@@ -417,6 +417,14 @@ async def transition(
     except ValueError as e:
         raise BusinessRuleViolation(str(e))
 
+    # 1b. Lượt I (F230) — CHỐT duy nhất: hồ sơ có tên trong Quyết định ĐÃ KÝ đang hiệu lực (hoặc mang
+    #     dấu AppSheet "Đã trúng tuyển theo QĐ số …") KHÔNG sang Nháp / Từ chối / rút (owner C4, C5,
+    #     E1; J1 dòng 12) — trừ cạnh chốt rút khi hoàn xong. Khoá hồ sơ trước khi đọc (tuần tự hoá với
+    #     ghi nhận). Tầng chủ sở hữu luật; các kiểm sớm trong từng hàm chỉ để báo lỗi sớm.
+    from .council_decision_status_service import kiem_chuyen_trang_thai
+
+    await kiem_chuyen_trang_thai(db, profile.id, profile.status, new_status)
+
     # 2. Capture old status BEFORE the write — required for the audit
     #    row and the dispatch payload's ``old_status`` field.
     old_status = profile.status

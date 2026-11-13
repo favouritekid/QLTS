@@ -124,7 +124,11 @@ class PathMatrixCell(BaseModel):
     )
     approved_count: int = Field(
         default=0,
-        description="Trúng tuyển — QUOTA_OCCUPYING_STATUSES (choice.decision='admitted' + legacy).",
+        description=(
+            "Trúng tuyển / chỗ đã dùng — hồ sơ ở trạng thái chiếm chỗ (choice.decision='admitted' + "
+            "legacy) KHÔNG có Quyết định đã ký hiệu lực, cộng dòng Quyết định đã ký hiệu lực theo đường "
+            "xét chụp lúc dựng bộ (F230 — quota_occupancy_service)."
+        ),
     )
     enrolled_count: int = Field(
         default=0,

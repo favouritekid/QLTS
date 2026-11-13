@@ -26,8 +26,10 @@ dùng chung nó:
    ⇒ :func:`configure_logging` (worker/beat KHÔNG nạp ``app.main``).
 
 Ngoài phạm vi (ghi rõ, không phải sót): ``print()`` và mọi thứ ghi thẳng
-stdout/stderr không qua ``logging``; Sentry (nếu bật — ``send_default_pii=False``,
-chưa đo); ``error_log`` của nginx — chặn ở location phục vụ URL token (N17.10 B,
+stdout/stderr không qua ``logging``; Sentry — cửa ra có chủ sở hữu RIÊNG
+``app/core/sentry_init.py`` (chặt hơn log: không breadcrumb, log không thành sự kiện, chữ ngoại
+lệ chỉ còn loại; dùng lại ``redact_text`` / ``loai_loi_an_toan`` của tệp này — E4, F223);
+``error_log`` của nginx — chặn ở location phục vụ URL token (N17.10 B,
 xem ``nginx/nginx.conf`` và ``nginx/templates/default.conf.template``), phần dư ghi ở đó.
 
 Khoảng trống CÓ CHỦ Ý
@@ -78,6 +80,10 @@ TOKEN_PATH_PREFIXES: tuple[str, ...] = (
 #: Tập con là route mang mã SMS — ``exception_handlers`` dùng để bỏ ``input``
 #: của lỗi 422 trên các route này.
 SMS_BEARER_PREFIXES: tuple[str, ...] = TOKEN_PATH_PREFIXES[:3]
+#: Tiền tố route mà THÂN request mang dữ liệu cá nhân (danh sách CCCD của bộ văn bản Hội
+#: đồng — Lần xét tuyển GĐ1) — ``exception_handlers`` cũng bỏ ``input`` của lỗi 422 trên
+#: các route này (cùng MỘT vị từ với route mã SMS). Khớp theo ĐOẠN đường dẫn.
+PII_BODY_ROUTE_PREFIXES: tuple[str, ...] = ("/api/admission-config/council-documents",)
 
 #: Đoạn chuỗi trong TÊN khoá ⇒ khoá bí mật (so chuỗi con, như bản H3 cũ ở
 #: ``main.py``). ``token`` phủ ``confirm_token``, ``access_token``, ``token_id``…

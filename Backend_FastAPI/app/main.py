@@ -39,6 +39,7 @@ from .routers import (
     administrative,  # ✅ PHASE 4: Administrative Nodes (Province/District/Ward)
     admission_config,  # ✅ PHASE 3: Admission Config + Scoring API
     admission_paths,  # ✅ PHASE 1: Admission Configuration Console
+    council_documents,  # Lần xét tuyển GĐ1: kho mẫu + bộ văn bản Hội đồng
     admin_v2_casbin,  # ✅ T0-5 cold cutover: admin-only Casbin reload endpoint
     admin_v2_admission_round,  # ✅ #184 Phase 2 v8.2 PR-2A v2: year-level rounds CRUD + bulk-create + extend
     admin_v2_path_subject_group,  # ✅ #184 Phase 2 v8.2 PR-2D: path-level subject group config + clone endpoint
@@ -115,20 +116,13 @@ from .socket_manager import load_rate_limit_script, sio
 from .middleware import register_exception_handlers
 
 # === ✅ H12+M10: Sentry Error Tracking (auto-activates when SENTRY_DSN is set) ===
-if settings.SENTRY_DSN:
-    try:
-        import sentry_sdk
-        sentry_sdk.init(
-            dsn=settings.SENTRY_DSN,
-            environment=settings.APP_ENV,
-            traces_sample_rate=settings.SENTRY_TRACES_SAMPLE_RATE,
-            send_default_pii=False,  # GDPR: don't send PII by default
-        )
-        print(f"INFO [main.py]: ✅ Sentry initialized (env={settings.APP_ENV}, sample_rate={settings.SENTRY_TRACES_SAMPLE_RATE})")
-    except ImportError:
-        print("WARNING [main.py]: SENTRY_DSN is set but sentry-sdk is not installed. Run: pip install sentry-sdk[fastapi]")
-    except Exception as e:
-        print(f"WARNING [main.py]: Failed to initialize Sentry: {e}")
+# MỘT nơi khởi tạo (F223): `app/core/sentry_init.py` — chặn thân request, biến cục bộ,
+# breadcrumb, log thành sự kiện, chuỗi truy vấn, chữ của ngoại lệ trước khi gửi ra ngoài.
+from app.core.sentry_init import khoi_tao_sentry  # noqa: E402
+
+khoi_tao_sentry(
+    settings.SENTRY_DSN, settings.APP_ENV, settings.SENTRY_TRACES_SAMPLE_RATE
+)
 
 # === Cấu hình log + che dữ liệu cá nhân/token (V6) ===
 # MỘT tầng chủ sở hữu: `app/core/log_redaction.py`. Cùng một hàm được celery
@@ -839,6 +833,7 @@ fastapi_app.include_router(admissions_v2.router)  # ✅ #184 Phase 3 PR-3C: mult
 fastapi_app.include_router(admin_backfill.router)  # ✅ #184 Phase 3 PR-3D-B BE-2: admin backfill exception queue (router declares /api/v2/admin prefix)
 fastapi_app.include_router(admission_config.router, prefix="/api")  # ✅ PHASE 3: Admission Config + Scoring
 fastapi_app.include_router(admission_paths.router, prefix="/api")  # ✅ PHASE 1: Admission Configuration Console
+fastapi_app.include_router(council_documents.router, prefix="/api")  # Văn bản Hội đồng (dưới /api/admission-config — bị đóng băng)
 fastapi_app.include_router(admin_v2_casbin.router)  # ✅ T0-5: POST /api/v2/admin/casbin/reload (router declares full prefix)
 fastapi_app.include_router(admin_v2_system_config.router)  # ✅ #184 PR-1D: GET/PATCH /api/v2/admin/system-config (router declares full prefix)
 fastapi_app.include_router(admin_v2_admission_round.router)  # ✅ #184 Phase 2 v8.2 PR-2A v2: year-level rounds (router declares full prefix)

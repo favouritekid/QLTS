@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useNotifications } from "@/hooks/useNotifications";
 import { useAppNavigation } from "@/hooks/useAppNavigation";
+import { useServerFlagNavigation } from "@/hooks/useServerFlagNavigation";
 import { useFinanceDashboard } from "@/hooks/finance/useFinanceDashboard";
 
 const AppTitle = ({ isCollapsed }: { isCollapsed: boolean }) => (
@@ -57,7 +58,9 @@ const AppTitle = ({ isCollapsed }: { isCollapsed: boolean }) => (
 
 export function AppSidebar() {
   const { isSidebarCollapsed } = useUIStore();
-  const { navigation } = useAppNavigation();
+  const { navigation: navigationTheoVai } = useAppNavigation();
+  // F238: mục có `serverFlag` chỉ hiện khi cờ quyền của máy chủ cho phép (không theo vai).
+  const navigation = useServerFlagNavigation(navigationTheoVai);
 
   // Fetch unread notification count for badge
   const { data: notificationsData } = useNotifications({

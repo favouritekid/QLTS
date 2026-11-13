@@ -1,0 +1,457 @@
+# app/repositories/council_candidate_repository.py
+"""Đọc số liệu hồ sơ cho bộ văn bản Hội đồng — MỘT giao dịch ``REPEATABLE READ READ ONLY``
+trên kết nối RIÊNG (không dùng giao dịch của request), không ghi gì trong đó.
+
+Mỗi cột trả về tính ĐÚNG như cột cùng tên của truy vấn bộ xuất ``xettuyen_theo_ds.sql``
+(nguồn tham chiếu của luật v1; bản ghim không chú thích ở
+``tests/integration/sql/xettuyen_theo_ds_khong_chu_thich.sql``). Hai nguồn được khoá bằng
+nhau bởi ``tests/integration/test_council_candidate_snapshot.py`` trên dữ liệu giả
+(CLAUDE.md §7): sửa một bên mà không sửa bên kia ⇒ test đỏ. Viết bằng SQL tham số hoá
+(``text()``) để định dạng số (``numeric::text``, ``round(avg, 2)``) và chữ (``to_char``,
+``regexp_replace``) do CHÍNH PostgreSQL làm, như bộ xuất — không chép lại bằng Python.
+
+Khác bộ xuất (có chủ ý, không đổi giá trị nào của một hồ sơ):
+
+* Đầu vào là danh sách id hồ sơ đã phân giải từ mã (CCCD); KHÔNG lọc trạng thái, KHÔNG lọc
+  trình độ (danh sách do Quyết định quyết; trình độ lạ do bộ dựng chặn). Kết quả theo ĐÚNG
+  thứ tự đầu vào.
+* Không nối ``admission_criteria`` / ``config_offering_type``: nối trái theo khoá chính nên
+  không đổi số hàng, và không cột nào của DTO đọc chúng (loại hình không ảnh hưởng cách đếm
+  của Biên bản — luật v1.1).
+* Hai phép sắp có thể HOÀ trong bộ xuất được thêm khoá phụ tất định (``id``): mức điểm khu
+  vực theo ``effective_from`` và thứ tự môn theo ``position, display_order``. Khi không hoà
+  thì kết quả trùng bộ xuất; khi hoà thì bộ xuất không xác định.
+* Thêm ``lead.unit_id`` (đơn vị của hồ sơ — đúng cột kiểm quyền Quản lý của
+  ``admission_service._check_idor_access`` dùng) để tính đơn vị của bộ văn bản.
+* Thêm ba cột phụ (lượt G): ``nv_in_id`` (nguyện vọng truy vấn này in), ``hp_co`` /
+  ``hp_nganh_id`` (khoản học phí HK1 nó dùng) — để cổng dựng bộ so với nguồn của luồng
+  (``SQL_KIEM_NGUON``). Không cột DTO nào đổi.
+
+``diem_kv`` của ảnh chụp ở đây = luật bộ xuất (mức mới nhất theo ``effective_from``, không theo
+năm) — giữ để khoá bằng bộ xuất. Bộ văn bản KHÔNG in giá trị này: sau cổng dựng bộ,
+``council_document_set_service.tao_bo_van_ban`` thay bằng mức theo NĂM HỌC mà hàm đọc tra qua
+``priority_service.select_open_priority_rates`` (owner 05-11, F231 — khác bộ xuất CÓ CHỦ Ý).
+"""
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from datetime import datetime
+from typing import AsyncIterator, Dict, List, Optional, Sequence, Tuple
+
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
+
+from app.models.council_document import SQL_COT_TINH_TRANG_QD
+from app.utils.exceptions import ServiceError
+
+MUC_CO_LAP = "repeatable read"
+
+
+@dataclass(frozen=True)
+class ThongTinGiaoDich:
+    """Đo NGAY TRONG giao dịch đọc (không suy từ cấu hình)."""
+
+    transaction_isolation: str
+    transaction_read_only: str
+    moc_chup: datetime  # transaction_timestamp() — mốc chụp của bộ
+    backend_pid: int
+
+
+@asynccontextmanager
+async def giao_dich_chi_doc(
+    engine: AsyncEngine,
+) -> AsyncIterator["tuple[AsyncConnection, ThongTinGiaoDich]"]:
+    """Mở MỘT giao dịch ``REPEATABLE READ READ ONLY`` trên kết nối riêng của ``engine``.
+
+    Mức cô lập + chỉ đọc đặt bằng tuỳ chọn của KẾT NỐI ⇒ asyncpg mở giao dịch bằng đúng MỘT
+    lệnh ``BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY`` (không có truy vấn nào chen
+    trước). Sau đó ĐO lại trong giao dịch; lệch ⇒ ``ServiceError`` (fail-closed, không đọc).
+    Thoát khối (kể cả khi lỗi) ⇒ giao dịch kết thúc bằng ROLLBACK — không có gì để commit —
+    và kết nối trả pool (SQLAlchemy trả mức cô lập / chỉ đọc về mặc định khi trả kết nối;
+    test khoá điều này trên pool một kết nối)."""
+    async with engine.connect() as conn:
+        await conn.execution_options(
+            isolation_level="REPEATABLE READ", postgresql_readonly=True
+        )
+        gd = await conn.begin()
+        try:
+            do = (
+                await conn.execute(
+                    text(
+                        "SELECT current_setting('transaction_isolation') AS iso, "
+                        "current_setting('transaction_read_only') AS ro, "
+                        "transaction_timestamp() AS moc, pg_backend_pid() AS pid"
+                    )
+                )
+            ).one()
+            tt = ThongTinGiaoDich(do.iso, do.ro, do.moc, do.pid)
+            if (
+                tt.transaction_isolation != MUC_CO_LAP
+                or tt.transaction_read_only != "on"
+            ):
+                raise ServiceError(
+                    "Giao dịch đọc hồ sơ không ở REPEATABLE READ READ ONLY — không đọc."
+                )
+            yield conn, tt
+        finally:
+            await gd.rollback()
+
+
+# Mỗi dòng đầu vào khớp bao nhiêu hồ sơ (CCCD = ``admission_profile.citizen_id``) TRONG
+# NĂM HỌC đã cho. CCCD chỉ UNIQUE theo năm học (``uq_citizen_academic_year``) ⇒ không lọc
+# năm thì một người có hồ sơ ở hai năm "khớp NHIỀU"; người gọi vẫn đòi ĐÚNG MỘT (lớp phụ).
+SQL_PHAN_GIAI_MA = text(
+    """
+SELECT d.stt::int AS stt, count(p.id)::int AS so_khop, min(p.id) AS pid
+FROM unnest(CAST(:ma AS text[])) WITH ORDINALITY AS d(ma, stt)
+LEFT JOIN admission_profile p
+       ON p.citizen_id = d.ma AND p.academic_year = CAST(:nam AS integer)
+GROUP BY d.stt
+ORDER BY d.stt
+"""
+)
+
+# Số liệu của các hồ sơ ``:pids`` theo ĐÚNG thứ tự mảng. Tên cột = tên trường DTO.
+SQL_SO_LIEU = text(
+    r"""
+WITH chon AS (
+    SELECT x.pid, x.stt
+    FROM unnest(CAST(:pids AS integer[])) WITH ORDINALITY AS x(pid, stt)
+),
+hoc_phi AS (
+    -- khoản học phí học kỳ 1 chưa huỷ, id lớn nhất
+    SELECT DISTINCT ON (f.admission_profile_id)
+           f.admission_profile_id AS pid, f.resolved_major_id, f.resolved_degree_level
+    FROM fee f
+    JOIN chon ON chon.pid = f.admission_profile_id
+    WHERE f.fee_type = 'tuition' AND f.status <> 'cancelled' AND f.semester_no = 1
+    ORDER BY f.admission_profile_id, f.id DESC
+),
+nv1 AS (
+    -- nguyện vọng đầu: display_order rồi id, CHỈ trong các nguyện vọng có đủ chuỗi
+    -- phương thức -> tổ hợp -> ngành (nối trong, như bộ xuất)
+    SELECT DISTINCT ON (c.admission_profile_id)
+           c.admission_profile_id AS pid, c.id AS choice_id,
+           mp.name AS ten_nganh, mp.degree_level AS trinh_do_nganh,
+           sg.code AS to_hop, am.name AS phuong_thuc, psg.subject_group_id AS sg_id
+    FROM admission_profile_choice c
+    JOIN chon ON chon.pid = c.admission_profile_id
+    JOIN admission_path ap ON ap.id = c.admission_path_id
+    JOIN admission_method am ON am.id = ap.admission_method_id
+    JOIN path_subject_group_config psg ON psg.id = c.path_subject_group_config_id
+    JOIN subject_group sg ON sg.id = psg.subject_group_id
+    JOIN offering_academic_info oai ON oai.id = ap.academic_info_id
+    JOIN program_offering po ON po.id = oai.offering_id
+    JOIN major_program mp ON mp.id = po.program_id
+    ORDER BY c.admission_profile_id, c.display_order, c.id
+),
+mon AS (
+    -- điểm từng môn của NGUYỆN VỌNG ĐẦU, thứ tự môn theo vị trí trong tổ hợp đã chọn
+    SELECT nv1.pid, pcs.score, s.name_vi,
+           row_number() OVER (PARTITION BY nv1.pid
+                              ORDER BY sgs.position NULLS LAST, s.display_order, s.id) AS vt
+    FROM nv1
+    JOIN profile_choice_score pcs ON pcs.admission_profile_choice_id = nv1.choice_id
+    JOIN subject s ON s.id = pcs.subject_id
+    JOIN subject_group_subject sgs
+         ON sgs.subject_group_id = nv1.sg_id AND sgs.subject_id = s.id
+),
+diem AS (
+    SELECT pid,
+           max(score) FILTER (WHERE vt = 1) AS m1,
+           max(score) FILTER (WHERE vt = 2) AS m2,
+           max(score) FILTER (WHERE vt = 3) AS m3,
+           sum(score) AS tong, avg(score) AS tb,
+           string_agg(name_vi, ', ' ORDER BY vt) AS mon_to_hop
+    FROM mon
+    GROUP BY pid
+),
+giay AS (
+    -- trạng thái + hình thức từng loại giấy (không có giấy -> mặc định ở SELECT)
+    SELECT pd.profile_id AS pid,
+      max(pd.status::text) FILTER (WHERE dt.code = 'phieu_dang_ky_xet_tuyen') AS s_phieu,
+      max(pd.status::text) FILTER (WHERE dt.code = 'so_yeu_ly_lich') AS s_soyeu,
+      max(pd.status::text) FILTER (WHERE dt.code = 'hoc_ba_thpt') AS s_hocba,
+      max(pd.actual_submission_format::text) FILTER (WHERE dt.code = 'hoc_ba_thpt') AS f_hocba,
+      max(pd.status::text) FILTER (WHERE dt.code = 'bang_tot_nghiep_thpt') AS s_bang,
+      max(pd.actual_submission_format::text)
+          FILTER (WHERE dt.code = 'bang_tot_nghiep_thpt') AS f_bang,
+      max(pd.graduation_proof_kind) FILTER (WHERE dt.code = 'bang_tot_nghiep_thpt') AS k_bang,
+      max(pd.status::text) FILTER (WHERE dt.code = 'giay_cn_hoan_thanh_gdpt') AS s_cngdpt,
+      max(pd.actual_submission_format::text)
+          FILTER (WHERE dt.code = 'giay_cn_hoan_thanh_gdpt') AS f_cngdpt,
+      max(pd.status::text) FILTER (WHERE dt.code = 'giay_khai_sinh') AS s_ks,
+      max(pd.actual_submission_format::text) FILTER (WHERE dt.code = 'giay_khai_sinh') AS f_ks,
+      max(pd.status::text) FILTER (WHERE dt.code = 'cccd') AS s_cccd,
+      max(pd.actual_submission_format::text) FILTER (WHERE dt.code = 'cccd') AS f_cccd,
+      max(pd.status::text) FILTER (WHERE dt.code = 'anh_3x4') AS s_anh,
+      max(pd.actual_submission_format::text) FILTER (WHERE dt.code = 'anh_3x4') AS f_anh
+    FROM profile_document pd
+    JOIN chon ON chon.pid = pd.profile_id
+    JOIN config_document_type dt ON dt.id = pd.document_type_id
+    GROUP BY pd.profile_id
+)
+SELECT
+  chon.stt::int AS stt,
+  p.id AS pid,
+  l.unit_id AS unit_id,
+  -- cột PHỤ (không thuộc DTO, không có ở bộ xuất): ĐÚNG nguyện vọng + khoản học phí mà
+  -- chính truy vấn này dùng để in — cổng F229 so với nguồn của luồng (lượt G)
+  nv1.choice_id AS nv_in_id,
+  (t.pid IS NOT NULL) AS hp_co,
+  t.resolved_major_id AS hp_nganh_id,
+  COALESCE(p.citizen_id, '') AS ma_ho_so,
+  -- họ = mọi từ trừ từ cuối; tên một chữ thì họ RỖNG (không lặp tên vào họ)
+  CASE WHEN h.ten_gon ~ ' ' THEN regexp_replace(h.ten_gon, '\s+\S+$', '') ELSE '' END AS ho,
+  COALESCE((regexp_match(h.ten_gon, '(\S+)$'))[1], '') AS ten,
+  COALESCE(p.gender, '') AS gioi_tinh,
+  COALESCE(to_char(p.dob, 'DD/MM/YYYY'), '') AS ngay_sinh,
+  COALESCE(p.place_of_birth, '') AS noi_sinh,
+  COALESCE(dtoc.name, p.ethnicity, '') AS dan_toc,
+  -- tên xã lấy bản ghi khu vực HIỆN HÀNH (tên sau sắp xếp), tên tỉnh từ danh mục hành chính
+  -- hiện hành; thiếu thì rơi về chữ trên hồ sơ
+  COALESCE(NULLIF(btrim(concat_ws(', ',
+      NULLIF(p.permanent_residential_group, ''),
+      NULLIF(COALESCE(kvx.ward, p.permanent_ward), ''),
+      NULLIF(COALESCE(tinh.name, p.permanent_province), ''))), ''), '') AS dia_chi,
+  CASE p.cultural_education_level::text
+      WHEN 'graduated_thpt' THEN 'THPT'
+      WHEN 'graduated_gdtx' THEN 'GDTX'
+      WHEN 'completed_thpt' THEN 'Hoàn thành THPT'
+      WHEN 'graduated_thcs' THEN 'THCS'
+      WHEN 'completed_thcs' THEN 'Hoàn thành THCS'
+      ELSE COALESCE(p.cultural_education_level::text, '') END AS van_hoa,
+  -- ngành + mã ngành theo khoản học phí (ngành đã định giá), không có thì theo nguyện vọng
+  -- đầu (mã ngành chỉ lấy từ khoản học phí)
+  COALESCE(mpt.name, nv1.ten_nganh, '') AS nganh,
+  COALESCE(mpt.code, '') AS ma_nganh,
+  COALESCE(t.resolved_degree_level::text, nv1.trinh_do_nganh::text, '') AS trinh_do,
+  COALESCE(nv1.to_hop, '') AS to_hop,
+  COALESCE(nv1.phuong_thuc, '') AS phuong_thuc,
+  COALESCE(diem.mon_to_hop, '') AS mon_to_hop,
+  COALESCE(diem.m1::text, '') AS m1,
+  COALESCE(diem.m2::text, '') AS m2,
+  COALESCE(diem.m3::text, '') AS m3,
+  COALESCE(round(diem.tb, 2)::text, '') AS diem_tb,
+  COALESCE(diem.tong::text, '') AS tong_diem,
+  -- khu vực ưu tiên theo nơi học THPT (ảnh chụp phân giải trên hồ sơ)
+  COALESCE(p.priority_resolution_snapshot->>'kv_resolved', '') AS kv,
+  COALESCE((SELECT pac.bonus_points::text FROM priority_area_config pac
+            WHERE pac.area_code = p.priority_resolution_snapshot->>'kv_resolved'
+            ORDER BY pac.effective_from DESC NULLS LAST, pac.id DESC LIMIT 1), '0') AS diem_kv,
+  -- đối tượng ưu tiên của em dân tộc thiểu số theo HỘ KHẨU (xã thường trú KV1 hay không)
+  CASE WHEN COALESCE(dtoc.name, p.ethnicity, '') IN ('Kinh', '') THEN ''
+       WHEN kvx.area_code = 'KV1' THEN '01'
+       ELSE '06' END AS ut_ma,
+  CASE WHEN COALESCE(dtoc.name, p.ethnicity, '') IN ('Kinh', '') THEN '0'
+       WHEN kvx.area_code = 'KV1' THEN '2.00'
+       ELSE '1.00' END AS diem_ut,
+  COALESCE(giay.s_phieu, 'missing') AS s_phieu,
+  COALESCE(giay.s_soyeu, 'missing') AS s_soyeu,
+  COALESCE(giay.s_hocba, 'missing') AS s_hocba,
+  COALESCE(giay.f_hocba, '') AS f_hocba,
+  COALESCE(giay.s_bang, 'missing') AS s_bang,
+  COALESCE(giay.f_bang, '') AS f_bang,
+  COALESCE(giay.k_bang, '') AS k_bang,
+  COALESCE(giay.s_cngdpt, 'missing') AS s_cngdpt,
+  COALESCE(giay.f_cngdpt, '') AS f_cngdpt,
+  COALESCE(giay.s_ks, 'missing') AS s_ks,
+  COALESCE(giay.f_ks, '') AS f_ks,
+  COALESCE(giay.s_cccd, 'missing') AS s_cccd,
+  COALESCE(giay.f_cccd, '') AS f_cccd,
+  COALESCE(giay.s_anh, 'missing') AS s_anh,
+  COALESCE(giay.f_anh, '') AS f_anh,
+  p.vocational_qualification::text AS chuyen_mon
+FROM chon
+JOIN admission_profile p ON p.id = chon.pid
+JOIN lead l ON l.id = p.lead_id
+CROSS JOIN LATERAL (
+    SELECT btrim(regexp_replace(p.full_name, '\s+', ' ', 'g')) AS ten_gon
+) h
+LEFT JOIN hoc_phi t ON t.pid = p.id
+LEFT JOIN major_program mpt ON mpt.id = t.resolved_major_id
+LEFT JOIN nv1 ON nv1.pid = p.id
+LEFT JOIN diem ON diem.pid = p.id
+LEFT JOIN giay ON giay.pid = p.id
+LEFT JOIN config_system_category dtoc
+       ON dtoc.type = 'ethnicity' AND dtoc.code = p.ethnicity
+LEFT JOIN vn_commune_area_map kvx
+       ON kvx.commune_code = p.permanent_commune_code AND kvx.effective_to IS NULL
+LEFT JOIN administrative_nodes xa
+       ON xa.code = p.permanent_commune_code AND xa.level = 'WARD'
+      AND xa.is_active AND xa.valid_to IS NULL
+LEFT JOIN administrative_nodes tinh
+       ON tinh.code = xa.province_code AND tinh.level = 'PROVINCE'
+      AND tinh.is_active AND tinh.valid_to IS NULL
+ORDER BY chon.stt
+"""
+)
+
+
+# Dữ liệu cho cổng dựng bộ (lượt G — F228 / F229 / F231), cùng giao dịch chỉ đọc. KHÔNG là
+# nguồn in: chỉ đọc NGUỒN CỦA LUỒNG để so với cái ``SQL_SO_LIEU`` sẽ in (``:nv_in`` = cột
+# ``nv_in_id`` của chính truy vấn ấy, cùng thứ tự ``:pids``).
+#  * ``nv1_id``: nguyện vọng 1 theo app — ``display_order`` rồi ``id`` (như
+#    ``fee_calculation_service.resolve_fee_academic_info`` / ``_validate_eligibility_all_choices``
+#    sắp theo ``display_order``), KHÔNG đòi chuỗi cấu hình đủ (``SQL_SO_LIEU`` thì đòi ⇒ khi
+#    NV1 thiếu cấu hình nó in nguyện vọng khác — cổng bắt).
+#  * ``lg_*``: hồ sơ một nguyện vọng kiểu cũ — ngành theo cấu hình hồ sơ ĐÚNG thứ tự nhánh
+#    legacy của ``resolve_fee_academic_info`` (``offering_admission_config`` → academic_info,
+#    rồi ``applied_rules.academic_info_id``); đường xét = ``applied_rules.admission_path_id``;
+#    tổ hợp = ``selected_subject_group_id``. Giá trị JSON không phải số ⇒ NULL (không ép kiểu
+#    ⇒ không lỗi CSDL).
+#  * ``diem_*``: trên các môn của tổ hợp IN — điểm nguyện vọng (``profile_choice_score``) so
+#    với bảng điểm hồ sơ (``profile_subject_score``, nơi ``admission_service.update_profile``
+#    ghi — ``admission_repository.update_profile_scores``).
+SQL_KIEM_NGUON = text(
+    r"""
+WITH chon AS (
+    SELECT x.pid, x.nv_in, x.stt
+    FROM unnest(CAST(:pids AS integer[]), CAST(:nv_in AS bigint[]))
+         WITH ORDINALITY AS x(pid, nv_in, stt)
+),
+nv AS (
+    SELECT c.admission_profile_id AS pid, c.id, c.display_order, c.decision,
+           c.admission_path_id AS path_id, psg.subject_group_id AS sg_id,
+           po.program_id AS nganh_id,
+           ap.academic_info_id AS ai_id, oai.offering_id AS offering_id
+    FROM admission_profile_choice c
+    JOIN chon ON chon.pid = c.admission_profile_id
+    LEFT JOIN admission_path ap ON ap.id = c.admission_path_id
+    LEFT JOIN path_subject_group_config psg ON psg.id = c.path_subject_group_config_id
+    LEFT JOIN offering_academic_info oai ON oai.id = ap.academic_info_id
+    LEFT JOIN program_offering po ON po.id = oai.offering_id
+),
+nv1 AS (
+    SELECT DISTINCT ON (pid) pid, id
+    FROM nv
+    ORDER BY pid, display_order, id
+),
+nv_dem AS (
+    SELECT pid, count(*)::int AS so_nv,
+           (count(*) FILTER (WHERE decision = 'admitted'))::int AS so_trung,
+           min(id) FILTER (WHERE decision = 'admitted') AS trung_id
+    FROM nv
+    GROUP BY pid
+),
+mon_in AS (
+    SELECT chon.pid, chon.nv_in, sgs.subject_id
+    FROM chon
+    JOIN nv ON nv.id = chon.nv_in
+    JOIN subject_group_subject sgs ON sgs.subject_group_id = nv.sg_id
+),
+diem AS (
+    SELECT m.pid,
+      (count(*) FILTER (WHERE pcs.score IS NOT NULL AND pss.score IS NOT NULL
+                          AND pcs.score <> pss.score))::int AS ca_hai_khac,
+      (count(*) FILTER (WHERE pcs.score IS NOT NULL AND pss.score IS NULL))::int AS chi_nv,
+      (count(*) FILTER (WHERE pcs.score IS NULL AND pss.score IS NOT NULL))::int AS chi_hs
+    FROM mon_in m
+    LEFT JOIN profile_choice_score pcs
+           ON pcs.admission_profile_choice_id = m.nv_in AND pcs.subject_id = m.subject_id
+    LEFT JOIN profile_subject_score pss
+           ON pss.profile_id = m.pid AND pss.subject_id = m.subject_id
+    GROUP BY m.pid
+)
+SELECT
+  chon.stt::int AS stt,
+  p.id AS pid,
+  p.status::text AS status,
+  p.uses_choice_engine AS uses_choice_engine,
+  p.academic_year AS academic_year,
+  p.area_resolution_basis::text AS area_resolution_basis,
+  p.priority_resolution_snapshot AS kv_snapshot,
+  COALESCE(nv_dem.so_nv, 0) AS so_nv,
+  nv1.id AS nv1_id,
+  COALESCE(nv_dem.so_trung, 0) AS so_nv_trung,
+  nv_dem.trung_id AS nv_trung_id,
+  nvi.nganh_id AS nv_in_nganh_id,
+  nvi.path_id AS nv_in_path_id,
+  nvi.sg_id AS nv_in_sg_id,
+  po_lg.program_id AS lg_nganh_id,
+  ap_lg.id AS lg_path_id,
+  p.selected_subject_group_id AS lg_sg_id,
+  COALESCE(diem.ca_hai_khac, 0) AS diem_ca_hai_khac,
+  COALESCE(diem.chi_nv, 0) AS diem_chi_nv,
+  COALESCE(diem.chi_hs, 0) AS diem_chi_hs,
+  -- lượt I (F230): khoá đếm của nguyện vọng in (ghi vào dòng bộ) + tình trạng Quyết định của hồ sơ
+  -- (biểu thức MỘT nguồn ``SQL_COT_TINH_TRANG_QD`` — cùng chuỗi hàm hỏi
+  -- ``council_decision_status_service`` dùng)
+  nvi.ai_id AS nv_in_ai_id,
+  nvi.offering_id AS nv_in_offering_id,
+  """ + SQL_COT_TINH_TRANG_QD + r"""
+FROM chon
+JOIN admission_profile p ON p.id = chon.pid
+LEFT JOIN nv_dem ON nv_dem.pid = p.id
+LEFT JOIN nv1 ON nv1.pid = p.id
+LEFT JOIN nv nvi ON nvi.id = chon.nv_in
+LEFT JOIN diem ON diem.pid = p.id
+LEFT JOIN offering_admission_config oac ON oac.id = p.offering_admission_config_id
+LEFT JOIN offering_academic_info oai_oac ON oai_oac.id = oac.academic_info_id
+LEFT JOIN offering_academic_info oai_ar
+       ON oai_ar.id = CASE WHEN p.applied_rules->>'academic_info_id' ~ '^[0-9]{1,9}$'
+                           THEN (p.applied_rules->>'academic_info_id')::int END
+LEFT JOIN program_offering po_lg ON po_lg.id = COALESCE(oai_oac.offering_id, oai_ar.offering_id)
+LEFT JOIN admission_path ap_lg
+       ON ap_lg.id = CASE WHEN p.applied_rules->>'admission_path_id' ~ '^[0-9]{1,9}$'
+                          THEN (p.applied_rules->>'admission_path_id')::int END
+ORDER BY chon.stt
+"""
+)
+
+
+async def doc_kiem_nguon(
+    conn: AsyncConnection, pids: Sequence[int], nv_in: Sequence[Optional[int]]
+) -> List[dict]:
+    """Dữ liệu kiểm (``SQL_KIEM_NGUON``) theo thứ tự ``pids``; ``nv_in[i]`` = nguyện vọng mà
+    ``SQL_SO_LIEU`` in cho ``pids[i]`` (None nếu không có)."""
+    return [
+        dict(r._mapping)
+        for r in (
+            await conn.execute(
+                SQL_KIEM_NGUON, {"pids": list(pids), "nv_in": list(nv_in)}
+            )
+        ).all()
+    ]
+
+
+async def phan_giai_ma(
+    conn: AsyncConnection, ma: Sequence[str], academic_year: int
+) -> List[tuple]:
+    """[(stt, số hồ sơ khớp trong năm học ``academic_year``, id nhỏ nhất)] theo thứ tự đầu
+    vào."""
+    return [
+        tuple(r)
+        for r in (
+            await conn.execute(SQL_PHAN_GIAI_MA, {"ma": list(ma), "nam": academic_year})
+        ).all()
+    ]
+
+
+#: Vòng giao diện (``kiem-truoc``): năm học + đơn vị (``lead.unit_id`` — CÙNG phép nối ``JOIN lead`` của
+#: ``SQL_SO_LIEU``: hồ sơ không có lead thì ``SQL_SO_LIEU`` cũng không đọc được) của từng id.
+SQL_PHAM_VI_THEO_ID = text(
+    """
+SELECT p.id, p.academic_year, l.unit_id
+FROM admission_profile p
+JOIN lead l ON l.id = p.lead_id
+WHERE p.id = ANY(CAST(:ids AS integer[]))
+"""
+)
+
+
+async def doc_pham_vi_theo_id(
+    conn: AsyncConnection, pids: Sequence[int]
+) -> Dict[int, Tuple[Optional[int], Optional[int]]]:
+    """{id hồ sơ: (năm học, đơn vị)} cho các id CÓ hồ sơ (kèm lead); id không có thì vắng."""
+    return {
+        r[0]: (r[1], r[2])
+        for r in (await conn.execute(SQL_PHAM_VI_THEO_ID, {"ids": list(pids)})).all()
+    }
+
+
+async def doc_so_lieu(conn: AsyncConnection, pids: Sequence[int]) -> List[dict]:
+    """Mỗi hàng = dict cột → giá trị, theo thứ tự ``pids``."""
+    return [
+        dict(r._mapping)
+        for r in (await conn.execute(SQL_SO_LIEU, {"pids": list(pids)})).all()
+    ]

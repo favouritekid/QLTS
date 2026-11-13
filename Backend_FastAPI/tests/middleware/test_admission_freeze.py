@@ -1,7 +1,7 @@
 # tests/middleware/test_admission_freeze.py
 """T0-2 admission freeze middleware coverage.
 
-Stub app dựng ĐỘNG theo ``FROZEN_PREFIXES`` (10 tiền tố, 11 router tuyển sinh)
+Stub app dựng ĐỘNG theo ``FROZEN_PREFIXES`` (10 tiền tố, 12 router tuyển sinh)
 nên không trôi khi danh sách dài ra. Stub giữ các ca này không cần DB/Casbin/Redis
 và cho phép phủ kín ma trận method × tiền tố × trạng thái đóng băng.
 

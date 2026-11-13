@@ -376,6 +376,11 @@ jobs:
           # folded scalar thành MỘT dòng, nên dấu `#` đầu tiên biến toàn bộ
           # phần còn lại thành comment của shell — nuốt cả danh sách test lẫn
           # `--timeout=60`, và workflow vẫn xanh vì lệnh vẫn chạy (chạy thiếu).
+          #
+          # Codex lần 22 F285: `tests/unit/test_admission_state_service.py` (WHOLE-FILE) đi cùng
+          # `test_phase3_pr3b_state_machine.py` — chứa hai ca canh NỐI DÂY chốt Quyết định đã ký
+          # (F230 `kiem_chuyen_trang_thai`) trong `admission_state_service.transition`; trước đây
+          # không selector nào chọn tệp này nên gỡ lời gọi chốt vẫn xanh trên ma trận PR.
           - tier: Tier 1 — Phase 3 multi-NV core
             tests: >-
               tests/api/test_b1_kv_override_preserve.py
@@ -383,6 +388,7 @@ jobs:
               tests/api/test_admission_submit_document_debt.py
               tests/unit/test_phase3_pr3a_choice_and_score.py
               tests/unit/test_phase3_pr3b_state_machine.py
+              tests/unit/test_admission_state_service.py
               tests/unit/test_phase3_pr3c_sub1_scoring_gates.py
               tests/unit/test_phase3_pr3c_sub2_choice_engine.py
               tests/unit/test_phase3_pr3c_sub2b_router_helpers.py
@@ -1157,6 +1163,103 @@ jobs:
           # Trước đây NGOÀI mọi tier — ca `pytest.raises(ValidationError)` của nó
           # không shard PR nào chạy. Unit thuần (reload module), KHÔNG đụng CSDL.
           # Ghim WHOLE-FILE.
+          # `test_council_document_render_service.py` vào Tier 5 (Lần xét tuyển GĐ1,
+          # PR 1.3 — bộ dựng văn bản Hội đồng): service THUẦN, mẫu Word + hồ sơ GIẢ
+          # dựng lúc chạy, KHÔNG CSDL, không mạng (~8 giây). Nó khoá thứ tự ngành /
+          # người, điểm in (trần ưu tiên 2.75), thống kê Biên bản v1, điền tham số
+          # Quyết định, ô gộp — tệp mới, ngoài mọi tier thì không shard PR nào chạy
+          # mà required check vẫn xanh (CLAUDE.md §11). Ghim WHOLE-FILE.
+          # Ba tệp lượt E1 (Lần xét tuyển GĐ1 — kho mẫu + hàm đọc hồ sơ + lưu bộ văn bản)
+          # vào Tier 5 cùng bộ dựng: `test_council_document_models.py` (unit, không CSDL —
+          # CHECK / tên ràng buộc model ↔ migration hdts20261103, head duy nhất);
+          # `tests/integration/test_council_candidate_snapshot.py` (CSDL test: DTO của hàm
+          # đọc == cột cùng tên của bản GHIM `sql/xettuyen_theo_ds_khong_chu_thich.sql`,
+          # giao dịch REPEATABLE READ READ ONLY, ghi bị CSDL từ chối) và
+          # `tests/integration/test_council_document_store.py` (CSDL test: chống bom zip,
+          # chọn mẫu theo ngày ký, lưu bộ ở giao dịch sau, lỗi mọi bước không ghi gì).
+          # Dữ liệu + mẫu GIẢ dựng lúc chạy. Ghim WHOLE-FILE.
+          # Lượt E2 (Lần xét tuyển GĐ1): `tests/integration/test_council_document_migration_downgrade.py`
+          # (CSDL test: chạy ĐÚNG `downgrade()` của migration hdts20261103 trong một giao dịch
+          # ROLLBACK — bảng nào còn hàng ⇒ dừng không xoá gì; cờ CHO PHÉP đúng "1" ⇒ xoá được).
+          # Trước đây guard hạ cấp chỉ được canh bằng script chạy tay (Codex lần 4, K6). Ghim
+          # WHOLE-FILE.
+          # `tests/api/test_council_documents_api.py` (lượt E2 — API văn bản Hội đồng): request
+          # THẬT qua app thật + CSDL test — quyền theo vai (Casbin), IDOR hai chiều đơn vị (404),
+          # bộ unit NULL chỉ admin, tải tệp = bytes đã lưu, đóng băng 503 trên mọi route ghi
+          # của module (lấy từ bảng route thật), log 422 không có CCCD, một lần dựng cùng lúc
+          # (hai phiên CSDL), không lộ qua đường tĩnh. Ghim WHOLE-FILE.
+          # Lượt E3 (Lần xét tuyển GĐ1 — owner 04-11, Codex lần 5): `tests/api/test_council_documents_audit_api.py`
+          # (request THẬT: Admin xoá bộ có lý do + vết độc lập cùng giao dịch, danh sách mã đầu vào
+          # chỉ admin, nhật ký tải ghi bền TRƯỚC khi gửi bytes) và
+          # `tests/integration/test_council_document_migrations_e3.py` (CSDL test: chạy ĐÚNG SQL
+          # `upgrade()` / `downgrade()` của migration Casbin hdts20261103b — F220 — và của migration
+          # vết hdts20261104, hạ cấp fail-closed). Ngoài mọi tier thì không shard PR nào chạy mà
+          # required check vẫn xanh (CLAUDE.md §11). Ghim WHOLE-FILE.
+          # Lượt E4 (Codex lần 6): `tests/integration/test_council_document_downgrade_dong_thoi.py`
+          # (F222: hạ cấp hdts20261104 / hdts20261103 qua ĐÚNG `alembic/env.py` — tiến trình con,
+          # AUTOCOMMIT — khi phiên thứ hai ghi chen giữa kiểm và xoá: không mất dòng; CSDL dùng một
+          # lần riêng từng ca, không chạm `qlts_test`) và `tests/unit/test_sentry_khoi_tao.py`
+          # (F223: Sentry khởi tạo MỘT nơi, transport giả + chặn socket — thân request, biến cục
+          # bộ, chuỗi truy vấn, chữ ngoại lệ, log, header không vào sự kiện). Ghim WHOLE-FILE.
+          # Lượt F (giao diện): `tests/api/test_council_documents_quyen_api.py` (request THẬT: cờ
+          # quyền giao diện `GET /quyen` KHỚP hành vi thật của từng route cho năm vai, Casbin giả
+          # cho qua / từ chối, cổng lạ ⇒ cờ tắt; SQL thật của migration hdts20261105). Ghim WHOLE-FILE.
+          # Lượt G (owner 05-11 — F227 / F228 / F229 / F231): `tests/unit/test_council_set_gate.py`
+          # (không CSDL: ba mức trạng thái phủ đủ 15 trạng thái của CHECK / enum / bảng chuyển, luật
+          # từng dòng, luật xác nhận), `tests/integration/test_council_set_gate_db.py` (CSDL test:
+          # cổng dựng bộ trên dữ liệu giả — trạng thái, nguồn ngành / nguyện vọng / điểm, khu vực theo
+          # năm học, ấn định thủ công), `tests/api/test_council_documents_gate_api.py` (request
+          # THẬT: 409 cần admin xác nhận, 400 chặn, vết xác nhận, quản lý bị từ chối / 403) và
+          # `tests/integration/test_council_document_downgrade_cho_khoa.py` (hạ cấp hai migration
+          # dừng sau trần chờ khoá 10 giây qua ĐÚNG `alembic/env.py`, không mất dữ liệu / phiên bản);
+          # Codex lần 8: `tests/api/test_council_documents_hop_dong_api.py` (thân 422 thật = mẫu chung với
+          # giao diện — F236; cờ quyền chỉ theo mẫu route, đối chứng theo id thật — F237). Ghim WHOLE-FILE.
+          # Codex lần 9 (lượt H): `tests/unit/test_council_flag_policy_grammar.py` (không CSDL: ngữ
+          # pháp policy của cờ văn bản Hội đồng quyết theo hàm khớp keyMatch4 THẬT của enforcer — lọt /
+          # tắt nhầm, so với vét cạn, nối dây đọc policy). Ghim WHOLE-FILE.
+          # Lượt I (F230 — ghi nhận Quyết định đã ký): `tests/unit/test_council_decision_models.py` (không
+          # CSDL: model = migration hdts20261107), `tests/integration/test_council_decision_constraints_db.py`
+          # (CSDL test: mỗi CHECK / UNIQUE / khoá ngoại ghép một ca cô lập + đối chứng),
+          # `tests/integration/test_council_decision_migration.py` (nâng / hạ qua ĐÚNG alembic, hai phiên,
+          # quá trần chờ khoá), `tests/api/test_council_decisions_api.py` (request THẬT: ghi nhận, huỷ,
+          # nhóm chờ, điều chỉnh, tái dựng bản ký) và `tests/api/test_council_decision_profile_gates_api.py`
+          # (request THẬT: chặn từ chối / rút / về Nháp / công bố theo NV với em có Quyết định / dấu
+          # AppSheet + kiểm kê chỗ gọi transition). Ghim WHOLE-FILE.
+          # Lượt J (F230 chặng 2b — đếm chỉ tiêu cho dòng Quyết định đã ký): `tests/integration/
+          # test_quota_occupancy_db.py` (CSDL test: một nguồn đếm Phần A + Phần B ở bốn nơi, khoá chụp, năm,
+          # exclude, rút / chờ hoàn, điều chỉnh / huỷ / khôi phục, kiểm kê tập trạng thái chiếm chỗ) và
+          # `tests/api/test_council_decision_hai_phien_api.py` (request THẬT, HAI PHIÊN có điểm đồng bộ: ghi
+          # nhận ↔ từ chối hai thứ tự, chốt transition không khoá trước, công bố thành công, chỗ cuối cùng).
+          # Ghim WHOLE-FILE.
+          # Lượt K (F230 sửa cuối — Codex lần 15): `tests/api/test_quota_occupancy_mot_anh_chup_api.py` (F260:
+          # thao tác chuyển A↔B chen giữa Phần A / Phần B — bốn hàm đếm vẫn đúng 1, Phê duyệt cũ không duyệt
+          # vượt), `tests/api/test_council_decision_khoa_cheo_api.py` (F259: vòng chờ khoá ghi nhận ↔ Phê duyệt
+          # hàng loạt / công bố nhiều nguyện vọng, mỗi bên lần lượt bị chọn huỷ; SAVEPOINT từng mục; 409 khi bị
+          # huỷ), `tests/api/test_council_decision_khoa_dem_api.py` (Q-J1: dòng bộ thiếu khoá đếm / lệch chuỗi
+          # ⇒ 409 ở ba thao tác) và `tests/api/test_council_decision_canh_bao_chi_tieu_api.py` (N9: cảnh báo vượt
+          # chỉ tiêu, không chặn). Ghim WHOLE-FILE.
+          # Lượt L (vòng giao diện GĐ1 — Codex lần 16 F263): `tests/api/test_council_bulk_ngu_canh_chi_tieu_api.py`
+          # (Phê duyệt hàng loạt không khoá dòng chỉ tiêu ngoài tập khi cấu hình đổi năm giữa dò ↔ khoá; đo khoá
+          # hàng bằng phiên thứ ba NOWAIT). `tests/integration/test_loi_goc_giao_dich_db.py` (D.2: ca canh thư viện —
+          # chỗ duy nhất đọc `_rollback_exception` của SQLAlchemy trả đúng lỗi flush gốc).
+          # K-2 (owner 11-11): `tests/api/test_council_config_lock_api.py` (trigger khoá cấu hình đã được Quyết
+          # định dùng: route PATCH 409, mọi đường ghi ở tầng CSDL, hai thứ tự cạnh tranh, vị từ lệch SQL = Python)
+          # + `tests/unit/test_council_config_lock_ddl_lockin.py` (bản create_all ↔ migration) + `tests/integration/
+          # test_council_config_lock_migration.py` (migration hdts20261111 qua alembic thật: khoá → đếm → dừng / cài
+          # nguyên tử, phiên sửa đang mở, lỗi câu thứ hai, chạy lại, quá trần, hạ cấp).
+          # Lượt gửi ghi nhận (vòng giao diện 3.7): `tests/api/test_council_decision_luot_gui_api.py` (mở / gửi / gửi lặp /
+          # phân xử / xoá bộ / lịch ba phiên F272) + `tests/unit/test_council_decision_submission_model.py` (model ↔
+          # migration hdts20261112). Đường chọn hồ sơ (vòng giao diện 3.1–3.3, 3.11):
+          # `tests/api/test_council_set_preview_api.py` (kiểm trước / dựng theo id + dấu / đổi mã / tìm hồ sơ) +
+          # `tests/unit/test_council_preview_sign.py` (dấu + thứ tự chuẩn, hàm thuần). Đợt 2 (3.4–3.6, 3.8, 3.9):
+          # `tests/api/test_council_set_list_api.py` (tình trạng bộ / Quyết định / lọc / không N+1, người tạo, tải cả
+          # bộ, tên người trong nhật ký, lọc văn bản, ô Quyết định trên hồ sơ, năm học ở dòng danh sách) +
+          # `tests/integration/test_council_document_casbin_vong_gd_migration.py` (migration Casbin hdts20261113 chạy ĐÚNG
+          # SQL: chèn đủ, chạy lại không trùng, dòng có sẵn giữ nguyên, hạ cấp chỉ xoá dòng của mình). Ghim WHOLE-FILE.
+          # Codex lần 21 câu 1: `tests/unit/test_hop_dong_msw_ghim_luat.py` ghim mã băm các hàm / hằng máy chủ mà MSW giao diện
+          # (`frontend/src/test/mocks/council-luat-may-chu.ts`) CHÉP luật — đổi luật ⇒ đỏ ⇒ rà bảng hợp đồng + MSW cùng lượt.
+          # CLAUDE.md §7 (13-11): `tests/unit/test_hop_dong_msw_cau_loi.py` khoá CÂU LỖI + tên loại mẫu / tập trạng thái / trần từ
+          # khoá của MSW bằng máy chủ (so trực tiếp; test ghim chỉ canh phía máy chủ đổi). Đọc tệp frontend ⇒ cần checkout cả repo.
           - tier: Tier 5 — Phase 2 engine prereqs
             tests: >-
               tests/unit/test_nginx_template_packaging.py
@@ -1224,6 +1327,54 @@ jobs:
               tests/unit/test_che_log_pii.py
               tests/unit/test_che_log_token_nginx.py
               tests/utils/test_config_loading.py
+              tests/unit/test_sentry_khoi_tao.py
+          # Lát GĐ1 tách khỏi Tier 5 (owner 13-11, PR #724): Tier 5 vốn ~41 phút trên main; 41 tệp GĐ1 thêm ~31,5 phút
+          # (đo từ log PR #724, lượt bị huỷ ở trần `timeout-minutes: 75` khi đã chạy 4.087 / 4.183 ca, 0 đỏ).
+          # Tách ra thì cả hai dưới trần; wall-clock không tăng (lát dài nhất vẫn là Tier 2a ~51 phút).
+          # Lý do từng tệp: xem chú thích phía trên mục Tier 5 (giữ nguyên chỗ cũ). Ghim WHOLE-FILE.
+          - tier: Tier 5g — Văn bản Hội đồng + Quyết định trúng tuyển (GĐ1)
+            tests: >-
+              tests/unit/test_council_document_render_service.py
+              tests/unit/test_council_document_models.py
+              tests/integration/test_council_candidate_snapshot.py
+              tests/integration/test_council_document_store.py
+              tests/integration/test_council_document_migration_downgrade.py
+              tests/api/test_council_documents_api.py
+              tests/api/test_council_documents_audit_api.py
+              tests/integration/test_council_document_migrations_e3.py
+              tests/integration/test_council_document_downgrade_dong_thoi.py
+              tests/api/test_council_documents_quyen_api.py
+              tests/unit/test_council_set_gate.py
+              tests/integration/test_council_set_gate_db.py
+              tests/api/test_council_documents_gate_api.py
+              tests/integration/test_council_document_downgrade_cho_khoa.py
+              tests/api/test_council_documents_hop_dong_api.py
+              tests/unit/test_council_flag_policy_grammar.py
+              tests/unit/test_council_decision_models.py
+              tests/integration/test_council_decision_constraints_db.py
+              tests/integration/test_council_decision_migration.py
+              tests/api/test_council_decisions_api.py
+              tests/api/test_council_decision_profile_gates_api.py
+              tests/integration/test_quota_occupancy_db.py
+              tests/api/test_council_decision_hai_phien_api.py
+              tests/api/test_quota_occupancy_mot_anh_chup_api.py
+              tests/api/test_council_decision_khoa_cheo_api.py
+              tests/api/test_council_decision_khoa_dem_api.py
+              tests/api/test_council_decision_canh_bao_chi_tieu_api.py
+              tests/api/test_council_bulk_ngu_canh_chi_tieu_api.py
+              tests/integration/test_loi_goc_giao_dich_db.py
+              tests/api/test_council_config_lock_api.py
+              tests/unit/test_council_config_lock_ddl_lockin.py
+              tests/integration/test_council_config_lock_migration.py
+              tests/api/test_council_decision_luot_gui_api.py
+              tests/unit/test_council_decision_submission_model.py
+              tests/integration/test_council_decision_submission_migration.py
+              tests/api/test_council_set_preview_api.py
+              tests/unit/test_council_preview_sign.py
+              tests/api/test_council_set_list_api.py
+              tests/integration/test_council_document_casbin_vong_gd_migration.py
+              tests/unit/test_hop_dong_msw_ghim_luat.py
+              tests/unit/test_hop_dong_msw_cau_loi.py
 
     env:
       APP_ENV: test

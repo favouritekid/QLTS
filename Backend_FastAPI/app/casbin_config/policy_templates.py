@@ -687,6 +687,20 @@ MANAGER_TEMPLATE: PolicyTemplate = {
         # REMOVED: activate/deactivate - Admin only (Manager creates, Admin approves)
         {"subject": "{role}", "object": "/api/admission-config/paths/{path_id}/documents", "action": "GET"},  # Resolved docs
         {"subject": "{role}", "object": "/api/admission-config/paths/{path_id}/validate-activation", "action": "GET"},  # Validate
+        # Văn bản Hội đồng (Lần xét tuyển GĐ1): manager CHỈ ĐỌC bộ văn bản — phạm vi đơn vị
+        # (bộ unit_id = đơn vị mình; bộ NULL chỉ admin) ở deps.get_council_document_set_for_user.
+        # Tải mẫu / dựng bộ = admin (wildcard). Officer / accountant KHÔNG có dòng nào.
+        # Seed DB: migration hdts20261103b.
+        {"subject": "{role}", "object": "/api/admission-config/council-documents/sets", "action": "GET"},
+        {"subject": "{role}", "object": "/api/admission-config/council-documents/sets/{set_id}", "action": "GET"},
+        {"subject": "{role}", "object": "/api/admission-config/council-documents/sets/{set_id}/files/{thu_tu}", "action": "GET"},
+        # Cờ quyền giao diện của module (lượt F): máy chủ đánh giá chính các cổng của từng
+        # route cho người gọi (deps.quyen_van_ban_hoi_dong). Seed DB: migration hdts20261105.
+        {"subject": "{role}", "object": "/api/admission-config/council-documents/quyen", "action": "GET"},
+        # Vòng giao diện GĐ1: tải cả bộ (quyền + phạm vi y hệt tải lẻ) + người tạo bộ (bộ lọc danh sách).
+        # Seed DB: migration hdts20261113.
+        {"subject": "{role}", "object": "/api/admission-config/council-documents/sets/{set_id}/tai-ca-bo", "action": "GET"},
+        {"subject": "{role}", "object": "/api/admission-config/council-documents/nguoi-tao-bo", "action": "GET"},
         # Finance Module - Manager can verify/reject payments, waive fees, apply penalties
         {"subject": "{role}", "object": "/api/finance/dashboard", "action": "GET"},  # Finance overview
         {"subject": "{role}", "object": "/api/finance/debt-report", "action": "GET"},

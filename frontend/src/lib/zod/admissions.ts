@@ -848,6 +848,11 @@ export type AppliedRules = z.infer<typeof appliedRulesSchema>
 export const admissionProfileResponseSchema = z.object({
   id: z.number(),
   lead_id: z.number(),
+  // Ô "Quyết định trúng tuyển" (đặc tả vòng giao diện 3.9). Máy chủ `083a428d`: CHỈ `GET /api/admissions/{id}` điền
+  // ({tinh_trang, van_ban, ly_do_huy_ghi_nhan, dau_appsheet, dau_appsheet_so_qd}); route khác trả `null`. CHỦ Ý giữ
+  // `unknown` và đọc bằng `councilProfileDecisionSchema.safeParse` ở thẻ hiển thị: đây là thẻ phụ — sai dạng chỉ làm
+  // thẻ không hiện, KHÔNG được làm vỡ cả trang hồ sơ (schema chi tiết này nuôi rất nhiều màn).
+  quyet_dinh_trung_tuyen: z.unknown().optional(),
   citizen_id: z.string().optional().nullable(),
   citizen_id_masked: z.string().optional().nullable(), // Masked CCCD for display (e.g., ********1234)
   // Personal Info Extensions
@@ -1362,6 +1367,13 @@ export const admissionListItemSchema = admissionProfileResponseSchema.pick({
   available_actions: true,
   major_change_cycle_open: true,
   major_change_awaiting_confirmation: true,
+}).extend({
+  // Vòng giao diện Văn bản Hội đồng (máy chủ `083a428d`, đặc tả 5.1): NĂM HỌC thật của hồ sơ (cột `academic_year`) — nút
+  // "Dựng văn bản Hội đồng" ở thanh hàng loạt cần năm học CHUNG của các hồ sơ đang chọn, không suy từ bộ lọc. Máy chủ
+  // trả `int | null`; schema chi tiết (`.pick` ở trên) khai `.optional()` không nhận `null` nên khai lại ở đây.
+  // Chủ ý KHÔNG bắt buộc khoá: danh sách này là trang lõi — thiếu khoá chỉ làm nút Hội đồng khoá (năm học chưa rõ),
+  // không được làm trắng cả bảng hồ sơ.
+  academic_year: z.number().int().nullable().optional(),
 })
 
 export type AdmissionListItem = z.infer<typeof admissionListItemSchema>

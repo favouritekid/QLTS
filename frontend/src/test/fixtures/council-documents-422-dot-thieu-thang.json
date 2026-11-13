@@ -1,0 +1,13 @@
+{
+  "detail": "Request validation failed",
+  "error_code": "VALIDATION_ERROR",
+  "errors": [
+    {
+      "type": "value_error",
+      "loc": ["body", "tham_so_quyet_dinh"],
+      "msg": "Value error, đợt xét tuyển cần đủ cả số đợt và tháng",
+      "input": { "dot_so": "1" },
+      "ctx": { "error": "đợt xét tuyển cần đủ cả số đợt và tháng" }
+    }
+  ]
+}
