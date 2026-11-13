@@ -1327,6 +1327,13 @@ jobs:
               tests/unit/test_che_log_pii.py
               tests/unit/test_che_log_token_nginx.py
               tests/utils/test_config_loading.py
+              tests/unit/test_sentry_khoi_tao.py
+          # Lát GĐ1 tách khỏi Tier 5 (owner 13-11, PR #724): Tier 5 vốn ~41 phút trên main; 41 tệp GĐ1 thêm ~31,5 phút
+          # (đo từ log PR #724, lượt bị huỷ ở trần `timeout-minutes: 75` khi đã chạy 4.087 / 4.183 ca, 0 đỏ).
+          # Tách ra thì cả hai dưới trần; wall-clock không tăng (lát dài nhất vẫn là Tier 2a ~51 phút).
+          # Lý do từng tệp: xem chú thích phía trên mục Tier 5 (giữ nguyên chỗ cũ). Ghim WHOLE-FILE.
+          - tier: Tier 5g — Văn bản Hội đồng + Quyết định trúng tuyển (GĐ1)
+            tests: >-
               tests/unit/test_council_document_render_service.py
               tests/unit/test_council_document_models.py
               tests/integration/test_council_candidate_snapshot.py
@@ -1336,7 +1343,6 @@ jobs:
               tests/api/test_council_documents_audit_api.py
               tests/integration/test_council_document_migrations_e3.py
               tests/integration/test_council_document_downgrade_dong_thoi.py
-              tests/unit/test_sentry_khoi_tao.py
               tests/api/test_council_documents_quyen_api.py
               tests/unit/test_council_set_gate.py
               tests/integration/test_council_set_gate_db.py
