@@ -17,6 +17,8 @@ import { COUNCIL_DOCUMENTS_PREFIX as P } from "@/lib/api/council-documents"
 import { NO_COUNCIL_PERMISSIONS, councilDocumentKeys } from "@/hooks/admin/useCouncilDocuments"
 import type { CouncilDocumentPermissions } from "@/lib/zod/council-documents"
 
+import { dap, luatGhiNhan, luatHuyGhiNhan, type NguCanhGhiNhan } from "@/test/mocks/council-luat-may-chu"
+
 import { CouncilSetDetailClient } from "./CouncilSetDetailClient"
 
 const { push } = vi.hoisted(() => ({ push: vi.fn() }))
@@ -33,7 +35,7 @@ const SO_QD = "99"
 const TAT_CA = Object.fromEntries(Object.keys(NO_COUNCIL_PERMISSIONS).map((k) => [k, true])) as CouncilDocumentPermissions
 
 const BO = {
-  id: 7, nguoi_tao_id: 1, tao_luc: "2026-11-05T01:00:00Z", moc_chup: "2026-11-05T00:59:00Z", unit_id: 2,
+  id: 7, nguoi_tao_id: 1, tao_luc: "2026-09-01T01:00:00Z", moc_chup: "2026-09-01T00:59:00Z", unit_id: 2, // dựng 01-09 ≤ ngày QĐ đã in 08-09 (luật thật: ngày ký ≥ ngày dựng)
   trinh_do: "Cao đẳng", so_ho_so: 3, so_tep: 2, kich_thuoc_tong: 20, nam_hoc: 2026,
   tham_so_quyet_dinh: { so_quyet_dinh: "99", ngay_quyet_dinh: "2026-09-08" },
   thong_tin_dung: { luat: "v1.1" }, tep: [],
@@ -75,6 +77,26 @@ function quyetDinhCuaBo7(ds: unknown[]) {
     : null
 }
 
+/** Ngữ cảnh luật máy chủ giả cho bộ 7 — dựng từ CHÍNH dữ liệu giả của test (bộ, danh sách văn bản), không hằng số riêng. */
+function nguCanhMayChu(c: Cau): NguCanhGhiNhan {
+  const bo = { ...BO, ...(c.bo ?? {}) }
+  const ds = (c.decisions ?? []) as ReturnType<typeof qd>[]
+  const song = ds.find((d) => d.set_id === 7 && d.trang_thai !== "huy_ghi_nhan")
+  return {
+    bo: {
+      so_ho_so: bo.so_ho_so,
+      tham_so: (bo.tham_so_quyet_dinh ?? null) as Record<string, unknown> | null,
+      ngay_dung: new Date(Date.parse(bo.tao_luc) + 7 * 3600e3).toISOString().slice(0, 10), // ngày dựng theo giờ Việt Nam
+      van_ban_song_id: song?.id,
+    },
+    goc: (id) => {
+      const g = ds.find((d) => d.id === id)
+      return g ? { loai: g.loai, trang_thai: g.trang_thai } : undefined
+    },
+    soDaDung: (so, nam) => ds.find((d) => d.so_quyet_dinh === so && d.pham_vi_so === nam && d.trang_thai !== "huy_ghi_nhan")?.id,
+  }
+}
+
 function dung(c: Cau = {}) {
   server.use(
     http.get(`${API}${P}/quyen`, () => HttpResponse.json({ permissions: TAT_CA })),
@@ -99,23 +121,28 @@ function dung(c: Cau = {}) {
       return c.mo ? c.mo() : HttpResponse.json({ ma: MA }, { status: 201 })
     }),
     http.post(`${API}${P}/decisions`, async ({ request }) => {
+      let form: FormData | null = null
       try {
-        formGui.push(await request.formData())
+        form = await request.formData()
+        formGui.push(form)
       } catch {
         /* không đọc được form */
       }
-      return c.gui ? c.gui() : HttpResponse.json(qd(), { status: 201 })
+      if (c.gui) return c.gui()
+      // MẶC ĐỊNH máy chủ giả ÁP LUẬT THẬT (`council-luat-may-chu.ts`, bảng hợp đồng thân yêu cầu mục 8): số hồ sơ gõ lại = số hồ sơ của BỘ
+      // (≠ số QĐ ≠ set_id), cặp loại ↔ gốc, tham số đã in, số theo NĂM CỦA NGÀY KÝ, ngày ký ≥ ngày dựng. Ca nào muốn ép một kết cục
+      // (mất mạng, 5xx, đóng băng, 409 xác nhận…) vẫn truyền `gui`.
+      const loi = form === null ? null : dap(await luatGhiNhan(form, nguCanhMayChu(c)))
+      return loi ?? HttpResponse.json(qd(), { status: 201 })
     }),
     http.post(`${API}${P}/luot-ghi-nhan/:ma/chan`, () => (c.chan ? c.chan() : HttpResponse.json({ ket_qua: "dang_xu_ly" }))),
     http.post(`${API}${P}/decisions/21/huy-ghi-nhan`, async ({ request }) => {
       const than = (await request.json()) as Record<string, unknown>
       huyBodies.push(than)
-      // Như máy chủ thật (`council_decision_service.huy_ghi_nhan`, `if so_go_lai != x.so_quyet_dinh`): so NGUYÊN CHUỖI với SỐ QUYẾT
-      // ĐỊNH của văn bản, KHÔNG phải số hồ sơ. Lệch ⇒ 400 DATA_VALIDATION_ERROR, văn bản không đổi. (Máy chủ giả cũ nhận mọi giá
-      // trị nên không bắt được lỗi Đ2-1: hộp thoại bảo gõ số hồ sơ.)
-      if (than.so_go_lai !== SO_QD) {
-        return HttpResponse.json({ detail: "Số văn bản gõ lại không khớp.", error_code: "DATA_VALIDATION_ERROR" }, { status: 400 })
-      }
+      // Như máy chủ thật (`huy_ghi_nhan`): `so_go_lai` so NGUYÊN CHUỖI với SỐ QUYẾT ĐỊNH của văn bản, KHÔNG phải số hồ sơ — luật chung ở
+      // `council-luat-may-chu.ts` (`luatHuyGhiNhan`). (Máy chủ giả cũ nhận mọi giá trị nên không bắt được lỗi Đ2-1.)
+      const loi = dap(luatHuyGhiNhan(than, { so_quyet_dinh: SO_QD, trang_thai: "hieu_luc" }))
+      if (loi) return loi
       return c.huy ? c.huy() : HttpResponse.json(qd({ trang_thai: "huy_ghi_nhan" }))
     }),
   )
@@ -383,7 +410,126 @@ describe("lượt CHƯA RÕ — mọi chỗ chỉ nói 'Chưa xác định'", ()
 })
 
 describe("bị từ chối nghiệp vụ", () => {
-  it("400 ⇒ hiện câu máy chủ, mở khoá biểu mẫu; gửi lại cùng mã (không mở lượt thứ hai)", async () => {
+  // Hợp đồng thân yêu cầu mục 8 (Codex lần 20 câu 2): máy chủ giả ÁP LUẬT THẬT (`council-luat-may-chu.ts`) nên ca SAI dùng đúng giá trị DỄ
+  // NHẦM — bộ giả có set_id 7, số QĐ "99", số hồ sơ 3 (KHÁC nhau). Ca cũ ép 400 bằng `gui` nên chỉ kiểm cách giao diện xử lý 400, không kiểm
+  // NGHĨA của ô "Gõ lại số hồ sơ".
+  it.each([
+    ["99", "số Quyết định"],
+    ["7", "set_id của bộ"],
+    ["4", "lệch 1 so với số hồ sơ của bộ"],
+  ])("xac_nhan_so_ho_so: gõ %s (%s) ⇒ 400 'không khớp số hồ sơ của bộ'; mở khoá biểu mẫu; sửa thành 3 ⇒ ghi được, CÙNG mã (không mở lượt thứ hai)", async (sai) => {
+    dung()
+    ve()
+    await dien()
+    fireEvent.change(screen.getByTestId("xac-nhan-so-ho-so"), { target: { value: sai } })
+    fireEvent.click(nutGhi())
+    expect((await screen.findByTestId("ghi-nhan-loi")).textContent).toContain("Số hồ sơ gõ lại không khớp số hồ sơ của bộ.")
+    expect((screen.getByTestId("bieu-mau-ghi-nhan") as HTMLFieldSetElement).disabled).toBe(false)
+    expect(screen.queryByTestId("chua-xac-dinh")).toBeNull()
+    expect(screen.queryByTestId("ket-qua-ghi-nhan")).toBeNull() // máy chủ TỪ CHỐI ⇒ chưa có văn bản
+    fireEvent.change(screen.getByTestId("xac-nhan-so-ho-so"), { target: { value: "3" } })
+    fireEvent.click(nutGhi())
+    await screen.findByTestId("ket-qua-ghi-nhan")
+    expect(soLanMo).toBe(1)
+    expect(formGui.map((f) => f.get("ma_luot_gui"))).toEqual([MA, MA])
+    expect(formGui.map((f) => f.get("xac_nhan_so_ho_so"))).toEqual([sai, "3"])
+  })
+
+  it("xac_nhan_so_ho_so: gõ ĐÚNG 3 (số hồ sơ của bộ) ngay lần đầu ⇒ ghi được", async () => {
+    dung()
+    ve()
+    await dien()
+    fireEvent.click(nutGhi())
+    await screen.findByTestId("ket-qua-ghi-nhan")
+    expect(formGui.map((f) => f.get("xac_nhan_so_ho_so"))).toEqual(["3"])
+  })
+
+  async function boSungChonGoc() {
+    dung({ decisions: [qd({ id: 30, set_id: 3, so_quyet_dinh: "10" })] })
+    ve()
+    await dien()
+    fireEvent.click(screen.getByTestId("loai-bo-sung"))
+    const goc = (await screen.findByTestId("goc")) as HTMLSelectElement
+    await waitFor(() => expect(goc.options.length).toBe(2))
+    fireEvent.change(goc, { target: { value: "30" } })
+  }
+
+  it("goc_id ↔ loai: bo_sung + gốc là Quyết định trúng tuyển ĐANG hiệu lực ⇒ gửi goc_id và được nhận", async () => {
+    await boSungChonGoc()
+    fireEvent.click(nutGhi())
+    await screen.findByTestId("ket-qua-ghi-nhan")
+    expect(formGui[0]?.get("loai")).toBe("bo_sung")
+    expect(formGui[0]?.get("goc_id")).toBe("30")
+  })
+
+  it("goc_id ↔ loai: chọn gốc rồi ĐỔI LẠI trung_tuyen ⇒ KHÔNG còn gửi goc_id (luật thật: trung_tuyen + goc_id ⇒ 400)", async () => {
+    await boSungChonGoc()
+    fireEvent.click(screen.getByTestId("loai-trung-tuyen"))
+    fireEvent.click(nutGhi())
+    await screen.findByTestId("ket-qua-ghi-nhan") // máy chủ giả sẽ 400 nếu thân còn goc_id
+    expect(formGui[0]?.get("loai")).toBe("trung_tuyen")
+    expect(formGui[0]?.has("goc_id")).toBe(false)
+  })
+
+  const TS_TRONG = { tham_so_quyet_dinh: null } // bộ để TRỐNG tham số ⇒ Admin gõ số + ngày trên giấy
+
+  async function dienSoNgay(so: string, ngay: string) {
+    await dien()
+    fireEvent.change(screen.getByTestId("so-quyet-dinh"), { target: { value: so } })
+    fireEvent.change(screen.getByTestId("ngay-ky"), { target: { value: ngay } })
+  }
+
+  it("so_quyet_dinh: số đã dùng TRONG NĂM CỦA NGÀY KÝ ⇒ 409; cùng số nhưng ngày ký sang NĂM KHÁC ⇒ được (năm ký, không phải năm học)", async () => {
+    dung({ bo: TS_TRONG, decisions: [qd({ id: 50, set_id: 3, so_quyet_dinh: "300", ngay_ky: "2026-10-01", pham_vi_so: 2026 })] })
+    ve()
+    await dienSoNgay("300", "2026-12-01")
+    fireEvent.click(nutGhi())
+    expect((await screen.findByTestId("ghi-nhan-loi")).textContent).toContain("Số Quyết định 300 đã dùng trong năm 2026 (văn bản #50).")
+    expect((screen.getByTestId("bieu-mau-ghi-nhan") as HTMLFieldSetElement).disabled).toBe(false)
+    fireEvent.change(screen.getByTestId("ngay-ky"), { target: { value: "2027-01-15" } })
+    fireEvent.click(nutGhi())
+    await screen.findByTestId("ket-qua-ghi-nhan")
+    expect(formGui.map((f) => f.get("ngay_ky"))).toEqual(["2026-12-01", "2027-01-15"])
+    expect(formGui.map((f) => f.get("ma_luot_gui"))).toEqual([MA, MA])
+  })
+
+  it("ngay_ky: TRƯỚC ngày dựng bộ (01-09-2026 giờ VN) ⇒ 400; đúng ngày dựng ⇒ được", async () => {
+    dung({ bo: TS_TRONG })
+    ve()
+    await dienSoNgay("300", "2026-08-31")
+    fireEvent.click(nutGhi())
+    expect((await screen.findByTestId("ghi-nhan-loi")).textContent).toContain("Ngày ký trước ngày dựng bộ")
+    fireEvent.change(screen.getByTestId("ngay-ky"), { target: { value: "2026-09-01" } })
+    fireEvent.click(nutGhi())
+    await screen.findByTestId("ket-qua-ghi-nhan")
+  })
+
+  const TS_DOT = { so_quyet_dinh: "99", ngay_quyet_dinh: "2026-09-08", dot_so: "1", dot_thang: 9 }
+
+  it("dot_so ↔ dot_thang: bộ ĐÃ in (đợt 1, tháng 9) ⇒ hai ô KHOÁ đúng giá trị in và thân gửi (1, 9) — không thể hoán đổi; được nhận", async () => {
+    dung({ bo: { tham_so_quyet_dinh: TS_DOT } })
+    ve()
+    await dien()
+    const dotSo = screen.getByTestId("dot-so") as HTMLInputElement
+    const dotThang = screen.getByTestId("dot-thang") as HTMLInputElement
+    expect([dotSo.readOnly, dotSo.value, dotThang.readOnly, dotThang.value]).toEqual([true, "1", true, "9"])
+    fireEvent.click(nutGhi())
+    await screen.findByTestId("ket-qua-ghi-nhan")
+    expect([formGui[0]?.get("dot_so"), formGui[0]?.get("dot_thang")]).toEqual(["1", "9"])
+  })
+
+  it("dot_so ↔ dot_thang: bộ in số + ngày nhưng ĐỂ TRỐNG đợt ⇒ Admin gõ (2, 3) ⇒ thân gửi dot_so '2' và dot_thang '3'; được nhận", async () => {
+    dung({ bo: { tham_so_quyet_dinh: { so_quyet_dinh: "99", ngay_quyet_dinh: "2026-09-08" } } })
+    ve()
+    await dien()
+    fireEvent.change(screen.getByTestId("dot-so"), { target: { value: "2" } })
+    fireEvent.change(screen.getByTestId("dot-thang"), { target: { value: "3" } })
+    fireEvent.click(nutGhi())
+    await screen.findByTestId("ket-qua-ghi-nhan")
+    expect([formGui[0]?.get("dot_so"), formGui[0]?.get("dot_thang")]).toEqual(["2", "3"])
+  })
+
+  it("400 từ chối nghiệp vụ (ép) ⇒ hiện câu máy chủ, mở khoá biểu mẫu; gửi lại cùng mã (không mở lượt thứ hai)", async () => {
     let lan = 0
     dung({
       gui: () => {

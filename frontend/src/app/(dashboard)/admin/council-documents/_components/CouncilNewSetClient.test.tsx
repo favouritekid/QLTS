@@ -13,6 +13,7 @@ import { http, HttpResponse } from "msw"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 
 import { server } from "@/test/mocks/server"
+import { dap, luatDoiMa, luatKiemTruoc, luatTaoBo, luatTimHoSo } from "@/test/mocks/council-luat-may-chu"
 import { COUNCIL_DOCUMENTS_PREFIX as P } from "@/lib/api/council-documents"
 import { NO_COUNCIL_PERMISSIONS } from "@/hooks/admin/useCouncilDocuments"
 import { useCouncilSelectionStore } from "@/lib/stores/council-selection.store"
@@ -68,8 +69,25 @@ let timBodies: Record<string, unknown>[] = []
 let taoBodies: Record<string, unknown>[] = []
 let doiMaBodies: Record<string, unknown>[] = []
 let urls: string[] = []
+/** máy chủ giả đang dùng + mức hồ sơ bị ĐỔI sau lần kiểm (mô phỏng người dùng khác sửa hồ sơ ở thẻ khác) */
+let mayChuHienTai: Cau = {}
+let mucGhiDe: Record<number, "duoc_dung" | "can_xac_nhan" | "bi_chan"> | null = null
+const ID_THEO_MA = new Map(HO_SO.map((h) => [h.cccd, h.profile_id]))
+
+/** Mức hiện tại của từng hồ sơ theo máy chủ giả: ghi đè sau kiểm > đổi từ lần kiểm thứ n > mặc định của ca. */
+function mucHienTai(): Record<number, "duoc_dung" | "can_xac_nhan" | "bi_chan"> {
+  const c = mayChuHienTai
+  if (mucGhiDe) return mucGhiDe
+  return c.doiMucTuLanKiem && kiemBodies.length >= c.doiMucTuLanKiem.lan ? c.doiMucTuLanKiem.muc : (c.muc ?? {})
+}
+/** Dấu kiểm trước = hàm của (thứ tự chuẩn, mức từng hồ sơ HIỆN TẠI): dữ liệu đổi sau lúc kiểm ⇒ dấu tính lại KHÁC dấu đã cấp (như HMAC thật). */
+function dauKiem(idsChuan: readonly number[]): string {
+  const m = mucHienTai()
+  return `PBK:${idsChuan.join(",")}:${idsChuan.map((id) => m[id] ?? "duoc_dung").join(",")}`
+}
 
 function dung(cau: Cau = {}) {
+  mayChuHienTai = cau
   server.use(
     http.get(`${API}${P}/quyen`, () => HttpResponse.json({ permissions: QUYEN })),
     http.get(`${API}/api/admissions/academic-years`, () => HttpResponse.json([2026, 2025])),
@@ -78,8 +96,11 @@ function dung(cau: Cau = {}) {
     ),
     http.post(`${API}${P}/sets/tim-ho-so`, async ({ request }) => {
       urls.push(request.url)
-      timBodies.push((await request.json()) as Record<string, unknown>)
+      const than = (await request.json()) as Record<string, unknown>
+      timBodies.push(than)
       if (cau.timLoi) return cau.timLoi()
+      const sai = dap(luatTimHoSo(than)) // luật thật: khoá lạ ⇒ 422, từ khoá ≤ 100, trạng thái là MÃ, page_size 1…100
+      if (sai) return sai
       const dong = cau.dongTim ?? HO_SO
       return HttpResponse.json({ tong: dong.length, page: 1, page_size: 25, dong })
     }),
@@ -88,7 +109,9 @@ function dung(cau: Cau = {}) {
       const b = (await request.json()) as { academic_year: number; profile_ids: number[] }
       kiemBodies.push(b)
       if (cau.kiemLoi) return cau.kiemLoi()
-      const muc = cau.doiMucTuLanKiem && kiemBodies.length >= cau.doiMucTuLanKiem.lan ? cau.doiMucTuLanKiem.muc : (cau.muc ?? {})
+      const saiKiem = dap(luatKiemTruoc(b)) // luật thật: không rỗng, không TRÙNG (nêu số dòng), id dương
+      if (saiKiem) return saiKiem
+      const muc = mucHienTai()
       // MÁY CHỦ sắp theo id tăng dần — KHÁC thứ tự người dùng chọn / gửi.
       const ids = [...b.profile_ids].sort((x, y) => x - y)
       const dong = ids.map((id, i) => {
@@ -105,7 +128,7 @@ function dung(cau: Cau = {}) {
       for (const d of dong) if (d.muc === "can_xac_nhan") xn[d.trang_thai] = (xn[d.trang_thai] ?? 0) + 1
       return HttpResponse.json({
         kiem_luc: "2026-11-11T02:00:00Z",
-        phien_ban_kiem: "PBK-" + kiemBodies.length,
+        phien_ban_kiem: dauKiem(ids),
         dong,
         khong_tim_thay: [],
         tom_tat: {
@@ -121,12 +144,19 @@ function dung(cau: Cau = {}) {
       const b = (await request.json()) as Record<string, unknown>
       doiMaBodies.push(b)
       if (cau.doiMaLoi) return cau.doiMaLoi()
-      return HttpResponse.json({ profile_ids: [13], dong_loi: [{ dong: 2, ly_do: "khong_khop" }] })
+      // luật thật (`loi_mot_ma` + trùng + ngoài phạm vi): id theo thứ tự dòng, lỗi theo SỐ DÒNG
+      return HttpResponse.json(luatDoiMa(b.ma_ho_so, ID_THEO_MA))
     }),
     http.post(`${API}${P}/sets`, async ({ request }) => {
       urls.push(request.url)
-      taoBodies.push((await request.json()) as Record<string, unknown>)
-      return cau.tao ? cau.tao() : HttpResponse.json(BO_MOI, { status: 201 })
+      const than = (await request.json()) as Record<string, unknown>
+      taoBodies.push(than)
+      if (cau.tao) return cau.tao()
+      // luật thật (`so_voi_kiem_truoc`): thứ tự CHUẨN = tính từ chính tập id gửi lên; dấu tính lại từ dữ liệu HIỆN TẠI; lệch ⇒ 409
+      const ids = Array.isArray(than.profile_ids) ? (than.profile_ids as number[]) : []
+      const chuan = [...ids].sort((x, y) => x - y)
+      const sai = dap(luatTaoBo(than, { anh: { thuTuChuan: chuan, dau: dauKiem(chuan) }, idTheoMa: ID_THEO_MA }))
+      return sai ?? HttpResponse.json(BO_MOI, { status: 201 })
     }),
   )
 }
@@ -166,6 +196,8 @@ beforeEach(() => {
   taoBodies = []
   doiMaBodies = []
   urls = []
+  mucGhiDe = null
+  mayChuHienTai = {}
   push.mockClear()
   useCouncilSelectionStore.getState().lamSach()
   vi.spyOn(console, "error").mockImplementation(() => undefined)
@@ -199,7 +231,7 @@ describe("trang /moi — luồng chính", () => {
     expect(taoBodies).toHaveLength(1)
     expect(taoBodies[0]).toEqual({
       profile_ids: [11, 12], // thứ tự MÁY CHỦ trả, không phải [12, 11]
-      phien_ban_kiem: "PBK-" + kiemBodies.length,
+      phien_ban_kiem: dauKiem([11, 12]),
       academic_year: 2026,
       tham_so_quyet_dinh: { so_quyet_dinh: "501" },
     })
@@ -431,10 +463,10 @@ describe("bước 4 — dựng", () => {
     expect(push).not.toHaveBeenCalled()
   })
 
-  it("lỗi miền khác (422 / 400) ⇒ hiện nguyên văn câu của máy chủ, vẫn ở bước 4", async () => {
-    await denBuoc4({ tao: () => HttpResponse.json({ detail: "Đợt số và tháng phải cùng điền.", error_code: "DATA_VALIDATION_ERROR" }, { status: 400 }) })
+  it("lỗi miền khác (400 ép) ⇒ hiện nguyên văn câu của máy chủ, vẫn ở bước 4 (luật đợt số ↔ tháng THẬT là 422 — xem nhóm 'hợp đồng thân yêu cầu')", async () => {
+    await denBuoc4({ tao: () => HttpResponse.json({ detail: "Dữ liệu không hợp lệ (ca ép 400).", error_code: "DATA_VALIDATION_ERROR" }, { status: 400 }) })
     fireEvent.click(screen.getByTestId("dung-bo"))
-    expect((await screen.findByTestId("dung-bo-loi")).textContent).toContain("Đợt số và tháng phải cùng điền.")
+    expect((await screen.findByTestId("dung-bo-loi")).textContent).toContain("Dữ liệu không hợp lệ (ca ép 400).")
     expect(screen.getByTestId("buoc-dung")).toBeTruthy()
   })
 })
@@ -532,5 +564,118 @@ describe("danh sách chọn", () => {
     expect(them.mock.calls.some((c) => c[0] === "beforeunload")).toBe(true)
     act(() => useCouncilSelectionStore.getState().boTatCa())
     await waitFor(() => expect(go.mock.calls.some((c) => c[0] === "beforeunload")).toBe(true))
+  })
+})
+
+// ── Hợp đồng thân yêu cầu mục 2–6, 9 (Codex lần 20 câu 2): máy chủ giả ÁP LUẬT THẬT (`council-luat-may-chu.ts`) ──────────────────────────
+// profile_ids phải ĐÚNG thứ tự kiểm trước + phien_ban_kiem nguyên văn (đổi dữ liệu ⇒ dấu đổi); tham số `dot_so` CHUỖI + `dot_thang` SỐ phải ĐỦ CẢ HAI.
+describe("hợp đồng thân yêu cầu — dựng bộ theo id (luật thật)", () => {
+  async function denBuoc3(cau: Cau = {}) {
+    dung(cau)
+    ve()
+    await chon([12, 11]) // chọn 12 trước, 11 sau — thứ tự CHUẨN của máy chủ là [11, 12]
+    fireEvent.click(screen.getByTestId("tiep-kiem-tra"))
+    await screen.findByTestId("bang-kiem-tra")
+    fireEvent.click(screen.getByTestId("chot-tiep"))
+    await screen.findByTestId("buoc-tham-so")
+  }
+  async function denDung() {
+    fireEvent.click(screen.getByTestId("tham-so-tiep"))
+    await screen.findByTestId("buoc-dung")
+  }
+
+  it("profile_ids + phien_ban_kiem: gửi ĐÚNG thứ tự máy chủ [11, 12] (không phải thứ tự chọn [12, 11]) và dấu của lần kiểm đã cầm ⇒ máy chủ nhận", async () => {
+    await denBuoc3()
+    await denDung()
+    fireEvent.click(screen.getByTestId("dung-bo"))
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/admin/council-documents/9?buoc=tai"))
+    expect(taoBodies).toHaveLength(1)
+    expect(taoBodies[0].profile_ids).toEqual([11, 12])
+    expect(taoBodies[0].phien_ban_kiem).toBe(dauKiem([11, 12]))
+  })
+
+  it("phien_ban_kiem: hồ sơ ĐỔI sau lúc kiểm ⇒ dấu cũ ⇒ 409 du_lieu_doi_tu_luc_kiem (luật thật) ⇒ về bước 2 + kiểm lại; không chuyển trang", async () => {
+    await denBuoc3()
+    await denDung()
+    mucGhiDe = { 12: "can_xac_nhan" } // hồ sơ 12 đổi mức SAU lần kiểm mà giao diện đang cầm ⇒ dấu tính lại ở máy chủ khác
+    const soLanKiem = kiemBodies.length
+    fireEvent.click(screen.getByTestId("dung-bo"))
+    expect(await screen.findByTestId("buoc-kiem-tra")).toBeTruthy()
+    await waitFor(() => expect(kiemBodies.length).toBeGreaterThan(soLanKiem))
+    expect(taoBodies).toHaveLength(1) // máy chủ ĐÃ nhận đúng một lần gửi và TỪ CHỐI
+    expect(push).not.toHaveBeenCalled()
+  })
+
+  it("dot_so ↔ dot_thang: chỉ điền 'Đợt số' ⇒ máy chủ 422 'cần đủ cả số đợt và tháng'; giao diện hiện câu ấy, vẫn ở bước 4, không chuyển trang", async () => {
+    await denBuoc3()
+    fireEvent.change(screen.getByLabelText("Đợt số"), { target: { value: "1" } })
+    await denDung()
+    fireEvent.click(screen.getByTestId("dung-bo"))
+    expect((await screen.findByTestId("dung-bo-loi")).textContent).toContain("đợt xét tuyển cần đủ cả số đợt và tháng")
+    expect(screen.getByTestId("buoc-dung")).toBeTruthy()
+    expect(push).not.toHaveBeenCalled()
+    expect(taoBodies[0].tham_so_quyet_dinh).toEqual({ dot_so: "1" })
+  })
+
+  it("dot_so ↔ dot_thang: chỉ điền 'Tháng của đợt' ⇒ máy chủ 422 (nửa còn lại)", async () => {
+    await denBuoc3()
+    fireEvent.change(screen.getByLabelText("Tháng của đợt"), { target: { value: "9" } })
+    await denDung()
+    fireEvent.click(screen.getByTestId("dung-bo"))
+    expect((await screen.findByTestId("dung-bo-loi")).textContent).toContain("đợt xét tuyển cần đủ cả số đợt và tháng")
+    expect(taoBodies[0].tham_so_quyet_dinh).toEqual({ dot_thang: 9 })
+  })
+
+  it("dot_so ↔ dot_thang: điền ĐỦ (1, 9) ⇒ thân gửi dot_so CHUỖI '1' và dot_thang SỐ 9 (đúng kiểu của máy chủ); được nhận", async () => {
+    await denBuoc3()
+    fireEvent.change(screen.getByLabelText("Đợt số"), { target: { value: "1" } })
+    fireEvent.change(screen.getByLabelText("Tháng của đợt"), { target: { value: "9" } })
+    await denDung()
+    fireEvent.click(screen.getByTestId("dung-bo"))
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/admin/council-documents/9?buoc=tai"))
+    expect(taoBodies[0].tham_so_quyet_dinh).toEqual({ dot_so: "1", dot_thang: 9 })
+  })
+
+  it("tham số ngày: ngày Biên bản SAU ngày Quyết định ⇒ máy chủ 422; BB 08-09 + QĐ 08-09 ⇒ được", async () => {
+    await denBuoc3()
+    fireEvent.change(screen.getByLabelText("Ngày Quyết định"), { target: { value: "2026-09-08" } })
+    fireEvent.change(screen.getByLabelText("Ngày Biên bản"), { target: { value: "2026-09-09" } })
+    await denDung()
+    fireEvent.click(screen.getByTestId("dung-bo"))
+    expect((await screen.findByTestId("dung-bo-loi")).textContent).toContain("ngày Biên bản sau ngày Quyết định")
+  })
+})
+
+// ── Hợp đồng thân yêu cầu mục 6 (`POST /sets/tim-ho-so`): máy chủ giả ÁP LUẬT THẬT (`luatTimHoSo`) ───────────────────────────────────────
+describe("hợp đồng thân yêu cầu — tìm hồ sơ (luật thật)", () => {
+  async function vaoBuocChon() {
+    dung()
+    ve()
+    await screen.findByTestId("buoc-chon")
+    fireEvent.change(await screen.findByTestId("loc-nam"), { target: { value: "2026" } })
+    await screen.findByTestId("ho-so-11")
+  }
+
+  it("major_ids là id NGÀNH lấy từ danh sách ngành (1), trang_thai là MÃ (không phải nhãn) ⇒ máy chủ nhận, danh sách không báo lỗi", async () => {
+    await vaoBuocChon()
+    const nganh = screen.getByTestId("loc-nganh") as HTMLSelectElement
+    await waitFor(() => expect(nganh.options.length).toBeGreaterThan(1))
+    fireEvent.change(nganh, { target: { value: "1" } })
+    await waitFor(() => expect(timBodies.at(-1)?.major_ids).toEqual([1]))
+    const tt = screen.getByTestId("loc-trang-thai") as HTMLSelectElement
+    const ma = tt.options[1].value // mã trạng thái đầu tiên của bộ lọc
+    expect(ma).toMatch(/^[a-z_]+$/) // MÃ (approved…), không phải nhãn tiếng Việt
+    fireEvent.change(tt, { target: { value: ma } })
+    await waitFor(() => expect(timBodies.at(-1)?.trang_thai).toEqual([ma]))
+    expect(screen.queryByTestId("tim-ho-so-loi")).toBeNull() // luật thật nhận cả hai
+  })
+
+  it("tu_khoa: khoảng trắng hai đầu bị cắt; tối đa 100 ký tự (gõ 101 ⇒ chỉ gửi 100) ⇒ không bao giờ chạm luật '≤ 100' của máy chủ", async () => {
+    await vaoBuocChon()
+    fireEvent.change(screen.getByTestId("loc-tu-khoa"), { target: { value: `  ${"a".repeat(101)}  ` } })
+    await waitFor(() => expect(timBodies.some((b) => typeof b.tu_khoa === "string")).toBe(true), { timeout: 3000 })
+    const gui = timBodies.filter((b) => typeof b.tu_khoa === "string").map((b) => (b.tu_khoa as string).length)
+    expect(gui).toEqual([100])
+    expect(screen.queryByTestId("tim-ho-so-loi")).toBeNull()
   })
 })

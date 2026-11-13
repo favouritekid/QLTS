@@ -9,6 +9,7 @@ import { http, HttpResponse, delay } from "msw"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 
 import { server } from "@/test/mocks/server"
+import { dap, luatTaoBo } from "@/test/mocks/council-luat-may-chu"
 import { COUNCIL_DOCUMENTS_PREFIX as P } from "@/lib/api/council-documents"
 
 import { CreateCouncilSetForm, dongNhapThanhDanhSach } from "./CreateCouncilSetForm"
@@ -209,5 +210,77 @@ describe("CreateCouncilSetForm", () => {
     expect(o.getAttribute("name")).toBeNull()
     expect(o.getAttribute("autocomplete")).toBe("off")
     expect(screen.getByTestId("create-set-form").getAttribute("autocomplete")).toBe("off")
+  })
+})
+
+// ── Hợp đồng thân yêu cầu mục 2 (`POST /sets` dạng MÃ): máy chủ giả ÁP LUẬT THẬT (`council-luat-may-chu.ts` → `luatTaoBo`) ─────────────────
+// CCCD chỉ duy nhất trong MỘT năm học ⇒ mã đúng dạng nhưng sai năm ⇒ "không có hồ sơ"; mã 11 số / trùng dòng ⇒ 400 nêu SỐ DÒNG.
+describe("hợp đồng thân yêu cầu — POST /sets dạng mã (luật thật)", () => {
+  const KHO_2026 = new Map([[MA[0], 30], [MA[1], 10], [MA[2], 20]])
+  function mocLuat() {
+    server.use(
+      http.post(`${API}${P}/sets`, async ({ request }) => {
+        urls.push(request.url)
+        const than = (await request.clone().json()) as Record<string, unknown>
+        bodies.push(than)
+        const sai = dap(luatTaoBo(than, { anh: null, idTheoMa: than.academic_year === 2026 ? KHO_2026 : new Map() }))
+        return sai ?? HttpResponse.json(BO, { status: 201 })
+      }),
+      http.get(`${API}${P}/sets`, () => HttpResponse.json([])),
+    )
+  }
+
+  it("ĐÚNG: ba mã 12 số của năm 2026 theo đúng thứ tự trên giấy ⇒ dựng được", async () => {
+    mocLuat()
+    ve()
+    nhap(MA.join("\n"))
+    fireEvent.click(screen.getByTestId("create-set-submit"))
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/admin/council-documents/21"))
+  })
+
+  it("SAI: mã 11 số ở dòng 2 ⇒ 400 nêu 'Dòng 2' (không nêu giá trị); không chuyển trang", async () => {
+    mocLuat()
+    ve()
+    nhap([MA[0], "09999900000", MA[2]].join("\n"))
+    fireEvent.click(screen.getByTestId("create-set-submit"))
+    const loi = await screen.findByTestId("create-set-error")
+    expect(loi.textContent).toContain("Dòng 2")
+    expect(loi.textContent).not.toContain("09999900000")
+    expect(push).not.toHaveBeenCalled()
+  })
+
+  it("SAI: cùng một mã ở hai dòng ⇒ 400 'Dòng 2 trùng' ", async () => {
+    mocLuat()
+    ve()
+    nhap([MA[0], MA[0]].join("\n"))
+    fireEvent.click(screen.getByTestId("create-set-submit"))
+    expect((await screen.findByTestId("create-set-error")).textContent).toContain("Dòng 2 trùng")
+  })
+
+  it("SAI: mã ĐÚNG dạng nhưng sai NĂM HỌC (2027 — mã chỉ có ở 2026) ⇒ 400; sửa năm về 2026 ⇒ dựng được", async () => {
+    mocLuat()
+    ve()
+    nhap(MA.join("\n"), "2027")
+    fireEvent.click(screen.getByTestId("create-set-submit"))
+    expect((await screen.findByTestId("create-set-error")).textContent).toContain("không khớp đúng một hồ sơ")
+    expect(push).not.toHaveBeenCalled()
+    fireEvent.change(screen.getByTestId("nam-hoc-input"), { target: { value: "2026" } })
+    fireEvent.click(screen.getByTestId("create-set-submit"))
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/admin/council-documents/21"))
+    expect(bodies.map((b) => (b as { academic_year: number }).academic_year)).toEqual([2027, 2026])
+  })
+
+  it("tham số đợt chỉ MỘT NỬA (Đợt số 1, không tháng) ⇒ máy chủ 422; ĐỦ (1, 9) ⇒ được, thân dot_so CHUỖI + dot_thang SỐ", async () => {
+    mocLuat()
+    ve()
+    nhap(MA[0])
+    fireEvent.click(screen.getByTestId("tham-so-toggle"))
+    fireEvent.change(screen.getByLabelText("Đợt số"), { target: { value: "1" } })
+    fireEvent.click(screen.getByTestId("create-set-submit"))
+    expect((await screen.findByTestId("create-set-error")).textContent).toContain("đợt xét tuyển cần đủ cả số đợt và tháng")
+    fireEvent.change(screen.getByLabelText("Tháng của đợt"), { target: { value: "9" } })
+    fireEvent.click(screen.getByTestId("create-set-submit"))
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/admin/council-documents/21"))
+    expect((bodies[1] as { tham_so_quyet_dinh: unknown }).tham_so_quyet_dinh).toEqual({ dot_so: "1", dot_thang: 9 })
   })
 })
