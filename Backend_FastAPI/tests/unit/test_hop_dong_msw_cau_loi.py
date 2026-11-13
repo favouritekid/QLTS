@@ -200,11 +200,30 @@ def hang_chu_ts(tu) -> dict:
             j += 1
         if j + 1 >= len(tu) or tu[j].gt != "=":
             continue
-        gt = _gia_tri_chu(tu[j + 1])
-        sau_do = tu[j + 2] if j + 2 < len(tu) else None
-        if gt is not None and not (sau_do is not None and sau_do.loai == "dau" and sau_do.gt in ("+", ".", "[", "(", "?")):
+        chu = tu[j + 1]
+        gt = _gia_tri_chu(chu)
+        if gt is None:
+            continue
+        # Codex lần 24 F292: DANH SÁCH CHO PHÉP toàn bộ dạng khởi tạo — chữ [as const] rồi HẾT câu lệnh. Không dùng danh sách
+        # cấm toán tử: ``"câu" as string + " SAI"`` có ``as`` ngay sau chữ nên lọt danh sách cấm cũ trong khi giá trị chạy có hậu tố.
+        k2 = j + 2
+        if k2 + 1 < len(tu) and tu[k2].loai == "id" and tu[k2].gt == "as" and tu[k2 + 1].loai == "id" and tu[k2 + 1].gt == "const":
+            k2 += 2
+        tiep = tu[k2] if k2 < len(tu) else None
+        # Hết câu: ``;`` / ``}`` / hết tệp, hoặc một TÊN ở DÒNG SAU (tự chèn ``;`` của JS) mà không phải từ nối tiếp biểu thức.
+        # ``(`` ``[`` ``+`` `` ` `` … ở dòng sau VẪN nối tiếp ⇒ không nhận.
+        het_cau = (
+            tiep is None
+            or (tiep.loai == "dau" and tiep.gt in (";", "}"))
+            or (tiep.loai == "id" and tiep.dong > chu.dong and tiep.gt not in _TU_NOI_TIEP)
+        )
+        if het_cau:
             out[tu[k + 1].gt] = gt
     return out
+
+
+#: tên có thể NỐI TIẾP biểu thức đứng trước dù xuống dòng ⇒ KHÔNG coi là hết câu
+_TU_NOI_TIEP = frozenset(("as", "satisfies", "in", "instanceof"))
 
 
 def cau_cua_msw(src: str):
@@ -421,9 +440,19 @@ def test_ten_loai_trang_thai_va_tran_tu_khoa_msw_bang_may_chu():
         ('const C3 = "a" + b\nloi400(C3)', [("loi400", None)]),
         ('const C4 = f("x")\nloi400(C4)', [("loi400", None)]),
         ('loi400(KHONG_KHAI)', [("loi400", None)]),
+        # F292 (Codex lần 24): chỉ nhận ĐỦ dạng khởi tạo "chữ [as const]" rồi hết câu lệnh
+        ('const CAU = "câu đúng" as string + " SAI"\nloi400(CAU)', [("loi400", None)]),
+        ('const C6 = "a"\n  + " SAI"\nloi400(C6)', [("loi400", None)]),
+        ('const C7 = "a" satisfies string\nloi400(C7)', [("loi400", None)]),
+        ('const C8 = "Câu" as const\nexport const X = 1\nloi400(C8)', [("loi400", "Câu")]),
+        ('const C9 = "Câu";\nloi400(C9)', [("loi400", "Câu")]),
+        ('const C10 = "a"\n  as string\nloi400(C10)', [("loi400", None)]),
+        ('const C11 = "a"\n  ("x")\nloi400(C11)', [("loi400", None)]),
     ],
     ids=["loiTrung", "nhieu-dong", "chu-thich", "nhay-kep-thoat", "loi422-doi-so-2", "regex", "mau-long", "bien",
-         "hang-chu", "hang-co-kieu-mau", "hang-ghep", "hang-goi-ham", "ten-khong-khai"],
+         "hang-chu", "hang-co-kieu-mau", "hang-ghep", "hang-goi-ham", "ten-khong-khai",
+         "ep-kieu-roi-noi", "noi-dong-sau", "satisfies", "as-const-roi-cau-moi", "cham-phay", "as-dong-sau",
+         "goi-ham-dong-sau"],
 )
 def test_bo_tach_tu_doc_dung_cau(nguon, mong):
     assert [(h, c) for h, _, c in cau_cua_msw(nguon)] == mong
