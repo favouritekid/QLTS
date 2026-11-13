@@ -455,13 +455,15 @@ class Settings(BaseSettings):
     COUNCIL_SET_MAX_PROFILES: int = Field(
         default=1000, ge=1, le=10000,
         validation_alias="COUNCIL_SET_MAX_PROFILES",
-    )  # số hồ sơ tối đa của MỘT bộ văn bản. Đo 03-11 (1.000 hồ sơ giả, 12 ngành, máy dev
-    # 8 vCPU): dựng ~11 s, đi qua nginx proxy_read_timeout 60s ⇒ nâng trần thì đo lại thời gian
+    )  # số hồ sơ tối đa của MỘT bộ văn bản. Đo 03-11 trên dữ liệu GIẢ đúng bằng trần
+    # mặc định này (12 ngành, máy dev 8 vCPU): dựng ~11 s, đi qua nginx
+    # proxy_read_timeout 60s ⇒ nâng trần thì đo lại thời gian
     COUNCIL_SET_MAX_TOTAL_BYTES: int = Field(
         default=16 * 1024 * 1024, ge=1024 * 1024, le=512 * 1024 * 1024,
         validation_alias="COUNCIL_SET_MAX_TOTAL_BYTES",
-    )  # tổng bytes các tệp sinh của MỘT bộ (vượt ⇒ không ghi gì). Đo 03-11: 1.000 hồ sơ giả
-    # ⇒ 2,6 MB tệp (mẫu giả mang ~130 KB không nén được như phông nhúng của mẫu thật)
+    )  # tổng bytes các tệp sinh của MỘT bộ (vượt ⇒ không ghi gì). Đo 03-11 trên dữ liệu
+    # GIẢ ở trần mặc định số hồ sơ ⇒ 2,6 MB tệp (mẫu giả mang ~130 KB không nén được
+    # như phông nhúng của mẫu thật)
     COUNCIL_DECISION_SCAN_MAX_BYTES: int = Field(
         default=20 * 1024 * 1024, ge=64 * 1024, le=100 * 1024 * 1024,
         validation_alias="COUNCIL_DECISION_SCAN_MAX_BYTES",
