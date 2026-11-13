@@ -56,7 +56,7 @@ export function CouncilTemplatePanel({ canUpload }: { canUpload: boolean }) {
           <TableHeader>
             <TableRow>
               <TableHead>Loại</TableHead>
-              <TableHead>Hiệu lực từ</TableHead>
+              <TableHead>Áp cho văn bản ký từ</TableHead>
               <TableHead>sha256</TableHead>
               <TableHead className="text-right">Kích thước</TableHead>
               <TableHead>Người tải</TableHead>
@@ -105,7 +105,7 @@ function UploadTemplateForm() {
           { loai, hieu_luc_tu: hieuLuc, ghi_chu: ghiChu.trim() || undefined, file: tep },
           {
             onSuccess: (m) => {
-              toast.success(`Đã tải mẫu ${nhanLoaiMau(m.loai)} hiệu lực từ ${ngay(m.hieu_luc_tu)}.`)
+              toast.success(`Đã tải mẫu ${nhanLoaiMau(m.loai)}, áp cho văn bản ký từ ${ngay(m.hieu_luc_tu)}.`)
               setTep(null)
               setGhiChu("")
               if (oTep.current) oTep.current.value = ""
@@ -132,7 +132,7 @@ function UploadTemplateForm() {
           </Select>
         </div>
         <div className="space-y-1">
-          <Label htmlFor="mau-hieu-luc">Áp cho văn bản KÝ từ ngày</Label>
+          <Label htmlFor="mau-hieu-luc">Áp cho văn bản ký từ ngày</Label>
           <Input
             id="mau-hieu-luc"
             type="date"

@@ -20,6 +20,9 @@ import {
   luatTimHoSo,
   luatXoaBo,
   loiMotMa,
+  luatDoiMaTruoc,
+  luatLopSchemaMa,
+  neuDong,
   type NguCanhGhiNhan,
 } from "./council-luat-may-chu"
 
@@ -260,14 +263,128 @@ describe("luatTaoBo dạng MÃ — 12 / 9 số; trùng dòng; sai năm (mã đú
     expect(goi([CCCD(1), CCCD(1)])).toMatchObject({ status: 400, body: { detail: expect.stringContaining("Dòng 2 trùng") } })
     expect(goi([CCCD(9)])).toMatchObject({ status: 400 })
   })
-  it("câu lỗi từng dòng = câu máy chủ (`_CAU_LOI_MA` + `chuan_hoa_ma`): không phải chuỗi (Đ3-2) · ký tự điều khiển · trùng — chỉ nêu SỐ DÒNG", () => {
+  it("câu lỗi từng dòng = câu máy chủ (`_CAU_LOI_MA` + `chuan_hoa_ma`): rỗng · ký tự điều khiển · sai dạng · trùng — chỉ nêu SỐ DÒNG", () => {
     const loi = (ma: unknown[]) => (luatTaoBo({ ma_ho_so: ma, academic_year: 2026 }, { anh: null, idTheoMa: kho })?.body as { detail: string }).detail
-    expect(loi([CCCD(1), 123456789012])).toBe("Dòng 2: mã hồ sơ không phải chuỗi.")
-    expect(loi([CCCD(1), null])).toBe("Dòng 2: mã hồ sơ không phải chuỗi.")
     expect(loi([CCCD(1), ""])).toBe("Dòng 2: mã hồ sơ rỗng.")
     expect(loi([CCCD(1), CCCD(4) + String.fromCharCode(7)])).toBe("Dòng 2: không phải mã hồ sơ (quá dài hoặc có ký tự điều khiển).")
     expect(loi([CCCD(1), "09999900000"])).toBe("Dòng 2: mã hồ sơ phải gồm đúng 12 chữ số (CCCD) hoặc đúng 9 chữ số (CMND), chỉ chữ số 0-9.")
     expect(loi([CCCD(1), CCCD(4), CCCD(1)])).toBe("Dòng 3 trùng mã hồ sơ với dòng 1 — mỗi người một dòng.")
+  })
+
+  // ── Đ3-5: ba pha của máy chủ (cú pháp xong → trần → khớp CSDL) + câu "không khớp" GỘP ────────────────────────────────────────
+  const goiMa = (ma: unknown, them: { toiDa?: number; maNhieuHoSo?: ReadonlySet<string> } = {}, khoMa: ReadonlyMap<string, number> = kho) =>
+    luatTaoBo({ ma_ho_so: ma, academic_year: 2026 }, { anh: null, idTheoMa: khoMa, ...them })
+  const chiTiet = (r: ReturnType<typeof goiMa>) => (r?.body as { detail: string }).detail
+  const KHONG_CO = (n: number) => CCCD(500 + n) // mã đúng dạng, KHÔNG có trong kho
+  const CAU_GOP = "không có hồ sơ nào mang mã này trong năm học đã chọn"
+  it("Đ3-5: 'không khớp' là MỘT câu GỘP nêu MỌI dòng không khớp (đếm từ 1), không nêu giá trị — không dừng ở dòng đầu", () => {
+    const r = goiMa([CCCD(1), KHONG_CO(1), CCCD(4), KHONG_CO(2)])
+    expect(r).toMatchObject({ status: 400, body: { error_code: "DATA_VALIDATION_ERROR" } })
+    expect(chiTiet(r)).toBe(`Mã hồ sơ phải khớp đúng một hồ sơ: dòng 2, 4 ${CAU_GOP}.`)
+    expect(JSON.stringify(r)).not.toContain(KHONG_CO(1))
+    expect(JSON.stringify(r)).not.toContain(KHONG_CO(2))
+    expect(goiMa([CCCD(4), CCCD(1)])).toBeNull() // mọi mã khớp ⇒ nhận
+  })
+  it("Đ3-5: mã khớp NHIỀU hồ sơ (so > 1) ⇒ phần riêng nối bằng '; ' SAU phần 'không có hồ sơ' (đúng thứ tự của máy chủ)", () => {
+    const r = goiMa([CCCD(1), CCCD(4), KHONG_CO(3)], { maNhieuHoSo: new Set([CCCD(4)]) })
+    expect(chiTiet(r)).toBe(`Mã hồ sơ phải khớp đúng một hồ sơ: dòng 3 ${CAU_GOP}; dòng 2 khớp NHIỀU hồ sơ cùng mã.`)
+    expect(chiTiet(goiMa([CCCD(1), CCCD(4)], { maNhieuHoSo: new Set([CCCD(4)]) }))).toBe("Mã hồ sơ phải khớp đúng một hồ sơ: dòng 2 khớp NHIỀU hồ sơ cùng mã.")
+  })
+  it("Đ3-5: câu gộp chỉ nêu tối đa 20 dòng rồi '… (tổng N dòng)' (`_neu_dong`)", () => {
+    const dong = (n: number) => Array.from({ length: n }, (_, i) => i + 1)
+    expect(neuDong(dong(20))).toBe(dong(20).join(", "))
+    expect(neuDong(dong(21))).toBe(`${dong(20).join(", ")} … (tổng 21 dòng)`)
+    const khongCo = Array.from({ length: 25 }, (_, i) => KHONG_CO(i))
+    expect(chiTiet(goiMa(khongCo))).toBe(`Mã hồ sơ phải khớp đúng một hồ sơ: dòng ${dong(20).join(", ")} … (tổng 25 dòng) ${CAU_GOP}.`)
+  })
+  it("Đ3-5: THỨ TỰ ba pha — cú pháp / trùng ĐỨNG TRƯỚC khớp CSDL: dòng 1 không khớp + dòng 2 sai dạng ⇒ báo dòng 2 (không phải câu gộp)", () => {
+    expect(chiTiet(goiMa([KHONG_CO(1), "09999900000"]))).toBe("Dòng 2: mã hồ sơ phải gồm đúng 12 chữ số (CCCD) hoặc đúng 9 chữ số (CMND), chỉ chữ số 0-9.")
+    expect(chiTiet(goiMa([KHONG_CO(1), KHONG_CO(1)]))).toBe("Dòng 2 trùng mã hồ sơ với dòng 1 — mỗi người một dòng.")
+  })
+  it("Đ3-5: TRẦN ở nhánh mã — 1001 mã ⇒ 400 'Danh sách có 1001 mã, vượt giới hạn…' (chữ 'mã'); đúng 1000 mã khớp hết ⇒ nhận; trần truyền vào ưu tiên", () => {
+    const tu = (n: number) => Array.from({ length: n }, (_, i) => CCCD(i + 1))
+    const khoLon = new Map(tu(1001).map((m, i) => [m, i + 1] as [string, number]))
+    expect(goiMa(tu(1000), {}, khoLon)).toBeNull()
+    expect(chiTiet(goiMa(tu(1001), {}, khoLon))).toBe("Danh sách có 1001 mã, vượt giới hạn kỹ thuật 1000 hồ sơ cho một bộ văn bản.")
+    expect(chiTiet(goiMa(tu(3), { toiDa: 2 }, khoLon))).toBe("Danh sách có 3 mã, vượt giới hạn kỹ thuật 2 hồ sơ cho một bộ văn bản.")
+  })
+  it("Đ3-5: trần đứng SAU cú pháp và TRƯỚC khớp CSDL — 1001 mã có dòng 5 sai dạng ⇒ báo dòng 5; 1001 mã không có trong kho ⇒ báo TRẦN (không phải câu gộp)", () => {
+    const tu = (n: number) => Array.from({ length: n }, (_, i) => CCCD(i + 1))
+    const coSai = tu(1001)
+    coSai[4] = "09999900000"
+    expect(chiTiet(goiMa(coSai, {}, new Map()))).toMatch(/^Dòng 5: mã hồ sơ phải gồm đúng 12 chữ số/)
+    expect(chiTiet(goiMa(tu(1001), {}, new Map()))).toBe("Danh sách có 1001 mã, vượt giới hạn kỹ thuật 1000 hồ sơ cho một bộ văn bản.")
+  })
+
+  // ── Đ3-5b: lớp SCHEMA (pydantic) chạy TRƯỚC service ─────────────────────────────────────────────────────────────────────────
+  it("Đ3-5b: phần tử KHÔNG PHẢI CHUỖI ⇒ 422 ở lớp schema (string_type, loc kèm CHỈ SỐ phần tử) — không còn 400 'không phải chuỗi' của service", () => {
+    const r = goiMa([CCCD(1), 123456789012])
+    expect(r).toEqual({
+      status: 422,
+      body: {
+        detail: "Request validation failed",
+        error_code: "VALIDATION_ERROR",
+        errors: [{ type: "string_type", loc: ["body", "ma_ho_so", 1], msg: "Input should be a valid string" }],
+      },
+    })
+    expect(goiMa([CCCD(1), null])).toMatchObject({ status: 422, body: { errors: [{ loc: ["body", "ma_ho_so", 1] }] } })
+  })
+  it("Đ3-5b: pydantic báo MỌI phần tử sai (không dừng ở phần tử đầu); mã chuỗi không bị tính", () => {
+    const r = goiMa([CCCD(1), 5, null, CCCD(4), true, {}])
+    expect((r?.body as { errors: Array<{ loc: unknown[] }> }).errors.map((e) => e.loc)).toEqual([
+      ["body", "ma_ho_so", 1],
+      ["body", "ma_ho_so", 2],
+      ["body", "ma_ho_so", 4],
+      ["body", "ma_ho_so", 5],
+    ])
+  })
+  it("Đ3-5b: ma_ho_so rỗng ⇒ 422 too_short; không phải danh sách ('abc' / số / đối tượng) ⇒ 422 list_type — KHÔNG phải 400 'Danh sách mã hồ sơ rỗng.'", () => {
+    expect(goiMa([])).toEqual({
+      status: 422,
+      body: {
+        detail: "Request validation failed",
+        error_code: "VALIDATION_ERROR",
+        errors: [{ type: "too_short", loc: ["body", "ma_ho_so"], msg: "List should have at least 1 item after validation, not 0" }],
+      },
+    })
+    for (const sai of ["abc", 5, {}]) {
+      expect(goiMa(sai)).toMatchObject({ status: 422, body: { errors: [{ type: "list_type", loc: ["body", "ma_ho_so"], msg: "Input should be a valid list" }] } })
+    }
+  })
+  it("Đ3-5b: lỗi TRƯỜNG (schema) đứng trước lỗi 'đúng MỘT dạng' của validator mô hình: ma_ho_so sai kiểu + profile_ids ⇒ lỗi phần tử, không phải câu 'Gửi đúng MỘT dạng'", () => {
+    const r = luatTaoBo({ ma_ho_so: [CCCD(1), 7], profile_ids: [1], phien_ban_kiem: "x", academic_year: 2026 }, { anh: null, idTheoMa: kho })
+    expect(r).toMatchObject({ status: 422, body: { errors: [{ type: "string_type", loc: ["body", "ma_ho_so", 1] }] } })
+    // đối chứng: ma_ho_so ĐÚNG kiểu + profile_ids ⇒ câu 'đúng MỘT dạng' như cũ
+    expect(luatTaoBo({ ma_ho_so: [CCCD(1)], profile_ids: [1], phien_ban_kiem: "x", academic_year: 2026 }, { anh: null, idTheoMa: kho })).toMatchObject({ status: 422 })
+  })
+})
+describe("luatLopSchemaMa / luatDoiMaTruoc — doi-ma dùng List[StrictStr] (cùng luật) + trần theo 'dòng'", () => {
+  it("luatLopSchemaMa: danh sách chuỗi ⇒ qua", () => {
+    expect(luatLopSchemaMa([CCCD(1), ""])).toBeNull() // chuỗi rỗng vẫn là CHUỖI (rỗng là việc của service, không phải schema)
+  })
+  it("luatDoiMaTruoc ĐÚNG: thân đủ + 1000 dòng ⇒ qua (null)", () => {
+    expect(luatDoiMaTruoc({ academic_year: 2026, ma_ho_so: [CCCD(1)] })).toBeNull()
+    expect(luatDoiMaTruoc({ academic_year: 2026, ma_ho_so: Array.from({ length: 1000 }, (_, i) => CCCD(i + 1)) })).toBeNull()
+  })
+  it("luatDoiMaTruoc: 1001 dòng ⇒ 400 'Danh sách có 1001 dòng, vượt…' (chữ 'dòng'); trần đếm TRƯỚC kiểm từng mã (dòng sai không đổi câu)", () => {
+    const nhieu = Array.from({ length: 1001 }, (_, i) => (i === 3 ? "abc" : CCCD(i + 1)))
+    expect(luatDoiMaTruoc({ academic_year: 2026, ma_ho_so: nhieu })).toEqual({
+      status: 400,
+      body: { detail: "Danh sách có 1001 dòng, vượt giới hạn kỹ thuật 1000 hồ sơ cho một bộ văn bản.", error_code: "DATA_VALIDATION_ERROR" },
+    })
+    expect(luatDoiMaTruoc({ academic_year: 2026, ma_ho_so: [1, 2, 3] }, 2)).toMatchObject({ status: 422 }) // schema TRƯỚC trần
+    expect(luatDoiMaTruoc({ academic_year: 2026, ma_ho_so: [CCCD(1), CCCD(2), CCCD(3)] }, 2)).toMatchObject({
+      status: 400,
+      body: { detail: "Danh sách có 3 dòng, vượt giới hạn kỹ thuật 2 hồ sơ cho một bộ văn bản." },
+    })
+  })
+  it("luatDoiMaTruoc: phần tử không phải chuỗi / rỗng / thiếu trường / khoá lạ / năm học là chuỗi ⇒ 422 đúng loại", () => {
+    expect(luatDoiMaTruoc({ academic_year: 2026, ma_ho_so: [CCCD(1), 12] })).toMatchObject({ status: 422, body: { errors: [{ type: "string_type", loc: ["body", "ma_ho_so", 1] }] } })
+    expect(luatDoiMaTruoc({ academic_year: 2026, ma_ho_so: [] })).toMatchObject({ status: 422, body: { errors: [{ type: "too_short" }] } })
+    expect(luatDoiMaTruoc({ academic_year: 2026 })).toMatchObject({ status: 422, body: { errors: [{ type: "missing", loc: ["body", "ma_ho_so"] }] } })
+    expect(luatDoiMaTruoc({ ma_ho_so: [CCCD(1)] })).toMatchObject({ status: 422, body: { errors: [{ type: "missing", loc: ["body", "academic_year"] }] } })
+    expect(luatDoiMaTruoc({ academic_year: 2026, ma_ho_so: [CCCD(1)], trang_thai: [] })).toMatchObject({ status: 422, body: { errors: [{ type: "extra_forbidden" }] } })
+    expect(luatDoiMaTruoc({ academic_year: "2026", ma_ho_so: [CCCD(1)] })).toMatchObject({ status: 422, body: { errors: [{ type: "int_type", loc: ["body", "academic_year"] }] } })
   })
 })
 
@@ -385,6 +502,28 @@ describe("luatGhiNhan — xac_nhan_so_ho_so, goc_id ↔ loai, tham số đã in,
       })
     }
     expect(await luatGhiNhan(form({}, new File(["%PDF-1.7"], "scan.pdf")), cx())).toBeNull() // đúng chữ ký ⇒ nhận
+  })
+  // tệp `n` byte, bắt đầu bằng chữ ký `%PDF-`
+  const pdf = (n: number) => {
+    const u = new Uint8Array(n)
+    u.set([0x25, 0x50, 0x44, 0x46, 0x2d])
+    return new File([u], "scan.pdf")
+  }
+  const CAU_TRAN = (n: number) => ({ status: 400, body: { detail: `Bản scan vượt giới hạn kỹ thuật ${n} byte.`, error_code: "DATA_VALIDATION_ERROR" } })
+  it("Đ3-6: trần byte của scan (kiem_scan) — ĐÚNG trần ⇒ nhận; trần + 1 ⇒ 400 nêu TRẦN (không nêu kích thước); kiểm TRƯỚC chữ ký PDF; tệp rỗng ⇒ câu 'Phải kèm' đứng trước", async () => {
+    const tran = { scanToiDa: 100 }
+    expect(await luatGhiNhan(form({}, pdf(100)), cx({}, tran))).toBeNull()
+    expect(await luatGhiNhan(form({}, pdf(101)), cx({}, tran))).toEqual(CAU_TRAN(100))
+    expect(await luatGhiNhan(form({}, pdf(5000)), cx({}, tran))).toEqual(CAU_TRAN(100)) // nêu TRẦN, không nêu 5000
+    // quá trần mà KHÔNG phải PDF ⇒ vẫn câu TRẦN (trần kiểm trước chữ ký)
+    expect(await luatGhiNhan(form({}, new File([new Uint8Array(101)], "scan.pdf")), cx({}, tran))).toEqual(CAU_TRAN(100))
+    // dưới trần mà không phải PDF ⇒ câu chữ ký (đối chứng: trần không nuốt câu PDF)
+    expect(await luatGhiNhan(form({}, new File([new Uint8Array(50)], "scan.pdf")), cx({}, tran))).toMatchObject({ body: { detail: "Bản scan phải là tệp PDF." } })
+    expect(await luatGhiNhan(form({}, new File([], "scan.pdf")), cx({}, tran))).toMatchObject({ body: { detail: "Phải kèm bản scan (PDF) của văn bản đã ký." } })
+  })
+  it("Đ3-6: trần MẶC ĐỊNH 20 MiB (20.971.520 byte, cấu hình mặc định của máy chủ): đúng 20 MiB ⇒ nhận; 20 MiB + 1 byte ⇒ 400 nêu 20971520", async () => {
+    expect(await luatGhiNhan(form({}, pdf(20 * 1024 * 1024)), cx())).toBeNull()
+    expect(await luatGhiNhan(form({}, pdf(20 * 1024 * 1024 + 1)), cx())).toEqual(CAU_TRAN(20971520))
   })
 })
 
