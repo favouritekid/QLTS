@@ -108,6 +108,18 @@ export function luatLyDo(ly: unknown, viec: string): LoiMayChu | null {
   return null
 }
 
+/**
+ * Trường `StrictStr` BẮT BUỘC của thân JSON — pydantic chạy TRƯỚC service: vắng ⇒ 422 `missing` "Field required"; không phải chuỗi (null, số, bool, mảng, đối tượng …) ⇒ 422 `string_type`
+ * "Input should be a valid string". Dùng cho `CouncilSetDelete.ly_do` (schemas/council_document.py:279) và `CouncilDecisionCancelIn.ly_do` / `.so_go_lai` (:474 – :475).
+ * (Trường Tuỳ CHỌN `Optional[StrictStr]` — `tu_khoa`, `phien_ban_kiem` — coi `null` / vắng là hợp lệ: xem `luatTimHoSo`, `luatLopSchemaPhienBan`.)
+ */
+export function luatStrictStrBatBuoc(than: unknown, truong: string): LoiMayChu | null {
+  const v = than !== null && typeof than === "object" ? (than as Record<string, unknown>)[truong] : undefined
+  if (v === undefined) return loi422([truong], "Field required", "missing")
+  if (typeof v !== "string") return loi422([truong], "Input should be a valid string", "string_type")
+  return null
+}
+
 // ── 7. DELETE /sets/{id} ─────────────────────────────────────────────────────────────────────────────────────────────────
 /**
  * Điều CSDL nói về bộ lúc xoá (`xoa_bo_van_ban`, council_document_set_service.py:936): văn bản SỐNG của bộ (`van_ban_song_cua_bo`: mọi văn bản trỏ bộ có
@@ -126,9 +138,9 @@ export interface NguCanhXoaBo {
  * KHÔNG áp: 404 khi bộ biến mất giữa chừng (`khoa_bo`, :954) — router đã trả 404 từ lúc nạp bộ.
  */
 export function luatXoaBo(thanBody: unknown, bo: NguCanhXoaBo): LoiMayChu | null {
-  const ly = (thanBody as { ly_do?: unknown } | null)?.ly_do
-  if (typeof ly !== "string") return loi422(["ly_do"], "Input should be a valid string", "string_type")
-  const sai = luatLyDo(ly, "xoá bộ văn bản")
+  const lopLy = luatStrictStrBatBuoc(thanBody, "ly_do")
+  if (lopLy) return lopLy
+  const sai = luatLyDo((thanBody as { ly_do: string }).ly_do, "xoá bộ văn bản")
   if (sai) return sai
   const song = bo.vanBanSongIds ?? []
   if (song.length > 0) return loi409(`Bộ văn bản là bản in của Quyết định đã ký (văn bản #${song.join(", #")}) — lưu theo hạn lưu trữ, không xoá. Chỉ xoá được khi mọi ghi nhận của bộ đã huỷ ghi nhận.`, { quyet_dinh_id: [...song] })
@@ -259,7 +271,10 @@ export function luatDoiMa(codes: unknown, idTheoMa: ReadonlyMap<string, number>)
 // ── 6. POST /sets/tim-ho-so ──────────────────────────────────────────────────────────────────────────────────────────────
 /** Trần từ khoá tìm (sau cắt khoảng trắng) = `TU_KHOA_TOI_DA` của council_candidate_service.py:435; vào cả phép kiểm lẫn câu lỗi (`%d`). */
 export const TU_KHOA_TOI_DA = 100
-/** Schema (`extra=forbid`, page ≥ 1, page_size 1…100) + service: từ khoá cắt khoảng trắng ≤ 100 ký tự (400 "Từ khoá tìm quá dài …"); trạng thái ∈ CHECK (400 "Bộ lọc trạng thái …"). */
+/**
+ * Schema (`extra=forbid`, page ≥ 1, page_size 1…100, `tu_khoa` / `trang_thai` đúng KIỂU chuỗi — 422) + service: từ khoá cắt khoảng trắng ≤ 100 ký tự (400 "Từ khoá tìm quá dài …");
+ * trạng thái ∈ CHECK (400 "Bộ lọc trạng thái …"). KHÔNG áp: `trang_thai` tối đa 20 phần tử, `major_ids` (`StrictInt`, tối đa 200).
+ */
 export function luatTimHoSo(than: Record<string, unknown>): LoiMayChu | null {
   const khoa = new Set(["academic_year", "tu_khoa", "major_ids", "trang_thai", "page", "page_size"])
   const la = Object.keys(than).find((k) => !khoa.has(k))
@@ -268,6 +283,16 @@ export function luatTimHoSo(than: Record<string, unknown>): LoiMayChu | null {
   if (than.page !== undefined && (!Number.isInteger(than.page) || (than.page as number) < 1)) return loi422(["page"], "Input should be greater than or equal to 1", "greater_than_equal")
   if (than.page_size !== undefined && (!Number.isInteger(than.page_size) || (than.page_size as number) < 1 || (than.page_size as number) > 100)) {
     return loi422(["page_size"], "Input should be less than or equal to 100", "less_than_equal")
+  }
+  // `tu_khoa: Optional[StrictStr]` và `trang_thai: Optional[List[StrictStr]]` (schemas/council_document.py:142 / :144): null / vắng hợp lệ; kiểu sai ⇒ 422 TRƯỚC service
+  if (than.tu_khoa !== undefined && than.tu_khoa !== null && typeof than.tu_khoa !== "string") return loi422(["tu_khoa"], "Input should be a valid string", "string_type")
+  if (than.trang_thai !== undefined && than.trang_thai !== null) {
+    if (!Array.isArray(than.trang_thai)) return loi422(["trang_thai"], "Input should be a valid list", "list_type")
+    const sai: Muc422[] = []
+    than.trang_thai.forEach((p, i) => {
+      if (typeof p !== "string") sai.push({ type: "string_type", loc: ["trang_thai", i], msg: "Input should be a valid string" })
+    })
+    if (sai.length > 0) return loi422Nhieu(sai)
   }
   if (typeof than.tu_khoa === "string" && than.tu_khoa.length > 200) return loi422(["tu_khoa"], "String should have at most 200 characters", "string_too_long")
   if (typeof than.tu_khoa === "string" && [...than.tu_khoa.trim()].length > TU_KHOA_TOI_DA) return loi400(`Từ khoá tìm quá dài (tối đa ${TU_KHOA_TOI_DA} ký tự).`)
@@ -336,7 +361,19 @@ export interface AnhKiemTruoc {
   dau: string
 }
 /**
- * `POST /sets`. Thứ tự = máy chủ: SCHEMA (khoá lạ · `academic_year` · lớp schema của `ma_ho_so` — pydantic báo lỗi TRƯỜNG trước validator mô hình
+ * LỚP SCHEMA của `phien_ban_kiem` (`CouncilSetCreate`, schemas/council_document.py:55 — `Optional[StrictStr]`, 1…128 KÝ TỰ): không phải chuỗi ⇒ 422 `string_type`; rỗng ⇒ 422 `string_too_short`;
+ * dài hơn 128 ký tự (đếm điểm mã, không đếm đơn vị UTF-16) ⇒ 422 `string_too_long`. Chỉ gọi khi có mặt và khác null (`null` ≡ vắng ⇒ rơi xuống validator mô hình "Dạng id cần cả …").
+ */
+export function luatLopSchemaPhienBan(v: unknown): LoiMayChu | null {
+  if (typeof v !== "string") return loi422(["phien_ban_kiem"], "Input should be a valid string", "string_type")
+  const n = [...v].length
+  if (n < 1) return loi422(["phien_ban_kiem"], "String should have at least 1 character", "string_too_short")
+  if (n > 128) return loi422(["phien_ban_kiem"], "String should have at most 128 characters", "string_too_long")
+  return null
+}
+
+/**
+ * `POST /sets`. Thứ tự = máy chủ: SCHEMA (khoá lạ · `academic_year` · lớp schema của `ma_ho_so` · lớp schema của `phien_ban_kiem` — pydantic báo lỗi TRƯỜNG trước validator mô hình
  * "đúng MỘT dạng") → dạng mã: `chuan_hoa_ma` (từng dòng: không phải chuỗi / rỗng / ký tự lạ / sai dạng / TRÙNG — DỪNG ở dòng sai ĐẦU TIÊN)
  * → TRẦN (`doc_ho_so_theo_ma`: đếm danh sách đã chuẩn hoá) → KHỚP CSDL (câu GỘP nêu mọi dòng không khớp / khớp nhiều, `_neu_dong` ≤ 20 dòng).
  * `o.maNhieuHoSo`: mã khớp NHIỀU hồ sơ (`phan_giai_ma` trả so > 1); mặc định không có.
@@ -352,6 +389,11 @@ export function luatTaoBo(
   if (than.ma_ho_so !== undefined && than.ma_ho_so !== null) {
     const lop = luatLopSchemaMa(than.ma_ho_so)
     if (lop) return lop
+  }
+  // `phien_ban_kiem: Optional[StrictStr] = Field(None, min_length=1, max_length=128)` — lỗi TRƯỜNG (kiểu / độ dài) báo TRƯỚC validator mô hình "đúng MỘT dạng"
+  if (than.phien_ban_kiem !== undefined && than.phien_ban_kiem !== null) {
+    const pb = luatLopSchemaPhienBan(than.phien_ban_kiem)
+    if (pb) return pb
   }
   const theoMa = than.ma_ho_so !== undefined && than.ma_ho_so !== null
   const theoId = (than.profile_ids !== undefined && than.profile_ids !== null) || (than.phien_ban_kiem !== undefined && than.phien_ban_kiem !== null)
@@ -565,13 +607,17 @@ export function luatLopSchemaXacNhan(xn: unknown): LoiMayChu | null {
 }
 
 /**
- * `huy_ghi_nhan` (council_decision_service.py:807), theo thứ tự: schema (422: `so_go_lai` chuỗi; `xac_nhan` ⇒ :func:`luatLopSchemaXacNhan`) → lý do (kiem_ly_do, :819) →
+ * `huy_ghi_nhan` (council_decision_service.py:807), theo thứ tự: schema (422, theo thứ tự trường: `ly_do` và `so_go_lai` là `StrictStr` BẮT BUỘC ⇒ :func:`luatStrictStrBatBuoc`; `xac_nhan` ⇒ :func:`luatLopSchemaXacNhan`) → lý do (kiem_ly_do, :819) →
  * `xac_nhan` qua `kiem_xac_nhan_trang_thai` (:820 — `{}` / số < 1 ⇒ 400, CÙNG hai câu với ghi nhận) → `so_go_lai` phải BẰNG NGUYÊN CHUỖI số QUYẾT ĐỊNH của văn bản
  * (không phải số hồ sơ, :828) → văn bản chưa huỷ (:830). KHÔNG áp: các 409 `van_ban_sau` / `dong_xung_dot` và đếm đổi trạng thái (`_kiem_xac_nhan_dem`).
  */
 export function luatHuyGhiNhan(than: unknown, qd: { so_quyet_dinh: string; trang_thai: string }): LoiMayChu | null {
   const t = (than ?? {}) as Record<string, unknown>
-  if (typeof t.so_go_lai !== "string") return loi422(["so_go_lai"], "Input should be a valid string", "string_type")
+  // schema `CouncilDecisionCancelIn` báo lỗi theo THỨ TỰ TRƯỜNG: ly_do → so_go_lai → xac_nhan (MSW trả lỗi đầu tiên theo thứ tự ấy)
+  const lopLy = luatStrictStrBatBuoc(t, "ly_do")
+  if (lopLy) return lopLy
+  const lopSo = luatStrictStrBatBuoc(t, "so_go_lai")
+  if (lopSo) return lopSo
   const lopXn = luatLopSchemaXacNhan(t.xac_nhan)
   if (lopXn) return lopXn
   const ly = luatLyDo(t.ly_do, "huỷ ghi nhận")
