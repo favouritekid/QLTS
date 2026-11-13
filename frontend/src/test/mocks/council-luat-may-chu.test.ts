@@ -16,6 +16,7 @@ import {
   luatPhanXuMa,
   luatTaiMau,
   luatTaoBo,
+  luatStrictStrBatBuoc,
   luatThamSoQuyetDinh,
   luatTimHoSo,
   luatXacNhanTrangThai,
@@ -748,6 +749,103 @@ describe("luatHuyGhiNhan — so_go_lai = SỐ QUYẾT ĐỊNH, nguyên chuỗi (
     expect(huy({ a: 0 }, "4")).toEqual(CAU_XN_SO)
     expect(luatHuyGhiNhan({ ly_do: "Nhập sai", so_go_lai: "201", xac_nhan: {} }, { ...qd, trang_thai: "huy_ghi_nhan" })).toEqual(CAU_XN_DANG)
     expect(huy({ a: "3" }, "201", "   ")).toMatchObject({ status: 422 }) // 422 của schema đứng trước cả lý do
+  })
+})
+
+// ── Rà StrictStr (phiên A giao sau nghiệm thu C22): lỗi KIỂU của trường chuỗi ⇒ 422 của pydantic TRƯỚC mọi kiểm của service ─────────────
+describe("C22b luatStrictStrBatBuoc — `StrictStr` bắt buộc: vắng ⇒ 422 missing; không phải chuỗi ⇒ 422 string_type (CouncilDecisionCancelIn.ly_do / so_go_lai, CouncilSetDelete.ly_do)", () => {
+  const qd = { so_quyet_dinh: SO_QD, trang_thai: "hieu_luc" }
+  const STRING_TYPE = (truong: string) => ({ status: 422, body: { detail: "Request validation failed", error_code: "VALIDATION_ERROR", errors: [{ type: "string_type", loc: ["body", truong], msg: "Input should be a valid string" }] } })
+  const MISSING = (truong: string) => ({ status: 422, body: { detail: "Request validation failed", error_code: "VALIDATION_ERROR", errors: [{ type: "missing", loc: ["body", truong], msg: "Field required" }] } })
+
+  it("C22b-1: huỷ ghi nhận — `ly_do` KHÔNG phải chuỗi (số / null / bool / mảng / đối tượng) ⇒ 422 string_type loc [body, ly_do] (máy chủ: StrictStr) — KHÔNG phải 400 'phải là chữ'", () => {
+    for (const sai of [5, null, true, [], {}]) {
+      expect(luatHuyGhiNhan({ ly_do: sai, so_go_lai: "201" }, qd), JSON.stringify(sai)).toEqual(STRING_TYPE("ly_do"))
+    }
+  })
+  it("C22b-1: huỷ ghi nhận — `ly_do` VẮNG ⇒ 422 missing 'Field required' (không phải string_type); `so_go_lai` vắng ⇒ missing", () => {
+    expect(luatHuyGhiNhan({ so_go_lai: "201" }, qd)).toEqual(MISSING("ly_do"))
+    expect(luatHuyGhiNhan({ ly_do: "Nhập sai" }, qd)).toEqual(MISSING("so_go_lai"))
+    expect(luatHuyGhiNhan({}, qd)).toEqual(MISSING("ly_do")) // cả hai vắng ⇒ lỗi đầu theo THỨ TỰ TRƯỜNG: ly_do trước so_go_lai
+    expect(luatHuyGhiNhan(null, qd)).toEqual(MISSING("ly_do"))
+  })
+  it("C22b-1: đối chứng — `ly_do` là CHUỖI nhưng chỉ khoảng trắng ⇒ vẫn 400 'Phải nhập lý do …' của service (kiểu đúng ⇒ qua schema); chuỗi hợp lệ ⇒ nhận", () => {
+    expect(luatHuyGhiNhan({ ly_do: "   ", so_go_lai: "201" }, qd)).toMatchObject({ status: 400, body: { detail: "Phải nhập lý do huỷ ghi nhận." } })
+    expect(luatHuyGhiNhan({ ly_do: "Nhập sai", so_go_lai: "201" }, qd)).toBeNull()
+  })
+  it("C22b-1: thứ tự — schema báo theo thứ tự TRƯỜNG: ly_do sai KIỂU đứng trước so_go_lai sai KIỂU và trước xac_nhan sai kiểu; so_go_lai sai kiểu đứng trước xac_nhan sai kiểu", () => {
+    expect(luatHuyGhiNhan({ ly_do: 5, so_go_lai: 201 }, qd)).toEqual(STRING_TYPE("ly_do"))
+    expect(luatHuyGhiNhan({ ly_do: 5, so_go_lai: "201", xac_nhan: { a: "3" } }, qd)).toEqual(STRING_TYPE("ly_do"))
+    expect(luatHuyGhiNhan({ ly_do: "x", so_go_lai: 201, xac_nhan: { a: "3" } }, qd)).toEqual(STRING_TYPE("so_go_lai"))
+  })
+  it("C22b-1: xoá bộ — `ly_do` vắng ⇒ 422 missing; null / số ⇒ 422 string_type (cùng khuôn với huỷ ghi nhận)", () => {
+    expect(luatXoaBo({}, {})).toEqual(MISSING("ly_do"))
+    expect(luatXoaBo(null, {})).toEqual(MISSING("ly_do"))
+    for (const sai of [null, 5, false]) expect(luatXoaBo({ ly_do: sai }, {}), JSON.stringify(sai)).toEqual(STRING_TYPE("ly_do"))
+  })
+  it("luatStrictStrBatBuoc (hàm thuần): chuỗi (kể cả rỗng) ⇒ nhận — độ dài / nội dung là việc của service", () => {
+    expect(luatStrictStrBatBuoc({ a: "" }, "a")).toBeNull()
+    expect(luatStrictStrBatBuoc({ a: "x" }, "a")).toBeNull()
+    expect(luatStrictStrBatBuoc({ a: undefined }, "a")).toEqual(MISSING("a"))
+  })
+})
+
+describe("C22b luatTimHoSo — `tu_khoa: Optional[StrictStr]`, `trang_thai: Optional[List[StrictStr]]`: kiểu sai ⇒ 422 (TRƯỚC câu 400 của service)", () => {
+  const nam = { academic_year: 2026 }
+  it("C22b-2: `tu_khoa` không phải chuỗi (số / bool / mảng) ⇒ 422 string_type loc [body, tu_khoa]; null / vắng ⇒ nhận", () => {
+    for (const sai of [123456789012, true, ["a"]]) {
+      expect(luatTimHoSo({ ...nam, tu_khoa: sai }), JSON.stringify(sai)).toEqual({
+        status: 422,
+        body: { detail: "Request validation failed", error_code: "VALIDATION_ERROR", errors: [{ type: "string_type", loc: ["body", "tu_khoa"], msg: "Input should be a valid string" }] },
+      })
+    }
+    expect(luatTimHoSo({ ...nam, tu_khoa: null })).toBeNull()
+    expect(luatTimHoSo({ ...nam })).toBeNull()
+  })
+  it("C22b-2: `trang_thai` không phải danh sách ('approved' là CHUỖI) ⇒ 422 list_type; null ⇒ nhận", () => {
+    expect(luatTimHoSo({ ...nam, trang_thai: "approved" })).toEqual({
+      status: 422,
+      body: { detail: "Request validation failed", error_code: "VALIDATION_ERROR", errors: [{ type: "list_type", loc: ["body", "trang_thai"], msg: "Input should be a valid list" }] },
+    })
+    expect(luatTimHoSo({ ...nam, trang_thai: null })).toBeNull()
+  })
+  it("C22b-2: phần tử `trang_thai` không phải chuỗi ⇒ 422 string_type MANG CHỈ SỐ phần tử, BÁO HẾT (không dừng ở phần tử đầu); khác với mã LẠ là chuỗi ⇒ 400 của service", () => {
+    expect(luatTimHoSo({ ...nam, trang_thai: [5, "approved", null] })).toEqual({
+      status: 422,
+      body: {
+        detail: "Request validation failed",
+        error_code: "VALIDATION_ERROR",
+        errors: [
+          { type: "string_type", loc: ["body", "trang_thai", 0], msg: "Input should be a valid string" },
+          { type: "string_type", loc: ["body", "trang_thai", 2], msg: "Input should be a valid string" },
+        ],
+      },
+    })
+    expect(luatTimHoSo({ ...nam, trang_thai: ["da_duyet"] })).toMatchObject({ status: 400, body: { detail: "Bộ lọc trạng thái có giá trị không hợp lệ." } })
+  })
+})
+
+describe("C22b luatTaoBo — `phien_ban_kiem: Optional[StrictStr]`, 1…128 KÝ TỰ: lỗi TRƯỜNG ⇒ 422 TRƯỚC validator mô hình 'đúng MỘT dạng'", () => {
+  const anh = { thuTuChuan: [1, 4, 9], dau: "DAU" }
+  const idTheoMa = new Map<string, number>()
+  const goi = (phien_ban_kiem: unknown) => luatTaoBo({ profile_ids: [1, 4, 9], phien_ban_kiem, academic_year: 2026 }, { anh, idTheoMa })
+  const loi = (type: string, msg: string) => ({ status: 422, body: { detail: "Request validation failed", error_code: "VALIDATION_ERROR", errors: [{ type, loc: ["body", "phien_ban_kiem"], msg }] } })
+
+  it("C22b-3: không phải chuỗi (số / bool / mảng) ⇒ 422 string_type loc [body, phien_ban_kiem] — KHÔNG phải câu 'Value error, Dạng id cần …'", () => {
+    for (const sai of [123, true, ["DAU"]]) expect(goi(sai), JSON.stringify(sai)).toEqual(loi("string_type", "Input should be a valid string"))
+  })
+  it("C22b-3: chuỗi RỖNG ⇒ 422 string_too_short (min_length=1); ĐÚNG 128 ký tự ⇒ qua schema (rồi so dấu: dấu lạ ⇒ 409); 129 ký tự ⇒ 422 string_too_long", () => {
+    expect(goi("")).toEqual(loi("string_too_short", "String should have at least 1 character"))
+    expect(goi("a".repeat(129))).toEqual(loi("string_too_long", "String should have at most 128 characters"))
+    expect(goi("a".repeat(128))).toMatchObject({ status: 409, body: { ma_loi: "du_lieu_doi_tu_luc_kiem" } }) // qua schema; dấu lạ ⇒ 409 của luật kiểm trước
+    expect(goi("DAU")).toBeNull()
+  })
+  it("C22b-3: độ dài tính theo KÝ TỰ (điểm mã), không theo đơn vị UTF-16 — 128 ký tự ngoài mặt phẳng cơ bản (256 đơn vị UTF-16) vẫn qua schema; 129 thì không", () => {
+    expect(goi("\u{1D4D0}".repeat(128))).toMatchObject({ status: 409 })
+    expect(goi("\u{1D4D0}".repeat(129))).toMatchObject({ status: 422, body: { errors: [{ type: "string_too_long" }] } })
+  })
+  it("C22b-3: null ⇒ như vắng (hợp lệ ở schema) ⇒ rơi xuống validator mô hình: dạng id thiếu dấu ⇒ 'Value error, Dạng id cần cả …'", () => {
+    expect(goi(null)).toMatchObject({ status: 422, body: { errors: [{ msg: "Value error, Dạng id cần cả profile_ids và phien_ban_kiem." }] } })
   })
 })
 
