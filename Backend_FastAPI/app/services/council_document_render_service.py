@@ -83,7 +83,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils.exceptions import IllegalCharacterError
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic import ValidationError as PydanticValidationError
-from pydantic import model_validator
+from pydantic import field_validator, model_validator
 
 from app.utils.exceptions import DataValidationError, FileValidationError
 
@@ -197,6 +197,11 @@ _TRUONG_CHUOI: Tuple[str, ...] = tuple(
 _RE_NGOAI_XML = re.compile(r"[^\t\n\r\x20-\uD7FF\uE000-\uFFFD\U00010000-\U0010FFFF]")
 
 
+#: Review max PR #724 (R7, owner 15-11): câu DUY NHẤT cho luật "số Quyết định không bắt đầu bằng số 0" — dùng ở
+#: ``DecisionParams`` (số in sẵn lúc dựng bộ) và ``council_decision_service.kiem_so_quyet_dinh`` (số lúc ghi nhận).
+CAU_SO_QD_0_DAU = "Số Quyết định không bắt đầu bằng số 0 — ví dụ nhập 7, không nhập 07."
+
+
 class DecisionParams(BaseModel):
     """Tham số điền vào Quyết định. Mỗi trường độc lập: vắng thì chỗ ấy để trống
     (như bộ xuất). Ngày in theo quy ước văn thư (ngày < 10 và tháng 1, 2 thêm
@@ -210,6 +215,16 @@ class DecisionParams(BaseModel):
     dot_thang: Optional[int] = Field(default=None, ge=1, le=12)
     so_bien_ban: Optional[str] = Field(default=None, pattern=r"^[0-9]{1,6}$")
     ngay_bien_ban: Optional[date] = None
+
+    @field_validator("so_quyet_dinh")
+    @classmethod
+    def _kiem_so_khong_0_dau(cls, v: Optional[str]) -> Optional[str]:
+        # Review max PR #724 (R7, §6 — nhánh anh em): số in sẵn có 0 đầu thì lúc ghi nhận (phải gõ lại ĐÚNG số đã
+        # in) không bao giờ qua ``kiem_so_quyet_dinh`` ⇒ chặn ngay lúc dựng. Ngày Quyết định in sẵn KHÔNG chặn
+        # "sau hôm nay" (văn bản có thể in trước ngày ký).
+        if v is not None and v.startswith("0"):
+            raise ValueError(CAU_SO_QD_0_DAU)
+        return v
 
     @model_validator(mode="after")
     def _kiem_cap(self) -> "DecisionParams":

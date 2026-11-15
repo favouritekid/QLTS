@@ -69,6 +69,10 @@ export const TRANG_THAI_HO_SO = [
 /** Trần KỸ THUẬT của bản scan PDF = mặc định của `COUNCIL_DECISION_SCAN_MAX_BYTES` (app/config.py — `default=9 * 1024 * 1024`;
  *  review max PR #724 R1, owner 15-11: hạ từ 20 MiB xuống dưới nginx `client_max_body_size 10M`). */
 export const TRAN_BYTE_SCAN_MAC_DINH = 9 * 1024 * 1024
+/** Review max PR #724 (R7, owner 15-11): câu của `CAU_SO_QD_0_DAU` (council_document_render_service.py) — số Quyết định không có 0 đầu. */
+export const CAU_SO_QD_0_DAU = "Số Quyết định không bắt đầu bằng số 0 — ví dụ nhập 7, không nhập 07."
+/** "Hôm nay" theo giờ Việt Nam dạng YYYY-MM-DD — như `today_vn()` của máy chủ (`kiem_ngay`: ngày ký không sau hôm nay). */
+export const homNayVN = (): string => new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Ho_Chi_Minh" })
 const RE_NGAY = /^\d{4}-\d{2}-\d{2}$/
 const RE_SO_1_6 = /^[0-9]{1,6}$/
 const RE_SO_1_2 = /^[0-9]{1,2}$/
@@ -339,6 +343,8 @@ export function luatThamSoQuyetDinh(ts: unknown): LoiMayChu | null {
   if (la) return loi422(L(la), "Extra inputs are not permitted", "extra_forbidden")
   const chuoi = (k: string, re: RegExp) => t[k] !== undefined && t[k] !== null && (typeof t[k] !== "string" || !re.test(t[k] as string))
   if (chuoi("so_quyet_dinh", RE_SO_1_6)) return loi422(L("so_quyet_dinh"), "String should match pattern '^[0-9]{1,6}$'", "string_pattern_mismatch")
+  // R7: `DecisionParams._kiem_so_khong_0_dau` (field_validator, SAU pattern) — số in sẵn có 0 đầu ⇒ 422 value_error.
+  if (typeof t.so_quyet_dinh === "string" && t.so_quyet_dinh.startsWith("0")) return loi422(L("so_quyet_dinh"), `Value error, ${CAU_SO_QD_0_DAU}`)
   if (chuoi("so_bien_ban", RE_SO_1_6)) return loi422(L("so_bien_ban"), "String should match pattern '^[0-9]{1,6}$'", "string_pattern_mismatch")
   if (chuoi("dot_so", RE_SO_1_2)) return loi422(L("dot_so"), "String should match pattern '^[0-9]{1,2}$'", "string_pattern_mismatch")
   for (const k of ["ngay_quyet_dinh", "ngay_bien_ban"]) {
@@ -473,6 +479,9 @@ export interface NguCanhGhiNhan {
   soDaDung: (so: string, nam: number) => number | undefined
   /** trần byte của bản scan; mặc định = cấu hình mặc định của máy chủ (`TRAN_BYTE_SCAN_MAC_DINH`, 9 MiB). Cho test hạ thấp để khỏi tạo tệp 9 MiB. */
   scanToiDa?: number
+  /** "hôm nay" (YYYY-MM-DD) cho luật ngày ký không sau hôm nay; mặc định = giờ Việt Nam thật (`homNayVN`). Cho test đặt mốc
+   *  khi tình huống dựng ở năm khác (như `scanToiDa`). */
+  homNay?: string
 }
 const TRUONG_THAM_SO_GIAY = ["so_bien_ban", "ngay_bien_ban", "dot_so", "dot_thang"] as const
 
@@ -531,6 +540,9 @@ export async function luatGhiNhan(form: FormData, cx: NguCanhGhiNhan): Promise<L
   if (ma === null || !RE_UUID.test(ma)) return loi422(["ma_luot_gui"], "String should match pattern '^[0-9a-fA-F-]{36}$'", "string_pattern_mismatch")
   const scan = form.get("scan")
   // --- service ---
+  // R7: `kiem_so_quyet_dinh` (0 đầu) rồi `kiem_ngay` (ngày ký sau hôm nay, giờ VN) — ĐỨNG TRƯỚC `kiem_scan` như máy chủ.
+  if (so.startsWith("0")) return loi400(CAU_SO_QD_0_DAU)
+  if (ngayKy > (cx.homNay ?? homNayVN())) return loi400("Ngày ký không được sau hôm nay.")
   // `kiem_scan` (decision_service:101): rỗng → vượt trần kỹ thuật → chữ ký `%PDF-`. Router chỉ đọc tối đa TRẦN + 1 byte (`_doc_scan`) ⇒ đúng TRẦN byte vẫn nhận,
   // TRẦN + 1 trở lên bị chặn và câu luôn nêu TRẦN (không nêu kích thước thật). Tệp quá trần mà không phải PDF ⇒ câu trần (kiểm TRƯỚC chữ ký).
   if (!laTep(scan) || scan.size === 0) return loi400("Phải kèm bản scan (PDF) của văn bản đã ký.")

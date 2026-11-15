@@ -61,6 +61,7 @@ from app.services.quota_occupancy_service import (
     khoa_chi_tieu_cua_dong_bo,
     kiem_khoa_dem_dong_bo,
 )
+from app.utils.datetime_helpers import today_vn
 from app.utils.exceptions import (
     ConflictError,
     DataValidationError,
@@ -89,12 +90,21 @@ _LOI_RANG_BUOC = {
 def kiem_so_quyet_dinh(so: object) -> str:
     if not isinstance(so, str) or not (1 <= len(so) <= 6) or not so.isascii() or not so.isdigit():
         raise DataValidationError("Số Quyết định phải là 1–6 chữ số.")
+    # Review max PR #724 (R7, owner 15-11): CẤM số 0 đứng đầu — trước đây '7', '07', '007' là ba số khác nhau trước
+    # luật "không trùng số trong năm" (U1). Không tự đổi số người dùng gõ. (Pattern router / CHECK CSDL giữ dạng rộng
+    # hơn làm lớp phụ; tầng chủ sở hữu luật là đây.)
+    if so[0] == "0":
+        raise DataValidationError(bo_dung.CAU_SO_QD_0_DAU)
     return so
 
 
 def kiem_ngay(ngay: object, ten: str = "ngày ký") -> date:
     if isinstance(ngay, datetime) or not isinstance(ngay, date):
         raise DataValidationError("Thiếu %s hoặc %s không hợp lệ." % (ten, ten))
+    # Review max PR #724 (R7, owner 15-11): ngày ký không được sau HÔM NAY theo giờ Việt Nam (năm của ngày ký là phạm
+    # vi số Quyết định U1 — ngày tự gõ ở tương lai mở một "năm" giả). Mọi nơi gọi đều truyền ngày ký.
+    if ngay > today_vn():
+        raise DataValidationError("%s không được sau hôm nay." % (ten[:1].upper() + ten[1:]))
     return ngay
 
 

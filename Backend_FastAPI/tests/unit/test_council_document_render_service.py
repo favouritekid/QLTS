@@ -1161,6 +1161,16 @@ def test_tham_so_quyet_dinh_chuoi_chi_nhan_chu_so_ascii(truong, gia_tri):
         DecisionParams(**{truong: gia_tri}, **them)
 
 
+def test_tham_so_so_quyet_dinh_0_dau_bi_tu_choi():
+    # Review max PR #724 (R7, §6 nhánh anh em): số in sẵn có 0 đầu ⇒ lúc ghi nhận (gõ lại ĐÚNG số đã in) không bao
+    # giờ qua ``kiem_so_quyet_dinh`` ⇒ chặn ngay lúc dựng, cùng câu.
+    from app.services.council_document_render_service import CAU_SO_QD_0_DAU
+
+    assert DecisionParams(so_quyet_dinh="7").so_quyet_dinh == "7"  # đối chứng
+    with pytest.raises(PydanticValidationError, match=CAU_SO_QD_0_DAU):
+        DecisionParams(so_quyet_dinh="07")
+
+
 # ═══════════════════════════════ khối ngành của Quyết định phải liền nhau ════════
 def _sua_khoi_qd(b, khoi):
     """Mẫu QĐ giả có khối ngành KHÔNG liền ("Ngành:" → bảng → "Số thí sinh")."""

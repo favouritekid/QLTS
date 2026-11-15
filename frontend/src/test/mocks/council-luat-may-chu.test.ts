@@ -6,6 +6,9 @@
 import { describe, expect, it } from "vitest"
 
 import {
+  CAU_SO_QD_0_DAU,
+  loi400,
+  loi422,
   LY_DO_TOI_DA,
   luatDanhSachId,
   luatDoiMa,
@@ -318,6 +321,10 @@ describe("luatThamSoQuyetDinh — đợt PHẢI ĐỦ CẢ HAI (dot_so CHUỖI +
     expect(luatThamSoQuyetDinh({ so_quyet_dinh: SO_QD })).toBeNull()
     expect(luatThamSoQuyetDinh({ ngay_bien_ban: "2026-09-08", ngay_quyet_dinh: "2026-09-08" })).toBeNull()
   })
+  it("R7 (review max PR #724): số in sẵn có 0 đầu ⇒ 422 value_error câu máy chủ (SAU pattern)", () => {
+    expect(luatThamSoQuyetDinh({ so_quyet_dinh: "07" })).toEqual(loi422(["tham_so_quyet_dinh", "so_quyet_dinh"], `Value error, ${CAU_SO_QD_0_DAU}`))
+    expect(luatThamSoQuyetDinh({ so_quyet_dinh: "7" })).toBeNull()
+  })
   it("SAI: (1, vắng) và (vắng, 9) ⇒ 422 'cần đủ cả số đợt và tháng'", () => {
     for (const ts of [{ dot_so: "1" }, { dot_thang: 9 }]) {
       expect(luatThamSoQuyetDinh(ts)).toMatchObject({ status: 422, body: { error_code: "VALIDATION_ERROR" } })
@@ -520,6 +527,7 @@ describe("luatGhiNhan — xac_nhan_so_ho_so, goc_id ↔ loai, tham số đã in,
     },
     goc: (id) => ({ 30: { loai: "trung_tuyen", trang_thai: "hieu_luc" }, 31: { loai: "trung_tuyen", trang_thai: "huy_ghi_nhan" }, 32: { loai: "bo_sung", trang_thai: "hieu_luc" } } as const)[id as 30 | 31 | 32],
     soDaDung: (so, nam) => (so === "300" && nam === 2027 ? 77 : undefined),
+    homNay: "2028-12-31", // tình huống dựng ở 2027–2028 (R7: ngày ký không sau hôm nay — đặt mốc như scanToiDa; có ca ký 2028)
     ...cho,
   })
   const form = (o: Record<string, string | undefined> = {}, scan: File | null = new File(["%PDF-1.4 gia"], "scan.pdf")) => {
@@ -535,6 +543,11 @@ describe("luatGhiNhan — xac_nhan_so_ho_so, goc_id ↔ loai, tham số đã in,
 
   it("ĐÚNG: đủ trường, khớp bản in", async () => {
     expect(await luatGhiNhan(form(), cx())).toBeNull()
+  })
+  it("R7 (review max PR #724): số Quyết định có 0 đầu ⇒ 400 câu máy chủ; ngày ký sau 'hôm nay' ⇒ 400; đúng hôm nay ⇒ được", async () => {
+    expect(await luatGhiNhan(form({ so_quyet_dinh: "0201" }), cx())).toEqual(loi400(CAU_SO_QD_0_DAU))
+    expect(await luatGhiNhan(form(), cx({}, { homNay: "2027-03-09" }))).toEqual(loi400("Ngày ký không được sau hôm nay."))
+    expect(await luatGhiNhan(form(), cx({}, { homNay: "2027-03-10" }))).toBeNull()
   })
   it("xac_nhan_so_ho_so: ĐÚNG 4 (số hồ sơ của bộ); SAI 201 (số QĐ), 1 (set_id), 5 ⇒ 400 'không khớp số hồ sơ của bộ'", async () => {
     expect(await luatGhiNhan(form({ xac_nhan_so_ho_so: "4" }), cx())).toBeNull()

@@ -337,6 +337,25 @@ async def test_ghi_nhan_so_trung_trong_nam_409(client, hs, ad):
     assert await _q1("SELECT count(*) FROM council_decision") == 1
 
 
+async def test_ghi_nhan_so_qd_0_dau_400_khong_ghi(client, hs, ad):
+    # Review max PR #724 (R7, owner 15-11): '07' / '007' từng là số KHÁC '7' trước luật không trùng số trong năm (U1).
+    # Nay số có 0 đứng đầu bị từ chối ở service (câu tiếng Việt), không ghi gì.
+    from app.services.council_document_render_service import CAU_SO_QD_0_DAU
+
+    bo = await _bo_ok(client, ad, hs, SACH)
+    r = await _ghi(client, ad, bo["id"], so="07", so_hs=3)
+    assert r.status_code == 400 and r.json()["detail"] == CAU_SO_QD_0_DAU, r.text
+    assert await _q1("SELECT count(*) FROM council_decision") == 0
+
+
+async def test_ghi_nhan_ngay_ky_sau_hom_nay_400_khong_ghi(client, hs, ad):
+    # Review max PR #724 (R7, owner 15-11): ngày ký sau HÔM NAY (giờ VN) mở một "năm" giả cho phạm vi số (U1) ⇒ từ chối.
+    bo = await _bo_ok(client, ad, hs, SACH)
+    r = await _ghi(client, ad, bo["id"], so="501", so_hs=3, ngay=_ngay() + timedelta(days=1))
+    assert r.status_code == 400 and r.json()["detail"] == "Ngày ký không được sau hôm nay.", r.text
+    assert await _q1("SELECT count(*) FROM council_decision") == 0
+
+
 async def test_ghi_nhan_bo_hai_lan_409(client, hs, ad):
     bo, _ = await _qd_cua_bo(client, ad, hs, SACH, "501")
     r = await _ghi(client, ad, bo["id"], so="502", so_hs=3)
@@ -387,16 +406,18 @@ async def test_ghi_nhan_ngay_ky_truoc_ngay_dung_theo_gio_viet_nam(client, hs, ad
 
 async def test_ghi_nhan_mau_theo_ngay_ky_khac_mau_bo_da_dung(client, hs, ad):
     # G10: bộ chọn mẫu theo ngày dựng; mẫu BIÊN BẢN mới hiệu lực từ ngày ký ⇒ chặn (chỉ so mẫu QĐ sẽ lọt).
+    # Review max PR #724 (R7): ngày ký không được sau hôm nay ⇒ tình huống dựng bằng mẫu mới hiệu lực TỪ HÔM NAY (tải
+    # SAU khi bộ đã dựng với mẫu cũ), ký hôm nay — trước đây dùng ngày ký +2 ngày (nay bị chặn sớm hơn, sai lý do).
     bo = await _bo_ok(client, ad, hs, SACH)
-    sau = _ngay() + timedelta(days=2)
+    hom_nay = _ngay()
     r = await client.post(
         P + "/templates",
-        data={"loai": "bien_ban", "hieu_luc_tu": sau.isoformat()},
+        data={"loai": "bien_ban", "hieu_luc_tu": hom_nay.isoformat()},
         files={"file": ("m.docx", api._danh_dau(api.MAU_GIA["bien_ban"]), api.KIEU_DOCX)},
         headers=ad,
     )
     assert r.status_code == 201, r.text
-    r = await _ghi(client, ad, bo["id"], so="501", so_hs=3, ngay=sau)
+    r = await _ghi(client, ad, bo["id"], so="501", so_hs=3, ngay=hom_nay)
     assert r.status_code == 400 and r.json().get("mau_lech") == ["bien_ban"], r.text
 
 

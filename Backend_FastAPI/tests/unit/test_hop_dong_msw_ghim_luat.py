@@ -192,7 +192,7 @@ GHIM = {
     "bo.tao_bo_van_ban_theo_id": "db846adea3478a18",
     "cau_hinh.COUNCIL_DECISION_SCAN_MAX_BYTES": "cb01a688cfdfae4b",  # review max PR #724 R1: 9 MiB — MSW chép cùng lượt
     "cau_hinh.COUNCIL_SET_MAX_PROFILES": "b09d7b699cf5ffdf",
-    "dung.DecisionParams": "2c96e62f6f91e9db",
+    "dung.DecisionParams": "dd43050e54fbfacb",  # review max PR #724 R7: số in sẵn không 0 đầu — MSW chép cùng lượt
     "luot.kiem_ma_luot": "308137227d71b47c",
     "mau.TEN_LOAI": "ff27ce4a7da9b1c2",
     "mau.kiem_goi_mau": "ef70e2137b6bad3c",
@@ -205,9 +205,9 @@ GHIM = {
     "qd._so_tham_so": "203bc74e40ef9fc6",
     "qd.ghi_nhan_quyet_dinh": "9d8f98a70898d180",
     "qd.huy_ghi_nhan": "ca9f7185490424e1",
-    "qd.kiem_ngay": "c003052f130402c7",
+    "qd.kiem_ngay": "d6070d3bc5fc1283",  # review max PR #724 R7: ngày ký không sau hôm nay (giờ VN) — MSW chép cùng lượt
     "qd.kiem_scan": "ee7b2cb1bf446f2b",
-    "qd.kiem_so_quyet_dinh": "6e43fb7cbecabcce",
+    "qd.kiem_so_quyet_dinh": "a04ea3f45568c227",  # review max PR #724 R7: cấm 0 đầu — MSW chép cùng lượt
     "qd.kiem_xac_nhan_trang_thai": "c17156d4d7c11784",
     "route._doc_scan": "739d65dc50e09692",
     "route._json_xac_nhan": "e157f11c63380f61",
