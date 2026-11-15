@@ -91,13 +91,21 @@ _LOI_RANG_BUOC = {
 SIGN_DATE_AFTER_TODAY_MESSAGE = "Ngày ký không được sau hôm nay."
 
 
+#: Codex 42 (câu 4): trần độ dài (ký tự) của chuỗi JSON ``xac_nhan_trang_thai`` trên Form. Dữ liệu thật: ≤ ~16 khoá trạng
+#: thái ⇒ < 600 ký tự. Trần giữ độ lồng tối đa ~500 tầng — xa ngưỡng đệ quy của bộ đọc JSON Python (ngưỡng ấy phụ thuộc
+#: độ sâu ngăn xếp lúc gọi, MSW không chép được) ⇒ JSON HỢP LỆ dưới trần luôn đọc được như ``JSON.parse`` của MSW; vượt
+#: trần ⇒ router coi là "không đọc được" (cùng đường JSON hỏng).
+CONFIRMATION_JSON_MAX_CHARS = 1024
+
+
 def kiem_so_quyet_dinh(so: object) -> str:
     if not isinstance(so, str) or not (1 <= len(so) <= 6) or not so.isascii() or not so.isdigit():
         raise DataValidationError("Số Quyết định phải là 1–6 chữ số.")
     # Review max PR #724 (R7, owner 15-11): CẤM số 0 đứng đầu — trước đây '7', '07', '007' là ba số khác nhau trước
     # luật "không trùng số trong năm" (U1). Không tự đổi số người dùng gõ. (Pattern router / CHECK CSDL giữ dạng rộng
-    # hơn làm lớp phụ; tầng chủ sở hữu luật là đây.)
-    if so[0] == "0":
+    # hơn làm lớp phụ; tầng chủ sở hữu luật là đây.) Owner chốt: số KHÁC "0" mà có 0 đứng đầu ⇒ từ chối; "0" một chữ số
+    # vẫn nhận (Codex 42 F337).
+    if len(so) > 1 and so[0] == "0":
         raise DataValidationError(bo_dung.CAU_SO_QD_0_DAU)
     return so
 

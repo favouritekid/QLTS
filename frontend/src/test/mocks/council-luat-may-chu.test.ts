@@ -3,10 +3,12 @@
  * (`HOP-DONG-THAN-YEU-CAU-LENH-GHI-GD1-2026-11-13.md`): bộ có số hồ sơ 4, số Quyết định "201", set_id 1; năm học 2026 ≠ năm ký 2027.
  * Ca SAI luôn dùng đúng giá trị DỄ NHẦM (số QĐ ↔ số hồ sơ ↔ set_id), không chỉ giá trị rác — vì OpenAPI / zod chỉ kiểm hình dạng.
  */
-import { describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 
 import {
   CAU_SO_QD_0_DAU,
+  homNayVN,
+  TRAN_KY_TU_JSON_XAC_NHAN,
   loi400,
   loi422,
   LY_DO_TOI_DA,
@@ -325,6 +327,10 @@ describe("luatThamSoQuyetDinh — đợt PHẢI ĐỦ CẢ HAI (dot_so CHUỖI +
     expect(luatThamSoQuyetDinh({ so_quyet_dinh: "07" })).toEqual(loi422(["tham_so_quyet_dinh", "so_quyet_dinh"], `Value error, ${CAU_SO_QD_0_DAU}`))
     expect(luatThamSoQuyetDinh({ so_quyet_dinh: "7" })).toBeNull()
   })
+  it("Codex 42 F337 (owner: số KHÁC \"0\" có 0 đầu ⇒ từ chối): \"0\" một chữ số được nhận; \"00\" bị từ chối", () => {
+    expect(luatThamSoQuyetDinh({ so_quyet_dinh: "0" })).toBeNull()
+    expect(luatThamSoQuyetDinh({ so_quyet_dinh: "00" })).toEqual(loi422(["tham_so_quyet_dinh", "so_quyet_dinh"], `Value error, ${CAU_SO_QD_0_DAU}`))
+  })
   it("SAI: (1, vắng) và (vắng, 9) ⇒ 422 'cần đủ cả số đợt và tháng'", () => {
     for (const ts of [{ dot_so: "1" }, { dot_thang: 9 }]) {
       expect(luatThamSoQuyetDinh(ts)).toMatchObject({ status: 422, body: { error_code: "VALIDATION_ERROR" } })
@@ -546,6 +552,9 @@ describe("luatGhiNhan — xac_nhan_so_ho_so, goc_id ↔ loai, tham số đã in,
   })
   it("R7 (review max PR #724): số Quyết định có 0 đầu ⇒ 400 câu máy chủ; ngày ký sau 'hôm nay' ⇒ 400; đúng hôm nay ⇒ được", async () => {
     expect(await luatGhiNhan(form({ so_quyet_dinh: "0201" }), cx())).toEqual(loi400(CAU_SO_QD_0_DAU))
+    // Codex 42 F337: "0" một chữ số KHÔNG bị luật 0 đầu chặn (bộ in sẵn "201" ⇒ lệch bản in — luật sau); "00" thì bị.
+    expect(await luatGhiNhan(form({ so_quyet_dinh: "0" }), cx())).not.toEqual(loi400(CAU_SO_QD_0_DAU))
+    expect(await luatGhiNhan(form({ so_quyet_dinh: "00" }), cx())).toEqual(loi400(CAU_SO_QD_0_DAU))
     expect(await luatGhiNhan(form(), cx({}, { homNay: "2027-03-09" }))).toEqual(loi400("Ngày ký không được sau hôm nay."))
     expect(await luatGhiNhan(form(), cx({}, { homNay: "2027-03-10" }))).toBeNull()
   })
@@ -683,6 +692,16 @@ describe("luatGhiNhan — xac_nhan_so_ho_so, goc_id ↔ loai, tham số đã in,
     for (const hong of ["{", "abc", "{'a': 1}", '{"a":1,}', "undefined"]) {
       expect(await luatGhiNhan(xn(hong), cx()), `xac_nhan_trang_thai = ${hong}`).toEqual(CAU_XN_DANG)
     }
+  })
+  it("Codex 42 câu 4: JSON HỢP LỆ lồng ~500 tầng, dài ≤ trần ⇒ đọc được ⇒ luật giá trị (như máy chủ); vượt trần (kể cả JSON hợp lệ phẳng) ⇒ 'không đọc được'", async () => {
+    const sau = '{"trung_tuyen":' + "[".repeat(500) + "]".repeat(500) + "}"
+    expect(Array.from(sau).length).toBeLessThanOrEqual(TRAN_KY_TU_JSON_XAC_NHAN)
+    expect(await luatGhiNhan(xn(sau), cx())).toEqual(CAU_XN_SO)
+    const dungTran = '{"trung_tuyen": 3' + " ".repeat(TRAN_KY_TU_JSON_XAC_NHAN - 18) + "}"
+    const vuotTran = '{"trung_tuyen": 3' + " ".repeat(TRAN_KY_TU_JSON_XAC_NHAN - 17) + "}"
+    expect([Array.from(dungTran).length, Array.from(vuotTran).length]).toEqual([TRAN_KY_TU_JSON_XAC_NHAN, TRAN_KY_TU_JSON_XAC_NHAN + 1])
+    expect(await luatGhiNhan(xn(dungTran), cx())).not.toEqual(CAU_XN_DANG)
+    expect(await luatGhiNhan(xn(vuotTran), cx())).toEqual(CAU_XN_DANG)
   })
   it("C22-5c: giá trị KHÔNG phải số nguyên ≥ 1 ⇒ 400 ĐÚNG câu 'Số hồ sơ trong xác nhận phải là số nguyên ≥ 1.' — 0, âm, số lẻ, chuỗi số, null, bool (bool KHÔNG phải số)", async () => {
     for (const sai of ['{"submitted":0}', '{"submitted":-1}', '{"submitted":1.5}', '{"submitted":"3"}', '{"submitted":null}', '{"submitted":true}', '{"submitted":false}', '{"submitted":[2]}']) {
@@ -891,5 +910,18 @@ describe("lượt gửi", () => {
   it("phân xử: mã uuid ⇒ ĐÚNG; chuỗi lạ ⇒ 422", () => {
     expect(luatPhanXuMa(MA_LUOT)).toBeNull()
     expect(luatPhanXuMa("../../etc/passwd")).toMatchObject({ status: 422 })
+  })
+})
+
+describe("homNayVN — ranh giới ngày giờ Việt Nam (Codex 42 câu 4; máy chủ: today_vn, cùng hai mốc)", () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+  it("16:59:59Z còn là ngày cũ; 17:00:00Z đã sang ngày mới (UTC+7, không giờ mùa hè)", () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date("2026-11-15T16:59:59Z"))
+    expect(homNayVN()).toBe("2026-11-15")
+    vi.setSystemTime(new Date("2026-11-15T17:00:00Z"))
+    expect(homNayVN()).toBe("2026-11-16")
   })
 })

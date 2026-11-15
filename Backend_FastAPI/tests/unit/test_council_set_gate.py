@@ -491,3 +491,22 @@ async def test_t6_goi_dung_helper_cong_tac(monkeypatch, ten_ham):
         None, SimpleNamespace(area_resolution_basis=None), luat, 2026
     )
     assert goi == [luat] and (kv, dt) == (0, 0)
+
+
+# Codex 42 F334 — gộp hàng số liệu in mà bảng tham chiếu nhân lên: KHÔNG chọn hàng nào.
+def test_gop_hang_trung_giu_truong_giong_nhau_de_rong_truong_chu_khac_nhau():
+    from app.services.council_candidate_service import _merge_duplicate_rows
+
+    a = {"stt": 3, "pid": 9, "ho": "Họ Giả", "dia_chi": "xã A, tỉnh A", "dan_toc": "Ê Đê"}
+    b = {"stt": 3, "pid": 9, "ho": "Họ Giả", "dia_chi": "xã A, tỉnh B", "dan_toc": "Ê Đê"}
+    gop = _merge_duplicate_rows([a, b])
+    assert gop == {"stt": 3, "pid": 9, "ho": "Họ Giả", "dia_chi": "", "dan_toc": "Ê Đê"}
+    assert _merge_duplicate_rows([b, a]) == gop  # không phụ thuộc thứ tự hàng
+
+
+def test_gop_hang_trung_truong_khong_phai_chu_khac_nhau_thi_dung():
+    from app.services.council_candidate_service import _merge_duplicate_rows
+    from app.utils.exceptions import ServiceError
+
+    with pytest.raises(ServiceError, match="trường không phải chữ"):
+        _merge_duplicate_rows([{"stt": 3, "nv_in_id": 1}, {"stt": 3, "nv_in_id": 2}])

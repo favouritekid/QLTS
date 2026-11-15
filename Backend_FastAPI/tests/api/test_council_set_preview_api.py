@@ -160,6 +160,42 @@ async def test_dung_bo_cccd_trong_400_khong_ghi(client, hs, ad):
     assert await _so_bo() == 0
 
 
+async def _xa_trung(pid):
+    """Hai xã HIỆN HÀNH cùng mã (``administrative_nodes.code`` không UNIQUE), khác tỉnh ⇒ số liệu in của hồ sơ ``pid``
+    khớp HAI hàng tham chiếu (địa chỉ khác nhau)."""
+    await _sql("UPDATE admission_profile SET permanent_commune_code = 'GIA9901' WHERE id = :p", p=pid)
+    for xa, tinh, ten_tinh in (("Xã Giả Một", "GT991", "Tỉnh Giả Một"), ("Xã Giả Hai", "GT992", "Tỉnh Giả Hai")):
+        await _sql(
+            "INSERT INTO administrative_nodes (code, name, level, path, province_code, valid_from, is_active) "
+            "VALUES ('GIA9901', :x, 'WARD', :pa, :t, DATE '2020-01-01', true)",
+            x=xa, pa="/gia/" + tinh + "/GIA9901", t=tinh,
+        )
+        await _sql(
+            "INSERT INTO administrative_nodes (code, name, level, path, province_code, valid_from, is_active) "
+            "VALUES (:t, :n, 'PROVINCE', :pa, :t, DATE '2020-01-01', true)",
+            t=tinh, n=ten_tinh, pa="/gia/" + tinh,
+        )
+
+
+async def test_kiem_truoc_tham_chieu_trung_chi_chan_dong_ay_id_loc_dung_truoc(client, hs, ad):
+    # Codex 42 F334 (nhánh anh em của R5) — trước đây CẢ bản xem trước 400 "Dòng N: … khớp nhiều hàng", N đếm SAU khi
+    # lọc (id không có đứng trước ⇒ sai dòng). Nay: 200, id không có ở VỊ TRÍ ĐẦU VÀO 1, đúng hồ sơ ấy (theo
+    # profile_id) bị chặn ``tham_chieu_trung``, dòng khác không mang mã ấy; dựng bộ từ chối, 0 bộ.
+    pid = _pids(hs)[-1]  # hồ sơ CUỐI: số dòng sau lọc ≠ vị trí đầu vào
+    await _xa_trung(pid)
+    pids = [2147480000] + _pids(hs)  # id KHÔNG CÓ đứng trước
+    assert pids.index(pid) >= 2
+    kq = await _kiem_ok(client, ad, pids)
+    assert kq["khong_tim_thay"] == [1], kq["khong_tim_thay"]
+    dong = {d["profile_id"]: d for d in kq["dong"]}
+    ma = {x["ma"]: x["cau"] for x in dong[pid]["ly_do"]}
+    assert dong[pid]["muc"] == "bi_chan" and ma.get("tham_chieu_trung") == cong.LY_DO["tham_chieu_trung"], dong[pid]
+    assert all("tham_chieu_trung" not in {x["ma"] for x in d["ly_do"]} for p, d in dong.items() if p != pid)
+    r = await _dung(client, ad, [d["profile_id"] for d in kq["dong"]], kq["phien_ban_kiem"])
+    assert r.status_code == 400 and r.json()["kiem_tra_dung_bo"]["muc"] == "chan", r.text
+    assert await _so_bo() == 0
+
+
 async def test_kiem_truoc_van_hoa_trong_chan_dong_ay(client, hs, ad):
     # Review max PR #724 (R10): bước dựng dừng khi trình độ văn hoá rỗng; trước đây bản xem trước vẫn báo "được dựng"
     # (kèm dấu hợp lệ) cho dòng ấy. Nay: dòng ấy mang mã chặn ``du_lieu_van_hoa_la``, các dòng khác không mang mã ấy.

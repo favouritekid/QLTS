@@ -106,6 +106,11 @@ LY_DO: Dict[str, str] = {
     "thieu_hoc_phi_hk1": "chưa có khoản học phí học kỳ 1 — không có mã ngành để in",
     # Review max PR #724 (R5): CCCD = mã hồ sơ in trên văn bản; thiếu thì CHẶN DÒNG ẤY (trước đây làm hỏng cả lô).
     "thieu_ma_ho_so": "hồ sơ chưa có số CCCD — mã hồ sơ in trên văn bản sẽ trống; bổ sung CCCD rồi kiểm lại",
+    # Codex 42 F334 (nhánh anh em của R5): trước đây làm hỏng CẢ LÔ, kèm số dòng đếm SAU khi lọc (sai dòng).
+    "tham_chieu_trung": (
+        "dữ liệu tham chiếu (địa giới / khu vực / dân tộc) của hồ sơ khớp nhiều hàng hiện hành — phần mềm không tự "
+        "chọn một hàng; sửa danh mục rồi kiểm lại"
+    ),
     "hoc_phi_chua_gan_nganh": "khoản học phí học kỳ 1 chưa gắn ngành — không có mã ngành để in",
     "hoc_phi_khac_nganh_nv": (
         "ngành của khoản học phí học kỳ 1 khác ngành của nguyện vọng dùng để in"
@@ -259,6 +264,8 @@ class DuLieuKiem:
     dau_appsheet: bool = False
     # Review max PR #724 (R5): CCCD (``ma_ho_so``) trống / chỉ khoảng trắng ⇒ dòng bị chặn ``thieu_ma_ho_so``.
     thieu_ma_ho_so: bool = False
+    # Codex 42 F334: số liệu in của hồ sơ khớp NHIỀU hàng tham chiếu hiện hành ⇒ dòng bị chặn ``tham_chieu_trung``.
+    duplicate_reference: bool = False
 
 
 def diem_ut_in(luat_ut: Optional[str], diem_ut_v1: str) -> Optional[str]:
@@ -344,6 +351,8 @@ def ly_do_cua_dong(k: DuLieuKiem) -> List[str]:
         out.append("khong_xac_dinh_luat_cong_diem_ut")
     if k.thieu_ma_ho_so:
         out.append("thieu_ma_ho_so")
+    if k.duplicate_reference:
+        out.append("tham_chieu_trung")
     return out
 
 

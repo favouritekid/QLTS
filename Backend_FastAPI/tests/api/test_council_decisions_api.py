@@ -339,7 +339,8 @@ async def test_ghi_nhan_so_trung_trong_nam_409(client, hs, ad):
 
 async def test_ghi_nhan_xac_nhan_json_long_qua_sau_400_khong_500(client, hs, ad):
     # Review max PR #724 (dưới ngưỡng): ``xac_nhan_trang_thai`` là JSON lồng quá sâu ⇒ ``json.loads`` ném RecursionError
-    # (trước đây 500). Nay đi đường "không đọc được" ⇒ 400 câu của service, không ghi gì.
+    # (trước đây 500). Nay đi đường "không đọc được" ⇒ 400 câu của service, không ghi gì. Từ Codex 42: chuỗi này vượt
+    # trần độ dài nên bị chặn TRƯỚC ``json.loads``; ``except RecursionError`` còn lại là lớp thứ hai.
     bo = await _bo_ok(client, ad, hs, SACH)
     r = await _ghi(client, ad, bo["id"], so="501", so_hs=3, them={"xac_nhan_trang_thai": "[" * 100000})
     assert r.status_code == 400 and r.json()["detail"] == "Xác nhận phải là danh sách {loại: số hồ sơ} không rỗng.", r.text
@@ -354,6 +355,44 @@ async def test_ghi_nhan_so_qd_0_dau_400_khong_ghi(client, hs, ad):
     bo = await _bo_ok(client, ad, hs, SACH)
     r = await _ghi(client, ad, bo["id"], so="07", so_hs=3)
     assert r.status_code == 400 and r.json()["detail"] == CAU_SO_QD_0_DAU, r.text
+    assert await _q1("SELECT count(*) FROM council_decision") == 0
+
+
+async def test_ghi_nhan_so_qd_0_mot_chu_so_duoc_nhan(client, hs, ad):
+    # Codex 42 F337 — owner chốt: số KHÁC "0" mà có 0 đứng đầu ⇒ từ chối; "0" một chữ số vẫn nhận (bộ không in sẵn số).
+    bo = await _bo_ok(client, ad, hs, SACH)
+    await _ghi_ok(client, ad, bo["id"], so="0", so_hs=3)
+    assert await _q1("SELECT so_quyet_dinh FROM council_decision") == "0"
+
+
+async def test_ghi_nhan_xac_nhan_json_hop_le_long_sau_duoi_tran_doc_duoc(client, hs, ad):
+    # Codex 42 câu 4: JSON HỢP LỆ lồng ~500 tầng, dài ≤ trần ⇒ bộ đọc Python đọc được (không RecursionError) ⇒ tới luật
+    # GIÁ TRỊ — đúng như ``JSON.parse`` của MSW (cùng chuỗi ở council-luat-may-chu.test.ts).
+    from app.services.council_decision_service import CONFIRMATION_JSON_MAX_CHARS
+
+    sau = '{"trung_tuyen":' + "[" * 500 + "]" * 500 + "}"
+    assert len(sau) <= CONFIRMATION_JSON_MAX_CHARS
+    bo = await _bo_ok(client, ad, hs, SACH)
+    r = await _ghi(client, ad, bo["id"], so="502", so_hs=3, them={"xac_nhan_trang_thai": sau})
+    assert r.status_code == 400 and r.json()["detail"] == "Số hồ sơ trong xác nhận phải là số nguyên ≥ 1.", r.text
+    assert await _q1("SELECT count(*) FROM council_decision") == 0
+
+
+async def test_ghi_nhan_xac_nhan_json_vuot_tran_khong_doc_duoc(client, hs, ad):
+    # Codex 42 câu 4: trần độ dài là RANH GIỚI cứng — đúng trần thì đọc (JSON phẳng hợp lệ ⇒ không phải câu "danh sách");
+    # vượt 1 ký tự thì "không đọc được" dù JSON hợp lệ.
+    from app.services.council_decision_service import CONFIRMATION_JSON_MAX_CHARS
+
+    dung_tran = '{"trung_tuyen": 3' + " " * (CONFIRMATION_JSON_MAX_CHARS - 18) + "}"
+    vuot_tran = '{"trung_tuyen": 3' + " " * (CONFIRMATION_JSON_MAX_CHARS - 17) + "}"
+    assert [len(dung_tran), len(vuot_tran)] == [CONFIRMATION_JSON_MAX_CHARS, CONFIRMATION_JSON_MAX_CHARS + 1]
+    assert json.loads(vuot_tran) == {"trung_tuyen": 3}
+    cau_dang = "Xác nhận phải là danh sách {loại: số hồ sơ} không rỗng."
+    bo = await _bo_ok(client, ad, hs, SACH)
+    r = await _ghi(client, ad, bo["id"], so="503", so_hs=3, them={"xac_nhan_trang_thai": dung_tran})
+    assert r.json().get("detail") != cau_dang, r.text
+    r = await _ghi(client, ad, bo["id"], so="504", so_hs=3, them={"xac_nhan_trang_thai": vuot_tran})
+    assert r.status_code == 400 and r.json()["detail"] == cau_dang, r.text
     assert await _q1("SELECT count(*) FROM council_decision") == 0
 
 

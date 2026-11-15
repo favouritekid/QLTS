@@ -112,6 +112,7 @@ HANG = {
     "bo.CAU_DOI_TU_LUC_KIEM": (s_bo, "CAU_DOI_TU_LUC_KIEM"),
     "qd.TRUONG_THAM_SO_GIAY": (s_qd, "TRUONG_THAM_SO_GIAY"),
     "qd.SIGN_DATE_AFTER_TODAY_MESSAGE": (s_qd, "SIGN_DATE_AFTER_TODAY_MESSAGE"),  # review max PR #724 R7
+    "qd.CONFIRMATION_JSON_MAX_CHARS": (s_qd, "CONFIRMATION_JSON_MAX_CHARS"),  # Codex 42 câu 4 — MSW TRAN_KY_TU_JSON_XAC_NHAN
     "mau.TEN_LOAI": (s_mau, "TEN_LOAI"),
     "model.LY_DO_XOA_TOI_DA": (m_vb, "LY_DO_XOA_TOI_DA"),
 }
@@ -193,7 +194,7 @@ GHIM = {
     "bo.tao_bo_van_ban_theo_id": "db846adea3478a18",
     "cau_hinh.COUNCIL_DECISION_SCAN_MAX_BYTES": "cb01a688cfdfae4b",  # review max PR #724 R1: 9 MiB — MSW chép cùng lượt
     "cau_hinh.COUNCIL_SET_MAX_PROFILES": "b09d7b699cf5ffdf",
-    "dung.DecisionParams": "dd43050e54fbfacb",  # review max PR #724 R7: số in sẵn không 0 đầu — MSW chép cùng lượt
+    "dung.DecisionParams": "fa964ed3e853a34f",  # review max PR #724 R7: số in sẵn không 0 đầu — MSW chép cùng lượt
     "luot.kiem_ma_luot": "308137227d71b47c",
     "mau.TEN_LOAI": "ff27ce4a7da9b1c2",
     "mau.kiem_goi_mau": "ef70e2137b6bad3c",
@@ -209,10 +210,11 @@ GHIM = {
     "qd.huy_ghi_nhan": "ca9f7185490424e1",
     "qd.kiem_ngay": "32acc69c19c328c2",  # review max PR #724 R7: ngày ký không sau hôm nay (giờ VN), câu = hằng nguyên văn — MSW chép cùng lượt
     "qd.kiem_scan": "ee7b2cb1bf446f2b",
-    "qd.kiem_so_quyet_dinh": "a04ea3f45568c227",  # review max PR #724 R7: cấm 0 đầu — MSW chép cùng lượt
+    "qd.kiem_so_quyet_dinh": "6449b99d90d01950",  # R7 cấm 0 đầu; Codex 42 F337: "0" một chữ số nhận — MSW chép cùng lượt
+    "qd.CONFIRMATION_JSON_MAX_CHARS": "e39eef82f61b21e2",  # Codex 42 câu 4 — MSW TRAN_KY_TU_JSON_XAC_NHAN = 1024
     "qd.kiem_xac_nhan_trang_thai": "c17156d4d7c11784",
     "route._doc_scan": "739d65dc50e09692",
-    "route._json_xac_nhan": "15eab3a998e150fc",  # review max PR #724: + RecursionError ⇒ "không đọc được" (MSW vốn catch mọi lỗi JSON.parse)
+    "route._json_xac_nhan": "0a97d2deae933c9c",  # + RecursionError; Codex 42: vượt trần ký tự ⇒ "không đọc được" — MSW chép cùng lượt
     "route.cancel_council_decision_record": "8652360e55420ed5",
     "route.create_council_decision": "b6a564e00dfe18e9",
     "route.create_council_document_set": "f14d7ca19acadabe",

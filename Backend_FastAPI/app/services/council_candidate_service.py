@@ -640,23 +640,39 @@ async def _doc_tho(conn: AsyncConnection, pids: Sequence[int]):
     return hang, hang_kiem, khu_vuc, luat
 
 
+def _merge_duplicate_rows(rows: List[dict]) -> dict:
+    """Codex 42 F334: gộp các hàng số liệu in của MỘT hồ sơ mà bảng tham chiếu nhân lên. Trường giống nhau ở mọi hàng
+    ⇒ giữ; trường chữ khác nhau ⇒ "" (không chọn hàng nào). Trường KHÔNG phải chữ mà khác nhau (định danh, mã nguyện
+    vọng…) — không thể đến từ bảng tham chiếu ⇒ ``ServiceError`` (fail-closed)."""
+    merged = dict(rows[0])
+    for key in rows[0]:
+        values = [row.get(key) for row in rows]
+        if any(value != values[0] for value in values[1:]):
+            if not all(isinstance(value, str) for value in values):
+                raise ServiceError("Số liệu hồ sơ khớp nhiều hàng ở trường không phải chữ — không dựng.")
+            merged[key] = ""
+    return merged
+
+
 def _dung_anh_chup(tho, pids, tt) -> AnhChupHoSo:
     hang, hang_kiem, khu_vuc, luat = tho
     so_dong = len(pids)
-    # Mỗi hồ sơ đúng MỘT hàng: bảng tham chiếu (địa giới, khu vực) khớp nhiều hàng hiện
-    # hành thì bộ xuất in TRÙNG người ⇒ dừng, không tự chọn một hàng.
-    dem: dict = {}
+    # Mỗi hồ sơ đúng MỘT hàng: bảng tham chiếu (địa giới, khu vực, dân tộc) khớp nhiều hàng hiện hành thì bộ xuất
+    # in TRÙNG người ⇒ không tự chọn một hàng. Codex 42 F334 (nhánh anh em của R5): trước đây ném lỗi cho CẢ LÔ, kèm
+    # "Dòng N" đếm SAU khi lọc (bản xem trước lọc id ⇒ sai dòng). Nay: các hàng của hồ sơ ấy GỘP thành một — trường
+    # GIỐNG NHAU ở mọi hàng giữ nguyên, trường KHÁC NHAU (chỉ có thể là chữ lấy từ bảng tham chiếu) để RỖNG — và dòng
+    # mang cờ ⇒ cổng chặn ``tham_chieu_trung`` (bản xem trước nêu đúng hồ sơ theo ``profile_id``; POST /sets từ chối
+    # như mọi dòng bị chặn — không bao giờ in giá trị của một hàng được chọn).
+    rows_by_position: dict = {}
     for h in hang:
-        dem[h["stt"]] = dem.get(h["stt"], 0) + 1
-    du = sorted(stt for stt, n in dem.items() if n > 1)
-    if du:
-        raise DataValidationError(
-            "Dòng %s: dữ liệu tham chiếu (địa giới / khu vực) khớp nhiều hàng hiện hành "
-            "— không dựng." % _neu_dong(du)
-        )
-    if sorted(dem) != list(range(1, so_dong + 1)):
+        rows_by_position.setdefault(h["stt"], []).append(h)
+    if sorted(rows_by_position) != list(range(1, so_dong + 1)):
         raise ServiceError("Đọc số liệu hồ sơ thiếu hàng — không dựng.")
-    hang.sort(key=lambda h: h["stt"])
+    duplicate_reference = {stt for stt, rows in rows_by_position.items() if len(rows) > 1}
+    hang = [
+        _merge_duplicate_rows(rows_by_position[stt]) if stt in duplicate_reference else rows_by_position[stt][0]
+        for stt in range(1, so_dong + 1)
+    ]
     if (
         [h["stt"] for h in hang_kiem] != list(range(1, so_dong + 1))
         or len(khu_vuc) != so_dong
@@ -710,6 +726,7 @@ def _dung_anh_chup(tho, pids, tt) -> AnhChupHoSo:
             cho_quyet_id=tq.cho_quyet_id,
             dau_appsheet=tq.dau_appsheet,
             thieu_ma_ho_so=k["stt"] in thieu_ma,
+            duplicate_reference=k["stt"] in duplicate_reference,
         )
         for k, kv, lk, tq in zip(
             hang_kiem, khu_vuc, luat, (tu_hang(k) for k in hang_kiem)

@@ -221,8 +221,9 @@ class DecisionParams(BaseModel):
     def _kiem_so_khong_0_dau(cls, v: Optional[str]) -> Optional[str]:
         # Review max PR #724 (R7, §6 — nhánh anh em): số in sẵn có 0 đầu thì lúc ghi nhận (phải gõ lại ĐÚNG số đã
         # in) không bao giờ qua ``kiem_so_quyet_dinh`` ⇒ chặn ngay lúc dựng. Ngày Quyết định in sẵn KHÔNG chặn
-        # "sau hôm nay" (văn bản có thể in trước ngày ký).
-        if v is not None and v.startswith("0"):
+        # "sau hôm nay" (văn bản có thể in trước ngày ký). Cùng luật owner với ``kiem_so_quyet_dinh``: số KHÁC "0" mà có
+        # 0 đứng đầu ⇒ từ chối; "0" một chữ số vẫn nhận (Codex 42 F337).
+        if v is not None and len(v) > 1 and v.startswith("0"):
             raise ValueError(CAU_SO_QD_0_DAU)
         return v
 
@@ -427,24 +428,37 @@ def row_data_error(row: CandidateRowV1) -> Optional[Tuple[str, Optional[str]]]:
     return None
 
 
-def group_data_errors(rows: Sequence[CandidateRowV1]) -> Dict[int, str]:
-    """{chỉ số dòng (từ 0): mã} của phép kiểm theo NHÓM (ngành, trình độ) mà ``_ma_nganh`` thi hành: nhóm có ≥ 2 mã
-    ngành khác nhau ⇒ ``du_lieu_ma_nganh_mau_thuan``; mọi dòng của nhóm mã rỗng ⇒ ``du_lieu_thieu_ma_nganh``. Đánh
-    dấu MỌI dòng của nhóm (bước dựng dừng cả bộ)."""
-    groups: Dict[Tuple[str, str], List[int]] = {}
+def _major_code_groups(
+    rows: Sequence[CandidateRowV1],
+) -> Tuple[Dict[Tuple[str, str], str], Dict[Tuple[str, str], int], List[Tuple[str, str]]]:
+    """MỘT nguồn QUYẾT ĐỊNH lỗi theo NHÓM (ngành, trình độ) — dùng chung cho bản xem trước (:func:`group_data_errors`)
+    và bước dựng (:func:`_ma_nganh`); mỗi bên chỉ TRÌNH BÀY khác (Codex 42 F335). Trả:
+    (mã ngành theo nhóm = mã của dòng ĐẦU nhóm, như bộ xuất; {nhóm mâu thuẫn: chỉ số (từ 0) dòng ĐẦU TIÊN ghi mã khác};
+    [nhóm thiếu mã: dòng đầu mã rỗng VÀ nhóm không mâu thuẫn])."""
+    codes: Dict[Tuple[str, str], str] = {}
+    conflicts: Dict[Tuple[str, str], int] = {}
     for index, row in enumerate(rows):
-        groups.setdefault(khoa_nhom_quyet_dinh(row), []).append(index)
+        group = khoa_nhom_quyet_dinh(row)
+        if group not in codes:
+            codes[group] = row.ma_nganh
+        elif codes[group] != row.ma_nganh and group not in conflicts:
+            conflicts[group] = index
+    missing = [group for group, code in codes.items() if not code and group not in conflicts]
+    return codes, conflicts, missing
+
+
+def group_data_errors(rows: Sequence[CandidateRowV1]) -> Dict[int, str]:
+    """{chỉ số dòng (từ 0): mã} của phép kiểm theo NHÓM mà ``_ma_nganh`` thi hành — quyết định ở
+    :func:`_major_code_groups`: nhóm mâu thuẫn ⇒ ``du_lieu_ma_nganh_mau_thuan``; nhóm thiếu mã ⇒
+    ``du_lieu_thieu_ma_nganh``. Đánh dấu MỌI dòng của nhóm (bước dựng dừng cả bộ)."""
+    _, conflicts, missing = _major_code_groups(rows)
+    error_by_group = {group: "du_lieu_ma_nganh_mau_thuan" for group in conflicts}
+    error_by_group.update({group: "du_lieu_thieu_ma_nganh" for group in missing})
     errors: Dict[int, str] = {}
-    for indexes in groups.values():
-        codes = {rows[index].ma_nganh for index in indexes}
-        if len(codes) > 1:
-            error_code = "du_lieu_ma_nganh_mau_thuan"
-        elif not next(iter(codes)):
-            error_code = "du_lieu_thieu_ma_nganh"
-        else:
-            continue
-        for index in indexes:
-            errors[index] = error_code
+    for index, row in enumerate(rows):
+        group = khoa_nhom_quyet_dinh(row)
+        if group in error_by_group:
+            errors[index] = error_by_group[group]
     return errors
 
 
@@ -507,17 +521,15 @@ def _ma_nganh(
     hs: Sequence[_HoSo], nganh_ds: Sequence[Tuple[str, str]]
 ) -> Dict[Tuple[str, str], str]:
     """Mã ngành theo (ngành, trình độ): lấy từ hồ sơ ĐẦU của nhóm (như bộ xuất);
-    thiếu hoặc các hồ sơ cùng nhóm ghi mã khác nhau ⇒ DỪNG."""
-    ma: Dict[Tuple[str, str], str] = {}
-    for i, h in enumerate(hs, 1):
-        ng = h.khoa_nganh
-        if ng not in ma:
-            ma[ng] = h.dto.ma_nganh
-        elif ma[ng] != h.dto.ma_nganh:
-            raise DataValidationError(
-                "Dòng %d: mã ngành khác các hồ sơ cùng ngành, cùng trình độ." % i
-            )
-    thieu = [ng for ng in nganh_ds if not ma.get(ng)]
+    thiếu hoặc các hồ sơ cùng nhóm ghi mã khác nhau ⇒ DỪNG. Quyết định ở :func:`_major_code_groups` (một nguồn với
+    bản xem trước — Codex 42 F335); ở đây chỉ trình bày câu NGUYÊN như trước."""
+    ma, conflicts, missing = _major_code_groups([h.dto for h in hs])
+    if conflicts:
+        raise DataValidationError(
+            "Dòng %d: mã ngành khác các hồ sơ cùng ngành, cùng trình độ."
+            % (min(conflicts.values()) + 1)
+        )
+    thieu = [ng for ng in nganh_ds if ng in missing or ng not in ma]
     if thieu:
         raise DataValidationError(
             "Thiếu mã ngành cho %d nhóm ngành — không dựng được Điều 1." % len(thieu)
@@ -1343,6 +1355,13 @@ _CHO_TRINH_DO_BB = (
 _NESTED_LEVEL_SLOT = (
     "đoạn có chỗ điền trình độ (trong bảng, đầu / chân trang, khung chữ hoặc ô nội dung)"
 )
+#: Câu DUY NHẤT khi mẫu Biên bản không có chỗ điền trình độ — phép kiểm mẫu (lúc tải lên + đầu bước dựng; Codex 42 F333)
+#: và lớp thứ hai sau vòng điền dùng chung.
+BB_MISSING_LEVEL_SLOT_MESSAGE = "Mẫu Biên bản: không có chỗ điền `trình độ` — mẫu đã đổi?"
+
+
+def _is_bb_level_slot(text: str) -> bool:
+    return any(cu in text for cu, _ in _CHO_TRINH_DO_BB)
 
 
 
@@ -1365,9 +1384,16 @@ def _kiem_mau_bien_ban(d) -> None:
             _kiem_doan_chi_run(p._p, "Biên bản", "đoạn %d (chỗ điền trình độ)" % k)
     # Review max PR #724 (R11): bộ dựng điền chỗ trình độ ở MỌI vùng chữ (:func:`_all_paragraphs`) ⇒ cùng luật chỉ run
     # cho mọi đoạn ấy (ô bảng, đầu / chân trang, khung chữ, ô nội dung), không chỉ đoạn cấp cao nhất.
+    found = False
     for p in _all_paragraphs(d):
-        if any(cu in p.text for cu, _ in _CHO_TRINH_DO_BB):
+        if _is_bb_level_slot(p.text):
+            found = True
             _kiem_doan_chi_run(p._p, "Biên bản", _NESTED_LEVEL_SLOT)
+    # Codex 42 F333: mẫu THIẾU chỗ điền trình độ trước đây qua được lúc tải lên, chỉ hỏng lúc dựng ⇒ chặn ngay ở đây.
+    if not found:
+        raise FileValidationError(BB_MISSING_LEVEL_SLOT_MESSAGE)
+    # Codex 42 F333: chỗ điền ở chú thích cuối trang / cuối văn bản không được điền ⇒ từ chối.
+    _reject_slots_in_unfilled_regions(d, "Biên bản", _is_bb_level_slot)
 
 
 def _dung_bien_ban(hs, nganh_ds, trinh_do: str, mau: bytes) -> bytes:
@@ -1426,10 +1452,8 @@ def _dung_bien_ban(hs, nganh_ds, trinh_do: str, mau: bytes) -> bytes:
         if t != p.text:
             _dat_doan(p, t)
             da_dien += 1
-    if da_dien == 0:
-        raise FileValidationError(
-            "Mẫu Biên bản: không có chỗ điền `trình độ` — mẫu đã đổi?"
-        )
+    if da_dien == 0:  # lớp thứ hai — tầng chủ sở hữu là :func:`_kiem_mau_bien_ban` (chạy đầu hàm này)
+        raise FileValidationError(BB_MISSING_LEVEL_SLOT_MESSAGE)
     return _luu_docx(d)
 
 
@@ -1501,15 +1525,28 @@ def _kiem_mau_quyet_dinh(d) -> None:
     # Review max PR #724 (R11): chỗ điền ``<<…>>`` phần mềm KHÔNG điền (ngoài :data:`_LEVEL_PLACEHOLDERS`) chắc chắn
     # in nguyên văn ⇒ chặn NGAY ở đây — phép kiểm này chạy cả lúc TẢI MẪU LÊN (mẫu đã vào kho không xoá được qua API)
     # lẫn đầu bước dựng, TRƯỚC khi đổ dữ liệu thí sinh (dữ liệu có chữ ``<<…>>`` không phải lỗi của mẫu).
-    unsupported = sorted(
-        {m.group(0) for p in _all_paragraphs(d) for m in _PLACEHOLDER_PATTERN.finditer(p.text)}
-        - set(_LEVEL_PLACEHOLDERS)
-    )
-    if unsupported:
+    # Codex 42 F336: thông báo nêu SỐ LƯỢNG + VÙNG (từ vựng cố định) + tên ĐƯỢC PHÉP (hằng của mã) — KHÔNG phản chiếu chữ
+    # của mẫu (chỗ điền có thể chứa chuỗi nhạy cảm).
+    unsupported_regions = [
+        region
+        for region, p in _paragraphs_with_region(d)
+        for m in _PLACEHOLDER_PATTERN.finditer(p.text)
+        if m.group(0) not in _LEVEL_PLACEHOLDERS
+    ]
+    if unsupported_regions:
         raise FileValidationError(
-            "Mẫu Quyết định có chỗ điền phần mềm không điền (%s) — chỉ điền được %s."
-            % (", ".join(unsupported), " / ".join(_LEVEL_PLACEHOLDERS))
+            "Mẫu Quyết định có %d chỗ điền phần mềm không điền (ở: %s) — chỉ điền được %s."
+            % (
+                len(unsupported_regions),
+                ", ".join(sorted(set(unsupported_regions))),
+                " / ".join(_LEVEL_PLACEHOLDERS),
+            )
         )
+    # Codex 42 F333: chú thích cuối trang / cuối văn bản (phần ĐƯỢC PHÉP của gói) không được điền ⇒ có chỗ điền ở đó
+    # (``<<…>>`` bất kỳ, kể cả ``trinh_do``) ⇒ từ chối.
+    _reject_slots_in_unfilled_regions(
+        d, "Quyết định", lambda text: bool(_PLACEHOLDER_PATTERN.search(text)) or "trinh_do" in text
+    )
 
 
 # TT · số CCCD · họ · tên · giới tính · ngày sinh · nơi sinh · dân tộc
@@ -1535,33 +1572,90 @@ def _dat_dong_nganh(par, txt: str) -> None:
         pf.tab_stops.add_tab_stop(Twips(pos))
 
 
-#: Review max PR #724 (R11): một chỗ điền dạng ``<<tên>>`` / ``<<[tên]>>`` trong chữ của văn bản.
-_PLACEHOLDER_PATTERN = re.compile(r"<<[^<>\n]{1,64}>>")
+#: Review max PR #724 (R11): một chỗ điền dạng ``<<tên>>`` / ``<<[tên]>>`` trong chữ của văn bản. KHÔNG giới hạn độ dài
+#: tên (Codex 42 F333: trần 64 ký tự cũ để lọt chỗ điền tên dài).
+_PLACEHOLDER_PATTERN = re.compile(r"<<[^<>]*>>")
 #: Chỗ điền DUY NHẤT phần mềm điền trong mẫu Quyết định (một nguồn cho vòng điền và phép kiểm mẫu).
 _LEVEL_PLACEHOLDERS: Tuple[str, ...] = ("<<[trinh_do]>>", "<<trinh_do>>")
 
+#: Nhãn vùng chữ — TỪ VỰNG CỐ ĐỊNH để thông báo lỗi nêu VỊ TRÍ mà không phản chiếu chữ của mẫu (Codex 42 F336).
+REGION_BODY = "thân văn bản"
+REGION_TABLE = "bảng"
+REGION_TEXT_BOX = "khung chữ"
+REGION_CONTENT_CONTROL = "ô nội dung"
+REGION_HEADER = "đầu trang"
+REGION_FOOTER = "chân trang"
+REGION_FOOTNOTE = "chú thích cuối trang"
+REGION_ENDNOTE = "chú thích cuối văn bản"
+#: Phần của gói được phép (``KIEU_NOI_DUNG_CHO_PHEP``) có chữ in ra mà bộ dựng KHÔNG điền ⇒ chỗ điền ở đó bị TỪ CHỐI
+#: (Codex 42 F333: "vùng chưa hỗ trợ phải từ chối khi có chỗ điền"). python-docx 1.2 không có lớp cho hai phần này
+#: (nạp thành ``Part`` thường, chỉ có byte) ⇒ đọc bằng ``_PARSER_GOI``.
+_UNFILLED_PART_REGIONS = {
+    _CT_WORD + "footnotes+xml": REGION_FOOTNOTE,
+    _CT_WORD + "endnotes+xml": REGION_ENDNOTE,
+}
 
-def _all_paragraphs(document):
-    """Mọi đoạn chữ của văn bản (review max PR #724 R11): MỌI ``w:p`` hậu duệ của thân và của đầu / chân trang ĐÃ ĐỊNH
-    NGHĨA của mọi section — gồm ô bảng (cả bảng lồng), khung chữ (``w:txbxContent``, cả nhánh ``mc:Fallback``) và ô
-    nội dung (``w:sdt``). ``container.paragraphs`` của python-docx chỉ trả đoạn CON TRỰC TIẾP ⇒ mù khung chữ / ô nội
-    dung: chỗ điền ở đó vừa không được điền vừa lọt lượt quét sót. Duyệt cây lxml thăm mỗi nút đúng MỘT lần ⇒ ô gộp
-    không lặp đoạn. Đầu / chân trang "liên kết với trước" bị bỏ qua — truy cập chúng làm python-docx TẠO phần mới (đổi
-    tệp sinh)."""
+
+def _region_of(p_element, base: str) -> str:
+    """Vùng của một ``w:p``: tổ tiên GẦN nhất là khung chữ / ô nội dung / ô bảng; không có ⇒ ``base``."""
+    for ancestor in p_element.iterancestors():
+        if ancestor.tag == qn("w:txbxContent"):
+            return REGION_TEXT_BOX
+        if ancestor.tag == qn("w:sdtContent"):
+            return REGION_CONTENT_CONTROL
+        if ancestor.tag == qn("w:tc"):
+            return REGION_TABLE
+    return base
+
+
+def _paragraphs_with_region(document):
+    """(nhãn vùng, đoạn) cho MỌI đoạn mà bộ dựng duyệt (review max PR #724 R11): MỌI ``w:p`` hậu duệ của thân và của đầu
+    / chân trang ĐÃ ĐỊNH NGHĨA của mọi section — gồm ô bảng (cả bảng lồng), khung chữ (``w:txbxContent``, cả nhánh
+    ``mc:Fallback``) và ô nội dung (``w:sdt``). ``container.paragraphs`` của python-docx chỉ trả đoạn CON TRỰC TIẾP ⇒ mù
+    khung chữ / ô nội dung: chỗ điền ở đó vừa không được điền vừa lọt phép kiểm. Duyệt cây lxml thăm mỗi nút đúng MỘT
+    lần ⇒ ô gộp không lặp đoạn. Đầu / chân trang "liên kết với trước" bị bỏ qua — truy cập chúng làm python-docx TẠO
+    phần mới (đổi tệp sinh). Chú thích cuối trang / văn bản KHÔNG ở đây: xem :func:`_unfilled_region_texts`."""
     for p in document.element.body.iter(qn("w:p")):
-        yield Paragraph(p, document._body)
+        yield _region_of(p, REGION_BODY), Paragraph(p, document._body)
     for section in document.sections:
-        for part in (
-            section.header,
-            section.footer,
-            section.first_page_header,
-            section.first_page_footer,
-            section.even_page_header,
-            section.even_page_footer,
+        for part, base in (
+            (section.header, REGION_HEADER),
+            (section.footer, REGION_FOOTER),
+            (section.first_page_header, REGION_HEADER),
+            (section.first_page_footer, REGION_FOOTER),
+            (section.even_page_header, REGION_HEADER),
+            (section.even_page_footer, REGION_FOOTER),
         ):
             if not part.is_linked_to_previous:
                 for p in part._element.iter(qn("w:p")):
-                    yield Paragraph(p, part)
+                    yield _region_of(p, base), Paragraph(p, part)
+
+
+def _all_paragraphs(document):
+    """Mọi đoạn bộ dựng duyệt — :func:`_paragraphs_with_region` bỏ nhãn (MỘT nguồn duyệt)."""
+    for _, paragraph in _paragraphs_with_region(document):
+        yield paragraph
+
+
+def _unfilled_region_texts(document):
+    """(nhãn vùng, chữ) của từng ``w:p`` trong các phần có chữ in ra mà bộ dựng KHÔNG điền (:data:`_UNFILLED_PART_REGIONS`)."""
+    for part in document.part.package.iter_parts():
+        region = _UNFILLED_PART_REGIONS.get(part.content_type)
+        if region is None:
+            continue
+        root = etree.fromstring(part.blob, _PARSER_GOI)
+        for p in root.iter(qn("w:p")):
+            yield region, "".join(t.text or "" for t in p.iter(qn("w:t")))
+
+
+def _reject_slots_in_unfilled_regions(document, ten: str, is_slot) -> None:
+    """Chỗ điền (``is_slot(chữ)``) nằm ở vùng bộ dựng KHÔNG điền ⇒ TỪ CHỐI, nêu SỐ LƯỢNG + VÙNG, không nêu chữ của mẫu."""
+    regions = [region for region, text in _unfilled_region_texts(document) if is_slot(text)]
+    if regions:
+        raise FileValidationError(
+            "Mẫu %s có %d đoạn chứa chỗ điền ở vùng phần mềm không điền (%s) — chuyển chỗ điền vào thân văn bản, "
+            "bảng hoặc đầu / chân trang." % (ten, len(regions), ", ".join(sorted(set(regions))))
+        )
 
 
 def _dung_quyet_dinh(

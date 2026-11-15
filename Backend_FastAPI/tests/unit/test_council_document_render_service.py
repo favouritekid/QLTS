@@ -726,6 +726,44 @@ def test_dau_vao_sai_bi_tu_choi_khong_lo_ma_ho_so(mau):
         CandidateRowV1(**{k: "" for k in CANDIDATE_FIELDS})  # mã hồ sơ rỗng
 
 
+# Codex 42 F335 — kiểm NHÓM (mã ngành) của bản xem trước và bước dựng dùng CHUNG ``_major_code_groups``. Cùng dữ liệu, hai
+# đường: dựng nêu câu (dòng lệch đầu tiên / số nhóm thiếu); xem trước đánh dấu mọi dòng của nhóm. Một bản phá trong hàm
+# chung phải làm ĐỎ cả hai.
+def _nhom_mau_thuan():
+    # nhóm (ô tô, CĐ): dòng 1 mã "1", dòng 3 mã "2" (lệch); nhóm (dược, CĐ) ở giữa, mã đúng.
+    return [
+        _hs("GIA-X", "X", OTO, CD, "1", "1"),
+        _hs("GIA-Z", "Z", DUOC, CD, "5", "1"),
+        _hs("GIA-Y", "Y", OTO, CD, "2", "1"),
+    ]
+
+
+def _nhom_thieu_ma():
+    return [
+        _hs("GIA-X", "X", OTO, CD, "", "1"),
+        _hs("GIA-Z", "Z", DUOC, CD, "", "1"),
+        _hs("GIA-Y", "Y", DIEU, CD, "7", "1"),
+    ]
+
+
+def test_nhom_mau_thuan_duong_dung(mau):
+    with pytest.raises(DataValidationError, match=r"^Dòng 3: mã ngành khác các hồ sơ cùng ngành, cùng trình độ\.$"):
+        render_council_documents(_nhom_mau_thuan(), mau)
+
+
+def test_nhom_mau_thuan_duong_xem_truoc():
+    assert svc.group_data_errors(_nhom_mau_thuan()) == {0: "du_lieu_ma_nganh_mau_thuan", 2: "du_lieu_ma_nganh_mau_thuan"}
+
+
+def test_nhom_thieu_ma_duong_dung(mau):
+    with pytest.raises(DataValidationError, match=r"^Thiếu mã ngành cho 2 nhóm ngành — không dựng được Điều 1\.$"):
+        render_council_documents(_nhom_thieu_ma(), mau)
+
+
+def test_nhom_thieu_ma_duong_xem_truoc():
+    assert svc.group_data_errors(_nhom_thieu_ma()) == {0: "du_lieu_thieu_ma_nganh", 1: "du_lieu_thieu_ma_nganh"}
+
+
 def test_mau_sai_cau_truc_bi_tu_choi(mau):
     hong = CouncilTemplates(
         bien_ban=mau.bien_ban, quyet_dinh=b"khong phai zip", danh_sach=mau.danh_sach
@@ -1169,6 +1207,36 @@ def test_tham_so_so_quyet_dinh_0_dau_bi_tu_choi():
     assert DecisionParams(so_quyet_dinh="7").so_quyet_dinh == "7"  # đối chứng
     with pytest.raises(PydanticValidationError, match=CAU_SO_QD_0_DAU):
         DecisionParams(so_quyet_dinh="07")
+
+
+def test_tham_so_so_quyet_dinh_0_mot_chu_so_duoc_nhan():
+    # Codex 42 F337 — owner chốt: số KHÁC "0" có 0 đứng đầu ⇒ từ chối; "0" một chữ số vẫn nhận; "00" bị từ chối.
+    from app.services.council_document_render_service import CAU_SO_QD_0_DAU
+
+    assert DecisionParams(so_quyet_dinh="0").so_quyet_dinh == "0"
+    with pytest.raises(PydanticValidationError, match=CAU_SO_QD_0_DAU):
+        DecisionParams(so_quyet_dinh="00")
+
+
+def test_today_vn_ranh_gioi_17h_utc(monkeypatch):
+    # Codex 42 câu 4: "hôm nay giờ VN" của luật ngày ký — CÙNG hai mốc với MSW ``homNayVN`` (council-luat-may-chu.test.ts):
+    # 16:59:59Z còn ngày cũ, 17:00:00Z sang ngày mới.
+    import datetime as _dt
+
+    from app.utils import datetime_helpers as dh
+
+    moc = {}
+
+    class _GioCoDinh(_dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return moc["utc"].astimezone(tz)
+
+    monkeypatch.setattr(dh, "datetime", _GioCoDinh)
+    moc["utc"] = _dt.datetime(2026, 11, 15, 16, 59, 59, tzinfo=_dt.timezone.utc)
+    assert dh.today_vn() == _dt.date(2026, 11, 15)
+    moc["utc"] = _dt.datetime(2026, 11, 15, 17, 0, 0, tzinfo=_dt.timezone.utc)
+    assert dh.today_vn() == _dt.date(2026, 11, 16)
 
 
 # ═══════════════════════════════ khối ngành của Quyết định phải liền nhau ════════
@@ -2680,10 +2748,12 @@ def test_qd_cho_trinh_do_o_dau_trang_duoc_dien():
 
 
 def test_qd_cho_dien_la_con_sot_thi_dung():
+    # Codex 42 F336: thông báo nêu SỐ LƯỢNG + VÙNG, KHÔNG phản chiếu chữ của mẫu.
     d = docx.Document(io.BytesIO(_mau_quyet_dinh()))
-    d.tables[0].cell(0, 0).add_paragraph("Số: <<so_khac>>")
-    with pytest.raises(FileValidationError, match="<<so_khac>>"):
+    d.tables[0].cell(0, 0).add_paragraph("Số: <<so_khac_BI_MAT>>")
+    with pytest.raises(FileValidationError, match=r"có 1 chỗ điền phần mềm không điền \(ở: bảng\)") as e:
         render_council_documents(_bo_giai(), _bo_mau_voi(qd=_luu(d)))
+    assert "BI_MAT" not in str(e.value) and "so_khac" not in str(e.value)
 
 
 # Review max PR #724 (R11, nhánh anh em): ``container.paragraphs`` chỉ trả đoạn CON TRỰC TIẾP ⇒ mù khung chữ
@@ -2713,8 +2783,9 @@ def test_qd_cho_trinh_do_trong_khung_chu_duoc_dien():
 def test_qd_cho_dien_la_trong_o_noi_dung_thi_dung():
     d = docx.Document(io.BytesIO(_mau_quyet_dinh()))
     d.element.body.insert(0, parse_xml(_O_NOI_DUNG))
-    with pytest.raises(FileValidationError, match="<<so_khac>>"):
+    with pytest.raises(FileValidationError, match=r"có 1 chỗ điền phần mềm không điền \(ở: ô nội dung\)") as e:
         render_council_documents(_bo_giai(), _bo_mau_voi(qd=_luu(d)))
+    assert "so_khac" not in str(e.value)
 
 
 # Review max PR #724 (R11, nhánh anh em): đoạn có chỗ điền ở NGOÀI các đoạn cấp cao nhất cũng bị viết lại cả đoạn ⇒ phải
@@ -2751,8 +2822,82 @@ def test_bb_cho_trinh_do_trong_bang_kem_lien_ket_thi_tu_choi():
 def test_tai_mau_qd_co_cho_dien_khong_ho_tro_bi_chan_ngay():
     d = docx.Document(io.BytesIO(_mau_quyet_dinh()))
     d.tables[0].cell(0, 0).add_paragraph("Số: <<so_khac>>")
-    with pytest.raises(FileValidationError, match=r"chỗ điền phần mềm không điền \(<<so_khac>>\)"):
+    with pytest.raises(FileValidationError, match=r"có 1 chỗ điền phần mềm không điền \(ở: bảng\)") as e:
         svc.kiem_mau("quyet_dinh", _luu(d))
+    assert "so_khac" not in str(e.value)
+
+
+# Codex 42 F333 — ba nhánh còn hở của R11, mỗi ca MỘT bất biến; thông báo không phản chiếu chữ của mẫu (F336).
+def _them_chu_thich(goi: bytes, loai: str, chu: str) -> bytes:
+    """Phần chú thích ``word/<loai>.xml`` (``footnotes`` / ``endnotes``) có MỘT chú thích chứa ``chu`` + kiểu nội dung +
+    quan hệ từ thân — như phần chú thích của mẫu thật (gói cho phép hai phần này)."""
+    the = loai[:-1]  # footnote / endnote
+    xml = (
+        "<?xml version='1.0' encoding='UTF-8' standalone='yes'?><w:%s %s><w:%s w:id='1'><w:p><w:r><w:t>%s</w:t>"
+        "</w:r></w:p></w:%s></w:%s>" % (loai, _W_NS, the, chu.replace("<", "&lt;").replace(">", "&gt;"), the, loai)
+    ).encode("utf-8")
+    phan = "word/%s.xml" % loai
+    return _sua_goi(
+        goi,
+        {
+            "[Content_Types].xml": lambda d: _them_ghi_de(d, phan, _CT_W + loai + "+xml"),
+            _RELS_DOC: lambda d: _them_quan_he(d, _QH + loai, phan.split("/", 1)[1]),
+        },
+        [(phan, xml)],
+    )
+
+
+@pytest.mark.parametrize(
+    "loai, vung", [("footnotes", "chú thích cuối trang"), ("endnotes", "chú thích cuối văn bản")]
+)
+@pytest.mark.parametrize("cho", ["<<trinh_do>>", "<<so_khac_BI_MAT>>"])
+def test_mau_qd_cho_dien_trong_chu_thich_bi_tu_choi_ca_hai_duong(loai, vung, cho):
+    goi = _them_chu_thich(_mau_quyet_dinh(), loai, "Ghi chú %s" % cho)
+    khop = r"Mẫu Quyết định có 1 đoạn chứa chỗ điền ở vùng phần mềm không điền \(%s\)" % vung
+    with pytest.raises(FileValidationError, match=khop) as e1:
+        svc.kiem_mau("quyet_dinh", goi)  # đường TẢI MẪU LÊN
+    with pytest.raises(FileValidationError, match=khop) as e2:
+        render_council_documents(_bo_giai(), _bo_mau_voi(qd=goi))  # đường DỰNG
+    for e in (e1, e2):
+        assert "BI_MAT" not in str(e.value) and "trinh_do" not in str(e.value)
+
+
+@pytest.mark.parametrize("loai", ["footnotes", "endnotes"])
+def test_mau_co_chu_thich_khong_cho_dien_thi_nhan(loai):
+    # Đối chứng: chú thích chữ thường (mẫu thật có hai phần này) ⇒ cả hai mẫu vẫn qua.
+    svc.kiem_mau("quyet_dinh", _them_chu_thich(_mau_quyet_dinh(), loai, "Ghi chú thường"))
+    svc.kiem_mau("bien_ban", _them_chu_thich(_mau_bien_ban(), loai, "Ghi chú thường"))
+
+
+@pytest.mark.parametrize("loai", ["footnotes", "endnotes"])
+def test_mau_bb_cho_trinh_do_trong_chu_thich_bi_tu_choi(loai):
+    goi = _them_chu_thich(_mau_bien_ban(), loai, "các ngành, nghề trình độ ……")
+    khop = "Mẫu Biên bản có 1 đoạn chứa chỗ điền ở vùng phần mềm không điền"
+    with pytest.raises(FileValidationError, match=khop):
+        svc.kiem_mau("bien_ban", goi)  # đường TẢI MẪU LÊN (sau kiem_goi_mau)
+    with pytest.raises(FileValidationError, match=khop):
+        render_council_documents(_bo_giai(), _bo_mau_voi(bb=goi))  # đường DỰNG
+
+
+def test_mau_qd_cho_dien_ten_dai_bi_tu_choi():
+    # Trần 64 ký tự cũ của mẫu nhận diện để lọt tên dài.
+    d = docx.Document(io.BytesIO(_mau_quyet_dinh()))
+    d.tables[0].cell(0, 0).add_paragraph("Số: <<" + "x" * 100 + ">>")
+    with pytest.raises(FileValidationError, match=r"có 1 chỗ điền phần mềm không điền \(ở: bảng\)") as e:
+        svc.kiem_mau("quyet_dinh", _luu(d))
+    assert "xxx" not in str(e.value)
+
+
+def test_mau_bb_thieu_cho_dien_trinh_do_bi_chan_luc_tai_len():
+    # Trước đây mẫu THIẾU chỗ điền vẫn qua lúc tải lên, chỉ hỏng lúc dựng.
+    d = docx.Document(io.BytesIO(_mau_bien_ban()))
+    for p in d.paragraphs:
+        for r_ in p.runs:
+            r_.text = r_.text.replace("……..", "XX").replace("……", "XX")
+    goi = _luu(d)
+    assert not any(cu in p.text for p in docx.Document(io.BytesIO(goi)).paragraphs for cu, _ in svc._CHO_TRINH_DO_BB)
+    with pytest.raises(FileValidationError, match="Mẫu Biên bản: không có chỗ điền `trình độ`"):
+        svc.kiem_mau("bien_ban", goi)
 
 
 def test_tai_mau_qd_chi_hai_dang_trinh_do_thi_qua():
