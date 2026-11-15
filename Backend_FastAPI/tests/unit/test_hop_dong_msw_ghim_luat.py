@@ -212,7 +212,7 @@ GHIM = {
     "qd.kiem_so_quyet_dinh": "a04ea3f45568c227",  # review max PR #724 R7: cấm 0 đầu — MSW chép cùng lượt
     "qd.kiem_xac_nhan_trang_thai": "c17156d4d7c11784",
     "route._doc_scan": "739d65dc50e09692",
-    "route._json_xac_nhan": "e157f11c63380f61",
+    "route._json_xac_nhan": "15eab3a998e150fc",  # review max PR #724: + RecursionError ⇒ "không đọc được" (MSW vốn catch mọi lỗi JSON.parse)
     "route.cancel_council_decision_record": "8652360e55420ed5",
     "route.create_council_decision": "b6a564e00dfe18e9",
     "route.create_council_document_set": "f14d7ca19acadabe",

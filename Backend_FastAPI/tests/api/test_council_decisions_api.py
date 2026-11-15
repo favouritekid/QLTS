@@ -337,6 +337,15 @@ async def test_ghi_nhan_so_trung_trong_nam_409(client, hs, ad):
     assert await _q1("SELECT count(*) FROM council_decision") == 1
 
 
+async def test_ghi_nhan_xac_nhan_json_long_qua_sau_400_khong_500(client, hs, ad):
+    # Review max PR #724 (dưới ngưỡng): ``xac_nhan_trang_thai`` là JSON lồng quá sâu ⇒ ``json.loads`` ném RecursionError
+    # (trước đây 500). Nay đi đường "không đọc được" ⇒ 400 câu của service, không ghi gì.
+    bo = await _bo_ok(client, ad, hs, SACH)
+    r = await _ghi(client, ad, bo["id"], so="501", so_hs=3, them={"xac_nhan_trang_thai": "[" * 100000})
+    assert r.status_code == 400 and r.json()["detail"] == "Xác nhận phải là danh sách {loại: số hồ sơ} không rỗng.", r.text
+    assert await _q1("SELECT count(*) FROM council_decision") == 0
+
+
 async def test_ghi_nhan_so_qd_0_dau_400_khong_ghi(client, hs, ad):
     # Review max PR #724 (R7, owner 15-11): '07' / '007' từng là số KHÁC '7' trước luật không trùng số trong năm (U1).
     # Nay số có 0 đứng đầu bị từ chối ở service (câu tiếng Việt), không ghi gì.

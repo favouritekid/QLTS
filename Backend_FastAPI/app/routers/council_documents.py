@@ -609,7 +609,9 @@ def _json_xac_nhan(gia_tri: Optional[str]):
         return None
     try:
         return json.loads(gia_tri)
-    except ValueError:
+    # Review max PR #724 (dưới ngưỡng): JSON lồng quá sâu ⇒ ``RecursionError`` (trước đây 500) — cùng đường "không đọc
+    # được" ⇒ 400 qua service.
+    except (ValueError, RecursionError):
         return "<khong-doc-duoc>"
 
 
