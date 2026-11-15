@@ -118,6 +118,12 @@ async def test_kiem_truoc_bat_bien_thu_tu_gui_va_khong_ghi(client, hs, ad):
     ) == truoc
 
 
+async def test_kiem_truoc_id_vuot_int32_400_khong_500(client, hs, ad):
+    # Review max PR #724 (dưới ngưỡng): id vượt int4 ⇒ 400 có số dòng, không 500 ở câu SQL ``CAST(... integer[])``.
+    r = await _kiem(client, ad, _pids(hs) + [2147483648])
+    assert r.status_code == 400 and "Dòng 4" in r.json()["detail"], r.text
+
+
 async def test_kiem_truoc_phan_hoi_no_store(client, hs, ad):
     r = await _kiem(client, ad, _pids(hs))
     assert r.status_code == 200 and r.headers["cache-control"] == "no-store"

@@ -1724,7 +1724,9 @@ class _QuotaBypassMixin(BaseModel):
 
 class BulkApproveItem(_QuotaBypassMixin):
     """Single item in a bulk approve request."""
-    profile_id: int = Field(..., description="Admission profile ID")
+    # Review max PR #724 (R4): khoảng int4 như ``routers/admissions.py`` — vượt int32 ⇒ 422, không làm cả lô 500
+    # ở bước khoá trước lô (``_khoa_truoc_lo_duyet`` chạy NGOÀI savepoint từng mục).
+    profile_id: int = Field(..., ge=1, le=2147483647, description="Admission profile ID")
     version: int = Field(..., ge=1, description="Current profile version for optimistic locking")
     # ADM-026: per-item quota bypass. Admin-only enforced at request entry
     # (``require_admin_for_quota_bypass`` in ``deps.py``); service-side check

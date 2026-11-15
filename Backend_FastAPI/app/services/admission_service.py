@@ -348,6 +348,9 @@ async def _khoa_truoc_lo_duyet(db: AsyncSession, profile_ids: List[int]) -> Dict
                 .options(selectinload(models.AdmissionProfile.lead))
                 .order_by(models.AdmissionProfile.id)
                 .with_for_update()
+                # Review max PR #724 (R4): hồ sơ có thể đã nằm trong identity map (đọc TRƯỚC khoá) ⇒ nạp lại
+                # giá trị SAU khoá, như vòng lặp cũ (:14866).
+                .execution_options(populate_existing=True)
             )
         )
         .scalars()
@@ -669,6 +672,9 @@ async def _resolve_quota_context(
                     select(models.OfferingAcademicInfo)
                     .where(models.OfferingAcademicInfo.id == id_moi)
                     .with_for_update()
+                    # Review max PR #724 (R4): bước dò của lô đã nạp dòng này KHÔNG khoá ⇒ không có cờ này thì
+                    # câu khoá trả lại đối tượng cũ trong identity map (trần chỉ tiêu ĐỌC TRƯỚC lúc chờ khoá).
+                    .execution_options(populate_existing=True)
                 )
             ).scalar_one()
         return (ai_moi, ai_moi.annual_admission_quota)
@@ -689,7 +695,8 @@ async def _resolve_quota_context(
         )
 
     if lock:
-        stmt = stmt.with_for_update()
+        # Review max PR #724 (R4, rà cùng khuôn): đọc lại giá trị SAU khoá nếu dòng đã có trong identity map.
+        stmt = stmt.with_for_update().execution_options(populate_existing=True)
 
     result = await db.execute(stmt)
     academic_info = result.scalar_one_or_none()

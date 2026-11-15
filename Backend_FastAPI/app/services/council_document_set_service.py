@@ -243,7 +243,8 @@ def kiem_danh_sach_id(profile_ids: object) -> List[int]:
     out: List[int] = []
     gap: Dict[int, int] = {}
     for i, p in enumerate(profile_ids, 1):
-        if isinstance(p, bool) or not isinstance(p, int) or p < 1:
+        # Review max PR #724 (dưới ngưỡng): cận trên int4 — vượt ⇒ 400 tại đây, không 500 ở câu SQL.
+        if isinstance(p, bool) or not isinstance(p, int) or p < 1 or p > 2147483647:
             raise DataValidationError("Dòng %d: id hồ sơ không hợp lệ." % i)
         if p in gap:
             raise DataValidationError(

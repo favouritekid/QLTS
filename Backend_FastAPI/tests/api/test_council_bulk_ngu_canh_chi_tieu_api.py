@@ -306,3 +306,45 @@ async def test_f263_anh_xa_thieu(hs):  # noqa: F811
             await db.rollback()
     finally:
         await _doi_nam(z, nam_z)
+
+
+
+# ── Review max PR #724 (R4): trần chỉ tiêu phải đọc SAU khoá, không phải giá trị bước dò đã nạp ─────────────────────
+async def test_r4_dong_nganh_giua_do_va_khoa_khong_duyet_theo_tran_cu(client, hs, ad, monkeypatch):  # noqa: F811
+    # Bước dò của lô nạp dòng chỉ tiêu (trần 10) KHÔNG khoá; phiên B đóng ngành (trần 0, commit) TRƯỚC khi lô khoá.
+    # Câu khoá thiếu ``populate_existing`` trả lại đối tượng cũ trong identity map ⇒ duyệt theo trần 10 đã hết hiệu
+    # lực. Đúng: mục đọc trần 0 ⇒ bị chặn, hồ sơ vẫn "submitted".
+    o, p, _ = await _chuan_bi(hs)
+    vp = (await _ban(p))[1]
+
+    async def dong_nganh():
+        await qd._sql("UPDATE offering_academic_info SET annual_admission_quota = 0 WHERE id = :a", a=o["ai"])
+
+    _boc_p0(monkeypatch, _Diem(), dong_nganh)
+    # Tiền điều kiện của lỗi: identity map của Session giữ tham chiếu YẾU — bước dò bỏ đối tượng ngay thì CPython giải
+    # phóng nó và câu SELECT sau nạp mới (không lộ lỗi). Lỗi lộ khi có đường mã GIỮ đối tượng (vd quan hệ đã nạp) ⇒
+    # test giữ tham chiếu MẠNH tới mọi dòng chỉ tiêu ``_resolve_quota_context`` trả về (chỉ trong test).
+    giu = []
+    goc = asv._resolve_quota_context
+
+    async def giu_tham_chieu(db, profile, *a, **kw):
+        kq_ = await goc(db, profile, *a, **kw)
+        if kq_ and kq_[0] is not None:
+            giu.append(kq_[0])
+        return kq_
+
+    monkeypatch.setattr(asv, "_resolve_quota_context", giu_tham_chieu)
+    r = await _duyet_hang_loat(client, ad, (p, vp))
+    assert r.status_code == 200, r.text
+    assert giu, "tiền điều kiện: bước dò phải nạp dòng chỉ tiêu"
+    kq = r.json()
+    assert (kq["success_count"], kq["failed_ids"]) == (0, [p]), kq
+    # ĐÚNG lý do: bị chặn vì trần MỚI (0), không phải vì lý do khác (xung đột ngữ cảnh, ...).
+    assert kq["errors"][str(p)].startswith("Vượt chỉ tiêu tuyển sinh") and " là 0 hồ sơ" in kq["errors"][str(p)], kq
+    assert (await _ban(p))[0] == "submitted"
+
+
+async def test_r4_profile_id_vuot_int32_422_khong_500(client, hs, ad):  # noqa: F811
+    # Review max PR #724 (R4): id vượt int4 bị chặn ở lược đồ (422), không đi tới bước khoá trước lô (500 cả lô).
+    r = await _duyet_hang_loat(client, ad, (2147483648, 1))
+    assert r.status_code == 422, r.text
