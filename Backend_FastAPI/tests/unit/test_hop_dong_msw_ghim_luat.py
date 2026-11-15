@@ -111,6 +111,7 @@ HANG = {
     "bo.MA_LOI_DOI_TU_LUC_KIEM": (s_bo, "MA_LOI_DOI_TU_LUC_KIEM"),
     "bo.CAU_DOI_TU_LUC_KIEM": (s_bo, "CAU_DOI_TU_LUC_KIEM"),
     "qd.TRUONG_THAM_SO_GIAY": (s_qd, "TRUONG_THAM_SO_GIAY"),
+    "qd.SIGN_DATE_AFTER_TODAY_MESSAGE": (s_qd, "SIGN_DATE_AFTER_TODAY_MESSAGE"),  # review max PR #724 R7
     "mau.TEN_LOAI": (s_mau, "TEN_LOAI"),
     "model.LY_DO_XOA_TOI_DA": (m_vb, "LY_DO_XOA_TOI_DA"),
 }
@@ -199,13 +200,14 @@ GHIM = {
     "mau.tai_mau_len": "c84f9839f764bd0d",
     "model.LY_DO_XOA_TOI_DA": "40510175845988f1",
     "qd.TRUONG_THAM_SO_GIAY": "742204c74c586740",
+    "qd.SIGN_DATE_AFTER_TODAY_MESSAGE": "01cfd96e18cc2e7e",  # MSW chép nguyên câu (luatGhiNhan, kiem_ngay)
     "qd._bo_qd_hop_le": "4bb5b9edd04eb5b6",
     "qd._gia_tri_json": "5f4fbf80c0147a7f",
     "qd._so_chua_dung": "a3830c24b477d7d0",
     "qd._so_tham_so": "203bc74e40ef9fc6",
     "qd.ghi_nhan_quyet_dinh": "9d8f98a70898d180",
     "qd.huy_ghi_nhan": "ca9f7185490424e1",
-    "qd.kiem_ngay": "d6070d3bc5fc1283",  # review max PR #724 R7: ngày ký không sau hôm nay (giờ VN) — MSW chép cùng lượt
+    "qd.kiem_ngay": "32acc69c19c328c2",  # review max PR #724 R7: ngày ký không sau hôm nay (giờ VN), câu = hằng nguyên văn — MSW chép cùng lượt
     "qd.kiem_scan": "ee7b2cb1bf446f2b",
     "qd.kiem_so_quyet_dinh": "a04ea3f45568c227",  # review max PR #724 R7: cấm 0 đầu — MSW chép cùng lượt
     "qd.kiem_xac_nhan_trang_thai": "c17156d4d7c11784",

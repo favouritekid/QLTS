@@ -87,6 +87,10 @@ _LOI_RANG_BUOC = {
 
 
 # ═══════════════════════════════ kiểm đầu vào ═════════════════════════════════════════════
+#: Review max PR #724 (R7): câu khi ngày ký sau hôm nay (giờ VN) — nguyên văn, MSW chép đúng câu này.
+SIGN_DATE_AFTER_TODAY_MESSAGE = "Ngày ký không được sau hôm nay."
+
+
 def kiem_so_quyet_dinh(so: object) -> str:
     if not isinstance(so, str) or not (1 <= len(so) <= 6) or not so.isascii() or not so.isdigit():
         raise DataValidationError("Số Quyết định phải là 1–6 chữ số.")
@@ -102,9 +106,10 @@ def kiem_ngay(ngay: object, ten: str = "ngày ký") -> date:
     if isinstance(ngay, datetime) or not isinstance(ngay, date):
         raise DataValidationError("Thiếu %s hoặc %s không hợp lệ." % (ten, ten))
     # Review max PR #724 (R7, owner 15-11): ngày ký không được sau HÔM NAY theo giờ Việt Nam (năm của ngày ký là phạm
-    # vi số Quyết định U1 — ngày tự gõ ở tương lai mở một "năm" giả). Mọi nơi gọi đều truyền ngày ký.
+    # vi số Quyết định U1 — ngày tự gõ ở tương lai mở một "năm" giả). Mọi nơi gọi đều truyền ngày ký. Câu là hằng
+    # NGUYÊN VĂN (MSW chép nguyên câu — ``test_hop_dong_msw_cau_loi`` đòi có nguyên văn ở máy chủ).
     if ngay > today_vn():
-        raise DataValidationError("%s không được sau hôm nay." % (ten[:1].upper() + ten[1:]))
+        raise DataValidationError(SIGN_DATE_AFTER_TODAY_MESSAGE)
     return ngay
 
 
