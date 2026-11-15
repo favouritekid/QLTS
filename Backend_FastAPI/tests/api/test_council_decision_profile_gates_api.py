@@ -139,7 +139,9 @@ async def _so_yeu_cau_hoan():
 
 
 #: Cụm có trong MỌI thông điệp của ``council_decision_status_service`` (không có trong thông điệp deadlock /
-#: xung đột chung) — route cũ (``/api/admissions``) đổi lỗi miền thành HTTPException nên mất ``public_payload``.
+#: xung đột chung). Trước review max PR #724 (R8) route cũ (``/api/admissions``) đổi lỗi miền thành HTTPException
+#: nên mất ``public_payload``; nay giữ (``test_route_cu_tu_choi_giu_ma_loi_va_payload``) — nhánh ``detail`` dưới đây
+#: còn để các đường khác vẫn gói lỗi.
 CUM_CHAN = "Quyết định đã ký"
 
 
@@ -163,6 +165,19 @@ async def test_tu_choi_le_bi_chan(client, hs, ad, dau):
     )
     assert _la_chan(r), r.text
     assert (await _ban(pid))[0] == st
+
+
+async def test_route_cu_tu_choi_giu_ma_loi_va_payload(client, hs, ad):
+    # Review max PR #724 (R8): route cũ (/api/admissions/{id}/reject) trước đây gói lỗi miền thành HTTPException ⇒
+    # mất error_code + public_payload (giao diện chỉ còn câu chung). Nay GIỮ: mã COUNCIL_DECISION_LOCKS_PROFILE + thao_tac.
+    pid = await _co_qd(client, ad, hs, SACH[0])
+    st, ver = await _ban(pid)
+    r = await client.post(
+        A + "/%d/reject" % pid, json={"reason": "GIA tu choi thu", "version": ver}, headers=ad
+    )
+    assert r.status_code == 409, r.text
+    j = r.json()
+    assert j.get("error_code") == "COUNCIL_DECISION_LOCKS_PROFILE" and "thao_tac" in j, j
 
 
 async def test_tu_choi_le_doi_chung_khong_qd_thi_duoc(client, hs, ad):
@@ -245,6 +260,32 @@ async def test_link_rut_tao_truoc_qd_bam_sau_van_bi_chan(client, hs, ad):
         )
         is None
     )
+
+
+async def test_link_rut_cong_khai_409_chi_mot_cau_khong_lo_ma_noi_bo(client, hs, ad):
+    # Review max PR #724 (R8): đường CÔNG KHAI magic-link — thân 409 chỉ có ``detail`` (câu cho thí sinh); KHÔNG có
+    # mã tình trạng Quyết định / id văn bản / mục chờ / dấu AppSheet / câu hướng tới cán bộ.
+    from app.routers.admissions_magic_link import THONG_DIEP_THI_SINH_QD_KHOA
+
+    nhan = SACH[0]
+    pid = hs[nhan][1]
+    await qd._sql("UPDATE admission_profile SET status = 'submitted' WHERE id = :p", p=pid)
+    r = await client.post(A + "/%d/send-magic-link" % pid, json={"action": "withdraw"}, headers=ad)
+    assert r.status_code in (200, 201), r.text
+    token = await qd._q1(
+        "SELECT token FROM admission_confirmation_token WHERE profile_id = :p AND "
+        "action_type = 'withdraw'",
+        p=pid,
+    )
+    bo = await qd._bo_ok(client, ad, hs, [nhan], xac_nhan_trang_thai={"submitted": 1})
+    await qd._ghi_ok(client, ad, bo["id"], so="501", so_hs=1)
+    client.cookies.clear()
+    r = await client.post(
+        V2 + "/magic-link/withdraw/%s" % token, json={"cccd": hs[nhan][0][-4:]}
+    )
+    assert r.status_code == 409, r.text
+    # handler HTTPException chung thêm mã CHUNG ``HTTP_409`` — ngoài hai khoá ấy KHÔNG được có khoá nào khác.
+    assert r.json() == {"detail": THONG_DIEP_THI_SINH_QD_KHOA, "error_code": "HTTP_409"}, r.text
 
 
 async def test_tao_link_rut_bi_chan_va_co_tat(client, hs, ad):

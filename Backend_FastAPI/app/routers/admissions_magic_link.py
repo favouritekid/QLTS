@@ -36,10 +36,16 @@ from ..services.notification_dispatcher import (
     rooms_for_admission,
     safe_dispatch,
 )
-from ..utils.exceptions import BadRequest, ResourceNotFoundError
+from ..utils.exceptions import BadRequest, QuyetDinhKhoaHoSo, ResourceNotFoundError
 from ..utils.token_logging import token_fingerprint
 
 log = structlog.get_logger(__name__)
+
+#: Review max PR #724 (R8): câu DUY NHẤT thí sinh thấy khi hồ sơ bị Quyết định đã ký khoá thao tác.
+THONG_DIEP_THI_SINH_QD_KHOA = (
+    "Hồ sơ của bạn đã có tên trong Quyết định của Hội đồng tuyển sinh nên không thực hiện được thao tác "
+    "này trực tuyến. Vui lòng liên hệ Phòng Tuyển sinh của trường."
+)
 
 
 router = APIRouter(
@@ -138,6 +144,13 @@ async def consume_magic_link_token(
             next_url=None,  # FE picks destination per action
         )
 
+    except QuyetDinhKhoaHoSo:
+        # Review max PR #724 (R8): đường CÔNG KHAI — KHÔNG để handler toàn cục đổ ``public_payload`` (mã tình
+        # trạng Quyết định, id văn bản / mục chờ, dấu AppSheet) và câu hướng tới cán bộ / kế toán tới thí sinh.
+        # Chỉ một câu cho thí sinh; không commit gì (thao tác đã bị chặn trước mọi ghi).
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=THONG_DIEP_THI_SINH_QD_KHOA
+        )
     except ResourceNotFoundError as e:
         # 404 covers both "token does not exist" and "action enum
         # mismatch" — same response by design (no enumeration).
