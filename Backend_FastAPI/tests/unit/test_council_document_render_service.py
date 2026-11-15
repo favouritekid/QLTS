@@ -2900,6 +2900,95 @@ def test_mau_bb_thieu_cho_dien_trinh_do_bi_chan_luc_tai_len():
         svc.kiem_mau("bien_ban", goi)
 
 
+# Codex 43 F338 — chữ Word IN RA mà ``Paragraph.text`` của python-docx 1.2 không đọc (chỉ lấy con TRỰC TIẾP w:r / w:hyperlink):
+# (1) cấu trúc INLINE trong đoạn chứa w:r trực tiếp, KHÔNG có w:p con (w:sdt, w:ins, w:customXml); (2) nhãn đánh số
+# ``w:lvlText/@w:val`` (numbering.xml). Phép kiểm mẫu (tải lên + đầu bước dựng) phải TỪ CHỐI chỗ điền ở đó, không phản chiếu chữ
+# của mẫu; khung chữ / ô nội dung KHỐI (đã hỗ trợ) giữ kết quả cũ (các ca ở trên).
+_INLINE = {
+    "sdt": "<w:sdt %s><w:sdtPr/><w:sdtContent><w:r><w:t>%s</w:t></w:r></w:sdtContent></w:sdt>",
+    "ins": "<w:ins %s w:id='91' w:author='Gia' w:date='2026-01-01T00:00:00Z'><w:r><w:t>%s</w:t></w:r></w:ins>",
+    "customXml": "<w:customXml %s w:element='gia'><w:r><w:t>%s</w:t></w:r></w:customXml>",
+}
+
+
+def _thoat_xml(chu: str) -> str:
+    return chu.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("'", "&apos;").replace('"', "&quot;")
+
+
+def _goi_co_inline(goc: bytes, kieu: str, chu_dau: str, chu_inline: str) -> bytes:
+    d = docx.Document(io.BytesIO(goc))
+    p = d.tables[0].cell(0, 0).add_paragraph(chu_dau)
+    p._p.append(parse_xml(_INLINE[kieu] % (nsdecls("w"), _thoat_xml(chu_inline))))
+    return _luu(d)
+
+
+def _goi_co_nhan_danh_so(goc: bytes, chu: str) -> bytes:
+    def sua(b):
+        s = b.decode("utf-8")
+        cu = '<w:lvlText w:val="%1."/>'
+        assert cu in s
+        return s.replace(cu, '<w:lvlText w:val="%s"/>' % _thoat_xml(chu), 1).encode("utf-8")
+
+    return _sua_goi(goc, {"word/numbering.xml": sua})
+
+
+def _hai_duong_kiem(loai: str, goi: bytes) -> list:
+    """[đường TẢI MẪU LÊN (``kiem_mau``), đường DỰNG] — "NHAN" hoặc "CHAN: <thông báo>"."""
+    khoa = {"quyet_dinh": "qd", "bien_ban": "bb"}[loai]
+    kq = []
+    for f in (
+        lambda: svc.kiem_mau(loai, goi),
+        lambda: render_council_documents(_bo_giai(), _bo_mau_voi(**{khoa: goi})),
+    ):
+        try:
+            f()
+            kq.append("NHAN")
+        except FileValidationError as e:
+            kq.append("CHAN: " + str(e))
+    return kq
+
+
+@pytest.mark.parametrize("kieu", sorted(_INLINE))
+@pytest.mark.parametrize("cho", ["<<trinh_do>>", "<<so_khac_BI_MAT>>"])
+def test_mau_qd_cho_dien_trong_cau_truc_inline_bi_tu_choi_ca_hai_duong(kieu, cho):
+    kq = _hai_duong_kiem("quyet_dinh", _goi_co_inline(_mau_quyet_dinh(), kieu, "Ghi: ", cho))
+    khop = "Mẫu Quyết định có 1 đoạn chứa chỗ điền trong cấu trúc phần mềm không đọc (bảng)"
+    assert len(kq) == 2 and all(k.startswith("CHAN: ") and khop in k for k in kq), kq
+    assert not any("BI_MAT" in k or "trinh_do" in k for k in kq), kq
+
+
+@pytest.mark.parametrize("kieu", sorted(_INLINE))
+def test_mau_bb_cho_trinh_do_trong_cau_truc_inline_bi_tu_choi_ca_hai_duong(kieu):
+    kq = _hai_duong_kiem("bien_ban", _goi_co_inline(_mau_bien_ban(), kieu, "Hệ ", "trình độ ……"))
+    khop = "Mẫu Biên bản có 1 đoạn chứa chỗ điền trong cấu trúc phần mềm không đọc (bảng)"
+    assert len(kq) == 2 and all(k.startswith("CHAN: ") and khop in k for k in kq), kq
+
+
+@pytest.mark.parametrize("kieu", sorted(_INLINE))
+def test_mau_co_cau_truc_inline_khong_cho_dien_thi_nhan(kieu):
+    # Đối chứng: cấu trúc inline chứa chữ THƯỜNG ⇒ cả hai mẫu vẫn qua cả hai đường.
+    assert _hai_duong_kiem("quyet_dinh", _goi_co_inline(_mau_quyet_dinh(), kieu, "Ghi: ", "chữ thường")) == ["NHAN", "NHAN"]
+    assert _hai_duong_kiem("bien_ban", _goi_co_inline(_mau_bien_ban(), kieu, "Ghi: ", "chữ thường")) == ["NHAN", "NHAN"]
+
+
+@pytest.mark.parametrize(
+    "loai, cho",
+    [("quyet_dinh", "<<trinh_do>>"), ("quyet_dinh", "<<so_khac_BI_MAT>>"), ("bien_ban", "trình độ ……")],
+)
+def test_mau_cho_dien_trong_nhan_danh_so_bi_tu_choi_ca_hai_duong(loai, cho):
+    goc = {"quyet_dinh": _mau_quyet_dinh, "bien_ban": _mau_bien_ban}[loai]()
+    kq = _hai_duong_kiem(loai, _goi_co_nhan_danh_so(goc, cho))
+    ten = {"quyet_dinh": "Quyết định", "bien_ban": "Biên bản"}[loai]
+    khop = "Mẫu %s có 1 nhãn đánh số chứa chỗ điền" % ten
+    assert len(kq) == 2 and all(k.startswith("CHAN: ") and khop in k for k in kq), kq
+    assert not any("BI_MAT" in k for k in kq), kq
+
+
+def test_mau_nhan_danh_so_thuong_thi_nhan():
+    # Đối chứng: nhãn đánh số có chữ thường (không phải chỗ điền) ⇒ nhận.
+    assert _hai_duong_kiem("quyet_dinh", _goi_co_nhan_danh_so(_mau_quyet_dinh(), "Mục %1.")) == ["NHAN", "NHAN"]
+
+
 def test_tai_mau_qd_chi_hai_dang_trinh_do_thi_qua():
     d = docx.Document(io.BytesIO(_mau_quyet_dinh()))
     d.tables[0].cell(0, 0).add_paragraph("Trình độ <<[trinh_do]>> / <<trinh_do>>")

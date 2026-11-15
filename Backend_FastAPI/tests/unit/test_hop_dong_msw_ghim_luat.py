@@ -214,7 +214,7 @@ GHIM = {
     "qd.CONFIRMATION_JSON_MAX_CHARS": "e39eef82f61b21e2",  # Codex 42 câu 4 — MSW TRAN_KY_TU_JSON_XAC_NHAN = 1024
     "qd.kiem_xac_nhan_trang_thai": "c17156d4d7c11784",
     "route._doc_scan": "739d65dc50e09692",
-    "route._json_xac_nhan": "0a97d2deae933c9c",  # + RecursionError; Codex 42: vượt trần ký tự ⇒ "không đọc được" — MSW chép cùng lượt
+    "route._json_xac_nhan": "1c036558d38fdfdf",  # + RecursionError; Codex 42: vượt trần ký tự ⇒ "không đọc được" — MSW chép cùng lượt (Codex 43: chỉ sửa chú thích)
     "route.cancel_council_decision_record": "8652360e55420ed5",
     "route.create_council_decision": "b6a564e00dfe18e9",
     "route.create_council_document_set": "f14d7ca19acadabe",

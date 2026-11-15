@@ -607,8 +607,8 @@ def _json_xac_nhan(gia_tri: Optional[str]):
 
     if gia_tri is None or gia_tri == "":
         return None
-    # Codex 42 (câu 4): vượt trần độ dài ⇒ "không đọc được" — để JSON hợp lệ dưới trần không bao giờ chạm ngưỡng đệ quy
-    # (ngưỡng phụ thuộc ngăn xếp ⇒ MSW không chép được). ``len`` = số ký tự (code point); MSW đếm cùng đơn vị.
+    # Codex 42 (câu 4): vượt trần độ dài ⇒ "không đọc được" — giữ JSON hợp lệ dưới trần xa ngưỡng đệ quy (ngưỡng phụ thuộc
+    # bản dựng / ngăn xếp ⇒ MSW không chép được; xem CONFIRMATION_JSON_MAX_CHARS). ``len`` = số ký tự (code point) như MSW.
     if len(gia_tri) > qd_vb.CONFIRMATION_JSON_MAX_CHARS:
         return "<khong-doc-duoc>"
     try:

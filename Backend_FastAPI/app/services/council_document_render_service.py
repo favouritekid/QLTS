@@ -1364,6 +1364,19 @@ def _is_bb_level_slot(text: str) -> bool:
     return any(cu in text for cu, _ in _CHO_TRINH_DO_BB)
 
 
+def _count_bb_level_slots(text: str) -> int:
+    return sum(text.count(cu) for cu, _ in _CHO_TRINH_DO_BB)
+
+
+def _is_qd_slot(text: str) -> bool:
+    """Chữ có chỗ điền của mẫu Quyết định: ``<<…>>`` bất kỳ, hoặc tên ``trinh_do`` (điều kiện của vòng điền)."""
+    return bool(_PLACEHOLDER_PATTERN.search(text)) or "trinh_do" in text
+
+
+def _count_qd_slots(text: str) -> Tuple[int, int]:
+    return len(_PLACEHOLDER_PATTERN.findall(text)), text.count("trinh_do")
+
+
 
 def _kiem_mau_bien_ban(d) -> None:
     if len(d.tables) < 3 or len(d.tables[1].rows) < 6 or len(d.tables[2].rows) < 6:
@@ -1394,6 +1407,9 @@ def _kiem_mau_bien_ban(d) -> None:
         raise FileValidationError(BB_MISSING_LEVEL_SLOT_MESSAGE)
     # Codex 42 F333: chỗ điền ở chú thích cuối trang / cuối văn bản không được điền ⇒ từ chối.
     _reject_slots_in_unfilled_regions(d, "Biên bản", _is_bb_level_slot)
+    # Codex 43 F338: chỗ điền trong cấu trúc INLINE mà ``Paragraph.text`` không đọc, và trong nhãn đánh số ⇒ từ chối.
+    _reject_slots_hidden_in_paragraphs(d, "Biên bản", _count_bb_level_slots)
+    _reject_slots_in_numbering_labels(d, "Biên bản", _is_bb_level_slot)
 
 
 def _dung_bien_ban(hs, nganh_ds, trinh_do: str, mau: bytes) -> bytes:
@@ -1544,9 +1560,10 @@ def _kiem_mau_quyet_dinh(d) -> None:
         )
     # Codex 42 F333: chú thích cuối trang / cuối văn bản (phần ĐƯỢC PHÉP của gói) không được điền ⇒ có chỗ điền ở đó
     # (``<<…>>`` bất kỳ, kể cả ``trinh_do``) ⇒ từ chối.
-    _reject_slots_in_unfilled_regions(
-        d, "Quyết định", lambda text: bool(_PLACEHOLDER_PATTERN.search(text)) or "trinh_do" in text
-    )
+    _reject_slots_in_unfilled_regions(d, "Quyết định", _is_qd_slot)
+    # Codex 43 F338: chỗ điền trong cấu trúc INLINE mà ``Paragraph.text`` không đọc, và trong nhãn đánh số ⇒ từ chối.
+    _reject_slots_hidden_in_paragraphs(d, "Quyết định", _count_qd_slots)
+    _reject_slots_in_numbering_labels(d, "Quyết định", _is_qd_slot)
 
 
 # TT · số CCCD · họ · tên · giới tính · ngày sinh · nơi sinh · dân tộc
@@ -1646,6 +1663,64 @@ def _unfilled_region_texts(document):
         root = etree.fromstring(part.blob, _PARSER_GOI)
         for p in root.iter(qn("w:p")):
             yield region, "".join(t.text or "" for t in p.iter(qn("w:t")))
+
+
+_W_TEXT = qn("w:t")
+_M_TEXT = "{http://schemas.openxmlformats.org/officeDocument/2006/math}t"
+_W_PARAGRAPH = qn("w:p")
+_CT_NUMBERING = _CT_WORD + "numbering+xml"
+
+
+def _own_text(p_element) -> str:
+    """Chữ Word IN RA của RIÊNG đoạn ``p_element``: mọi ``w:t`` / ``m:t`` hậu duệ, BỎ QUA đoạn lồng (khung chữ có đoạn riêng —
+    bộ dựng duyệt chúng như đoạn độc lập; không ghép mù vào đoạn cha). Khác ``Paragraph.text`` của python-docx 1.2 (chỉ con TRỰC
+    TIẾP ``w:r`` / ``w:hyperlink``): thấy cả chữ trong ``w:sdt`` / ``w:ins`` / ``w:customXml`` / ``w:smartTag`` … inline."""
+    parts: List[str] = []
+
+    def walk(element) -> None:
+        for child in element:
+            if child.tag == _W_PARAGRAPH:
+                continue
+            if child.tag in (_W_TEXT, _M_TEXT):
+                parts.append(child.text or "")
+            walk(child)
+
+    walk(p_element)
+    return "".join(parts)
+
+
+def _reject_slots_hidden_in_paragraphs(document, ten: str, count_slots) -> None:
+    """Codex 43 F338 (1): đoạn có chỗ điền nằm trong cấu trúc INLINE mà bộ dựng không đọc (``Paragraph.text`` không thấy) —
+    số chỗ điền trong chữ riêng của đoạn (:func:`_own_text`) KHÁC số trong ``Paragraph.text`` ⇒ TỪ CHỐI (vòng điền dùng
+    ``Paragraph.text`` nên chỗ ấy sẽ in nguyên văn). Nêu SỐ ĐOẠN + VÙNG, không nêu chữ của mẫu."""
+    regions = [
+        region
+        for region, paragraph in _paragraphs_with_region(document)
+        if count_slots(_own_text(paragraph._p)) != count_slots(paragraph.text)
+    ]
+    if regions:
+        raise FileValidationError(
+            "Mẫu %s có %d đoạn chứa chỗ điền trong cấu trúc phần mềm không đọc (%s) — đặt chỗ điền thành chữ thường của đoạn "
+            "(không nằm trong ô nội dung / sửa đổi theo dõi / thẻ XML trong dòng)."
+            % (ten, len(regions), ", ".join(sorted(set(regions))))
+        )
+
+
+def _reject_slots_in_numbering_labels(document, ten: str, is_slot) -> None:
+    """Codex 43 F338 (2): nhãn đánh số (``w:lvlText/@w:val`` của numbering.xml — phần ĐƯỢC PHÉP của gói) là chữ Word IN RA mà
+    bộ dựng không điền ⇒ có chỗ điền ở đó ⇒ TỪ CHỐI. Đọc byte bằng ``_PARSER_GOI`` (không truy cập ``numbering_part`` của
+    python-docx — thuộc tính ấy TẠO phần mới khi chưa có)."""
+    count = 0
+    for part in document.part.package.iter_parts():
+        if part.content_type != _CT_NUMBERING:
+            continue
+        root = etree.fromstring(part.blob, _PARSER_GOI)
+        count += sum(1 for label in root.iter(qn("w:lvlText")) if is_slot(label.get(qn("w:val")) or ""))
+    if count:
+        raise FileValidationError(
+            "Mẫu %s có %d nhãn đánh số chứa chỗ điền — phần mềm không điền nhãn đánh số; đặt chỗ điền vào chữ của đoạn."
+            % (ten, count)
+        )
 
 
 def _reject_slots_in_unfilled_regions(document, ten: str, is_slot) -> None:

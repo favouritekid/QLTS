@@ -92,9 +92,10 @@ SIGN_DATE_AFTER_TODAY_MESSAGE = "Ngày ký không được sau hôm nay."
 
 
 #: Codex 42 (câu 4): trần độ dài (ký tự) của chuỗi JSON ``xac_nhan_trang_thai`` trên Form. Dữ liệu thật: ≤ ~16 khoá trạng
-#: thái ⇒ < 600 ký tự. Trần giữ độ lồng tối đa ~500 tầng — xa ngưỡng đệ quy của bộ đọc JSON Python (ngưỡng ấy phụ thuộc
-#: độ sâu ngăn xếp lúc gọi, MSW không chép được) ⇒ JSON HỢP LỆ dưới trần luôn đọc được như ``JSON.parse`` của MSW; vượt
-#: trần ⇒ router coi là "không đọc được" (cùng đường JSON hỏng).
+#: thái ⇒ < 600 ký tự. Trần giữ độ lồng tối đa 512 tầng; với bản dựng đang dùng, JSON hợp lệ lồng 500 tầng ĐO được là đọc
+#: được (ca test hai phía) — giới hạn đệ quy C của bộ đọc JSON phụ thuộc bản dựng / nền tảng (Codex 43), nên KHÔNG khẳng định
+#: "luôn"; ``except RecursionError`` ở router giữ làm lớp thứ hai. Vượt trần ⇒ router coi là "không đọc được" (cùng đường JSON
+#: hỏng) ở cả hai phía (MSW đếm code point như ``len``).
 CONFIRMATION_JSON_MAX_CHARS = 1024
 
 
