@@ -1339,6 +1339,12 @@ _CHO_TRINH_DO_BB = (
     ("trình độ ……", "trình độ {td}"),
 )
 
+#: Review max PR #724 (R11): nơi gặp lỗi "chỉ run" ở đoạn có chỗ điền trình độ NGOÀI các đoạn cấp cao nhất.
+_NESTED_LEVEL_SLOT = (
+    "đoạn có chỗ điền trình độ (trong bảng, đầu / chân trang, khung chữ hoặc ô nội dung)"
+)
+
+
 
 def _kiem_mau_bien_ban(d) -> None:
     if len(d.tables) < 3 or len(d.tables[1].rows) < 6 or len(d.tables[2].rows) < 6:
@@ -1357,6 +1363,11 @@ def _kiem_mau_bien_ban(d) -> None:
     for k, p in enumerate(d.paragraphs, 1):
         if any(cu in p.text for cu, _ in _CHO_TRINH_DO_BB):
             _kiem_doan_chi_run(p._p, "Biên bản", "đoạn %d (chỗ điền trình độ)" % k)
+    # Review max PR #724 (R11): bộ dựng điền chỗ trình độ ở MỌI vùng chữ (:func:`_all_paragraphs`) ⇒ cùng luật chỉ run
+    # cho mọi đoạn ấy (ô bảng, đầu / chân trang, khung chữ, ô nội dung), không chỉ đoạn cấp cao nhất.
+    for p in _all_paragraphs(d):
+        if any(cu in p.text for cu, _ in _CHO_TRINH_DO_BB):
+            _kiem_doan_chi_run(p._p, "Biên bản", _NESTED_LEVEL_SLOT)
 
 
 def _dung_bien_ban(hs, nganh_ds, trinh_do: str, mau: bytes) -> bytes:
@@ -1406,7 +1417,9 @@ def _dung_bien_ban(hs, nganh_ds, trinh_do: str, mau: bytes) -> bytes:
         for cu, moi in _CHO_TRINH_DO_BB
     ]
     da_dien = 0
-    for p in d.paragraphs:
+    # Review max PR #724 (R11): MỌI vùng chữ (như Quyết định) — trước đây chỉ đoạn cấp cao nhất, chỗ "trình độ ……" ở
+    # bảng / đầu trang / khung chữ bị in nguyên văn khi đã có một chỗ khác được điền. ``list(...)``: chốt trước khi sửa.
+    for p in list(_all_paragraphs(d)):
         t = p.text
         for pattern, moi in td_mau:
             t = pattern.sub(lambda _match, replacement=moi: replacement, t)
@@ -1480,6 +1493,11 @@ def _kiem_mau_quyet_dinh(d) -> None:
             ps[k]._p, "Quyết định", "đoạn %d (%s)" % (k + 1, viet_lai[k])
         )
     _kiem_doan_chi_run(dieu1[0]._p, "Quyết định", "đoạn `Điều 1.`")
+    # Review max PR #724 (R11): chỗ ``trinh_do`` được điền ở MỌI vùng chữ (:func:`_all_paragraphs`) — đoạn ấy cũng bị
+    # viết lại cả đoạn ⇒ cùng luật chỉ run (F207), không chỉ đoạn cấp cao nhất ở vòng trên.
+    for p in _all_paragraphs(d):
+        if "trinh_do" in p.text:
+            _kiem_doan_chi_run(p._p, "Quyết định", _NESTED_LEVEL_SLOT)
 
 
 # TT · số CCCD · họ · tên · giới tính · ngày sinh · nơi sinh · dân tộc
@@ -1510,24 +1528,14 @@ _PLACEHOLDER_PATTERN = re.compile(r"<<[^<>\n]{1,64}>>")
 
 
 def _all_paragraphs(document):
-    """Mọi đoạn chữ của văn bản (review max PR #724 R11): thân, ô bảng (cả bảng lồng), đầu / chân trang của mọi
-    section ĐÃ ĐỊNH NGHĨA. Đầu / chân trang "liên kết với trước" bị bỏ qua — truy cập chúng làm python-docx TẠO phần
-    mới (đổi tệp sinh). Ô gộp lặp lại cùng đoạn ⇒ mỗi đoạn trả MỘT lần — tập ``seen`` giữ CHÍNH phần tử lxml (giữ nó
-    sống ⇒ cùng nút luôn ra cùng đối tượng); KHÔNG dùng ``id()`` của đối tượng đại diện tạm (bị giải phóng, ``id`` tái
-    dùng ⇒ đoạn khác bị coi nhầm là đã thấy — test R11 đã bắt đúng lỗi này)."""
-    seen = set()
-
-    def from_container(container):
-        for paragraph in container.paragraphs:
-            if paragraph._p not in seen:
-                seen.add(paragraph._p)
-                yield paragraph
-        for table in container.tables:
-            for row in table.rows:
-                for cell in row.cells:
-                    yield from from_container(cell)
-
-    yield from from_container(document)
+    """Mọi đoạn chữ của văn bản (review max PR #724 R11): MỌI ``w:p`` hậu duệ của thân và của đầu / chân trang ĐÃ ĐỊNH
+    NGHĨA của mọi section — gồm ô bảng (cả bảng lồng), khung chữ (``w:txbxContent``, cả nhánh ``mc:Fallback``) và ô
+    nội dung (``w:sdt``). ``container.paragraphs`` của python-docx chỉ trả đoạn CON TRỰC TIẾP ⇒ mù khung chữ / ô nội
+    dung: chỗ điền ở đó vừa không được điền vừa lọt lượt quét sót. Duyệt cây lxml thăm mỗi nút đúng MỘT lần ⇒ ô gộp
+    không lặp đoạn. Đầu / chân trang "liên kết với trước" bị bỏ qua — truy cập chúng làm python-docx TẠO phần mới (đổi
+    tệp sinh)."""
+    for p in document.element.body.iter(qn("w:p")):
+        yield Paragraph(p, document._body)
     for section in document.sections:
         for part in (
             section.header,
@@ -1538,7 +1546,8 @@ def _all_paragraphs(document):
             section.even_page_footer,
         ):
             if not part.is_linked_to_previous:
-                yield from from_container(part)
+                for p in part._element.iter(qn("w:p")):
+                    yield Paragraph(p, part)
 
 
 def _dung_quyet_dinh(
@@ -1556,8 +1565,10 @@ def _dung_quyet_dinh(
         ),
     )
     # Chỗ <<trinh_do>> / <<[trinh_do]>> — dữ liệu, điền luôn. Review max PR #724 (R11): ở MỌI đoạn chữ (thân, ô bảng,
-    # đầu / chân trang) — trước đây chỉ đoạn cấp cao nhất, chỗ điền trong bảng / đầu trang bị in nguyên văn.
-    for p in _all_paragraphs(d):
+    # đầu / chân trang, khung chữ, ô nội dung) — trước đây chỉ đoạn cấp cao nhất, chỗ điền ở nơi khác bị in nguyên văn.
+    # ``list(...)`` chốt danh sách TRƯỚC khi sửa: ``_dat_doan`` thay con của đoạn, sửa cây giữa lúc ``iter()`` đang đi là
+    # hành vi lxml không bảo đảm.
+    for p in list(_all_paragraphs(d)):
         if "trinh_do" in p.text:
             _dat_doan(
                 p,

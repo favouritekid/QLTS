@@ -25,8 +25,8 @@ from datetime import date
 import docx
 import openpyxl
 import pytest
-from docx.oxml import OxmlElement
-from docx.oxml.ns import qn
+from docx.oxml import OxmlElement, parse_xml
+from docx.oxml.ns import nsdecls, qn
 from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 from pydantic import ValidationError as PydanticValidationError
 
@@ -2684,6 +2684,66 @@ def test_qd_cho_dien_la_con_sot_thi_dung():
     d.tables[0].cell(0, 0).add_paragraph("Số: <<so_khac>>")
     with pytest.raises(FileValidationError, match="<<so_khac>>"):
         render_council_documents(_bo_giai(), _bo_mau_voi(qd=_luu(d)))
+
+
+# Review max PR #724 (R11, nhánh anh em): ``container.paragraphs`` chỉ trả đoạn CON TRỰC TIẾP ⇒ mù khung chữ
+# (``w:txbxContent``) và ô nội dung (``w:sdt``). Hai ca dưới, mỗi ca MỘT bất biến: điền tới khung chữ; quét sót thấy ô nội dung.
+_KHUNG_CHU_VML = (
+    '<w:r %s xmlns:v="urn:schemas-microsoft-com:vml"><w:pict><v:shape style="width:200pt;height:20pt"><v:textbox>'
+    "<w:txbxContent><w:p><w:r><w:t>Trình độ: &lt;&lt;trinh_do&gt;&gt;</w:t></w:r></w:p></w:txbxContent>"
+    "</v:textbox></v:shape></w:pict></w:r>" % nsdecls("w")
+)
+_O_NOI_DUNG = (
+    "<w:sdt %s><w:sdtPr/><w:sdtContent><w:p><w:r><w:t>Số: &lt;&lt;so_khac&gt;&gt;</w:t></w:r></w:p></w:sdtContent>"
+    "</w:sdt>" % nsdecls("w")
+)
+
+
+def test_qd_cho_trinh_do_trong_khung_chu_duoc_dien():
+    d = docx.Document(io.BytesIO(_mau_quyet_dinh()))
+    d.tables[0].cell(0, 0).add_paragraph("Ô mang khung chữ")._p.append(parse_xml(_KHUNG_CHU_VML))
+    kq = render_council_documents(_bo_giai(), _bo_mau_voi(qd=_luu(d)))
+    ra = _doc(_tep(kq, TEP_QD))
+    khung = list(ra.element.body.iter(qn("w:txbxContent")))
+    assert len(khung) == 1, len(khung)
+    chu = ["".join(t.text or "" for t in p.iter(qn("w:t"))) for p in khung[0].iter(qn("w:p"))]
+    assert chu == ["Trình độ: Cao đẳng và Trung cấp"], chu
+
+
+def test_qd_cho_dien_la_trong_o_noi_dung_thi_dung():
+    d = docx.Document(io.BytesIO(_mau_quyet_dinh()))
+    d.element.body.insert(0, parse_xml(_O_NOI_DUNG))
+    with pytest.raises(FileValidationError, match="<<so_khac>>"):
+        render_council_documents(_bo_giai(), _bo_mau_voi(qd=_luu(d)))
+
+
+# Review max PR #724 (R11, nhánh anh em): đoạn có chỗ điền ở NGOÀI các đoạn cấp cao nhất cũng bị viết lại cả đoạn ⇒ phải
+# qua cùng luật "chỉ run" (F207) — không thì chữ của liên kết bị in hai lần, im lặng. Biên bản cũng điền ở mọi vùng chữ.
+_CHI_RUN_NGOAI_THAN = r"đoạn có chỗ điền trình độ \(trong bảng.* chỉ được có đoạn văn với run trực tiếp"
+
+
+def test_qd_cho_trinh_do_trong_bang_kem_lien_ket_thi_tu_choi():
+    d = docx.Document(io.BytesIO(_mau_quyet_dinh()))
+    d.tables[0].cell(0, 0).add_paragraph("Trình độ: <<trinh_do>>")._p.append(_el("w:hyperlink", _run_chu()))
+    with pytest.raises(FileValidationError, match="Mẫu Quyết định: " + _CHI_RUN_NGOAI_THAN) as e:
+        render_council_documents(_bo_giai(), _bo_mau_voi(qd=_luu(d)))
+    assert "GIA-" not in str(e.value)
+
+
+def test_bb_cho_trinh_do_trong_bang_duoc_dien():
+    d = docx.Document(io.BytesIO(_mau_bien_ban()))
+    d.tables[0].cell(0, 0).add_paragraph("Hệ trình độ ……")
+    kq = render_council_documents(_bo_giai(), _bo_mau_voi(bb=_luu(d)))
+    ra = _doc(_tep(kq, TEP_BB))
+    assert [p.text for p in ra.tables[0].cell(0, 0).paragraphs][-1] == "Hệ trình độ Cao đẳng và Trung cấp"
+
+
+def test_bb_cho_trinh_do_trong_bang_kem_lien_ket_thi_tu_choi():
+    d = docx.Document(io.BytesIO(_mau_bien_ban()))
+    d.tables[0].cell(0, 0).add_paragraph("Hệ trình độ ……")._p.append(_el("w:hyperlink", _run_chu()))
+    with pytest.raises(FileValidationError, match="Mẫu Biên bản: " + _CHI_RUN_NGOAI_THAN) as e:
+        render_council_documents(_bo_giai(), _bo_mau_voi(bb=_luu(d)))
+    assert "GIA-" not in str(e.value)
 
 
 def test_bb_trinh_do_ba_dau_cham_khong_de_dau_thua():
