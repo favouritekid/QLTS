@@ -522,8 +522,12 @@ async def test_vuot_gioi_han_so_ho_so_thi_dung_truoc_khi_doc(hs, monkeypatch):
     assert goi == []
 
 
-async def test_bang_tham_chieu_trung_hang_thi_dung_khong_tu_chon(hs):
-    # Hai nút xã HIỆN HÀNH cùng mã ⇒ bộ xuất in TRÙNG người; hàm đọc dừng, nêu số dòng.
+async def test_bang_tham_chieu_trung_hang_chan_dong_ay_khong_tu_chon(hs):
+    # Hai nút xã HIỆN HÀNH cùng mã ⇒ bộ xuất in TRÙNG người. Codex 42 F334 (đổi hợp đồng — trước đây hàm đọc ném lỗi CẢ
+    # LÔ "Dòng 2 …"): hàm đọc KHÔNG ném; dòng ấy GỘP (trường khác nhau — ở đây địa chỉ, vì xã thứ hai thuộc tỉnh khác —
+    # để RỖNG, không chọn hàng nào) + cờ ⇒ cổng chặn ``tham_chieu_trung``; dòng còn lại không bị đụng.
+    from app.services import council_set_gate_service as cong
+
     async with csdl.engine.begin() as conn:
         await chen(
             conn,
@@ -531,8 +535,19 @@ async def test_bang_tham_chieu_trung_hang_thi_dung_khong_tu_chon(hs):
             code="GX1",
             name="Phường giả GX1 bản hai",
             level="WARD",
-            path="GT1/GX1b",
-            province_code="GT1",
+            path="GT2/GX1b",
+            province_code="GT2",
+            valid_from=date(2020, 1, 1),
+            is_active=True,
+        )
+        await chen(
+            conn,
+            "administrative_nodes",
+            code="GT2",
+            name="Tỉnh Giả Hai",
+            level="PROVINCE",
+            path="GT2",
+            province_code="GT2",
             valid_from=date(2020, 1, 1),
             is_active=True,
         )
@@ -541,11 +556,13 @@ async def test_bang_tham_chieu_trung_hang_thi_dung_khong_tu_chon(hs):
     async with csdl.engine.connect() as c:
         n = (await c.execute(text(sql), {"ids": [pid]})).all()
     assert len(n) == 2  # bộ xuất: hai hàng cho một hồ sơ
-    with pytest.raises(DataValidationError, match="Dòng 2: dữ liệu tham chiếu") as e:
-        await doc.doc_ho_so_theo_ma(
-            csdl.engine, [hs["dia_chi_rong"][0], cccd], academic_year=2026
-        )
-    assert cccd not in str(e.value)
+    anh = await doc.doc_ho_so_theo_ma(csdl.engine, [hs["dia_chi_rong"][0], cccd], academic_year=2026)
+    assert [r.ma_ho_so for r in anh.rows] == [hs["dia_chi_rong"][0], cccd]
+    assert [k.duplicate_reference for k in anh.kiem] == [False, True]
+    assert anh.rows[1].dia_chi == ""  # hai hàng khác địa chỉ ⇒ không chọn hàng nào
+    assert anh.rows[1].ho == "Họ Giả"  # trường giống nhau giữ nguyên
+    assert "tham_chieu_trung" in cong.ly_do_cua_dong(anh.kiem[1])
+    assert "tham_chieu_trung" not in cong.ly_do_cua_dong(anh.kiem[0])
 
 
 async def test_loi_csdl_khong_mang_cau_sql_hay_tham_so(hs, monkeypatch):
