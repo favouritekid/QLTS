@@ -291,6 +291,10 @@ describe("luatKiemTruoc / luatDanhSachId", () => {
     expect(luatDanhSachId([1, 2, 3], 2)).toMatchObject({ status: 400 })
     expect(luatDanhSachId([1, 0])).toMatchObject({ status: 400 })
   })
+  it("Review max PR #724: cận trên int4 — 2147483647 ĐÚNG; 2147483648 ⇒ 400 nêu số dòng (như máy chủ, không 500)", () => {
+    expect(luatDanhSachId([1, 2147483647])).toBeNull()
+    expect(luatDanhSachId([1, 2147483648])).toMatchObject({ status: 400, body: { detail: "Dòng 2: id hồ sơ không hợp lệ." } })
+  })
   it("Đ3-1: trần MẶC ĐỊNH 1000 (COUNCIL_SET_MAX_PROFILES, config.py:455): 501 và 1000 hồ sơ ĐÚNG; 1001 ⇒ 400 đúng câu máy chủ; trần truyền vào vẫn ưu tiên", () => {
     const tu = (n: number) => Array.from({ length: n }, (_, i) => i + 1)
     expect(luatDanhSachId(tu(501))).toBeNull() // trần cũ (500) từng chặn nhầm ca này
@@ -637,9 +641,9 @@ describe("luatGhiNhan — xac_nhan_so_ho_so, goc_id ↔ loai, tham số đã in,
     expect(await luatGhiNhan(form({}, new File([new Uint8Array(50)], "scan.pdf")), cx({}, tran))).toMatchObject({ body: { detail: "Bản scan phải là tệp PDF." } })
     expect(await luatGhiNhan(form({}, new File([], "scan.pdf")), cx({}, tran))).toMatchObject({ body: { detail: "Phải kèm bản scan (PDF) của văn bản đã ký." } })
   })
-  it("Đ3-6: trần MẶC ĐỊNH 20 MiB (20.971.520 byte, cấu hình mặc định của máy chủ): đúng 20 MiB ⇒ nhận; 20 MiB + 1 byte ⇒ 400 nêu 20971520", async () => {
-    expect(await luatGhiNhan(form({}, pdf(20 * 1024 * 1024)), cx())).toBeNull()
-    expect(await luatGhiNhan(form({}, pdf(20 * 1024 * 1024 + 1)), cx())).toEqual(CAU_TRAN(20971520))
+  it("Đ3-6: trần MẶC ĐỊNH 9 MiB (9.437.184 byte, cấu hình mặc định của máy chủ — review max PR #724 R1): đúng 9 MiB ⇒ nhận; 9 MiB + 1 byte ⇒ 400 nêu 9437184", async () => {
+    expect(await luatGhiNhan(form({}, pdf(9 * 1024 * 1024)), cx())).toBeNull()
+    expect(await luatGhiNhan(form({}, pdf(9 * 1024 * 1024 + 1)), cx())).toEqual(CAU_TRAN(9437184))
   })
 
   // ── Codex lần 22 mục 4 (#5, #6): `xac_nhan_trang_thai` — router `_json_xac_nhan` (council_documents.py:604) + `kiem_xac_nhan_trang_thai` (council_decision_service.py:115) ──

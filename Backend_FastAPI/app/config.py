@@ -441,9 +441,11 @@ class Settings(BaseSettings):
     # KHÔNG phải số nghiệp vụ. Ba mẫu thật đo 03-11: ≤ 155 KB nén, ≤ 0,5 MB giải nén,
     # ≤ 16 mục zip. Mẫu và tệp sinh lưu trong CSDL (bytea) ⇒ mỗi byte vào cả pg_dump.
     COUNCIL_TEMPLATE_MAX_BYTES: int = Field(
-        default=5 * 1024 * 1024, ge=64 * 1024, le=50 * 1024 * 1024,
+        default=5 * 1024 * 1024, ge=64 * 1024, le=9 * 1024 * 1024,
         validation_alias="COUNCIL_TEMPLATE_MAX_BYTES",
-    )  # kích thước tệp mẫu .docx tải lên
+    )  # kích thước tệp mẫu .docx tải lên. Review max PR #724 (R1, owner 15-11): cận trên 9 MiB < nginx
+    # `client_max_body_size 10M` (nginx/nginx.conf) — cao hơn thì nginx trả 413 HTML trước, câu của app không
+    # bao giờ tới. Guard: tests/unit/test_nginx_template_packaging.py::test_tran_tai_len_hoi_dong_duoi_tran_nginx
     COUNCIL_TEMPLATE_MAX_UNCOMPRESSED_BYTES: int = Field(
         default=30 * 1024 * 1024, ge=1024 * 1024, le=200 * 1024 * 1024,
         validation_alias="COUNCIL_TEMPLATE_MAX_UNCOMPRESSED_BYTES",
@@ -465,10 +467,12 @@ class Settings(BaseSettings):
     # GIẢ ở trần mặc định số hồ sơ ⇒ 2,6 MB tệp (mẫu giả mang ~130 KB không nén được
     # như phông nhúng của mẫu thật)
     COUNCIL_DECISION_SCAN_MAX_BYTES: int = Field(
-        default=20 * 1024 * 1024, ge=64 * 1024, le=100 * 1024 * 1024,
+        default=9 * 1024 * 1024, ge=64 * 1024, le=9 * 1024 * 1024,
         validation_alias="COUNCIL_DECISION_SCAN_MAX_BYTES",
     )  # F230 lượt I: bản scan PDF của Quyết định đã ký — trần KỸ THUẬT (lưu trong CSDL, vào
-    # pg_dump), không phải số nghiệp vụ; đổi được ở cấu hình
+    # pg_dump), không phải số nghiệp vụ; đổi được ở cấu hình TRONG cận 9 MiB. Review max PR #724 (R1, owner
+    # 15-11 "hạ trần app xuống 9 MB"): trước 20 MiB (cận 100 MiB) > nginx `client_max_body_size 10M` ⇒ tệp
+    # 10–20 MiB bị nginx trả 413 HTML, giao diện chỉ hiện "Đã có lỗi (mã 413)". Guard như trần mẫu ở trên.
     # -- Landing page công khai /lp/{code} (PR-5) --
     SMS_LANDING_SCHOOL_NAME: str = Field(
         default="Cao đẳng Bách khoa Tây Nguyên",

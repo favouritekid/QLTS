@@ -66,8 +66,9 @@ export const TRANG_THAI_HO_SO = [
   "draft", "submitted", "resubmitted", "approved", "overridden", "confirmed", "enrolled", "reviewing", "result_published",
   "admitted", "waitlisted", "rejected", "revision_requested", "withdrawal_pending", "withdrawn",
 ] as const
-/** Trần KỸ THUẬT của bản scan PDF = mặc định của `COUNCIL_DECISION_SCAN_MAX_BYTES` (app/config.py:465 — `default=20 * 1024 * 1024`). */
-export const TRAN_BYTE_SCAN_MAC_DINH = 20 * 1024 * 1024
+/** Trần KỸ THUẬT của bản scan PDF = mặc định của `COUNCIL_DECISION_SCAN_MAX_BYTES` (app/config.py — `default=9 * 1024 * 1024`;
+ *  review max PR #724 R1, owner 15-11: hạ từ 20 MiB xuống dưới nginx `client_max_body_size 10M`). */
+export const TRAN_BYTE_SCAN_MAC_DINH = 9 * 1024 * 1024
 const RE_NGAY = /^\d{4}-\d{2}-\d{2}$/
 const RE_SO_1_6 = /^[0-9]{1,6}$/
 const RE_SO_1_2 = /^[0-9]{1,2}$/
@@ -312,7 +313,8 @@ export function luatDanhSachId(ids: unknown, toiDa = TRAN_HO_SO_MAC_DINH): LoiMa
   const gap = new Map<number, number>()
   for (let i = 0; i < ids.length; i++) {
     const p = ids[i]
-    if (typeof p !== "number" || !Number.isInteger(p) || p < 1) return loi400(`Dòng ${i + 1}: id hồ sơ không hợp lệ.`)
+    // Review max PR #724: cận trên int4 như máy chủ (`p > 2147483647` ⇒ cùng câu) — trước đây máy chủ 500 ở câu SQL.
+    if (typeof p !== "number" || !Number.isInteger(p) || p < 1 || p > 2147483647) return loi400(`Dòng ${i + 1}: id hồ sơ không hợp lệ.`)
     const truoc = gap.get(p)
     if (truoc !== undefined) return loi400(`Dòng ${i + 1} trùng hồ sơ với dòng ${truoc} — mỗi người một dòng.`)
     gap.set(p, i + 1)
@@ -469,7 +471,7 @@ export interface NguCanhGhiNhan {
   goc: (id: number) => { loai: string; trang_thai: string } | undefined
   /** số đã dùng trong năm ký ⇒ id văn bản đang dùng */
   soDaDung: (so: string, nam: number) => number | undefined
-  /** trần byte của bản scan; mặc định = cấu hình mặc định của máy chủ (`TRAN_BYTE_SCAN_MAC_DINH`, 20 MiB). Cho test hạ thấp để khỏi tạo tệp 20 MiB. */
+  /** trần byte của bản scan; mặc định = cấu hình mặc định của máy chủ (`TRAN_BYTE_SCAN_MAC_DINH`, 9 MiB). Cho test hạ thấp để khỏi tạo tệp 9 MiB. */
   scanToiDa?: number
 }
 const TRUONG_THAM_SO_GIAY = ["so_bien_ban", "ngay_bien_ban", "dot_so", "dot_thang"] as const

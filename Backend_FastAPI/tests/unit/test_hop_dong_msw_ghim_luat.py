@@ -184,13 +184,13 @@ GHIM = {
     "bo.CAU_DOI_TU_LUC_KIEM": "236fff0ad0195cf0",
     "bo.MA_LOI_DOI_TU_LUC_KIEM": "111c5b69b272ed2c",
     "bo._dung_va_ghi_bo": "2ab2554c6a39f4d7",
-    "bo.kiem_danh_sach_id": "08b6b1f445b2bb01",
+    "bo.kiem_danh_sach_id": "6cd148f854ea543d",  # review max PR #724: cận trên int4 — MSW chép cùng lượt
     "bo.kiem_ly_do": "a3a6177fdef55e9f",
     "bo.kiem_ly_do_xoa": "130741794b06a57c",
     "bo.so_voi_kiem_truoc": "f1b793b23f4e2d81",
     "bo.tao_bo_van_ban": "bbd2856bd47942da",
     "bo.tao_bo_van_ban_theo_id": "db846adea3478a18",
-    "cau_hinh.COUNCIL_DECISION_SCAN_MAX_BYTES": "46e7fca293474ecc",
+    "cau_hinh.COUNCIL_DECISION_SCAN_MAX_BYTES": "cb01a688cfdfae4b",  # review max PR #724 R1: 9 MiB — MSW chép cùng lượt
     "cau_hinh.COUNCIL_SET_MAX_PROFILES": "b09d7b699cf5ffdf",
     "dung.DecisionParams": "2c96e62f6f91e9db",
     "luot.kiem_ma_luot": "308137227d71b47c",
