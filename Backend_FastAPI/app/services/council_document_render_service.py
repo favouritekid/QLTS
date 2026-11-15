@@ -1399,16 +1399,17 @@ def _dung_bien_ban(hs, nganh_ds, trinh_do: str, mau: bytes) -> bytes:
 
     # "ngành nghề …… trình độ ……" ⇒ "các ngành, nghề trình độ <trình độ>" — theo
     # :data:`_CHO_TRINH_DO_BB` (mẫu DÀI khớp trước).
+    # Review max PR #724 (R11): mỗi chỗ điền khớp kèm mọi dấu "…" THỪA ngay sau (mẫu biến thể "trình độ ………" trước đây
+    # để lại "…" sau chữ trình độ). Chỉ nuốt "…", KHÔNG nuốt dấu chấm (giữ dấu chấm câu).
     td_mau = [
-        (cu, moi.format(nghe="các ngành, nghề", td=trinh_do))
+        (re.compile(re.escape(cu) + "…*"), moi.format(nghe="các ngành, nghề", td=trinh_do))
         for cu, moi in _CHO_TRINH_DO_BB
     ]
     da_dien = 0
     for p in d.paragraphs:
         t = p.text
-        for cu, moi in td_mau:
-            if cu in t:
-                t = t.replace(cu, moi)
+        for pattern, moi in td_mau:
+            t = pattern.sub(lambda _match, replacement=moi: replacement, t)
         if t != p.text:
             _dat_doan(p, t)
             da_dien += 1
@@ -1504,6 +1505,42 @@ def _dat_dong_nganh(par, txt: str) -> None:
         pf.tab_stops.add_tab_stop(Twips(pos))
 
 
+#: Review max PR #724 (R11): một chỗ điền dạng ``<<tên>>`` / ``<<[tên]>>`` trong chữ của văn bản.
+_PLACEHOLDER_PATTERN = re.compile(r"<<[^<>\n]{1,64}>>")
+
+
+def _all_paragraphs(document):
+    """Mọi đoạn chữ của văn bản (review max PR #724 R11): thân, ô bảng (cả bảng lồng), đầu / chân trang của mọi
+    section ĐÃ ĐỊNH NGHĨA. Đầu / chân trang "liên kết với trước" bị bỏ qua — truy cập chúng làm python-docx TẠO phần
+    mới (đổi tệp sinh). Ô gộp lặp lại cùng đoạn ⇒ mỗi đoạn trả MỘT lần — tập ``seen`` giữ CHÍNH phần tử lxml (giữ nó
+    sống ⇒ cùng nút luôn ra cùng đối tượng); KHÔNG dùng ``id()`` của đối tượng đại diện tạm (bị giải phóng, ``id`` tái
+    dùng ⇒ đoạn khác bị coi nhầm là đã thấy — test R11 đã bắt đúng lỗi này)."""
+    seen = set()
+
+    def from_container(container):
+        for paragraph in container.paragraphs:
+            if paragraph._p not in seen:
+                seen.add(paragraph._p)
+                yield paragraph
+        for table in container.tables:
+            for row in table.rows:
+                for cell in row.cells:
+                    yield from from_container(cell)
+
+    yield from from_container(document)
+    for section in document.sections:
+        for part in (
+            section.header,
+            section.footer,
+            section.first_page_header,
+            section.first_page_footer,
+            section.even_page_header,
+            section.even_page_footer,
+        ):
+            if not part.is_linked_to_previous:
+                yield from from_container(part)
+
+
 def _dung_quyet_dinh(
     hs, nganh_ds, trinh_do: str, ma: Dict, mau: bytes, ts: Optional[DecisionParams]
 ):
@@ -1518,8 +1555,9 @@ def _dung_quyet_dinh(
             "Công nhận …. thí sinh", "Công nhận %d thí sinh" % tong_tt
         ),
     )
-    # Chỗ <<trinh_do>> / <<[trinh_do]>> — dữ liệu, điền luôn.
-    for p in d.paragraphs:
+    # Chỗ <<trinh_do>> / <<[trinh_do]>> — dữ liệu, điền luôn. Review max PR #724 (R11): ở MỌI đoạn chữ (thân, ô bảng,
+    # đầu / chân trang) — trước đây chỉ đoạn cấp cao nhất, chỗ điền trong bảng / đầu trang bị in nguyên văn.
+    for p in _all_paragraphs(d):
         if "trinh_do" in p.text:
             _dat_doan(
                 p,
@@ -1606,6 +1644,15 @@ def _dung_quyet_dinh(
     _dat_doan(cuoi, "Tổng số thí sinh theo danh sách:  %d thí sinh./." % tong_tt)
 
     da_dien = _dien_tham_so_quyet_dinh(d, ts) if ts is not None else {}
+    # Review max PR #724 (R11): quét chỗ điền ``<<…>>`` CÒN SÓT ở mọi đoạn chữ ⇒ DỪNG (mẫu đòi một trường phần mềm
+    # không điền, hoặc đặt chỗ điền ở nơi chưa duyệt) — không in văn bản còn chữ ``<<…>>``.
+    leftovers = sorted(
+        {m.group(0) for p in _all_paragraphs(d) for m in _PLACEHOLDER_PATTERN.finditer(p.text)}
+    )
+    if leftovers:
+        raise FileValidationError(
+            "Mẫu Quyết định còn chỗ điền chưa thay (%s) — mẫu đã đổi?" % ", ".join(leftovers)
+        )
     return _luu_docx(d), da_dien
 
 

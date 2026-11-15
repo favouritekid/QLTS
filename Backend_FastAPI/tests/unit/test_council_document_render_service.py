@@ -2628,3 +2628,71 @@ def test_phan_xml_co_doctype_thi_loi_mien(mau, vi_tri, diem):
             _kho_mau.kiem_goi_mau(sai, "Biên bản")
         else:
             svc.kiem_mau("bien_ban", sai)
+
+
+# ═══════════════════════════════ review max PR #724 (R11): chỗ điền ngoài đoạn cấp cao nhất ═══════════════
+TEP_QD = "QuyetDinhTrungTuyen-Cao-dang-va-Trung-cap.docx"
+TEP_BB = "BienBanXetTuyen-Cao-dang-va-Trung-cap.docx"
+
+
+def _moi_doan_chu(d):
+    """Mọi đoạn chữ của tệp đầu ra: thân, ô bảng (cả lồng), đầu / chân trang đã định nghĩa (độc lập với mã đang kiểm)."""
+    def tu(container):
+        for p in container.paragraphs:
+            yield p
+        for t in container.tables:
+            for hang in t.rows:
+                for o in hang.cells:
+                    yield from tu(o)
+    yield from tu(d)
+    for s in d.sections:
+        for phan in (s.header, s.footer, s.first_page_header, s.first_page_footer, s.even_page_header, s.even_page_footer):
+            if not phan.is_linked_to_previous:
+                yield from tu(phan)
+
+
+def _bo_mau_voi(qd=None, bb=None):
+    return CouncilTemplates(
+        bien_ban=bb or _mau_bien_ban(),
+        quyet_dinh=qd or _mau_quyet_dinh(),
+        danh_sach=_mau_danh_sach(),
+    )
+
+
+def test_qd_cho_trinh_do_trong_o_bang_duoc_dien():
+    d = docx.Document(io.BytesIO(_mau_quyet_dinh()))
+    d.tables[0].cell(0, 0).add_paragraph("Trình độ: <<trinh_do>>")
+    kq = render_council_documents(_bo_giai(), _bo_mau_voi(qd=_luu(d)))
+    ra = _doc(_tep(kq, TEP_QD))
+    chu = [p.text for p in _moi_doan_chu(ra)]
+    assert "Trình độ: Cao đẳng và Trung cấp" in chu, chu[:12]
+    assert not any("<<" in t for t in chu)
+
+
+def test_qd_cho_trinh_do_o_dau_trang_duoc_dien():
+    d = docx.Document(io.BytesIO(_mau_quyet_dinh()))
+    dau = d.sections[0].header
+    dau.is_linked_to_previous = False
+    dau.paragraphs[0].text = "Trình độ <<trinh_do>>"
+    kq = render_council_documents(_bo_giai(), _bo_mau_voi(qd=_luu(d)))
+    ra = _doc(_tep(kq, TEP_QD))
+    assert ra.sections[0].header.paragraphs[0].text == "Trình độ Cao đẳng và Trung cấp"
+
+
+def test_qd_cho_dien_la_con_sot_thi_dung():
+    d = docx.Document(io.BytesIO(_mau_quyet_dinh()))
+    d.tables[0].cell(0, 0).add_paragraph("Số: <<so_khac>>")
+    with pytest.raises(FileValidationError, match="<<so_khac>>"):
+        render_council_documents(_bo_giai(), _bo_mau_voi(qd=_luu(d)))
+
+
+def test_bb_trinh_do_ba_dau_cham_khong_de_dau_thua():
+    d = docx.Document(io.BytesIO(_mau_bien_ban()))
+    doan = next(p for p in d.paragraphs if p.text.startswith("Sau khi nghe"))
+    chay = doan.runs
+    vi_tri = next(i for i in range(1, len(chay)) if chay[i - 1].text == " trình độ " and chay[i].text == "……")
+    chay[vi_tri].text = "………"  # biến thể ba dấu "…"
+    kq = render_council_documents(_bo_giai(), _bo_mau_voi(bb=_luu(d)))
+    ra = _doc(_tep(kq, TEP_BB))
+    doan_ra = next(p.text for p in ra.paragraphs if p.text.startswith("Sau khi nghe"))
+    assert "trình độ Cao đẳng và Trung cấp cụ thể:" in doan_ra and "…" not in doan_ra, doan_ra
