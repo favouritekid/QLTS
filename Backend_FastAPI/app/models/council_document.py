@@ -108,11 +108,15 @@ assert not any(k in DAU_APPSHEET_TIEN_TO for k in "%_\\'"), "tiền tố dùng t
 assert "'" not in SYSTEM_CONSULTATION_METHOD
 #: Biểu thức DUY NHẤT của dấu AppSheet (hồ sơ bí danh ``p``) — cổng dựng bộ, ghi nhận, chốt chuyển
 #: trạng thái, cờ giao diện đều đọc qua đây. KHÔNG lọc ``deleted_at`` của lần tư vấn (fail-closed).
+#: Review max PR #724 (R2, owner 15-11 "chỉ áp cho hồ sơ năm 2026"): năm học của đợt nhập AppSheet (182 em). Nhánh tư
+#: vấn nối theo ``lead_id`` (không theo hồ sơ) ⇒ trước đây hồ sơ NĂM SAU của cùng lead thừa hưởng dấu (chặn từ chối /
+#: rút / về nháp / dựng bộ / ghi nhận; ghi chú ``method='system'`` bất biến ⇒ chỉ gỡ được bằng SQL tay).
+NAM_HOC_APPSHEET = 2026
 SQL_DAU_APPSHEET = (
-    "(COALESCE(p.revision_reason, '') LIKE '%s%%' "
+    "(p.academic_year = %d AND (COALESCE(p.revision_reason, '') LIKE '%s%%' "
     "OR EXISTS (SELECT 1 FROM consultation c_dau WHERE c_dau.lead_id = p.lead_id "
-    "AND c_dau.method = '%s' AND COALESCE(c_dau.notes, '') LIKE '%s%%'))"
-    % (DAU_APPSHEET_TIEN_TO, SYSTEM_CONSULTATION_METHOD, DAU_APPSHEET_TIEN_TO)
+    "AND c_dau.method = '%s' AND COALESCE(c_dau.notes, '') LIKE '%s%%')))"
+    % (NAM_HOC_APPSHEET, DAU_APPSHEET_TIEN_TO, SYSTEM_CONSULTATION_METHOD, DAU_APPSHEET_TIEN_TO)
 )
 #: Các cột tình trạng Quyết định của MỘT hồ sơ (bí danh ``p``) — dùng nguyên văn trong
 #: ``SQL_KIEM_NGUON`` (cổng dựng bộ, giao dịch chỉ đọc) và trong hàm hỏi

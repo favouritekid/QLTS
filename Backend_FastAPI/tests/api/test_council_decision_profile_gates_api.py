@@ -167,6 +167,18 @@ async def test_tu_choi_le_bi_chan(client, hs, ad, dau):
     assert (await _ban(pid))[0] == st
 
 
+async def test_dau_appsheet_chi_ap_ho_so_nam_2026(client, hs, ad):
+    # Review max PR #724 (R2, owner 15-11): dấu ở lần tư vấn ``method='system'`` của LEAD không được lan sang hồ sơ
+    # năm khác của cùng lead (trước đây chặn mọi thao tác của hồ sơ năm sau, chỉ gỡ được bằng SQL tay).
+    from app.services.council_decision_status_service import mot_ho_so
+
+    pid = await _dau(hs, SACH[0], nguon="tu_van")
+    await qd._sql("UPDATE admission_profile SET academic_year = 2027 WHERE id = :p", p=pid)
+    async with AsyncSessionLocal() as db:
+        tt = await mot_ho_so(db, pid)
+    assert tt.dau_appsheet is False, tt
+
+
 async def test_route_cu_tu_choi_giu_ma_loi_va_payload(client, hs, ad):
     # Review max PR #724 (R8): route cũ (/api/admissions/{id}/reject) trước đây gói lỗi miền thành HTTPException ⇒
     # mất error_code + public_payload (giao diện chỉ còn câu chung). Nay GIỮ: mã COUNCIL_DECISION_LOCKS_PROFILE + thao_tac.
