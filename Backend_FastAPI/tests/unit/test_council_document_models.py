@@ -125,7 +125,10 @@ def test_migration_la_head_duy_nhat_noi_tiep_head_cu():
     # ghi nhận) + hdts20261113 (quyền Casbin cho Quản lý ở tải cả bộ / người tạo bộ) — chuỗi khoá cũng ở
     # ``test_council_decision_models.py``. (Ca này lẽ ra phải sửa ở commit K-2 9d406eab: hồi quy của K-2 bỏ sót tệp
     # này — phát hiện ở hồi quy rộng lượt gửi.)
-    assert heads == ["hdts20261113"]
+    # Review max PR #724 (R15): MỘT head + chuỗi Hội đồng là TỔ TIÊN của head (không ghim head = revision cuối của tính
+    # năng — migration sau này của repo sẽ làm đỏ test này dù chuỗi vẫn đúng). Cùng lối guard một-head của repo.
+    assert len(heads) == 1, heads
+    list(ScriptDirectory.from_config(cfg).iterate_revisions(heads[0], "hdts20261113"))  # ném nếu không phải tổ tiên
     mig = _migration()
     assert (mig.revision, mig.down_revision) == ("hdts20261103", "v3circ20261011c")
     assert mig.CO_CHO_PHEP_XOA.endswith("_ENABLED")  # cờ CHO PHÉP, mặc định tắt

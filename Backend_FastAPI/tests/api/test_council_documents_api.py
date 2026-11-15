@@ -57,6 +57,7 @@ from app.services import council_document_set_service as bo_vb
 from app.services import council_document_template_service as kho_mau
 from app.utils.exceptions import ConflictError, PermissionDeniedError
 from tests.fixtures.constants import AuthURLs, TestUsers
+from tests.fixtures.goc_repo import goc_repo_co
 from tests.fixtures.hoi_dong_seed import ma_gia, seed_hoi_dong
 from tests.fixtures.users import create_user_with_role, get_auth_headers
 from tests.unit.test_council_document_render_service import (
@@ -554,7 +555,7 @@ async def test_dong_bang_van_cho_route_doc(client, tk, ba_bo, dong_bang):
 
 def test_khoi_dong_bang_nginx_phu_moi_route_ghi_cua_module():
     mau = (
-        Path(__file__).resolve().parents[3]
+        goc_repo_co("nginx/templates/default.conf.template")  # review max PR #724 (R15): không parents[3]
         / "nginx"
         / "templates"
         / "default.conf.template"
@@ -752,7 +753,7 @@ async def test_khong_url_tinh_nao_tra_bytes_mau_hay_tep_sinh(client, tk, hs):
                 )
     # (3) nginx chỉ phục vụ tệp tĩnh từ hai thư mục cố định, không thư mục nào của mã văn bản
     mau = (
-        Path(__file__).resolve().parents[3]
+        goc_repo_co("nginx/templates/default.conf.template")  # review max PR #724 (R15): không parents[3]
         / "nginx"
         / "templates"
         / "default.conf.template"

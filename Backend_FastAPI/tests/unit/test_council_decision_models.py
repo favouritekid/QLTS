@@ -124,7 +124,10 @@ def test_migration_la_head_noi_sau_hdts20261105_va_co_cho_phep_dung_chu():
     # ngay sau 1105 (dòng dưới). Không ai được chen migration khác vào giữa chuỗi Hội đồng.
     # Vòng giao diện: hdts20261112 (lượt gửi ghi nhận) nối sau K-2; hdts20261113 (quyền Casbin của hai route đọc mới
     # cho Quản lý) nối sau 1112.
-    assert kho.get_heads() == ["hdts20261113"]
+    # Review max PR #724 (R15): MỘT head + hdts20261113 là tổ tiên (hoặc chính) head — không ghim head cố định.
+    heads = kho.get_heads()
+    assert len(heads) == 1, heads
+    list(kho.iterate_revisions(heads[0], "hdts20261113"))  # ném nếu hdts20261113 không nằm trên chuỗi tới head
     assert kho.get_revision("hdts20261113").down_revision == "hdts20261112"
     assert kho.get_revision("hdts20261112").down_revision == "hdts20261111"
     assert kho.get_revision("hdts20261111").down_revision == "hdts20261107"

@@ -31,19 +31,19 @@ from app.main import fastapi_app
 from app.routers import council_documents as rt
 from tests.api import test_council_documents_api as api
 from tests.api import test_council_documents_quyen_api as q
+from tests.fixtures.goc_repo import goc_repo_co
 from tests.fixtures.hoi_dong_seed import seed_hoi_dong
 
 pytestmark = pytest.mark.integration
 
 P = api.P
-MAU_422 = (
-    Path(__file__).resolve().parents[3]
-    / "frontend"
-    / "src"
-    / "test"
-    / "fixtures"
-    / "council-documents-422-dot-thieu-thang.json"
-)
+MAU_422_TUONG_DOI = "frontend/src/test/fixtures/council-documents-422-dot-thieu-thang.json"
+
+
+def _mau_422():
+    # Review max PR #724 (R15): không ``parents[3]``; HÀM (không hằng cấp mô-đun) để bỏ qua riêng test cần nó khi
+    # cây repo không có mặt — ``pytest.skip`` lúc import là lỗi thu thập, không phải bỏ qua.
+    return goc_repo_co(MAU_422_TUONG_DOI) / MAU_422_TUONG_DOI
 
 
 @pytest_asyncio.fixture
@@ -70,7 +70,7 @@ async def test_than_422_that_bang_mau_chung_cua_giao_dien(client, tk, hs):
     that = r.json()
     assert isinstance(that["detail"], str) and isinstance(that["errors"], list)
     assert hs["dia_chi_rong"][0] not in r.text  # mẫu chung không mang mã hồ sơ
-    mau = json.loads(MAU_422.read_text(encoding="utf-8"))
+    mau = json.loads(_mau_422().read_text(encoding="utf-8"))
     assert that == mau, json.dumps(that, ensure_ascii=False)
 
 
