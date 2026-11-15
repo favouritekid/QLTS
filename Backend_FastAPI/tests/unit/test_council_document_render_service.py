@@ -2746,6 +2746,30 @@ def test_bb_cho_trinh_do_trong_bang_kem_lien_ket_thi_tu_choi():
     assert "GIA-" not in str(e.value)
 
 
+# Review max PR #724 (R11, đợt 3): chỗ điền không hỗ trợ bị chặn ở PHÉP KIỂM MẪU — chạy cả lúc TẢI MẪU LÊN — không đợi tới
+# lúc dựng (mẫu đã vào kho không xoá được qua API). Dữ liệu thí sinh có chữ dạng ``<<…>>`` KHÔNG phải chỗ điền của mẫu.
+def test_tai_mau_qd_co_cho_dien_khong_ho_tro_bi_chan_ngay():
+    d = docx.Document(io.BytesIO(_mau_quyet_dinh()))
+    d.tables[0].cell(0, 0).add_paragraph("Số: <<so_khac>>")
+    with pytest.raises(FileValidationError, match=r"chỗ điền phần mềm không điền \(<<so_khac>>\)"):
+        svc.kiem_mau("quyet_dinh", _luu(d))
+
+
+def test_tai_mau_qd_chi_hai_dang_trinh_do_thi_qua():
+    d = docx.Document(io.BytesIO(_mau_quyet_dinh()))
+    d.tables[0].cell(0, 0).add_paragraph("Trình độ <<[trinh_do]>> / <<trinh_do>>")
+    svc.kiem_mau("quyet_dinh", _luu(d))  # không ném
+
+
+def test_qd_du_lieu_co_chu_dang_cho_dien_van_dung_duoc():
+    bo = _bo_giai()
+    assert bo[0].ma_ho_so == "GIA-01"
+    bo[0] = _hs("GIA-01", "Bình", OTO, TC, "5510216", "15.0", van_hoa="Hoàn thành THCS", noi_sinh="<<Tỉnh Giả>>")
+    kq = render_council_documents(bo, _bo_mau_voi())
+    chu = [p.text for p in _moi_doan_chu(_doc(_tep(kq, TEP_QD)))]
+    assert any(t == "<<Tỉnh Giả>>" for t in chu), [t for t in chu if "Tỉnh" in t][:4]
+
+
 def test_bb_trinh_do_ba_dau_cham_khong_de_dau_thua():
     d = docx.Document(io.BytesIO(_mau_bien_ban()))
     doan = next(p for p in d.paragraphs if p.text.startswith("Sau khi nghe"))

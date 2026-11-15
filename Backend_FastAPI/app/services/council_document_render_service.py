@@ -1498,6 +1498,18 @@ def _kiem_mau_quyet_dinh(d) -> None:
     for p in _all_paragraphs(d):
         if "trinh_do" in p.text:
             _kiem_doan_chi_run(p._p, "Quyết định", _NESTED_LEVEL_SLOT)
+    # Review max PR #724 (R11): chỗ điền ``<<…>>`` phần mềm KHÔNG điền (ngoài :data:`_LEVEL_PLACEHOLDERS`) chắc chắn
+    # in nguyên văn ⇒ chặn NGAY ở đây — phép kiểm này chạy cả lúc TẢI MẪU LÊN (mẫu đã vào kho không xoá được qua API)
+    # lẫn đầu bước dựng, TRƯỚC khi đổ dữ liệu thí sinh (dữ liệu có chữ ``<<…>>`` không phải lỗi của mẫu).
+    unsupported = sorted(
+        {m.group(0) for p in _all_paragraphs(d) for m in _PLACEHOLDER_PATTERN.finditer(p.text)}
+        - set(_LEVEL_PLACEHOLDERS)
+    )
+    if unsupported:
+        raise FileValidationError(
+            "Mẫu Quyết định có chỗ điền phần mềm không điền (%s) — chỉ điền được %s."
+            % (", ".join(unsupported), " / ".join(_LEVEL_PLACEHOLDERS))
+        )
 
 
 # TT · số CCCD · họ · tên · giới tính · ngày sinh · nơi sinh · dân tộc
@@ -1525,6 +1537,8 @@ def _dat_dong_nganh(par, txt: str) -> None:
 
 #: Review max PR #724 (R11): một chỗ điền dạng ``<<tên>>`` / ``<<[tên]>>`` trong chữ của văn bản.
 _PLACEHOLDER_PATTERN = re.compile(r"<<[^<>\n]{1,64}>>")
+#: Chỗ điền DUY NHẤT phần mềm điền trong mẫu Quyết định (một nguồn cho vòng điền và phép kiểm mẫu).
+_LEVEL_PLACEHOLDERS: Tuple[str, ...] = ("<<[trinh_do]>>", "<<trinh_do>>")
 
 
 def _all_paragraphs(document):
@@ -1570,12 +1584,10 @@ def _dung_quyet_dinh(
     # hành vi lxml không bảo đảm.
     for p in list(_all_paragraphs(d)):
         if "trinh_do" in p.text:
-            _dat_doan(
-                p,
-                p.text.replace("<<[trinh_do]>>", trinh_do).replace(
-                    "<<trinh_do>>", trinh_do
-                ),
-            )
+            text = p.text
+            for placeholder in _LEVEL_PLACEHOLDERS:
+                text = text.replace(placeholder, trinh_do)
+            _dat_doan(p, text)
 
     # Khối ngành (đoạn "Ngành:", BẢNG, đoạn "Số thí sinh:") — mẫu có sẵn HAI khối.
     p20 = d.paragraphs[20]._p
@@ -1655,15 +1667,7 @@ def _dung_quyet_dinh(
     _dat_doan(cuoi, "Tổng số thí sinh theo danh sách:  %d thí sinh./." % tong_tt)
 
     da_dien = _dien_tham_so_quyet_dinh(d, ts) if ts is not None else {}
-    # Review max PR #724 (R11): quét chỗ điền ``<<…>>`` CÒN SÓT ở mọi đoạn chữ ⇒ DỪNG (mẫu đòi một trường phần mềm
-    # không điền, hoặc đặt chỗ điền ở nơi chưa duyệt) — không in văn bản còn chữ ``<<…>>``.
-    leftovers = sorted(
-        {m.group(0) for p in _all_paragraphs(d) for m in _PLACEHOLDER_PATTERN.finditer(p.text)}
-    )
-    if leftovers:
-        raise FileValidationError(
-            "Mẫu Quyết định còn chỗ điền chưa thay (%s) — mẫu đã đổi?" % ", ".join(leftovers)
-        )
+    # Chỗ điền ``<<…>>`` không hỗ trợ đã bị chặn ở :func:`_kiem_mau_quyet_dinh` (đầu hàm này, TRƯỚC khi đổ dữ liệu).
     return _luu_docx(d), da_dien
 
 
