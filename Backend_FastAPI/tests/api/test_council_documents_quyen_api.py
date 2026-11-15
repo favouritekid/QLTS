@@ -443,6 +443,26 @@ async def test_casbin_cho_quan_ly_moi_route_thi_co_van_theo_lop_phu(
     assert co == hanh_vi
 
 
+@pytest.mark.parametrize("duong", ["danh_sach", "chi_tiet"])
+async def test_danh_sach_va_chi_tiet_bo_chi_tinh_mot_co(client, tk, ba_bo, monkeypatch, duong):
+    # Review max PR #724 (R14): GET /sets và GET /sets/{id} chỉ cần cờ ``ghi_nhan_qd`` ⇒ tính ĐÚNG MỘT cờ — trước đây cả
+    # bảng cờ (~31 lần hỏi Casbin đồng bộ trên event loop mỗi request). Đếm ``duong_mau_cua_route``: chỉ phép tính cờ
+    # gọi hàm này, MỘT lần cho mỗi cờ có cổng Casbin.
+    dem = []
+    goc = deps.duong_mau_cua_route
+
+    def dem_goi(path):
+        dem.append(path)
+        return goc(path)
+
+    monkeypatch.setattr(deps, "duong_mau_cua_route", dem_goi)
+    h = await tk("admin")
+    url = P + "/sets" if duong == "danh_sach" else P + "/sets/%d" % ba_bo["u1"][0]
+    r = await client.get(url, headers=h)
+    assert r.status_code == 200, r.text
+    assert len(dem) == 1, dem
+
+
 async def test_casbin_tu_choi_admin_thi_moi_co_tat(client, tk, ba_bo, monkeypatch):
     h = await tk("admin")
     enf = fastapi_app.state.enforcer

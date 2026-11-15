@@ -4211,10 +4211,15 @@ async def quyen_van_ban_hoi_dong(
     request: Request,
     current_user: models.User,
     endpoint_theo_co: Mapping[str, Callable[..., Any]],
+    only_flag: Optional[str] = None,
 ) -> Dict[str, bool]:
     """``{cờ: bool}`` cho người gọi — mỗi cờ ứng với ĐÚNG MỘT route (tìm theo HÀM xử lý trong
     bảng route thật của app). Không tìm được đúng một route / route nhiều phương thức /
-    enforcer chưa có ⇒ cờ False."""
+    enforcer chưa có ⇒ cờ False.
+
+    ``only_flag`` (review max PR #724 R14): chỉ tính MỘT cờ — route chỉ cần một cờ (``GET /sets``, ``GET /sets/{id}``
+    cần ``ghi_nhan_qd``) khỏi chạy ~31 lần hỏi Casbin đồng bộ trên event loop mỗi request. Phép chứng minh văn phạm
+    chính sách (F237, fail-closed) VẪN chạy trên TOÀN bộ bảng cờ — chỉ bớt phần hỏi Casbin của các cờ không cần."""
     from fastapi.routing import APIRoute
 
     enforcer = getattr(request.app.state, "enforcer", None)
@@ -4239,14 +4244,17 @@ async def quyen_van_ban_hoi_dong(
     # khác hành vi thật của bộ 57 ⇒ gặp dòng như thế: MỌI cờ tắt (fail-closed) + log (số dòng +
     # lý do, không in đối tượng). Phạm vi theo bộ thuộc ``deps`` (đơn vị), không thuộc Casbin.
     ngoai_mau = _policy_ngoai_mau_route(request, enforcer, endpoint_theo_co)
+    requested_flags = (
+        endpoint_theo_co if only_flag is None else {only_flag: endpoint_theo_co[only_flag]}
+    )
     if ngoai_mau:
         log.warning(
             "council_document_flag_policy_ngoai_mau",
             so_dong=len(ngoai_mau),
             ly_do=sorted({ly_do for _, ly_do in ngoai_mau}),
         )
-        return {co: False for co in endpoint_theo_co}
-    for co, ham in endpoint_theo_co.items():
+        return {co: False for co in requested_flags}
+    for co, ham in requested_flags.items():
         route = [
             r
             for r in request.app.routes

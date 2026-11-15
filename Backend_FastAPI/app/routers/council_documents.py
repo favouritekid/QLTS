@@ -1151,7 +1151,10 @@ async def _co_quyen_ghi_nhan(request: Request, current_user: models.User) -> boo
     """§5.8 (Codex lần 18): ``luot_gui_cho`` (mã lượt gửi đang chờ) chỉ cho người có quyền GHI NHẬN — trả lời bằng ĐÚNG
     cờ ``ghi_nhan_qd`` do CÙNG hàm tính cờ của ``GET /quyen`` (cổng thật của route ghi nhận), không suy từ phạm vi admin:
     phạm vi dữ liệu không phải quyền thao tác. Dòng policy ngoài mẫu route ⇒ mọi cờ tắt ⇒ không lộ mã (fail-closed)."""
-    quyen = await deps.quyen_van_ban_hoi_dong(request, current_user, ENDPOINT_THEO_CO)
+    # Review max PR #724 (R14): chỉ tính cờ cần dùng (cùng hàm, cùng luật với ``GET /quyen``).
+    quyen = await deps.quyen_van_ban_hoi_dong(
+        request, current_user, ENDPOINT_THEO_CO, only_flag="ghi_nhan_qd"
+    )
     return quyen["ghi_nhan_qd"] is True
 
 
