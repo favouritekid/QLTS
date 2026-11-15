@@ -79,6 +79,33 @@ async def test_patch_nam_hoc_dong_da_dung_bi_409(client, hs, ad):  # noqa: F811
     assert await _nam(o["ai"]) == 2026
 
 
+async def test_xoa_mem_hoc_vu_da_dung_van_duoc_qd_giu_nguyen(client, hs, ad):  # noqa: F811
+    # Review max PR #724 (R3, owner 15-11 "không chặn, ghi rõ phạm vi"): khoá chỉ canh đổi nội dung + xoá CỨNG. Xoá MỀM
+    # học vụ đã có Quyết định dùng (route thật ⇒ ``is_deleted``) ĐƯỢC; Quyết định vẫn hiệu lực.
+    a, o = await _qd_mot_em(client, ad, hs)
+    r = await client.delete("/api/academic-info/%d" % o["ai"], headers=ad)
+    assert r.status_code == 204, r.text
+    assert await qd._q1("SELECT is_deleted FROM offering_academic_info WHERE id = :a", a=o["ai"]) is True
+    assert await qd._q1("SELECT trang_thai FROM council_decision WHERE id = :d", d=a["id"]) == "hieu_luc"
+
+
+async def test_luu_tru_duong_xet_da_dung_van_duoc_qd_giu_nguyen(client, hs, ad):  # noqa: F811
+    # R3 — lưu trữ đường xét đã có Quyết định dùng (route thật ⇒ ``status='archived'``) ĐƯỢC; Quyết định vẫn hiệu lực.
+    a, _ = await _qd_mot_em(client, ad, hs)
+    duong = await qd._q1(
+        "SELECT c.admission_path_id FROM admission_profile_choice c WHERE c.admission_profile_id = :p "
+        "ORDER BY c.display_order, c.id LIMIT 1",
+        p=hs[SACH[0]][1],
+    )
+    # Luật sẵn có: tắt đường xét trước rồi mới lưu trữ (route thật cả hai bước).
+    r = await client.post("/api/admission-config/paths/%d/deactivate" % duong, headers=ad)
+    assert r.status_code == 200, r.text
+    r = await client.post("/api/admission-config/paths/%d/archive" % duong, headers=ad)
+    assert r.status_code == 200, r.text
+    assert await qd._q1("SELECT status FROM admission_path WHERE id = :d", d=duong) == "archived"
+    assert await qd._q1("SELECT trang_thai FROM council_decision WHERE id = :d", d=a["id"]) == "hieu_luc"
+
+
 async def test_doi_nganh_cua_hoc_vu_da_dung_bi_chan(client, hs, ad):  # noqa: F811
     # F275 (Codex lần 17): cột ``offering_id`` của học vụ đã dùng — CA RIÊNG (ca đổi năm học không bắt được việc bỏ
     # ``offering_id`` khỏi ``UPDATE OF``). Đổi sang một ngành HỢP LỆ chưa có dòng cùng năm (không đụng ràng buộc duy

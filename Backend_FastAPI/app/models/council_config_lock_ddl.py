@@ -25,6 +25,12 @@ from sqlalchemy import DDL, event
 
 from app.models.base import Base
 
+#: PHẠM VI khoá (review max PR #724 R3, owner 15-11 "không chặn, ghi rõ phạm vi"): CHỈ canh ĐỔI NỘI DUNG mà Quyết định
+#: đã ký căn cứ vào — ``offering_id`` / ``academic_year`` của học vụ, ``academic_info_id`` của đường xét — và XOÁ CỨNG.
+#: Xoá MỀM học vụ (``is_deleted``, đường API ``DELETE /api/academic-info/{id}``) và LƯU TRỮ đường xét
+#: (``status = 'archived'``) KHÔNG bị chặn: không đổi nội dung Quyết định đã ký (văn bản lưu nguyên tệp + ảnh chụp
+#: DTO), chỉ ẩn cấu hình khỏi lần dùng sau. Khoá bằng ``tests/api/test_council_config_lock_api.py`` (hai ca "vẫn được").
+
 #: SQLSTATE riêng của trigger (5 ký tự, lớp tự đặt) — đọc bằng ``ma_loi_csdl``, không đọc chữ thông báo.
 SQLSTATE_CAU_HINH_DA_DUNG = "QLK02"
 
