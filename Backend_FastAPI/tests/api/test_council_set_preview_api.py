@@ -131,6 +131,29 @@ async def test_kiem_truoc_dong_bi_chan_mang_ma_va_cau_cua_cong(client, hs, ad):
     assert kq["tom_tat"]["bi_chan"] == 1
 
 
+@pytest.mark.parametrize("cccd", [None, ""], ids=["null", "chuoi_rong"])
+async def test_kiem_truoc_cccd_trong_chi_chan_dong_ay(client, hs, ad, cccd):
+    # Review max PR #724 (R5) — trước đây CCCD trống làm _thanh_dto ném ⇒ CẢ bản xem trước 400. Nay: 200, đúng
+    # dòng ấy bị chặn mã ``thieu_ma_ho_so`` (câu thật của cổng), các dòng khác không mang mã ấy.
+    pid = hs["dia_chi_rong"][1]
+    await _sql("UPDATE admission_profile SET citizen_id = :c WHERE id = :p", c=cccd, p=pid)
+    kq = await _kiem_ok(client, ad, _pids(hs))
+    dong = {d["profile_id"]: d for d in kq["dong"]}
+    ma = {x["ma"]: x["cau"] for x in dong[pid]["ly_do"]}
+    assert dong[pid]["muc"] == "bi_chan" and ma.get("thieu_ma_ho_so") == cong.LY_DO["thieu_ma_ho_so"], dong[pid]
+    assert all("thieu_ma_ho_so" not in {x["ma"] for x in d["ly_do"]} for p, d in dong.items() if p != pid)
+
+
+async def test_dung_bo_cccd_trong_400_khong_ghi(client, hs, ad):
+    # R5 — dòng thiếu CCCD KHÔNG bao giờ được in: dấu khớp vẫn qua cổng chặn ⇒ 400 liệt kê dòng, 0 bộ.
+    pid = hs["dia_chi_rong"][1]
+    await _sql("UPDATE admission_profile SET citizen_id = NULL WHERE id = :p", p=pid)
+    kq = await _kiem_ok(client, ad, _pids(hs))
+    r = await _dung(client, ad, [d["profile_id"] for d in kq["dong"]], kq["phien_ban_kiem"])
+    assert r.status_code == 400 and r.json()["kiem_tra_dung_bo"]["muc"] == "chan", r.text
+    assert await _so_bo() == 0
+
+
 async def test_kiem_truoc_gop_khong_co_khac_nam_mot_danh_sach(client, hs, ad):
     # Năm khác ⇒ mọi vị trí "không tìm thấy" — như id không tồn tại (không phân biệt).
     kq = await _kiem_ok(client, ad, _pids(hs, SACH[:1]) + [ID_KHONG_CO], nam=2027)

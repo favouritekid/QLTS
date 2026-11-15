@@ -311,6 +311,11 @@ def chuan_hoa_ma(ma: Sequence[str]) -> List[str]:
     return out
 
 
+#: Review max PR #724 (R5): chữ thay thế ``ma_ho_so`` của dòng CCCD trống (``% pid`` ⇒ riêng từng hồ sơ). Dòng
+#: ấy luôn bị cổng chặn (``thieu_ma_ho_so``) nên chữ này chỉ hiện ở bản xem trước / phép so, KHÔNG bao giờ in.
+MA_HO_SO_THIEU = "(chưa có CCCD — hồ sơ %d)"
+
+
 def _thanh_dto(stt: int, hang: dict) -> CandidateRowV1:
     gia_tri = {}
     for ten in CANDIDATE_FIELDS:
@@ -656,6 +661,15 @@ def _dung_anh_chup(tho, pids, tt) -> AnhChupHoSo:
             "Đọc dữ liệu kiểm hồ sơ sai thứ tự / thiếu hàng — không dựng."
         )
     so_lieu = {h["stt"]: h for h in hang}
+    # Review max PR #724 (R5): CCCD trống (``COALESCE(citizen_id, '')`` — hồ sơ chưa nhập CCCD) KHÔNG còn làm
+    # hỏng cả lô ở ``_thanh_dto`` (``ma_ho_so`` min_length=1): dòng ấy mang cờ ⇒ cổng chặn ``thieu_ma_ho_so``
+    # (POST /sets từ chối như mọi dòng bị chặn — không bao giờ in); DTO của dòng mang chữ thay thế RIÊNG từng
+    # hồ sơ (không trùng nhau, để phép kiểm trùng mã không nổ thay cho lý do thật).
+    thieu_ma = {
+        h["stt"]
+        for h in hang
+        if isinstance(h.get("ma_ho_so"), str) and not h["ma_ho_so"].strip()
+    }
     kiem = tuple(
         DuLieuKiem(
             stt=k["stt"],
@@ -688,13 +702,20 @@ def _dung_anh_chup(tho, pids, tt) -> AnhChupHoSo:
             qd_chuoi_id=tq.qd_chuoi_id,
             cho_quyet_id=tq.cho_quyet_id,
             dau_appsheet=tq.dau_appsheet,
+            thieu_ma_ho_so=k["stt"] in thieu_ma,
         )
         for k, kv, lk, tq in zip(
             hang_kiem, khu_vuc, luat, (tu_hang(k) for k in hang_kiem)
         )
     )
     return AnhChupHoSo(
-        rows=tuple(_thanh_dto(h["stt"], h) for h in hang),
+        rows=tuple(
+            _thanh_dto(
+                h["stt"],
+                {**h, "ma_ho_so": MA_HO_SO_THIEU % h["pid"]} if h["stt"] in thieu_ma else h,
+            )
+            for h in hang
+        ),
         don_vi=tuple(h["unit_id"] for h in hang),
         giao_dich=tt,
         kiem=kiem,

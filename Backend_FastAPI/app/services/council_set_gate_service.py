@@ -104,6 +104,8 @@ LY_DO: Dict[str, str] = {
     # F229 — chung
     "luong_khong_xac_dinh": "không xác định được hồ sơ một hay nhiều nguyện vọng",
     "thieu_hoc_phi_hk1": "chưa có khoản học phí học kỳ 1 — không có mã ngành để in",
+    # Review max PR #724 (R5): CCCD = mã hồ sơ in trên văn bản; thiếu thì CHẶN DÒNG ẤY (trước đây làm hỏng cả lô).
+    "thieu_ma_ho_so": "hồ sơ chưa có số CCCD — mã hồ sơ in trên văn bản sẽ trống; bổ sung CCCD rồi kiểm lại",
     "hoc_phi_chua_gan_nganh": "khoản học phí học kỳ 1 chưa gắn ngành — không có mã ngành để in",
     "hoc_phi_khac_nganh_nv": (
         "ngành của khoản học phí học kỳ 1 khác ngành của nguyện vọng dùng để in"
@@ -255,6 +257,8 @@ class DuLieuKiem:
     qd_chuoi_id: Optional[int] = None
     cho_quyet_id: Optional[int] = None
     dau_appsheet: bool = False
+    # Review max PR #724 (R5): CCCD (``ma_ho_so``) trống / chỉ khoảng trắng ⇒ dòng bị chặn ``thieu_ma_ho_so``.
+    thieu_ma_ho_so: bool = False
 
 
 def diem_ut_in(luat_ut: Optional[str], diem_ut_v1: str) -> Optional[str]:
@@ -338,6 +342,8 @@ def ly_do_cua_dong(k: DuLieuKiem) -> List[str]:
         out.append("khong_xac_dinh_luat_cong_diem_kv")
     if k.nv_in_path_id is not None and k.luat_ut not in LUAT_KV_HOP_LE:
         out.append("khong_xac_dinh_luat_cong_diem_ut")
+    if k.thieu_ma_ho_so:
+        out.append("thieu_ma_ho_so")
     return out
 
 
