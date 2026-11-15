@@ -160,6 +160,54 @@ async def test_dung_bo_cccd_trong_400_khong_ghi(client, hs, ad):
     assert await _so_bo() == 0
 
 
+async def test_kiem_truoc_van_hoa_trong_chan_dong_ay(client, hs, ad):
+    # Review max PR #724 (R10): bước dựng dừng khi trình độ văn hoá rỗng; trước đây bản xem trước vẫn báo "được dựng"
+    # (kèm dấu hợp lệ) cho dòng ấy. Nay: dòng ấy mang mã chặn ``du_lieu_van_hoa_la``, các dòng khác không mang mã ấy.
+    # (Đổi văn hoá còn làm khu vực tính lại khác ảnh chụp ⇒ dòng cũng có mã của cổng — bất biến kiểm ở đây là MÃ dữ liệu.)
+    from app.services.council_document_render_service import ROW_DATA_ERROR_REASONS
+
+    pid = hs["dia_chi_rong"][1]
+    await _sql("UPDATE admission_profile SET cultural_education_level = NULL WHERE id = :p", p=pid)
+    kq = await _kiem_ok(client, ad, _pids(hs))
+    dong = {d["profile_id"]: d for d in kq["dong"]}
+    ma = {x["ma"]: x["cau"] for x in dong[pid]["ly_do"]}
+    assert dong[pid]["muc"] == "bi_chan" and ma.get("du_lieu_van_hoa_la") == ROW_DATA_ERROR_REASONS["du_lieu_van_hoa_la"], dong[pid]
+    assert all("du_lieu_van_hoa_la" not in {x["ma"] for x in d["ly_do"]} for p, d in dong.items() if p != pid)
+
+
+async def _xoa_ma_nganh_cua(pid):
+    await _sql(
+        "UPDATE major_program SET code = '' WHERE id = (SELECT resolved_major_id FROM fee WHERE admission_profile_id = :p "
+        "AND fee_type = 'tuition' AND status <> 'cancelled' AND semester_no = 1 ORDER BY id DESC LIMIT 1)",
+        p=pid,
+    )
+
+
+async def test_kiem_truoc_nhom_thieu_ma_nganh_chan_ca_nhom(client, hs, ad):
+    # R10 — phép kiểm theo NHÓM (ngành, trình độ) của bước dựng: mã ngành rỗng ⇒ MỌI dòng của nhóm bị chặn.
+    pid = hs["dia_chi_rong"][1]
+    await _xoa_ma_nganh_cua(pid)
+    kq = await _kiem_ok(client, ad, _pids(hs))
+    dong = {d["profile_id"]: d for d in kq["dong"]}
+    nhom = (dong[pid]["nganh_nhan"], dong[pid]["trinh_do"])
+    cung = [d for d in dong.values() if (d["nganh_nhan"], d["trinh_do"]) == nhom]
+    assert cung and all(
+        d["muc"] == "bi_chan" and "du_lieu_thieu_ma_nganh" in {x["ma"] for x in d["ly_do"]} for d in cung
+    ), cung
+
+
+async def test_dung_bo_sau_kiem_truoc_loi_du_lieu_400_dung_ly_do(client, hs, ad):
+    # R10 — dấu kiểm trước KHỚP ở hai phía (cùng ``chuan_hoa``) ⇒ dựng bị từ chối vì CHÍNH lỗi dữ liệu (câu của bước
+    # dựng "Thiếu mã ngành"), không phải 409 "dữ liệu đã đổi từ lúc kiểm"; 0 bộ. Dùng mã ngành rỗng (không đụng cổng —
+    # văn hoá rỗng làm cổng chặn trước, hai bất biến).
+    pid = hs["dia_chi_rong"][1]
+    await _xoa_ma_nganh_cua(pid)
+    kq = await _kiem_ok(client, ad, _pids(hs))
+    r = await _dung(client, ad, [d["profile_id"] for d in kq["dong"]], kq["phien_ban_kiem"])
+    assert r.status_code == 400 and "Thiếu mã ngành" in r.json().get("detail", ""), r.text
+    assert await _so_bo() == 0
+
+
 async def test_kiem_truoc_gop_khong_co_khac_nam_mot_danh_sach(client, hs, ad):
     # Năm khác ⇒ mọi vị trí "không tìm thấy" — như id không tồn tại (không phân biệt).
     kq = await _kiem_ok(client, ad, _pids(hs, SACH[:1]) + [ID_KHONG_CO], nam=2027)

@@ -275,10 +275,19 @@ def chuan_hoa(anh: "_ham_doc.AnhChupHoSo", kq_cong: "cong.KetQuaCong") -> List[D
         for s in dong:
             ma_theo_stt.setdefault(s, set()).add(ma)
     canh_bao = {s for d in kq_cong.canh_bao.values() for s in d}
+    # Review max PR #724 (R10): lỗi DỮ LIỆU mà bước dựng sẽ dừng (một nguồn: ``bo_dung.row_data_error`` /
+    # ``group_data_errors``) ⇒ dòng BỊ CHẶN ngay ở bản xem trước, cùng mã ở hai phía (dấu kiểm trước khớp).
+    group_errors = bo_dung.group_data_errors(anh.rows)
     out: List[DongChuan] = []
     for i in range(n):
         k, r, pid = anh.kiem[i], anh.rows[i], anh.pids[i]
-        ma = tuple(sorted(ma_theo_stt.get(k.stt, ())))
+        data_codes = set()
+        row_error = bo_dung.row_data_error(r)
+        if row_error is not None:
+            data_codes.add(row_error[0])
+        if i in group_errors:
+            data_codes.add(group_errors[i])
+        ma = tuple(sorted(set(ma_theo_stt.get(k.stt, ())) | data_codes))
         muc = (
             MUC_BI_CHAN
             if ma
@@ -420,7 +429,10 @@ async def kiem_truoc(
                     else None
                 ),
                 "muc": d.muc,
-                "ly_do": [{"ma": m, "cau": cong.LY_DO.get(m, m)} for m in d.ma_ly_do],
+                "ly_do": [
+                    {"ma": m, "cau": cong.LY_DO.get(m) or bo_dung.ROW_DATA_ERROR_REASONS.get(m, m)}
+                    for m in d.ma_ly_do
+                ],
             }
         )
     dem_muc = {

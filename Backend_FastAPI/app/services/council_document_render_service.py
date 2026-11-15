@@ -386,6 +386,90 @@ class _HoSo:
         return khoa_nhom_quyet_dinh(self.dto)
 
 
+#: Review max PR #724 (R10): MỘT nguồn cho phép kiểm DỮ LIỆU mà bước dựng thi hành — ``_chuan_bi`` / ``_ma_nganh``
+#: ném (câu cũ, nêu số dòng + trường), bản xem trước (``council_document_set_service.chuan_hoa``) đánh dấu dòng BỊ CHẶN
+#: bằng cùng mã ⇒ không còn "được dựng" cho dòng mà POST /sets sẽ từ chối. Câu dưới đây cho bản xem trước (không giá trị).
+ROW_DATA_ERROR_REASONS: Dict[str, str] = {
+    "du_lieu_khong_phai_chuoi": "dữ liệu hồ sơ có trường không đọc được dạng chữ — không dựng được văn bản",
+    "du_lieu_ky_tu_la": (
+        "dữ liệu hồ sơ có ký tự không ghi được vào Word / Excel (ký tự điều khiển) — sửa hồ sơ rồi kiểm lại"
+    ),
+    "du_lieu_trinh_do_la": "trình độ của ngành in không phải %s" % " / ".join(TRINH_DO_HOP_LE),
+    "du_lieu_van_hoa_la": (
+        "trình độ văn hoá rỗng hoặc không thuộc nhãn đã biết — không dựng được thống kê Biên bản"
+    ),
+    "du_lieu_chuyen_mon_la": "trình độ chuyên môn không thuộc nhãn đã biết",
+    "du_lieu_thieu_ma_nganh": "nhóm ngành của hồ sơ chưa có mã ngành — không dựng được Điều 1 của Quyết định",
+    "du_lieu_ma_nganh_mau_thuan": "các hồ sơ cùng ngành, cùng trình độ ghi mã ngành khác nhau",
+}
+_TEXT_ERROR_CODES = ("du_lieu_khong_phai_chuoi", "du_lieu_ky_tu_la")
+
+
+def row_data_error(row: CandidateRowV1) -> Optional[Tuple[str, Optional[str]]]:
+    """(mã, tên trường | None) của lỗi dữ liệu ĐẦU TIÊN của MỘT dòng mà bước dựng sẽ dừng; ``None`` nếu qua.
+    Thứ tự = thứ tự ``_chuan_bi``: chữ ghi được (mọi trường chuỗi) → trình độ → văn hoá → chuyên môn."""
+    # TẦNG CHỦ SỞ HỮU của "chữ ghi được vào Word / Excel": MỌI trường chuỗi, TRƯỚC mọi phép kiểm khác. Kiểu lạ
+    # (``model_copy`` / ``model_construct`` bỏ qua kiểm kiểu của pydantic) cũng dừng ở đây.
+    for field in _TRUONG_CHUOI:
+        value = getattr(row, field)
+        if not isinstance(value, str):
+            return ("du_lieu_khong_phai_chuoi", field)
+        if _RE_NGOAI_XML.search(value):
+            return ("du_lieu_ky_tu_la", field)
+    if row.trinh_do.strip() not in TRINH_DO_HOP_LE:
+        return ("du_lieu_trinh_do_la", None)
+    # Văn hoá BẮT BUỘC (owner 03-11): rỗng hay lạ là lỗi dữ liệu ⇒ dừng, không đếm sót im lặng. Chuyên môn: chỉ các
+    # giá trị của CHECK trên model (+ rỗng).
+    if row.van_hoa not in NHAN_VAN_HOA_HOP_LE:
+        return ("du_lieu_van_hoa_la", None)
+    if row.chuyen_mon not in CHUYEN_MON_HOP_LE:
+        return ("du_lieu_chuyen_mon_la", None)
+    return None
+
+
+def group_data_errors(rows: Sequence[CandidateRowV1]) -> Dict[int, str]:
+    """{chỉ số dòng (từ 0): mã} của phép kiểm theo NHÓM (ngành, trình độ) mà ``_ma_nganh`` thi hành: nhóm có ≥ 2 mã
+    ngành khác nhau ⇒ ``du_lieu_ma_nganh_mau_thuan``; mọi dòng của nhóm mã rỗng ⇒ ``du_lieu_thieu_ma_nganh``. Đánh
+    dấu MỌI dòng của nhóm (bước dựng dừng cả bộ)."""
+    groups: Dict[Tuple[str, str], List[int]] = {}
+    for index, row in enumerate(rows):
+        groups.setdefault(khoa_nhom_quyet_dinh(row), []).append(index)
+    errors: Dict[int, str] = {}
+    for indexes in groups.values():
+        codes = {rows[index].ma_nganh for index in indexes}
+        if len(codes) > 1:
+            error_code = "du_lieu_ma_nganh_mau_thuan"
+        elif not next(iter(codes)):
+            error_code = "du_lieu_thieu_ma_nganh"
+        else:
+            continue
+        for index in indexes:
+            errors[index] = error_code
+    return errors
+
+
+def _row_error_message(line: int, error: Tuple[str, Optional[str]]) -> str:
+    """Câu của ``_chuan_bi`` (NGUYÊN như trước R10) cho lỗi ``error`` ở dòng ``line`` (từ 1)."""
+    code, field = error
+    if code == "du_lieu_khong_phai_chuoi":
+        return "Dòng %d, trường %s: không phải chuỗi." % (line, field)
+    if code == "du_lieu_ky_tu_la":
+        return (
+            "Dòng %d, trường %s: có ký tự không ghi được vào Word / Excel "
+            "(ký tự điều khiển hoặc ngoài tập ký tự XML) — không dựng văn bản." % (line, field)
+        )
+    if code == "du_lieu_trinh_do_la":
+        return "Dòng %d: trình độ không thuộc %s." % (line, " / ".join(TRINH_DO_HOP_LE))
+    if code == "du_lieu_van_hoa_la":
+        return (
+            "Dòng %d: trình độ văn hoá rỗng hoặc không thuộc nhãn đã biết "
+            "— không dựng thống kê Biên bản." % line
+        )
+    return "Dòng %d: trình độ chuyên môn không thuộc %s." % (
+        line, " / ".join(repr(x) for x in CHUYEN_MON_HOP_LE)
+    )
+
+
 def _chuan_bi(rows: Sequence[CandidateRowV1]) -> List[_HoSo]:
     if not rows:
         raise DataValidationError("Danh sách hồ sơ rỗng — không dựng văn bản.")
@@ -394,45 +478,20 @@ def _chuan_bi(rows: Sequence[CandidateRowV1]) -> List[_HoSo]:
     for i, r in enumerate(rows, 1):
         if not isinstance(r, CandidateRowV1):
             raise DataValidationError("Dòng %d không phải CandidateRowV1." % i)
-        # TẦNG CHỦ SỞ HỮU của "chữ ghi được vào Word / Excel": MỌI trường chuỗi,
-        # TRƯỚC mọi phép kiểm khác (thông báo nêu đúng trường) và trước khi dựng tệp
-        # nào. Kiểu lạ (``model_copy`` / ``model_construct`` bỏ qua kiểm kiểu của
-        # pydantic) cũng dừng ở đây. Thông báo: số dòng + tên trường, KHÔNG có giá trị.
-        for ten in _TRUONG_CHUOI:
-            v = getattr(r, ten)
-            if not isinstance(v, str):
-                raise DataValidationError(
-                    "Dòng %d, trường %s: không phải chuỗi." % (i, ten)
-                )
-            if _RE_NGOAI_XML.search(v):
-                raise DataValidationError(
-                    "Dòng %d, trường %s: có ký tự không ghi được vào Word / Excel "
-                    "(ký tự điều khiển hoặc ngoài tập ký tự XML) — không dựng văn bản."
-                    % (i, ten)
-                )
+        # R10: phép kiểm dòng ở ``row_data_error`` (một nguồn với bản xem trước); thứ tự + câu NGUYÊN như trước —
+        # lỗi chữ (mọi trường) TRƯỚC kiểm trùng mã, phần còn lại SAU.
+        error = row_data_error(r)
+        if error is not None and error[0] in _TEXT_ERROR_CODES:
+            raise DataValidationError(_row_error_message(i, error))
         if r.ma_ho_so in gap:
             raise DataValidationError(
                 "Danh sách có mã hồ sơ TRÙNG (dòng %d trùng dòng %d) — mỗi người một dòng."
                 % (i, gap[r.ma_ho_so])
             )
         gap[r.ma_ho_so] = i
+        if error is not None:
+            raise DataValidationError(_row_error_message(i, error))
         td = r.trinh_do.strip()
-        if td not in TRINH_DO_HOP_LE:
-            raise DataValidationError(
-                "Dòng %d: trình độ không thuộc %s." % (i, " / ".join(TRINH_DO_HOP_LE))
-            )
-        # Văn hoá BẮT BUỘC (owner 03-11): rỗng hay lạ là lỗi dữ liệu ⇒ dừng, không
-        # đếm sót im lặng. Chuyên môn: chỉ các giá trị của CHECK trên model (+ rỗng).
-        if r.van_hoa not in NHAN_VAN_HOA_HOP_LE:
-            raise DataValidationError(
-                "Dòng %d: trình độ văn hoá rỗng hoặc không thuộc nhãn đã biết "
-                "— không dựng thống kê Biên bản." % i
-            )
-        if r.chuyen_mon not in CHUYEN_MON_HOP_LE:
-            raise DataValidationError(
-                "Dòng %d: trình độ chuyên môn không thuộc %s."
-                % (i, " / ".join(repr(x) for x in CHUYEN_MON_HOP_LE))
-            )
         out.append(
             _HoSo(
                 r,

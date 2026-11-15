@@ -39,6 +39,10 @@ def _hang(**kw) -> bo_dung.CandidateRowV1:
         tong_diem="18.00",
         diem_kv="0.25",
         diem_ut="0",
+        # Review max PR #724 (R10): dòng giả phải QUA phép kiểm dữ liệu của bước dựng (văn hoá thuộc nhãn đã biết, mã
+        # ngành khác rỗng) — không thì ``chuan_hoa`` chặn mọi dòng vì lỗi dữ liệu, che mất mức của cổng đang kiểm.
+        van_hoa=sorted(bo_dung.NHAN_VAN_HOA_HOP_LE)[0],
+        ma_nganh="9999999",
     )
     gia_tri.update(kw)
     return bo_dung.CandidateRowV1(**gia_tri)
