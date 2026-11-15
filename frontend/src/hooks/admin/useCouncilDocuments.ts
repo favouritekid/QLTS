@@ -323,9 +323,9 @@ export function useCouncilSetDeletions(
 export function useCouncilSetPreview(input: CouncilSetPreviewIn | null, enabled = true) {
   return useQuery({
     queryKey: councilDocumentKeys.preview(input?.academic_year ?? 0, input?.profile_ids ?? []),
-    queryFn: () => {
+    queryFn: ({ signal }) => {
       if (input === null) throw new Error("Chưa có danh sách để kiểm trước.")
-      return previewCouncilSet(input)
+      return previewCouncilSet(input, signal)
     },
     enabled: enabled && input !== null && input.profile_ids.length > 0,
     gcTime: 0,

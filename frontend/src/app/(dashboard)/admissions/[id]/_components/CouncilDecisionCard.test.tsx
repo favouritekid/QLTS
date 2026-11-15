@@ -107,6 +107,22 @@ describe("CouncilDecisionCard", () => {
     expect(screen.queryByTestId("qd-ly-do-huy")).toBeNull() // người không phải admin: máy chủ không trả ⇒ không hiện
   })
 
+  it("review max PR #724 (R13): văn bản HẾT hiệu lực ⇒ nhãn 'Hết hiệu lực' màu cảnh báo, không phải màu xanh", () => {
+    ve(dto({ tinh_trang: "chua_co_qd", van_ban: { ...VB, trang_thai: "het_hieu_luc" } }), TAT_CA)
+    const nhan = screen.getByTestId("qd-nhan-trang-thai")
+    expect(nhan.textContent).toBe("Hết hiệu lực")
+    expect(nhan.className).toContain("bg-warning-100")
+    expect(nhan.className).not.toContain("bg-success-100")
+  })
+
+  it("review max PR #724 (R13): văn bản còn hiệu lực nhưng hồ sơ không còn tên (máy chủ: chưa có QĐ) ⇒ nhãn trung tính, không 'Còn hiệu lực' xanh", () => {
+    ve(dto({ tinh_trang: "chua_co_qd", van_ban: { ...VB, trang_thai: "hieu_luc" } }), TAT_CA)
+    const nhan = screen.getByTestId("qd-nhan-trang-thai")
+    expect(nhan.textContent).toBe("Văn bản còn hiệu lực")
+    expect(nhan.className).not.toContain("bg-success-100")
+    expect(screen.getByTestId("qd-tinh-trang").textContent).toBe("Chưa có Quyết định")
+  })
+
   it("tình trạng / trạng thái LẠ ⇒ in nguyên (không suy)", () => {
     ve(dto({ tinh_trang: "tinh_trang_moi", van_ban: { ...VB, trang_thai: "trang_thai_moi" } }), TAT_CA)
     expect(screen.getByTestId("qd-tinh-trang").textContent).toBe("tinh_trang_moi")

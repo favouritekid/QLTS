@@ -94,6 +94,9 @@ function nguCanhMayChu(c: Cau): NguCanhGhiNhan {
       return g ? { loai: g.loai, trang_thai: g.trang_thai } : undefined
     },
     soDaDung: (so, nam) => ds.find((d) => d.so_quyet_dinh === so && d.pham_vi_so === nam && d.trang_thai !== "huy_ghi_nhan")?.id,
+    // Review max PR #724 (R7): máy chủ chặn ngày ký sau HÔM NAY — tình huống của tệp dùng ngày ký tới 2027-01-15 ⇒ mốc "hôm
+    // nay" CỐ ĐỊNH (không phụ thuộc ngày chạy test).
+    homNay: "2027-12-31",
   }
 }
 

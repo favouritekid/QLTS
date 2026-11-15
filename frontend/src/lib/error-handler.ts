@@ -64,7 +64,17 @@ export interface ApiErrorResponse {
  * is not configured", "Inconsistent application fee ledger: payment method",
  * "Multiple application fee rows exist for this profile".
  */
-const USER_FACING_CONFLICT_CODES = new Set<string>(['DUPLICATE_RESOURCE'])
+//
+// Review max PR #724 (R8): hai mã 409 của Văn bản Hội đồng có câu tiếng Việt viết cho người dùng (kể cả hướng dẫn
+// ghi nhận văn bản điều chỉnh / huỷ trước, làm dòng cấu hình mới) — trước đây bị thay bằng câu chung:
+// `COUNCIL_DECISION_LOCKS_PROFILE` (`QuyetDinhKhoaHoSo`, `app/utils/exceptions.py`) và
+// `CAU_HINH_DA_DUOC_QUYET_DINH_DUNG` (trigger khoá cấu hình, `exception_handlers.py`). Câu "thử lại" của deadlock đi
+// ra với mã chung `CONFLICT` (mang cả chuỗi nội bộ) ⇒ KHÔNG thêm — giữ câu chung "…kiểm tra lại".
+const USER_FACING_CONFLICT_CODES = new Set<string>([
+  'DUPLICATE_RESOURCE',
+  'COUNCIL_DECISION_LOCKS_PROFILE',
+  'CAU_HINH_DA_DUOC_QUYET_DINH_DUNG',
+])
 
 // =============================================================================
 // HANDLER OPTIONS
@@ -199,6 +209,11 @@ export interface ApiErrorView {
   data?: Record<string, unknown>
 }
 
+/** Review max PR #724 (R9): mã 503 của cơ chế đóng băng HAI tầng — `ADMISSION_FROZEN` (middleware backend) và
+ * `NGINX_ADMISSION_FROZEN` (nginx trả lời TRƯỚC, `nginx/templates/default.conf.template`; vùng regex phủ
+ * `/api/admission-config/council-documents`). Thiếu mã nginx ⇒ mọi nhánh riêng cho đóng băng không chạy ở production. */
+const FROZEN_SERVER_CODES = new Set<string>(["ADMISSION_FROZEN", "NGINX_ADMISSION_FROZEN"])
+
 /** Đọc một lỗi bất kỳ ⇒ dạng chuẩn. Không đọc `config` / thân yêu cầu của lỗi axios. */
 export function readApiError(error: unknown): ApiErrorView {
   if (!axios.isAxiosError(error)) {
@@ -230,7 +245,7 @@ export function readApiError(error: unknown): ApiErrorView {
     serverCode,
     detail: chuoi(data?.detail),
     validation,
-    frozen: res.status === 503 && serverCode === "ADMISSION_FROZEN",
+    frozen: res.status === 503 && serverCode !== undefined && FROZEN_SERVER_CODES.has(serverCode),
     data,
   }
 }

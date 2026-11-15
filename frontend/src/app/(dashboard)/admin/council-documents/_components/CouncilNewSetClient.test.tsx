@@ -51,7 +51,7 @@ const BO_MOI = {
 interface Cau {
   /** mức kiểm trước theo id hồ sơ (mặc định duoc_dung) */
   muc?: Record<number, "duoc_dung" | "can_xac_nhan" | "bi_chan">
-  tao?: () => Response
+  tao?: () => Response | Promise<Response>
   /** máy chủ báo người gọi có xác nhận được hay không (`nguoi_goi_duoc_xac_nhan` — LUÔN có trong `tom_tat`); mặc định true */
   xacNhanDuoc?: boolean
   /** `kiem-truoc` / `tim-ho-so` trả lỗi này thay vì dữ liệu (vd 503 đóng băng) */
@@ -241,6 +241,35 @@ describe("trang /moi — luồng chính", () => {
     // dựng xong ⇒ xoá lựa chọn + tham số khỏi bộ nhớ
     expect(useCouncilSelectionStore.getState().idHoSo).toEqual([])
     expect(useCouncilSelectionStore.getState().namHoc).toBeNull()
+  })
+
+  it("review max PR #724 (R12): đang dựng ⇒ thanh bước khoá MỌI bước; dựng xong vẫn chuyển trang (không mất kết quả)", async () => {
+    let thaDung: () => void = () => {}
+    const cho = new Promise<void>((res) => {
+      thaDung = res
+    })
+    dung({
+      tao: async () => {
+        await cho
+        return HttpResponse.json(BO_MOI, { status: 201 })
+      },
+    })
+    ve()
+    await chon([12, 11])
+    fireEvent.click(screen.getByTestId("tiep-kiem-tra"))
+    await screen.findByTestId("bang-kiem-tra")
+    fireEvent.click(screen.getByTestId("chot-tiep"))
+    fireEvent.change(await screen.findByLabelText("Số Quyết định"), { target: { value: "501" } })
+    fireEvent.click(screen.getByTestId("tham-so-tiep"))
+    await screen.findByTestId("du-kien-tep")
+    expect(screen.getByTestId("buoc-1")).not.toBeDisabled() // đối chứng: trước khi dựng, bước cũ bấm được
+    fireEvent.click(screen.getByTestId("dung-bo"))
+    await waitFor(() => expect(taoBodies).toHaveLength(1))
+    await waitFor(() => expect(screen.getByTestId("buoc-1")).toBeDisabled())
+    for (const so of [2, 3, 4]) expect(screen.getByTestId(`buoc-${so}`)).toBeDisabled()
+    thaDung()
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/admin/council-documents/9?buoc=tai"))
+    expect(taoBodies).toHaveLength(1)
   })
 
   it("dữ liệu cá nhân: từ khoá tìm / CCCD chỉ ở thân JSON; không URL / storage mang chúng", async () => {

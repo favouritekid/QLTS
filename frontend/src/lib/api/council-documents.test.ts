@@ -198,6 +198,20 @@ describe("đường chọn hồ sơ — DTO khớp máy chủ 5feb425d", () => {
     expect(kq.tom_tat.nguoi_goi_duoc_xac_nhan).toBe(false)
   })
 
+  it("review max PR #724 (R6): kiem-truoc nhận signal — đã huỷ ⇒ không gửi yêu cầu, lời gọi bị từ chối", async () => {
+    let soLanGoi = 0
+    server.use(
+      http.post(`${API}${P}/sets/kiem-truoc`, () => {
+        soLanGoi += 1
+        return HttpResponse.json(KIEM)
+      }),
+    )
+    const huy = new AbortController()
+    huy.abort()
+    await expect(previewCouncilSet({ academic_year: 2026, profile_ids: [11] }, huy.signal)).rejects.toBeTruthy()
+    expect(soLanGoi).toBe(0)
+  })
+
   it("kiem-truoc: tom_tat THIẾU nguoi_goi_duoc_xac_nhan ⇒ bị từ chối (máy chủ luôn trả; không đoán 'xác nhận được')", async () => {
     const { nguoi_goi_duoc_xac_nhan: _bo, ...thieu } = TOM_TAT
     server.use(http.post(`${API}${P}/sets/kiem-truoc`, () => HttpResponse.json({ ...KIEM, tom_tat: thieu })))

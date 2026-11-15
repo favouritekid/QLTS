@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { Loader2 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -23,6 +23,9 @@ interface Props {
   onDungXong: (bo: CouncilSetDetail) => void
   /** 409 `du_lieu_doi_tu_luc_kiem`: dữ liệu đã đổi từ lúc kiểm — cha đưa về bước 2 và kiểm lại */
   onDuLieuDoi: () => void
+  /** Review max PR #724 (R12): báo cha khi lệnh dựng đang chạy — cha khoá thanh bước (chuyển bước lúc đang dựng gỡ
+   * bước này ⇒ react-query bỏ callback của `mutate` ⇒ bộ đã tạo mà không chuyển trang; bấm "Dựng" lại ⇒ bộ TRÙNG). */
+  onBuildingChange?: (building: boolean) => void
 }
 
 /** Câu tóm tắt tham số đã nhập (chỉ ô có giá trị). */
@@ -43,7 +46,7 @@ function chuoiThamSo(t: ReturnType<typeof thamSoGui>): string {
  * kiểm trước, kèm dấu `phien_ban_kiem`; máy chủ kiểm lại. Hồ sơ ở mức "cần xác nhận": người dùng gõ lại đúng số hồ sơ
  * theo từng trạng thái (số do máy chủ báo; giao diện chỉ yêu cầu gõ khớp để mở nút — máy chủ vẫn kiểm).
  */
-export function CouncilBuildStep({ namHoc, xemTruoc, onQuayLai, onDungXong, onDuLieuDoi }: Props) {
+export function CouncilBuildStep({ namHoc, xemTruoc, onQuayLai, onDungXong, onDuLieuDoi, onBuildingChange }: Props) {
   const thamSoNhap = useCouncilSelectionStore((s) => s.thamSo)
   const lamSach = useCouncilSelectionStore((s) => s.lamSach)
   const tao = useCreateCouncilSetByIds()
@@ -63,6 +66,13 @@ export function CouncilBuildStep({ namHoc, xemTruoc, onQuayLai, onDungXong, onDu
   }, [xemTruoc.dong])
 
   const maLoi = tao.error ? councilErrorCode(tao.error).maLoi : undefined
+
+  // R12: trạng thái "đang dựng" lên cha (khoá thanh bước); gỡ bước này ⇒ báo hết dựng (không khoá kẹt).
+  const isBuilding = tao.isPending
+  useEffect(() => {
+    onBuildingChange?.(isBuilding)
+  }, [isBuilding, onBuildingChange])
+  useEffect(() => () => onBuildingChange?.(false), [onBuildingChange])
 
   const dung = () => {
     tao.mutate(

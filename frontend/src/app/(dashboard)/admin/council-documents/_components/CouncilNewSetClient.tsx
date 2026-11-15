@@ -36,6 +36,8 @@ export function CouncilNewSetClient() {
   const idHoSo = useCouncilSelectionStore((s) => s.idHoSo)
   const boTatCa = useCouncilSelectionStore((s) => s.boTatCa)
   const [buoc, setBuoc] = useState<BuocMoi>(1)
+  // Review max PR #724 (R12): đang dựng ⇒ khoá chuyển bước (xem `CouncilBuildStep.onBuildingChange`).
+  const [isBuilding, setIsBuilding] = useState(false)
   // Danh sách rỗng ⇒ không còn gì để chốt: về bước 1. Đặt lại NGAY trong lúc render (mẫu "điều chỉnh state theo dữ liệu
   // đổi" của React) — không dùng effect, và bước cũ không "sống lại" khi người dùng chọn lại từ đầu.
   if (idHoSo.length === 0 && buoc !== 1) setBuoc(1)
@@ -98,13 +100,17 @@ export function CouncilNewSetClient() {
     )
   }
 
-  const choPhep: number[] = idHoSo.length > 0 ? [1, 2, 3, 4].filter((b) => b <= buoc) : [1]
+  const choPhep: number[] = isBuilding ? [] : idHoSo.length > 0 ? [1, 2, 3, 4].filter((b) => b <= buoc) : [1]
   const idDaGui = idTre
 
   return (
     <div className="space-y-4" data-testid="moi-client">
       {quayLai}
-      <CouncilStepper hienTai={buoc} choPhepChon={choPhep} onChon={(so) => so <= 4 && setBuoc(so as BuocMoi)} />
+      <CouncilStepper
+        hienTai={buoc}
+        choPhepChon={choPhep}
+        onChon={(so) => !isBuilding && so <= 4 && setBuoc(so as BuocMoi)}
+      />
 
       {buoc === 1 ? (
         <>
@@ -153,6 +159,7 @@ export function CouncilNewSetClient() {
               void kt.refetch()
               setBuoc(2)
             }}
+            onBuildingChange={setIsBuilding}
             onDungXong={(bo) => {
               toast.success(`Đã dựng bộ văn bản #${bo.id}: ${bo.so_ho_so} hồ sơ, ${bo.so_tep} tệp.`)
               router.push(`/admin/council-documents/${bo.id}?buoc=tai`)

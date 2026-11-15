@@ -20,6 +20,14 @@ const NHAN_TINH_TRANG: Record<string, string> = {
   chua_co_qd: "Chưa có Quyết định",
 }
 
+/** Review max PR #724 (R13): màu nhãn theo trạng thái VĂN BẢN do máy chủ trả (trước đây chỉ hai màu — "Hết hiệu lực" hiện
+ * nhãn XANH). Trạng thái lạ ⇒ trung tính (không suy). */
+const DECISION_BADGE_VARIANT: Record<string, "success" | "warning" | "error"> = {
+  hieu_luc: "success",
+  het_hieu_luc: "warning",
+  huy_ghi_nhan: "error",
+}
+
 /**
  * Mã bộ của văn bản. Cán bộ xem được hồ sơ chưa chắc được xem bộ văn bản Hội đồng (cổng RIÊNG của module): chỉ làm LIÊN KẾT khi
  * máy chủ báo cờ `xem_chi_tiet_bo` (`GET /quyen`; 403 = mọi cờ tắt — hợp đồng hiện có). Đang tải / lỗi / 403 / thiếu cờ ⇒ chỉ
@@ -51,7 +59,18 @@ export function CouncilDecisionCard({ value }: { value: unknown }) {
   if (!r.success) return null
   const d = r.data
   const vb = d.van_ban
-  const daHuy = vb?.trang_thai === "huy_ghi_nhan"
+  // Review max PR #724 (R13): văn bản còn hiệu lực nhưng hồ sơ KHÔNG còn tên hiệu lực trong đó (tình trạng do máy chủ tính
+  // ≠ `co_qd_hieu_luc` — vd dòng đã bị văn bản điều chỉnh bỏ) ⇒ nhãn trung tính "Văn bản còn hiệu lực", không để
+  // "Còn hiệu lực" xanh đứng cạnh "Chưa có Quyết định".
+  const activeDocumentWithoutProfile = vb?.trang_thai === "hieu_luc" && d.tinh_trang !== "co_qd_hieu_luc"
+  const badgeVariant = activeDocumentWithoutProfile
+    ? "secondary"
+    : (vb && DECISION_BADGE_VARIANT[vb.trang_thai]) || "secondary"
+  const badgeLabel = vb
+    ? activeDocumentWithoutProfile
+      ? "Văn bản còn hiệu lực"
+      : nhanTrangThaiQuyetDinh(vb.trang_thai)
+    : ""
 
   return (
     <section className="mb-4 rounded-lg border bg-card p-4 text-sm" data-testid="the-quyet-dinh-trung-tuyen" aria-label="Quyết định trúng tuyển">
@@ -69,8 +88,8 @@ export function CouncilDecisionCard({ value }: { value: unknown }) {
             ) : null}
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Badge variant={daHuy ? "error" : "success"} data-testid="qd-nhan-trang-thai">
-              {nhanTrangThaiQuyetDinh(vb.trang_thai)}
+            <Badge variant={badgeVariant} data-testid="qd-nhan-trang-thai">
+              {badgeLabel}
             </Badge>
             {d.tinh_trang === "co_qd_hieu_luc" ? (
               <span className="text-xs text-muted-foreground" data-testid="qd-doi-chieu-so">

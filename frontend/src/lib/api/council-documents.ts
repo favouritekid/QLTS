@@ -283,9 +283,11 @@ export async function listCouncilSetDeletions(
 // ⚠️ Thân yêu cầu / phản hồi có `ho_ten`, `cccd`: chỉ ở bộ nhớ, không `console.*`, không URL.
 
 /** Kiểm trước + thứ tự (đặc tả 3.1): cùng cổng và cùng đường đọc với bộ dựng; KHÔNG ghi gì. */
-export async function previewCouncilSet(input: CouncilSetPreviewIn): Promise<CouncilSetPreview> {
+export async function previewCouncilSet(input: CouncilSetPreviewIn, signal?: AbortSignal): Promise<CouncilSetPreview> {
   const body = councilSetPreviewInSchema.parse(input)
-  const res = await api.post(`${P}/sets/kiem-truoc`, body)
+  // Review max PR #724 (R6): `signal` của react-query — danh sách đổi ⇒ huỷ lượt kiểm trước cũ đang chạy (không chờ /
+  // xử lý kết quả đã lỗi thời).
+  const res = await api.post(`${P}/sets/kiem-truoc`, body, { signal })
   return councilSetPreviewSchema.parse(res.data)
 }
 

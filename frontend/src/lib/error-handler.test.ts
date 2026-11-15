@@ -6,7 +6,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest"
 import type { AxiosError, InternalAxiosRequestConfig } from "axios"
-import { handleApiError, isErrorType, type ApiErrorResponse, type HandleErrorOptions } from "./error-handler"
+import { handleApiError, isErrorType, readApiError, type ApiErrorResponse, type HandleErrorOptions } from "./error-handler"
 
 // Mock sonner toast
 vi.mock("sonner", () => ({
@@ -58,6 +58,18 @@ describe("handleApiError", () => {
       expect(toast.error).toHaveBeenCalledWith(
         "Không thể cập nhật hồ sơ",
         expect.objectContaining({ description: detail, duration: 10000 })
+      )
+    })
+
+    it.each([
+      ["COUNCIL_DECISION_LOCKS_PROFILE", "Hồ sơ đã có tên trong Quyết định đã ký (hoặc mang dấu đã trúng tuyển theo Quyết định cũ) — không chuyển sang 'rejected'. Muốn đổi, ghi nhận văn bản điều chỉnh / huỷ trước."],
+      ["CAU_HINH_DA_DUOC_QUYET_DINH_DUNG", "Dòng cấu hình ngành – năm học (hoặc đường xét) này đã được Quyết định đã ký dùng tới — không sửa năm học / ngành, không xoá. Năm học mới hãy tạo dòng cấu hình mới."],
+    ])("review max PR #724 (R8): 409 %s hiện NGUYÊN câu tiếng Việt của máy chủ", (ma, detail) => {
+      handleApiError(createAxiosError(409, { detail, error_code: ma }), { context: "từ chối hồ sơ" })
+
+      expect(toast.error).toHaveBeenCalledWith(
+        "Không thể từ chối hồ sơ",
+        expect.objectContaining({ description: detail })
       )
     })
 
@@ -279,6 +291,19 @@ describe("handleApiError", () => {
         expect.any(Object)
       )
     })
+  })
+})
+
+describe("readApiError — đóng băng hai tầng (review max PR #724 R9)", () => {
+  it.each(["ADMISSION_FROZEN", "NGINX_ADMISSION_FROZEN"])("503 + code %s ⇒ frozen", (code) => {
+    // thân phản hồi THÔ của máy chủ / nginx (`code` ngoài hợp mã của ApiErrorResponse) ⇒ ép qua unknown
+    const v = readApiError(createAxiosError(503, { detail: "x", code } as unknown as ApiErrorResponse))
+    expect(v.frozen).toBe(true)
+  })
+  it("503 với code khác ⇒ KHÔNG frozen; 500 + code đóng băng ⇒ KHÔNG frozen", () => {
+    const than = (code: string) => ({ detail: "x", code }) as unknown as ApiErrorResponse
+    expect(readApiError(createAxiosError(503, than("SERVICE_UNAVAILABLE"))).frozen).toBe(false)
+    expect(readApiError(createAxiosError(500, than("NGINX_ADMISSION_FROZEN"))).frozen).toBe(false)
   })
 })
 
