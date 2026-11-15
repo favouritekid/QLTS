@@ -30,6 +30,7 @@ from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession
+from sqlalchemy.orm import raiseload
 
 from app.config import settings
 from app.repositories.council_candidate_repository import (
@@ -148,7 +149,13 @@ async def _tra_khu_vuc(
                 # Phiên ORM trên CHÍNH kết nối đang ở giao dịch chỉ đọc (không mở giao dịch
                 # mới, không commit / rollback giao dịch ngoài).
                 phien = AsyncSession(bind=conn)
-            ho_so = await phien.get(models.AdmissionProfile, h["pid"])
+            # Review max PR #724 (R6): CHỈ CỘT — các hàm khu vực (``resolve_kv_for_profile``,
+            # ``verify_manual_override_provenance``) chỉ đọc cột thường + ``id``. ``raiseload("*")``: không kéo đồ thị
+            # quan hệ nạp sẵn mỗi dòng (học phí → hoá đơn, giấy tờ, điểm…); đường mã nào chạm quan hệ ⇒ LỖI ngay
+            # (fail-closed), không lặng lẽ trả rỗng như ``noload``.
+            ho_so = await phien.get(
+                models.AdmissionProfile, h["pid"], options=[raiseload("*")]
+            )
             if (
                 h.get("area_resolution_basis") == "manual_override"
                 or snap.get("rule_applied") == "manual_override"

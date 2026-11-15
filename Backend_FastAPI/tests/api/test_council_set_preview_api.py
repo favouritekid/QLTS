@@ -208,6 +208,30 @@ async def test_dung_bo_sau_kiem_truoc_loi_du_lieu_400_dung_ly_do(client, hs, ad)
     assert await _so_bo() == 0
 
 
+async def test_kiem_truoc_khong_nap_do_thi_ho_so(client, hs, ad):
+    # Review max PR #724 (R6): tra khu vực từng dòng (``_tra_khu_vuc``) nạp hồ sơ CHỈ CỘT — trước đây ``phien.get`` kéo cả
+    # đồ thị quan hệ nạp sẵn (học phí → hoá đơn → phiếu thu, giấy tờ, điểm…) cho MỖI dòng. Bất biến: bản xem trước KHÔNG
+    # đọc bảng hoá đơn / phiếu thu (truy vấn đọc của bộ dựng không cần hai bảng ấy).
+    import re
+
+    from sqlalchemy import event
+
+    cau = []
+
+    def ghi(conn, cursor, stmt, params, context, executemany):
+        cau.append(stmt)
+
+    event.listen(csdl.engine.sync_engine, "before_cursor_execute", ghi)
+    try:
+        kq = await _kiem_ok(client, ad, _pids(hs))
+    finally:
+        event.remove(csdl.engine.sync_engine, "before_cursor_execute", ghi)
+    assert kq["dong"]
+    bang = sorted({m.group(1) for s in cau for m in re.finditer(r"\bFROM (\w+)", s)})
+    print("SO_CAU_SQL_KIEM_TRUOC=%d BANG=%s" % (len(cau), ",".join(bang)))
+    assert not {"invoice", "payment"} & set(bang), bang
+
+
 async def test_kiem_truoc_gop_khong_co_khac_nam_mot_danh_sach(client, hs, ad):
     # Năm khác ⇒ mọi vị trí "không tìm thấy" — như id không tồn tại (không phân biệt).
     kq = await _kiem_ok(client, ad, _pids(hs, SACH[:1]) + [ID_KHONG_CO], nam=2027)
