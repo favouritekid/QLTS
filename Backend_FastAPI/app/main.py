@@ -118,9 +118,9 @@ from .middleware import register_exception_handlers
 # === ✅ H12+M10: Sentry Error Tracking (auto-activates when SENTRY_DSN is set) ===
 # MỘT nơi khởi tạo (F223): `app/core/sentry_init.py` — chặn thân request, biến cục bộ,
 # breadcrumb, log thành sự kiện, chuỗi truy vấn, chữ của ngoại lệ trước khi gửi ra ngoài.
-from app.core.sentry_init import khoi_tao_sentry  # noqa: E402
+from app.core.sentry_init import init_sentry  # noqa: E402
 
-khoi_tao_sentry(
+init_sentry(
     settings.SENTRY_DSN, settings.APP_ENV, settings.SENTRY_TRACES_SAMPLE_RATE
 )
 

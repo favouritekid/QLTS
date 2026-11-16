@@ -158,7 +158,7 @@ async def _qd(c, set_id, *, loai="trung_tuyen", goc_id=None, huy_qd_id=None, can
 
 
 async def _ghi_nhan(c, pids, o="X", **kw):
-    """Bộ + Quyết định hiệu lực + dòng (chép từ dòng bộ, như ``chen_dong_tu_bo``) ⇒ (văn bản, [dòng QĐ])."""
+    """Bộ + Quyết định hiệu lực + dòng (chép từ dòng bộ, như ``insert_rows_from_set``) ⇒ (văn bản, [dòng QĐ])."""
     sid, dong = await _bo(c, pids, o, **kw)
     qd = await _qd(c, sid)
     await _x(
@@ -178,16 +178,16 @@ async def _dem(c, o, ex=None, nam=2026):
     k = c.info[o]
     async with AsyncSession(bind=c) as db:
         return {
-            "nganh_nam": await qos.dem_theo_nganh_nam(
+            "nganh_nam": await qos.count_by_offering_year(
                 db, offering_id=k["off"], academic_year=nam, exclude_profile_id=ex
             ),
-            "hoc_vu": await qos.dem_theo_thong_tin_hoc_vu(
+            "hoc_vu": await qos.count_by_academic_info(
                 db, academic_info_id=k["ai"], exclude_profile_id=ex
             ),
-            "duong_xet": await qos.dem_theo_duong_xet(
+            "duong_xet": await qos.count_by_path(
                 db, admission_path_id=k["path"], exclude_profile_id=ex
             ),
-            "ma_tran": (await qos.dem_da_trung_tuyen_theo_duong_xet(db, [k["path"]]))[k["path"]],
+            "ma_tran": (await qos.count_admitted_by_path(db, [k["path"]]))[k["path"]],
         }
 
 
@@ -250,8 +250,8 @@ async def test_b_nam_chup_khong_theo_nam_hien_tai_cua_ho_so(c):
     await _x(c, "UPDATE admission_profile SET academic_year = 2027 WHERE id = :p", p=p)
     k = c.info["X"]
     async with AsyncSession(bind=c) as db:
-        n26 = await qos.dem_theo_nganh_nam(db, offering_id=k["off"], academic_year=2026)
-        n27 = await qos.dem_theo_nganh_nam(db, offering_id=k["off"], academic_year=2027)
+        n26 = await qos.count_by_offering_year(db, offering_id=k["off"], academic_year=2026)
+        n27 = await qos.count_by_offering_year(db, offering_id=k["off"], academic_year=2027)
     assert (n26, n27) == (1, 0)
 
 
@@ -270,8 +270,8 @@ async def test_loc_nam_a_va_b_cung_nam(c):
     await _ghi_nhan(c, [p], "X", nam=2025)
     k = c.info["X"]
     async with AsyncSession(bind=c) as db:
-        n26 = await qos.dem_theo_nganh_nam(db, offering_id=k["off"], academic_year=2026)
-        n25 = await qos.dem_theo_nganh_nam(db, offering_id=k["off"], academic_year=2025)
+        n26 = await qos.count_by_offering_year(db, offering_id=k["off"], academic_year=2026)
+        n25 = await qos.count_by_offering_year(db, offering_id=k["off"], academic_year=2025)
     assert (n26, n25) == (0, 2)
 
 
@@ -370,7 +370,7 @@ async def test_dong_bo_thieu_khoa_khong_khop_noi_can_khoa_va_duoc_dem_de_bao(c, 
     assert await _dem(c, "X") == ky_vong
     async with AsyncSession(bind=c) as db:
         cot = getattr(models.CouncilDocumentSetRow, thieu)
-        assert await qos.so_dong_hieu_luc_thieu_khoa(db, cot) == 1
+        assert await qos.count_effective_rows_missing_lock(db, cot) == 1
 
 
 # ═══════════════════════════════ is_already_occupying (Phê duyệt cũ) ══════════════════════════
@@ -381,9 +381,9 @@ async def test_dang_chiem_cho_trang_thai_hoac_dong_hieu_luc(c):
     await _ghi_nhan(c, [a], "X")
     async with AsyncSession(bind=c) as db:
         hs = {p: await db.get(models.AdmissionProfile, p) for p in (a, b, e)}
-        assert await qos.dang_chiem_cho(db, hs[a]) is True
-        assert await qos.dang_chiem_cho(db, hs[b]) is False
-        assert await qos.dang_chiem_cho(db, hs[e]) is True
+        assert await qos.is_occupying(db, hs[a]) is True
+        assert await qos.is_occupying(db, hs[b]) is False
+        assert await qos.is_occupying(db, hs[e]) is True
 
 
 async def test_phe_duyet_cu_em_co_qd_khong_cong_them_cho(c):
@@ -425,7 +425,7 @@ async def test_ma_tran_chi_cot_approved_doi_cac_cot_pheu_giu_nguyen(c):
 NAM = {"approved", "overridden", "admitted", "confirmed", "enrolled"}
 #: Bộ chữ TRÙNG tập chiếm chỗ nhưng KHÁC khái niệm, được phép: mức "không cảnh báo" của cổng dựng bộ (F228 —
 #: owner chốt trạng thái nào vào Quyết định không cần xác nhận) — không phải câu hỏi "chiếm chỗ".
-NGOAI_LE = {("services/council_set_gate_service.py", "TRANG_THAI_KHONG_CANH_BAO")}
+NGOAI_LE = {("services/council_set_gate_service.py", "NON_WARNING_STATUSES")}
 
 
 def _ten_gan(cay):
@@ -445,9 +445,9 @@ def test_trang_thai_chiem_cho_dinh_nghia_mot_lan():
     from app.services import admission_choice_engine_service as eng
     from app.services import admission_service as asv
 
-    assert asv.QUOTA_OCCUPYING_STATUSES is qos.TRANG_THAI_CHIEM_CHO
-    assert eng._QUOTA_OCCUPYING_STATUSES is qos.TRANG_THAI_CHIEM_CHO
-    assert set(qos.TRANG_THAI_CHIEM_CHO) == NAM and len(qos.TRANG_THAI_CHIEM_CHO) == 5
+    assert asv.QUOTA_OCCUPYING_STATUSES is qos.OCCUPYING_STATUSES
+    assert eng._QUOTA_OCCUPYING_STATUSES is qos.OCCUPYING_STATUSES
+    assert set(qos.OCCUPYING_STATUSES) == NAM and len(qos.OCCUPYING_STATUSES) == 5
     thay = []
     for tep in sorted((GOC / "app").rglob("*.py")):
         cay = ast.parse(tep.read_text(encoding="utf-8"))
@@ -457,6 +457,6 @@ def test_trang_thai_chiem_cho_dinh_nghia_mot_lan():
                 gt = [e.value for e in n.elts if isinstance(e, ast.Constant) and isinstance(e.value, str)]
                 if len(gt) == len(n.elts) and set(gt) == NAM:
                     thay.append((tep.relative_to(GOC / "app").as_posix(), ten.get(id(n))))
-    assert ("services/quota_occupancy_service.py", "TRANG_THAI_CHIEM_CHO") in thay, thay
-    ngoai = set(thay) - {("services/quota_occupancy_service.py", "TRANG_THAI_CHIEM_CHO")}
+    assert ("services/quota_occupancy_service.py", "OCCUPYING_STATUSES") in thay, thay
+    ngoai = set(thay) - {("services/quota_occupancy_service.py", "OCCUPYING_STATUSES")}
     assert ngoai == NGOAI_LE, sorted(ngoai)

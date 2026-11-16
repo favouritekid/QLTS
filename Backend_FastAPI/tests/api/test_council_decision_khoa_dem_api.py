@@ -3,7 +3,7 @@
 
 Dòng bộ THIẾU khoá đếm chỉ tiêu (đường xét / học vụ / ngành — mọi khoá mà hàm đếm thực dùng; năm NOT NULL ở
 CSDL) hoặc LỆCH chuỗi cấu hình ⇒ CHẶN ở ĐỦ ba thao tác sinh / khôi phục dòng Phần B, bằng MỘT hàm
-(``quota_occupancy_service.kiem_khoa_dem_dong_bo``), 409 nêu SỐ DÒNG (không tên, không CCCD), không ghi gì:
+(``quota_occupancy_service.check_lock_and_count_set_rows``), 409 nêu SỐ DÒNG (không tên, không CCCD), không ghi gì:
 
 * ghi nhận (``POST /decisions``);
 * dòng THÊM khi điều chỉnh (``POST /decisions/{id}/dieu-chinh`` có ``set_id``);
@@ -119,7 +119,7 @@ async def test_q_j1_doi_chung_du_khoa_ghi_duoc(client, hs, ad, thao_tac):  # noq
 
 def test_q_j1_khoa_kiem_bang_moi_khoa_ham_dem_dung():
     """Khoá đếm có thể NULL mà hàm đếm thực dùng = đúng ba cột (năm NOT NULL; ``major_id`` không hàm đếm nào dùng)."""
-    assert list(qos.KHOA_DEM_CO_THE_THIEU) == KHOA
+    assert list(qos.LOCKS_COUNT_MAY_BE_MISSING) == KHOA
 
 
 async def test_q_j1_thieu_dong_nguon_chan(client, hs):  # noqa: F811
@@ -127,7 +127,7 @@ async def test_q_j1_thieu_dong_nguon_chan(client, hs):  # noqa: F811
     đo hàm kiểm trực tiếp: chặn, nêu đúng số dòng."""
     async with AsyncSessionLocal() as db:
         with pytest.raises(ConflictError) as e:
-            await qos.kiem_khoa_dem_dong_bo(db, [(2, None), (5, 2_000_000_000)])
+            await qos.check_lock_and_count_set_rows(db, [(2, None), (5, 2_000_000_000)])
     assert e.value.public_payload["dong_thieu_khoa_dem"] == [
         {"dong": 2, "ly_do": "thieu_dong_nguon"},
         {"dong": 5, "ly_do": "thieu_dong_nguon"},
@@ -135,15 +135,15 @@ async def test_q_j1_thieu_dong_nguon_chan(client, hs):  # noqa: F811
 
 
 def test_q_j1_mot_ham_kiem_o_ba_thao_tac_duoi_khoa_truoc_ghi():
-    """Kiểm kê (đọc nguồn): ba thao tác gọi ĐÚNG MỘT lần ``kiem_khoa_dem_dong_bo`` — SAU khi khoá dòng chỉ tiêu
-    (``khoa_chi_tieu_cua_dong_bo``), TRƯỚC lệnh ghi đầu tiên của thao tác."""
+    """Kiểm kê (đọc nguồn): ba thao tác gọi ĐÚNG MỘT lần ``check_lock_and_count_set_rows`` — SAU khi khoá dòng chỉ tiêu
+    (``lock_quota_of_set_rows``), TRƯỚC lệnh ghi đầu tiên của thao tác."""
     ghi_dau = {
-        "ghi_nhan_quyet_dinh": "await repo.them(qd)",
-        "ghi_nhan_dieu_chinh": "await repo.them(dc)",
-        "huy_ghi_nhan": 'x.trang_thai = "huy_ghi_nhan"',
+        "record_decision": "await repo.add_objects(decision)",
+        "record_adjustment_decision": "await repo.add_objects(dc)",
+        "revoke_record": 'x.trang_thai = "huy_ghi_nhan"',
     }
     for ten, moc_ghi in ghi_dau.items():
         nguon = inspect.getsource(getattr(qd_vb, ten))
-        assert nguon.count("kiem_khoa_dem_dong_bo(") == 1, ten
-        i = nguon.index("kiem_khoa_dem_dong_bo(")
-        assert nguon.index("khoa_chi_tieu_cua_dong_bo(") < i < nguon.index(moc_ghi), ten
+        assert nguon.count("check_lock_and_count_set_rows(") == 1, ten
+        i = nguon.index("check_lock_and_count_set_rows(")
+        assert nguon.index("lock_quota_of_set_rows(") < i < nguon.index(moc_ghi), ten

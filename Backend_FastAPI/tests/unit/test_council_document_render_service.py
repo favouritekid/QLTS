@@ -33,14 +33,14 @@ from pydantic import ValidationError as PydanticValidationError
 import app.services.council_document_render_service as svc
 from app.services.council_document_render_service import (
     CANDIDATE_FIELDS,
-    LUAT_RENDER,
-    TRAN_UU_TIEN_V1,
+    RENDER_RULE,
+    PRIORITY_CAP_V1,
     CandidateRowV1,
     CouncilTemplates,
     DecisionParams,
-    chuan_dia_chi,
+    normalize_address,
     render_council_documents,
-    tinh_diem_in,
+    compute_printed_scores,
 )
 from app.utils.exceptions import DataValidationError, FileValidationError
 
@@ -356,14 +356,14 @@ def _cot(rows, j, tu=0):
 
 # ═══════════════════════════════ điểm in ═════════════════════════════════════
 def test_diem_in_tran_uu_tien_va_mot_nguon():
-    assert TRAN_UU_TIEN_V1 == 2.75
-    d = tinh_diem_in("15.5", "0.75", "2.00")  # đúng trần
+    assert PRIORITY_CAP_V1 == 2.75
+    d = compute_printed_scores("15.5", "0.75", "2.00")  # đúng trần
     assert (d.ut_tong, d.tong_xt) == (2.75, 18.25)
-    d = tinh_diem_in("15.5", "1.00", "2.00")  # vượt trần ⇒ cắt
+    d = compute_printed_scores("15.5", "1.00", "2.00")  # vượt trần ⇒ cắt
     assert (d.kv, d.ut, d.ut_tong, d.tong_xt) == (1.0, 2.0, 2.75, 18.25)
-    d = tinh_diem_in("15.5", "0.50", "2.00")  # dưới trần ⇒ giữ
+    d = compute_printed_scores("15.5", "0.50", "2.00")  # dưới trần ⇒ giữ
     assert (d.ut_tong, d.tong_xt) == (2.5, 18.0)
-    d = tinh_diem_in("", "", "")
+    d = compute_printed_scores("", "", "")
     assert (d.tong_mon, d.ut_tong, d.tong_xt) == (0.0, 0.0, 0.0)
 
 
@@ -509,13 +509,13 @@ def test_chuyen_mon_hop_le_va_la(mau):
 
 
 def test_dia_chi_viet_hoa_don_vi_ghep(mau):
-    assert chuan_dia_chi("thành phố buôn ma thuột") == "Thành phố Buôn Ma Thuột"
+    assert normalize_address("thành phố buôn ma thuột") == "Thành phố Buôn Ma Thuột"
     assert (
-        chuan_dia_chi("tổ dân phố 3, thị trấn ea kar, khu  phố 2, tỉnh giả")
+        normalize_address("tổ dân phố 3, thị trấn ea kar, khu  phố 2, tỉnh giả")
         == "TDP 3, Thị trấn Ea Kar, Khu phố 2, Tỉnh Giả"
     )
-    assert chuan_dia_chi("THỊ XÃ GIẢ, tiểu khu 5") == "Thị xã GIẢ, Tiểu khu 5"
-    assert chuan_dia_chi("phường giả, tỉnh giả") == "Phường Giả, Tỉnh Giả"
+    assert normalize_address("THỊ XÃ GIẢ, tiểu khu 5") == "Thị xã GIẢ, Tiểu khu 5"
+    assert normalize_address("phường giả, tỉnh giả") == "Phường Giả, Tỉnh Giả"
     bo = [_hs("GIA-X", "X", OTO, CD, "6510216", "10", dia_chi="thành phố giả")]
     kq = render_council_documents(bo, mau)
     ds = _tep(kq, "DanhSachXetTuyen-CD-Cong-nghe-o-to.docx")
@@ -756,7 +756,7 @@ def test_metadata(mau):
     bo = _bo_giai()
     kq = render_council_documents(bo, mau, TS_1844_GIA)
     md = kq.metadata
-    assert md["luat_render"] == LUAT_RENDER == "v1.1" and md["tran_uu_tien"] == 2.75
+    assert md["luat_render"] == RENDER_RULE == "v1.1" and md["tran_uu_tien"] == 2.75
     assert md["sha256_mau"] == {
         "bien_ban": hashlib.sha256(mau.bien_ban).hexdigest(),
         "quyet_dinh": hashlib.sha256(mau.quyet_dinh).hexdigest(),
@@ -804,7 +804,7 @@ TRUONG_CHU_XLSX = (
 
 @pytest.mark.parametrize("p", NGUY_HIEM)
 def test_xlsx_chuoi_nguy_hiem_ghi_nguyen_van_la_chuoi(mau, p):
-    assert chuan_dia_chi(p) == p  # địa chỉ in ra đúng chuỗi đầu vào
+    assert normalize_address(p) == p  # địa chỉ in ra đúng chuỗi đầu vào
     h = _hs("GIA-X", "X", OTO, CD, "6510216", "10").model_copy(
         update={k: p for k in TRUONG_CHU_XLSX}
     )
@@ -844,7 +844,7 @@ def test_xlsx_o_qua_dai_hoac_ky_tu_dieu_khien_thi_dung_khong_lo_gia_tri(mau):
     # Ký tự điều khiển: lỗi chỉ có toạ độ ô, không có giá trị, không giữ ngoại lệ gốc.
     ws = openpyxl.Workbook().active
     with pytest.raises(DataValidationError, match="ô C7 chứa ký tự điều khiển") as e:
-        svc._ghi_o_xlsx(ws, 7, 3, "GIA\x01BI-MAT")
+        svc._write_xlsx_cell(ws, 7, 3, "GIA\x01BI-MAT")
     assert "BI-MAT" not in str(e.value) and e.value.__cause__ is None
     assert e.value.__suppress_context__
 
@@ -889,8 +889,8 @@ def test_dong_mau_sai_thi_dung_truoc_moi_tep(mau, monkeypatch, loai, bang, dong,
         mau, **{loai: _sua_dong_mau(getattr(mau, loai), bang, dong, kieu)}
     )
     da_luu = []
-    goc = svc._luu_docx
-    monkeypatch.setattr(svc, "_luu_docx", lambda d: da_luu.append(1) or goc(d))
+    goc = svc._save_docx
+    monkeypatch.setattr(svc, "_save_docx", lambda d: da_luu.append(1) or goc(d))
     with pytest.raises(FileValidationError, match="dòng mẫu dữ liệu") as e:
         render_council_documents(_bo_giai(), hong)
     assert "GIA-" not in str(e.value)
@@ -916,10 +916,10 @@ def test_dia_chi_du_muoi_cum_va_ranh_gioi_tu():
         "Thành phố A, Thị xã B, Thị trấn C, Khu phố D, Khu vực E, Tiểu khu F, "
         "TDP G, Cụm dân cư H, Khu dân cư I, Tổ dân cư K"
     )
-    assert chuan_dia_chi(vao) == ra
-    assert len(svc.DON_VI_GHEP) == 10
+    assert normalize_address(vao) == ra
+    assert len(svc.MERGED_UNITS) == 10
     # Cụm nằm TRONG một từ dài hơn ⇒ không phải đơn vị ghép ⇒ giữ dạng viết hoa từng từ.
-    assert chuan_dia_chi("xthành phố, thành phốx, khu phốhội") == (
+    assert normalize_address("xthành phố, thành phốx, khu phốhội") == (
         "Xthành Phố, Thành Phốx, Khu Phốhội"
     )
 
@@ -979,10 +979,10 @@ KIEU_DONG_TONG_SAI = [
 def test_dong_tong_sai_cau_truc_thi_dung_truoc_moi_tep(mau, monkeypatch, bang, kieu):
     hong = dataclasses.replace(mau, bien_ban=_sua_dong_tong(mau.bien_ban, bang, kieu))
     da_luu, da_do = [], []
-    goc_luu, goc_do = svc._luu_docx, svc._do_bang_chen_truoc
-    monkeypatch.setattr(svc, "_luu_docx", lambda d: da_luu.append(1) or goc_luu(d))
+    goc_luu, goc_do = svc._save_docx, svc._fit_table_insert_before
+    monkeypatch.setattr(svc, "_save_docx", lambda d: da_luu.append(1) or goc_luu(d))
     monkeypatch.setattr(
-        svc, "_do_bang_chen_truoc", lambda *a, **k: da_do.append(1) or goc_do(*a, **k)
+        svc, "_fit_table_insert_before", lambda *a, **k: da_do.append(1) or goc_do(*a, **k)
     )
     with pytest.raises(
         FileValidationError,
@@ -994,8 +994,8 @@ def test_dong_tong_sai_cau_truc_thi_dung_truoc_moi_tep(mau, monkeypatch, bang, k
     assert da_do == [] and da_luu == []
 
 
-# Nhãn văn hoá → cột của Biên bản, viết LẠI trong test (không dùng VAN_HOA_THEO_COT /
-# _thong_ke của service) để số tổng kỳ vọng là phép tính ĐỘC LẬP.
+# Nhãn văn hoá → cột của Biên bản, viết LẠI trong test (không dùng CULTURE_BY_COLUMN /
+# _stats của service) để số tổng kỳ vọng là phép tính ĐỘC LẬP.
 _COT_VAN_HOA_GIA = {
     "THCS": 0,
     "THCS (chưa TN)": 0,
@@ -1081,7 +1081,7 @@ def test_ky_tu_khong_ghi_duoc_thi_loi_mien_khong_lo_gia_tri(
     )
     bo = [_hs("GIA-01", "X", OTO, CD, "6510216", "10"), xau]
     da_dung = []
-    for ten in ("_luu_docx", "_dung_ds_xlsx"):
+    for ten in ("_save_docx", "_build_list_xlsx"):
         goc = getattr(svc, ten)
         monkeypatch.setattr(
             svc, ten, lambda *a, _g=goc, **k: da_dung.append(1) or _g(*a, **k)
@@ -1164,10 +1164,10 @@ def test_tham_so_quyet_dinh_chuoi_chi_nhan_chu_so_ascii(truong, gia_tri):
 def test_tham_so_so_quyet_dinh_0_dau_bi_tu_choi():
     # Review max PR #724 (R7, §6 nhánh anh em): số in sẵn có 0 đầu ⇒ lúc ghi nhận (gõ lại ĐÚNG số đã in) không bao
     # giờ qua ``kiem_so_quyet_dinh`` ⇒ chặn ngay lúc dựng, cùng câu.
-    from app.services.council_document_render_service import CAU_SO_QD_0_DAU
+    from app.services.council_document_render_service import QUERY_DECISION_NUMBER_LEADING_ZERO
 
     assert DecisionParams(so_quyet_dinh="7").so_quyet_dinh == "7"  # đối chứng
-    with pytest.raises(PydanticValidationError, match=CAU_SO_QD_0_DAU):
+    with pytest.raises(PydanticValidationError, match=QUERY_DECISION_NUMBER_LEADING_ZERO):
         DecisionParams(so_quyet_dinh="07")
 
 
@@ -1190,8 +1190,8 @@ def test_khoi_nganh_quyet_dinh_khong_lien_thi_dung_truoc_moi_tep(
 ):
     hong = dataclasses.replace(mau, quyet_dinh=_sua_khoi_qd(mau.quyet_dinh, khoi))
     da_luu = []
-    goc = svc._luu_docx
-    monkeypatch.setattr(svc, "_luu_docx", lambda d: da_luu.append(1) or goc(d))
+    goc = svc._save_docx
+    monkeypatch.setattr(svc, "_save_docx", lambda d: da_luu.append(1) or goc(d))
     ky_vong = {
         1: "khối 1: KHÔNG liền, khối 2: liền",
         2: "khối 1: liền, khối 2: KHÔNG liền",
@@ -1289,13 +1289,13 @@ def _chi_do_cau_truc(monkeypatch, kieu):
     {PAGE} để chỉ F207 có thể chặn (CLAUDE.md §3: mỗi ca một bất biến); cấu hình thật (danh sách
     rỗng): ``test_truong_trong_vung_du_lieu_bi_danh_sach_cho_phep_chan_truoc``."""
     if kieu in KIEU_TRUONG:
-        monkeypatch.setattr(svc, "MA_TRUONG_CHO_PHEP", frozenset({"PAGE"}))
+        monkeypatch.setattr(svc, "ALLOWED_FIELD_CODES", frozenset({"PAGE"}))
 
 
 def _dem_luu(monkeypatch):
     da_luu = []
-    goc = svc._luu_docx
-    monkeypatch.setattr(svc, "_luu_docx", lambda d: da_luu.append(1) or goc(d))
+    goc = svc._save_docx
+    monkeypatch.setattr(svc, "_save_docx", lambda d: da_luu.append(1) or goc(d))
     return da_luu
 
 
@@ -1475,9 +1475,9 @@ def test_dong_tong_tren_hoac_trung_dong_mau_thi_dung_o_phep_kiem_mau(
 ):
     hong = dataclasses.replace(mau, bien_ban=_doi_dong_tong(mau.bien_ban, bang, vi_tri))
     da_do = []
-    goc = svc._do_bang_chen_truoc
+    goc = svc._fit_table_insert_before
     monkeypatch.setattr(
-        svc, "_do_bang_chen_truoc", lambda *a, **k: da_do.append(1) or goc(*a, **k)
+        svc, "_fit_table_insert_before", lambda *a, **k: da_do.append(1) or goc(*a, **k)
     )
     da_luu = _dem_luu(monkeypatch)
     with pytest.raises(
@@ -1573,17 +1573,17 @@ def test_moi_cho_doc_gridspan_deu_qua_mot_helper(mau, monkeypatch):
     import sys
 
     goi = set()
-    goc = svc._do_rong_o
+    goc = svc._cell_width
 
     def gian(*a, **k):
         goi.add(sys._getframe(1).f_code.co_name)
         return goc(*a, **k)
 
-    monkeypatch.setattr(svc, "_do_rong_o", gian)
+    monkeypatch.setattr(svc, "_cell_width", gian)
     render_council_documents(_bo_giai(), mau)
-    assert {"_kiem_dong_mau", "_kiem_dong_tong", "_dat_rong"} <= goi
+    assert {"_check_template_rows", "_check_total_row", "_set_widths"} <= goi
     nguon = inspect.getsource(svc)
-    assert nguon.count('qn("w:gridSpan")') == 1  # chỉ trong _do_rong_o
+    assert nguon.count('qn("w:gridSpan")') == 1  # chỉ trong _cell_width
     assert ".grid_span" not in nguon
 
 
@@ -1628,8 +1628,8 @@ def test_tham_so_quyet_dinh_sai_kieu_thi_loi_mien(mau):
 
 
 def test_tham_so_quyet_dinh_hop_le_di_qua_kiem_lai():
-    assert svc.kiem_lai_tham_so_quyet_dinh(TS_1844_GIA) == TS_1844_GIA
-    assert svc.kiem_lai_tham_so_quyet_dinh(None) is None
+    assert svc.recheck_decision_params(TS_1844_GIA) == TS_1844_GIA
+    assert svc.recheck_decision_params(None) is None
 
 
 # ═══════════════════════════════ kiem_mau — MỘT nguồn cho kho mẫu và bộ dựng ══════════
@@ -1660,12 +1660,12 @@ def _goi_hong(mau_docx):
     return ca
 
 
-@pytest.mark.parametrize("loai", svc.LOAI_MAU)
+@pytest.mark.parametrize("loai", svc.TEMPLATE_KINDS)
 def test_kiem_mau_goi_hong_luon_la_loi_mien(mau, loai):
     lot = []
     for ten, b in _goi_hong(getattr(mau, loai)).items():
         try:
-            svc.kiem_mau(loai, b)
+            svc.check_template(loai, b)
         except FileValidationError:
             continue
         except Exception as e:  # noqa: BLE001 — ghi lại ĐÚNG ca lọt lỗi của thư viện
@@ -1676,23 +1676,23 @@ def test_kiem_mau_goi_hong_luon_la_loi_mien(mau, loai):
 
 
 def test_kiem_mau_loai_va_kieu_noi_dung(mau):
-    for loai in svc.LOAI_MAU:
-        svc.kiem_mau(loai, getattr(mau, loai))  # mẫu giả hợp lệ
+    for loai in svc.TEMPLATE_KINDS:
+        svc.check_template(loai, getattr(mau, loai))  # mẫu giả hợp lệ
     with pytest.raises(DataValidationError, match="Loại mẫu"):
-        svc.kiem_mau("phu_luc", mau.bien_ban)
+        svc.check_template("phu_luc", mau.bien_ban)
     with pytest.raises(FileValidationError, match="không phải bytes"):
-        svc.kiem_mau("bien_ban", bytearray(mau.bien_ban))
+        svc.check_template("bien_ban", bytearray(mau.bien_ban))
     # Mẫu của loại khác đưa nhầm chỗ ⇒ phép kiểm của loại được nêu từ chối.
     with pytest.raises(FileValidationError):
-        svc.kiem_mau("quyet_dinh", mau.bien_ban)
+        svc.check_template("quyet_dinh", mau.bien_ban)
 
 
 def test_diem_vao_bo_dung_chay_dung_kiem_mau(mau, monkeypatch):
     goi = []
-    goc = svc.kiem_mau
-    monkeypatch.setattr(svc, "kiem_mau", lambda l, b: goi.append(l) or goc(l, b))
+    goc = svc.check_template
+    monkeypatch.setattr(svc, "check_template", lambda l, b: goi.append(l) or goc(l, b))
     render_council_documents(_bo_giai(), mau)
-    assert goi == list(svc.LOAI_MAU)
+    assert goi == list(svc.TEMPLATE_KINDS)
 
 
 # ═══════════════════════════════ F211 — mẫu hỏng ở các điểm ĐỌC khác ⇒ lỗi miền ═══════
@@ -1737,7 +1737,7 @@ def _dat_co_ma_hoa(b, ten_muc, co=0x1):
     return bytes(out)
 
 
-@pytest.mark.parametrize("loai", svc.LOAI_MAU)
+@pytest.mark.parametrize("loai", svc.TEMPLATE_KINDS)
 @pytest.mark.parametrize("kieu", ["dong_nen_hong", "ma_hoa", "ma_hoa_manh"])
 def test_goi_word_nen_hong_hoac_ma_hoa_thi_loi_mien(mau, loai, kieu):
     b = getattr(mau, loai)
@@ -1750,7 +1750,7 @@ def test_goi_word_nen_hong_hoac_ma_hoa_thi_loi_mien(mau, loai, kieu):
         co = 0x1 if kieu == "ma_hoa" else 0x40
         sai, khop = _dat_co_ma_hoa(b, "word/document.xml", co), "được mã hoá"
     with pytest.raises(FileValidationError, match=khop):
-        svc.kiem_mau(loai, sai)
+        svc.check_template(loai, sai)
 
 
 # (loại, bảng, ô ở dòng ĐẦU) — mọi bảng dữ liệu (MỘT phép kiểm chung, CLAUDE.md §6).
@@ -1783,14 +1783,14 @@ def _dat_vmerge(b, bang, dong, o, gia_tri):
 def test_vmerge_continue_o_dong_dau_bang_thi_loi_mien(mau, loai, bang, o, gia_tri):
     sai = _dat_vmerge(getattr(mau, loai), bang, 0, o, gia_tri)
     with pytest.raises(FileValidationError, match=r"dòng 1 của bảng có ô gộp dọc") as e:
-        svc.kiem_mau(loai, sai)
+        svc.check_template(loai, sai)
     assert "GIA" not in str(e.value) and "TT" not in str(e.value)
 
 
 def test_vmerge_restart_dong_dau_continue_dong_sau_van_hop_le(mau):
     # Như mẫu thật (đo 03-11): tiêu đề gộp dọc restart ở dòng đầu, continue ở dòng sau.
-    for loai in svc.LOAI_MAU:
-        svc.kiem_mau(loai, getattr(mau, loai))
+    for loai in svc.TEMPLATE_KINDS:
+        svc.check_template(loai, getattr(mau, loai))
     tb = _doc(mau.bien_ban).tables[1]._tbl.findall(qn("w:tr"))
     assert (
         tb[1].findall(qn("w:tc"))[0].find(qn("w:tcPr")).find(qn("w:vMerge")) is not None
@@ -1824,7 +1824,7 @@ def _dat_sz(b, bang, o, gia_tri):
 def test_co_chu_dong_mau_khong_phai_so_thi_loi_mien(mau, monkeypatch, bang, o, gia_tri):
     sai = _dat_sz(mau.danh_sach, bang, o, gia_tri)
     with pytest.raises(FileValidationError, match=r"cỡ chữ \(w:sz\)"):
-        svc.kiem_mau("danh_sach", sai)  # đường tải mẫu lên
+        svc.check_template("danh_sach", sai)  # đường tải mẫu lên
     da_luu = _dem_luu(monkeypatch)
     with pytest.raises(FileValidationError, match=r"cỡ chữ \(w:sz\)"):
         render_council_documents(_bo_giai(), dataclasses.replace(mau, danh_sach=sai))
@@ -1868,7 +1868,7 @@ def _dat_gridcol(b, bang, j, gia_tri):
 def test_be_rong_cot_luoi_khong_phai_so_thi_loi_mien(mau, bang, gia_tri):
     sai = _dat_gridcol(mau.danh_sach, bang, 3, gia_tri)
     with pytest.raises(FileValidationError, match=r"bề rộng cột lưới \(w:gridCol\)"):
-        svc.kiem_mau("danh_sach", sai)
+        svc.check_template("danh_sach", sai)
 
 
 @pytest.mark.parametrize("loai, bang, dong", VI_TRI_DONG_MAU)
@@ -1878,7 +1878,7 @@ def test_o_dong_mau_khong_co_doan_van_thi_loi_mien(mau, loai, bang, dong):
     for p in tc.findall(qn("w:p")):
         tc.remove(p)
     with pytest.raises(FileValidationError, match="không có đoạn văn nào"):
-        svc.kiem_mau(loai, _luu(d))
+        svc.check_template(loai, _luu(d))
 
 
 @pytest.mark.parametrize("bang", [1, 2])
@@ -1888,7 +1888,7 @@ def test_o_so_dong_tong_khong_co_doan_van_thi_loi_mien(mau, bang):
     for p in tc.findall(qn("w:p")):
         tc.remove(p)
     with pytest.raises(FileValidationError, match="không có đoạn văn nào"):
-        svc.kiem_mau("bien_ban", _luu(d))
+        svc.check_template("bien_ban", _luu(d))
 
 
 # ═══════════════════ F216 — kiểu nén ngoài danh sách cho phép ⇒ chặn TRƯỚC giải nén ═══
@@ -1921,20 +1921,20 @@ KIEU_NEN_LA = {"lzma": zipfile.ZIP_LZMA, "bzip2": zipfile.ZIP_BZIP2}
 def test_gian_diep_thay_giai_nen_that_va_goi_hop_le_van_nhan(mau, giai_nen):
     # Đối chứng cho ca "bộ giải nén KHÔNG được gọi": gián điệp THẤY lần giải nén thật; gói
     # DEFLATE (ba mẫu giả) và gói có mục lưu thẳng (STORED) vẫn được nhận.
-    for loai in svc.LOAI_MAU:
-        svc.kiem_mau(loai, getattr(mau, loai))
+    for loai in svc.TEMPLATE_KINDS:
+        svc.check_template(loai, getattr(mau, loai))
     assert zipfile.ZIP_DEFLATED in giai_nen
     giai_nen.clear()
-    svc.kiem_mau(
+    svc.check_template(
         "bien_ban", _doi_kieu_nen(mau.bien_ban, "word/document.xml", zipfile.ZIP_STORED)
     )
     assert zipfile.ZIP_STORED in giai_nen
-    assert svc.MA_NEN_CHO_PHEP == {zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED}
+    assert svc.ALLOWED_COMPRESSION == {zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED}
 
 
 @pytest.mark.parametrize("diem", ["kiem_mau", "bo_dung"])
 @pytest.mark.parametrize("ten", sorted(KIEU_NEN_LA))
-@pytest.mark.parametrize("loai", svc.LOAI_MAU)
+@pytest.mark.parametrize("loai", svc.TEMPLATE_KINDS)
 def test_kieu_nen_ngoai_danh_sach_bi_chan_truoc_khi_giai_nen(
     mau, giai_nen, loai, ten, diem
 ):
@@ -1945,7 +1945,7 @@ def test_kieu_nen_ngoai_danh_sach_bi_chan_truoc_khi_giai_nen(
     giai_nen.clear()
     with pytest.raises(FileValidationError, match="kiểu nén ngoài danh sách cho phép"):
         if diem == "kiem_mau":  # đường TẢI MẪU LÊN dùng chính hàm này
-            svc.kiem_mau(loai, sai)
+            svc.check_template(loai, sai)
         else:  # điểm vào bộ dựng
             render_council_documents(
                 _bo_giai(), dataclasses.replace(mau, **{loai: sai})
@@ -1962,30 +1962,30 @@ SZ_O = [(1, 0), (4, 5)]
 
 @pytest.mark.parametrize("bang, o", SZ_O)
 def test_co_chu_dung_tran_ky_thuat_thi_nhan(mau, bang, o):
-    svc.kiem_mau("danh_sach", _dat_sz(mau.danh_sach, bang, o, str(svc.SZ_TOI_DA)))
+    svc.check_template("danh_sach", _dat_sz(mau.danh_sach, bang, o, str(svc.MAX_SZ)))
 
 
 @pytest.mark.parametrize("bang, o", SZ_O)
 def test_co_chu_vuot_tran_mot_don_vi_thi_loi_mien(mau, bang, o):
-    sai = _dat_sz(mau.danh_sach, bang, o, str(svc.SZ_TOI_DA + 1))
+    sai = _dat_sz(mau.danh_sach, bang, o, str(svc.MAX_SZ + 1))
     with pytest.raises(
         FileValidationError, match=r"cỡ chữ \(w:sz\).*vượt trần kỹ thuật"
     ):
-        svc.kiem_mau("danh_sach", sai)
+        svc.check_template("danh_sach", sai)
 
 
 @pytest.mark.parametrize("bang, o", SZ_O)
 def test_co_chu_dung_tran_chu_so_co_so_0_dau_thi_nhan(mau, bang, o):
-    v = str(svc.SZ_TOI_DA).rjust(svc.SO_CHU_SO_TOI_DA, "0")
-    assert len(v) == svc.SO_CHU_SO_TOI_DA
-    svc.kiem_mau("danh_sach", _dat_sz(mau.danh_sach, bang, o, v))
+    v = str(svc.MAX_SZ).rjust(svc.MAX_DIGITS, "0")
+    assert len(v) == svc.MAX_DIGITS
+    svc.check_template("danh_sach", _dat_sz(mau.danh_sach, bang, o, v))
 
 
 @pytest.mark.parametrize("bang, o", SZ_O)
 def test_co_chu_qua_tran_chu_so_thi_loi_mien_du_gia_tri_nho(mau, bang, o):
-    v = "24".rjust(svc.SO_CHU_SO_TOI_DA + 1, "0")  # giá trị 24, nhưng 21 chữ số
+    v = "24".rjust(svc.MAX_DIGITS + 1, "0")  # giá trị 24, nhưng 21 chữ số
     with pytest.raises(FileValidationError, match=r"cỡ chữ \(w:sz\)"):
-        svc.kiem_mau("danh_sach", _dat_sz(mau.danh_sach, bang, o, v))
+        svc.check_template("danh_sach", _dat_sz(mau.danh_sach, bang, o, v))
 
 
 @pytest.mark.parametrize("diem", ["kiem_mau", "bo_dung"])
@@ -1993,7 +1993,7 @@ def test_co_chu_5000_chu_so_thi_loi_mien_khong_loi_tho(mau, monkeypatch, diem):
     sai = _dat_sz(mau.danh_sach, 1, 0, "1" * 5000)
     with pytest.raises(FileValidationError, match=r"cỡ chữ \(w:sz\)"):
         if diem == "kiem_mau":
-            svc.kiem_mau("danh_sach", sai)
+            svc.check_template("danh_sach", sai)
         else:
             render_council_documents(
                 _bo_giai(), dataclasses.replace(mau, danh_sach=sai)
@@ -2002,32 +2002,32 @@ def test_co_chu_5000_chu_so_thi_loi_mien_khong_loi_tho(mau, monkeypatch, diem):
 
 @pytest.mark.parametrize("bang", [1, 4])
 def test_cot_luoi_dung_tran_ky_thuat_thi_nhan(mau, bang):
-    svc.kiem_mau(
-        "danh_sach", _dat_gridcol(mau.danh_sach, bang, 3, str(svc.GRIDCOL_TOI_DA))
+    svc.check_template(
+        "danh_sach", _dat_gridcol(mau.danh_sach, bang, 3, str(svc.MAX_GRIDCOL))
     )
 
 
 @pytest.mark.parametrize("bang", [1, 4])
 def test_cot_luoi_vuot_tran_mot_don_vi_thi_loi_mien(mau, bang):
-    sai = _dat_gridcol(mau.danh_sach, bang, 3, str(svc.GRIDCOL_TOI_DA + 1))
+    sai = _dat_gridcol(mau.danh_sach, bang, 3, str(svc.MAX_GRIDCOL + 1))
     with pytest.raises(
         FileValidationError, match=r"bề rộng cột lưới \(w:gridCol\).*vượt trần kỹ thuật"
     ):
-        svc.kiem_mau("danh_sach", sai)
+        svc.check_template("danh_sach", sai)
 
 
 @pytest.mark.parametrize("bang", [1, 4])
 def test_cot_luoi_qua_tran_chu_so_thi_loi_mien_du_gia_tri_nho(mau, bang):
-    v = "500".rjust(svc.SO_CHU_SO_TOI_DA + 1, "0")
+    v = "500".rjust(svc.MAX_DIGITS + 1, "0")
     with pytest.raises(FileValidationError, match=r"bề rộng cột lưới \(w:gridCol\)"):
-        svc.kiem_mau("danh_sach", _dat_gridcol(mau.danh_sach, bang, 3, v))
+        svc.check_template("danh_sach", _dat_gridcol(mau.danh_sach, bang, 3, v))
 
 
 @pytest.mark.parametrize("bang", [1, 4])
 def test_cot_luoi_5000_chu_so_thi_loi_mien_khong_loi_tho(mau, bang):
     sai = _dat_gridcol(mau.danh_sach, bang, 3, "1" * 5000)
     with pytest.raises(FileValidationError, match=r"bề rộng cột lưới \(w:gridCol\)"):
-        svc.kiem_mau("danh_sach", sai)
+        svc.check_template("danh_sach", sai)
 
 
 # Anh em (CLAUDE.md §6): gridSpan đọc qua cùng helper chữ số — 5.000 chữ số từng nổ
@@ -2037,17 +2037,17 @@ def test_cot_luoi_5000_chu_so_thi_loi_mien_khong_loi_tho(mau, bang):
 def test_gridspan_qua_tran_chu_so_thi_loi_mien(mau, loai, bang, dong, o, v):
     sai = _dat_gridspan(getattr(mau, loai), bang, dong, o, v)
     with pytest.raises(FileValidationError, match=r"gridSpan"):
-        svc.kiem_mau(loai, sai)
+        svc.check_template(loai, sai)
 
 
 def test_gridspan_dung_tran_chu_so_co_so_0_dau_thi_nhan(mau):
-    v = "1".rjust(svc.SO_CHU_SO_TOI_DA, "0")
-    svc.kiem_mau("quyet_dinh", _dat_gridspan(mau.quyet_dinh, 3, 1, 2, v))
+    v = "1".rjust(svc.MAX_DIGITS, "0")
+    svc.check_template("quyet_dinh", _dat_gridspan(mau.quyet_dinh, 3, 1, 2, v))
 
 
 # ═══════════════════ CÁC PHẦN của gói Word — danh sách cho phép (E3, owner 04-11) ══════════
 # Mỗi ca: MỘT thứ bị cấm trên một mẫu giả hợp lệ ⇒ lỗi miền đúng LOẠI, ở CẢ đường tải mẫu lên
-# (``kiem_goi_mau`` của kho mẫu) lẫn bộ dựng (``kiem_mau`` → ``_mo_docx``). Thông báo không nêu
+# (``kiem_goi_mau`` của kho mẫu) lẫn bộ dựng (``kiem_mau`` → ``_open_docx``). Thông báo không nêu
 # đích liên kết / chữ của mẫu.
 from app.services import council_document_template_service as _kho_mau  # noqa: E402
 
@@ -2261,9 +2261,9 @@ def test_phan_goi_word_bi_cam_thi_loi_mien(mau, ca, diem):
     sai, khop = _ca_phan_goi(mau.bien_ban, ca)
     with pytest.raises(FileValidationError, match=khop) as e:
         if diem == "tai_len":
-            _kho_mau.kiem_goi_mau(sai, "Biên bản")
+            _kho_mau.check_template_package(sai, "Biên bản")
         else:
-            svc.kiem_mau("bien_ban", sai)
+            svc.check_template("bien_ban", sai)
     assert _DICH_GIA not in str(e.value) and "GIA" not in str(e.value)
 
 
@@ -2315,8 +2315,8 @@ def _hai_duong(goi):
     — "NHAN" hoặc "CHAN: <thông báo>"."""
     kq = []
     for f in (
-        lambda: _kho_mau.kiem_goi_mau(goi, "Biên bản"),
-        lambda: svc.kiem_mau("bien_ban", goi),
+        lambda: _kho_mau.check_template_package(goi, "Biên bản"),
+        lambda: svc.check_template("bien_ban", goi),
     ):
         try:
             f()
@@ -2333,7 +2333,7 @@ def _chan_ca_hai(kq, khop):
 def test_danh_sach_cho_phep_ma_truong_dung_so_do():
     # Đo E4: ba mẫu thật 0 phần tử họ trường, bộ dựng không chèn trường ⇒ RỖNG. Mở một mã là sửa
     # có chủ đích (kèm ca đối chứng) — không lặng lẽ.
-    assert svc.MA_TRUONG_CHO_PHEP == frozenset()
+    assert svc.ALLOWED_FIELD_CODES == frozenset()
 
 
 MA_TRUONG_NGOAI_DANH_SACH = [
@@ -2359,9 +2359,9 @@ def test_ma_truong_ngoai_danh_sach_bi_chan(mau, ma, dang, diem):
         FileValidationError, match="mã trường %s ngoài danh sách cho phép" % ma
     ):
         if diem == "tai_len":
-            _kho_mau.kiem_goi_mau(goi, "Biên bản")
+            _kho_mau.check_template_package(goi, "Biên bản")
         else:
-            svc.kiem_mau("bien_ban", goi)
+            svc.check_template("bien_ban", goi)
 
 
 def test_T3_ma_truong_database_doc_nguon_ngoai_bi_chan_o_ca_hai_duong(mau):
@@ -2437,7 +2437,7 @@ def test_T1_truong_long_bi_chan_o_ca_hai_duong(mau):
 def test_T1_doi_chung_ma_trong_danh_sach_thi_nhan(mau, monkeypatch, viet):
     # ĐỐI CHỨNG cơ chế: khi một mã ĐƯỢC cho phép (thay tạm danh sách), trường đó — viết hoa hay
     # thường — được NHẬN ở cả hai đường ⇒ ca lồng dưới đây đỏ vì trường TRONG, không vì cách dựng.
-    monkeypatch.setattr(svc, "MA_TRUONG_CHO_PHEP", frozenset({"IF"}))
+    monkeypatch.setattr(svc, "ALLOWED_FIELD_CODES", frozenset({"IF"}))
     goi = _them_dau_chan(
         mau.bien_ban, _truong_phuc(" %s 1 = 1 &quot;a&quot; &quot;b&quot; " % viet)
     )
@@ -2448,7 +2448,7 @@ def test_T1_truong_long_trong_truong_duoc_phep_van_bi_chan(mau, monkeypatch):
     # Trường NGOÀI được cho phép (thay tạm danh sách = {IF}) không che trường TRONG: câu lệnh
     # của trường lồng xét RIÊNG ⇒ INCLUDEPICTURE chặn ở cả hai đường. Gộp câu lệnh trường trong
     # vào trường ngoài (đột biến E3A của người điều phối) ⇒ ca này NHẬN ⇒ đỏ.
-    monkeypatch.setattr(svc, "MA_TRUONG_CHO_PHEP", frozenset({"IF"}))
+    monkeypatch.setattr(svc, "ALLOWED_FIELD_CODES", frozenset({"IF"}))
     kq = _hai_duong(_them_dau_chan(mau.bien_ban, _truong_long("IF", "INCLUDEPICTURE")))
     assert _chan_ca_hai(kq, "mã trường INCLUDEPICTURE ngoài danh sách cho phép"), kq
 
@@ -2597,9 +2597,9 @@ def test_quan_he_thuoc_tinh_tuy_bien_da_bo_bi_chan_o_ca_hai_duong(mau):
 
 def test_goi_word_thuong_van_nhan(mau):
     # Đối chứng: ba mẫu giả (không trường nào) ⇒ NHẬN ở cả hai điểm (phép kiểm không chặn thừa).
-    for loai in svc.LOAI_MAU:
-        _kho_mau.kiem_goi_mau(getattr(mau, loai), loai)
-        svc.kiem_mau(loai, getattr(mau, loai))
+    for loai in svc.TEMPLATE_KINDS:
+        _kho_mau.check_template_package(getattr(mau, loai), loai)
+        svc.check_template(loai, getattr(mau, loai))
 
 
 # ═════════ DOCTYPE — bước RIÊNG, mọi phần KHAI là XML (E3 §9 mục 4, E4; F232) ═════════
@@ -2625,6 +2625,6 @@ def test_phan_xml_co_doctype_thi_loi_mien(mau, vi_tri, diem):
     sai = _sua_goi(mau.bien_ban, {phan: chen})
     with pytest.raises(FileValidationError, match="DOCTYPE"):
         if diem == "tai_len":
-            _kho_mau.kiem_goi_mau(sai, "Biên bản")
+            _kho_mau.check_template_package(sai, "Biên bản")
         else:
-            svc.kiem_mau("bien_ban", sai)
+            svc.check_template("bien_ban", sai)

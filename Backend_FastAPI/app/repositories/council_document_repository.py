@@ -24,11 +24,11 @@ from app.models.council_document import (
 #: ``0``). Khoá hai-khoá và khoá một-khoá bigint không chồng nhau (tài liệu PostgreSQL);
 #: các khoá hai-khoá khác của mã (``invoice_service``, ``public_lead_intake_service``) dùng
 #: tên miền / khoá thứ hai khác.
-KHOA_DUNG_BO = "council_document_set:dung"
+BUILD_LOCK_KEY = "council_document_set:dung"
 
 #: Vòng giao diện (đặc tả 3.4 / 3.5) — tình trạng của bộ. MỘT nơi tính: biểu thức ``CASE`` trong
-#: :data:`SQL_BO_MO_RONG` (danh sách + chi tiết cùng câu).
-TINH_TRANG_BO = (
+#: :data:`SQL_SET_EXTENDED` (danh sách + chi tiết cùng câu).
+SET_STATE = (
     "chua_ghi_nhan",
     "con_hieu_luc",
     "het_hieu_luc",
@@ -38,7 +38,7 @@ TINH_TRANG_BO = (
 
 #: Tên hiển thị của MỘT người dùng (bí danh ``u`` của bảng ``"user"``) — MỘT biểu thức cho người tạo bộ, người tải, người
 #: xoá: họ tên nếu có, không thì tên đăng nhập.
-SQL_TEN_NGUOI_DUNG = "COALESCE(NULLIF(btrim(u.full_name), ''), u.username)"
+SQL_USER_NAMES = "COALESCE(NULLIF(btrim(u.full_name), ''), u.username)"
 
 #: MỘT câu cho danh sách bộ (``GET /sets``) và chi tiết bộ (``GET /sets/{id}``) — không N+1:
 #:
@@ -52,7 +52,7 @@ SQL_TEN_NGUOI_DUNG = "COALESCE(NULLIF(btrim(u.full_name), ''), u.username)"
 #:   người tạo, số Quyết định (khớp ĐÚNG, trên văn bản hiển thị), tình trạng; mới trước; ``LIMIT`` / ``OFFSET``.
 #:
 #: Không có cột dữ liệu cá nhân của bộ (``ma_ho_so_dau_vao``, ``snapshot_dto``).
-SQL_BO_MO_RONG = text(
+SQL_SET_EXTENDED = text(
     """
 WITH b AS (
   SELECT s.id, s.nguoi_tao_id, s.tao_luc, s.moc_chup, s.unit_id, s.trinh_do, s.so_ho_so,
@@ -98,12 +98,12 @@ WHERE CAST(:tt AS text) IS NULL OR b.tinh_trang = CAST(:tt AS text)
 ORDER BY b.tao_luc DESC, b.id DESC
 LIMIT :lim OFFSET :off
 """.replace(
-        "{ten}", SQL_TEN_NGUOI_DUNG
+        "{ten}", SQL_USER_NAMES
     )
 )
 
 #: Người tạo PHÂN BIỆT của các bộ trong phạm vi người gọi (bộ lọc "Người tạo" của danh sách).
-SQL_NGUOI_TAO_BO = text(
+SQL_SET_CREATORS = text(
     """
 SELECT DISTINCT s.nguoi_tao_id AS id, {ten} AS ten
 FROM council_document_set s
@@ -111,14 +111,14 @@ JOIN "user" u ON u.id = s.nguoi_tao_id
 WHERE CAST(:tat_ca AS boolean) OR s.unit_id = CAST(:don_vi AS integer)
 ORDER BY ten, id
 """.replace(
-        "{ten}", SQL_TEN_NGUOI_DUNG
+        "{ten}", SQL_USER_NAMES
     )
 )
 
 #: Tên hiển thị theo id người dùng (nhật ký tải / vết xoá).
-SQL_TEN_THEO_ID = text(
+SQL_NAME_BY_ID = text(
     'SELECT u.id, {ten} AS ten FROM "user" u WHERE u.id = ANY(CAST(:ids AS integer[]))'.replace(
-        "{ten}", SQL_TEN_NGUOI_DUNG
+        "{ten}", SQL_USER_NAMES
     )
 )
 
@@ -128,7 +128,7 @@ class CouncilDocumentRepository:
         self.db = db
 
     # ---------------------------------------------------------------- khoá dựng
-    async def thu_khoa_dung(self) -> bool:
+    async def try_build_lock(self) -> bool:
         """``pg_try_advisory_xact_lock`` trên GIAO DỊCH của phiên này: True = đã giữ khoá
         (tự nhả khi giao dịch commit / rollback — không rò khoá khi request lỗi), False =
         một giao dịch khác (bất kỳ tiến trình nào dùng cùng CSDL) đang giữ."""
@@ -136,31 +136,31 @@ class CouncilDocumentRepository:
             (
                 await self.db.execute(
                     text("SELECT pg_try_advisory_xact_lock(hashtext(:ten), 0)"),
-                    {"ten": KHOA_DUNG_BO},
+                    {"ten": BUILD_LOCK_KEY},
                 )
             ).scalar_one()
         )
 
     # ---------------------------------------------------------------- kho mẫu
-    async def mau_cung_ngay(
-        self, loai: str, hieu_luc_tu: date
+    async def template_same_date(
+        self, kind: str, effective_from: date
     ) -> Optional[CouncilDocumentTemplate]:
         """Mẫu đã có cùng loại + cùng ngày hiệu lực (UNIQUE) — không nạp bytes."""
         return (
             await self.db.execute(
                 select(CouncilDocumentTemplate).where(
-                    CouncilDocumentTemplate.loai == loai,
-                    CouncilDocumentTemplate.hieu_luc_tu == hieu_luc_tu,
+                    CouncilDocumentTemplate.loai == kind,
+                    CouncilDocumentTemplate.hieu_luc_tu == effective_from,
                 )
             )
         ).scalar_one_or_none()
 
-    async def them_mau(self, mau: CouncilDocumentTemplate) -> CouncilDocumentTemplate:
-        self.db.add(mau)
+    async def add_template(self, template: CouncilDocumentTemplate) -> CouncilDocumentTemplate:
+        self.db.add(template)
         await self.db.flush()
-        return mau
+        return template
 
-    async def danh_sach_mau(self) -> List[CouncilDocumentTemplate]:
+    async def list_templates(self) -> List[CouncilDocumentTemplate]:
         """Mọi mẫu — KHÔNG nạp bytes (cột deferred). Theo loại, ngày hiệu lực mới trước."""
         return list(
             (
@@ -176,8 +176,8 @@ class CouncilDocumentRepository:
             .all()
         )
 
-    async def mau_hieu_luc(
-        self, loai: str, ngay_ky: date
+    async def effective_template(
+        self, kind: str, signing_date: date
     ) -> Optional[CouncilDocumentTemplate]:
         """Mẫu ``loai`` có ``hieu_luc_tu`` LỚN NHẤT ≤ ``ngay_ky`` (J1 dòng 7), NẠP bytes.
         UNIQUE (loai, hieu_luc_tu) ⇒ kết quả xác định."""
@@ -186,8 +186,8 @@ class CouncilDocumentRepository:
                 select(CouncilDocumentTemplate)
                 .options(undefer(CouncilDocumentTemplate.noi_dung))
                 .where(
-                    CouncilDocumentTemplate.loai == loai,
-                    CouncilDocumentTemplate.hieu_luc_tu <= ngay_ky,
+                    CouncilDocumentTemplate.loai == kind,
+                    CouncilDocumentTemplate.hieu_luc_tu <= signing_date,
                 )
                 .order_by(CouncilDocumentTemplate.hieu_luc_tu.desc())
                 .limit(1)
@@ -195,19 +195,19 @@ class CouncilDocumentRepository:
         ).scalar_one_or_none()
 
     # ---------------------------------------------------------------- bộ văn bản
-    async def them_bo(
-        self, bo: CouncilDocumentSet, tep: Sequence[CouncilDocumentSetFile]
+    async def add_set(
+        self, doc_set: CouncilDocumentSet, file: Sequence[CouncilDocumentSetFile]
     ) -> CouncilDocumentSet:
         """Ghi một bộ + mọi tệp của nó (flush, không commit)."""
-        self.db.add(bo)
+        self.db.add(doc_set)
         await self.db.flush()
-        for t in tep:
-            t.set_id = bo.id
+        for t in file:
+            t.set_id = doc_set.id
             self.db.add(t)
         await self.db.flush()
-        return bo
+        return doc_set
 
-    async def bo_theo_id(self, set_id: int) -> Optional[CouncilDocumentSet]:
+    async def set_by_id(self, set_id: int) -> Optional[CouncilDocumentSet]:
         """Một bộ — KHÔNG nạp hai cột dữ liệu cá nhân (deferred)."""
         return (
             await self.db.execute(
@@ -215,7 +215,7 @@ class CouncilDocumentRepository:
             )
         ).scalar_one_or_none()
 
-    async def danh_sach_bo(
+    async def list_sets(
         self, *, chi_don_vi: Optional[int], tat_ca: bool, limit: int, offset: int
     ) -> List[CouncilDocumentSet]:
         """Bộ mới trước. ``tat_ca`` ⇒ mọi bộ; không thì CHỈ bộ có ``unit_id == chi_don_vi``
@@ -230,54 +230,54 @@ class CouncilDocumentRepository:
         )
         return list((await self.db.execute(q)).scalars().all())
 
-    async def danh_sach_bo_mo_rong(
+    async def list_sets_extended(
         self,
         *,
         tat_ca: bool,
         chi_don_vi: Optional[int],
         set_id: Optional[int] = None,
         nam_hoc: Optional[int] = None,
-        nguoi_tao_id: Optional[int] = None,
-        so_quyet_dinh: Optional[str] = None,
-        tinh_trang: Optional[str] = None,
+        creator_id: Optional[int] = None,
+        decision_number: Optional[str] = None,
+        state: Optional[str] = None,
         limit: int = 50,
         offset: int = 0,
     ) -> List[Dict[str, Any]]:
-        """:data:`SQL_BO_MO_RONG` — MỘT câu; mỗi dòng là dict cột. Người gọi (service) chặn tổ hợp phạm vi lạ."""
+        """:data:`SQL_SET_EXTENDED` — MỘT câu; mỗi dòng là dict cột. Người gọi (service) chặn tổ hợp phạm vi lạ."""
         rows = await self.db.execute(
-            SQL_BO_MO_RONG,
+            SQL_SET_EXTENDED,
             {
                 "tat_ca": tat_ca,
                 "don_vi": chi_don_vi,
                 "set_id": set_id,
                 "nam": None if nam_hoc is None else str(nam_hoc),
-                "nguoi": nguoi_tao_id,
-                "so": so_quyet_dinh,
-                "tt": tinh_trang,
+                "nguoi": creator_id,
+                "so": decision_number,
+                "tt": state,
                 "lim": limit,
                 "off": offset,
             },
         )
         return [dict(r._mapping) for r in rows.all()]
 
-    async def nguoi_tao_bo(
+    async def set_creators(
         self, *, tat_ca: bool, chi_don_vi: Optional[int]
     ) -> List[Dict[str, Any]]:
         rows = await self.db.execute(
-            SQL_NGUOI_TAO_BO, {"tat_ca": tat_ca, "don_vi": chi_don_vi}
+            SQL_SET_CREATORS, {"tat_ca": tat_ca, "don_vi": chi_don_vi}
         )
         return [dict(r._mapping) for r in rows.all()]
 
-    async def ten_nguoi_dung(self, ids: Sequence[int]) -> Dict[int, str]:
+    async def user_names(self, ids: Sequence[int]) -> Dict[int, str]:
         ds = sorted({int(i) for i in ids if i is not None})
         if not ds:
             return {}
         return {
             r[0]: r[1]
-            for r in (await self.db.execute(SQL_TEN_THEO_ID, {"ids": ds})).all()
+            for r in (await self.db.execute(SQL_NAME_BY_ID, {"ids": ds})).all()
         }
 
-    async def tep_cua_bo_kem_noi_dung(self, set_id: int) -> List[CouncilDocumentSetFile]:
+    async def set_files_with_content(self, set_id: int) -> List[CouncilDocumentSetFile]:
         """MỌI tệp của một bộ theo ``thu_tu``, NẠP bytes — chỉ cho "tải cả bộ" (đọc bytes đã lưu, không dựng lại)."""
         return list(
             (
@@ -306,7 +306,7 @@ class CouncilDocumentRepository:
             .all()
         )
 
-    async def ma_ho_so_dau_vao(self, set_id: int) -> Optional[List[str]]:
+    async def input_profile_codes(self, set_id: int) -> Optional[List[str]]:
         """Danh sách mã hồ sơ đầu vào ĐÚNG THỨ TỰ của một bộ (cột PII deferred) — chỉ route
         admin dùng; ``None`` khi không có bộ."""
         return (
@@ -318,12 +318,12 @@ class CouncilDocumentRepository:
         ).scalar_one_or_none()
 
     # ---------------------------------------------------------------- vết xoá
-    async def them_vet_xoa(
-        self, vet: CouncilDocumentSetDeletion
+    async def add_deletion_trace(
+        self, trace: CouncilDocumentSetDeletion
     ) -> CouncilDocumentSetDeletion:
-        self.db.add(vet)
+        self.db.add(trace)
         await self.db.flush()
-        return vet
+        return trace
 
     async def xoa_bo(self, set_id: int) -> int:
         """Xoá MỘT bộ (tệp theo ``ON DELETE CASCADE`` của CSDL); trả số bộ đã xoá. Flush,
@@ -333,7 +333,7 @@ class CouncilDocumentRepository:
         )
         return kq.rowcount
 
-    async def danh_sach_vet_xoa(
+    async def list_deletion_traces(
         self, *, limit: int, offset: int
     ) -> List[CouncilDocumentSetDeletion]:
         return list(
@@ -353,14 +353,14 @@ class CouncilDocumentRepository:
         )
 
     # ---------------------------------------------------------------- nhật ký tải
-    async def them_nhat_ky_tai(
-        self, dong: CouncilDocumentDownloadLog
+    async def add_download_log(
+        self, row: CouncilDocumentDownloadLog
     ) -> CouncilDocumentDownloadLog:
-        self.db.add(dong)
+        self.db.add(row)
         await self.db.flush()
-        return dong
+        return row
 
-    async def danh_sach_nhat_ky_tai(
+    async def list_download_log(
         self, *, set_id: Optional[int], limit: int, offset: int
     ) -> List[CouncilDocumentDownloadLog]:
         q = select(CouncilDocumentDownloadLog)
@@ -376,8 +376,8 @@ class CouncilDocumentRepository:
         )
         return list((await self.db.execute(q)).scalars().all())
 
-    async def tep_cua_bo(
-        self, set_id: int, thu_tu: int
+    async def set_file(
+        self, set_id: int, order_no: int
     ) -> Optional[CouncilDocumentSetFile]:
         """Một tệp đã lưu, NẠP bytes — tải lại = đọc bytes đã lưu, không dựng lại."""
         return (
@@ -386,7 +386,7 @@ class CouncilDocumentRepository:
                 .options(undefer(CouncilDocumentSetFile.noi_dung))
                 .where(
                     CouncilDocumentSetFile.set_id == set_id,
-                    CouncilDocumentSetFile.thu_tu == thu_tu,
+                    CouncilDocumentSetFile.thu_tu == order_no,
                 )
             )
         ).scalar_one_or_none()

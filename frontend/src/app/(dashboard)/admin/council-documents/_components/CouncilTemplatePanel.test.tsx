@@ -16,7 +16,7 @@ import { dap, luatTaiMau } from "@/test/mocks/council-luat-may-chu"
 import { COUNCIL_DOCUMENTS_PREFIX as P } from "@/lib/api/council-documents"
 
 import { CouncilTemplatePanel } from "./CouncilTemplatePanel"
-import { nhanLoaiMau } from "./hien-thi"
+import { templateKindLabel } from "./display"
 
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
 
@@ -90,7 +90,7 @@ const docx = () => new File(["PK\u0003\u0004 gia"], "mau.docx", { type: "applica
 /** Chọn loại qua Select của Radix (jsdom không có PointerEvent ⇒ mở bằng PHÍM Enter; chọn mục bằng click), điền ngày hiệu lực + tệp (+ ghi chú), bấm Tải mẫu lên. */
 async function tai(loai: "bien_ban" | "quyet_dinh" | "danh_sach", ngayHieuLuc: string, ghiChu?: string) {
   fireEvent.keyDown(await screen.findByTestId("upload-loai"), { key: "Enter" })
-  fireEvent.click(await screen.findByRole("option", { name: nhanLoaiMau(loai) }))
+  fireEvent.click(await screen.findByRole("option", { name: templateKindLabel(loai) }))
   fireEvent.change(screen.getByTestId("upload-hieu-luc"), { target: { value: ngayHieuLuc } })
   fireEvent.change(screen.getByTestId("upload-file"), { target: { files: [docx()] } })
   if (ghiChu !== undefined) fireEvent.change(screen.getByTestId("upload-ghi-chu"), { target: { value: ghiChu } })

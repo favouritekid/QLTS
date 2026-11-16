@@ -41,36 +41,36 @@ MSW = "frontend/src/test/mocks/council-luat-may-chu.ts"
 #: hàm / lớp — băm mã nguồn
 HAM = {
     # mã hồ sơ / tìm / đổi mã (council_candidate_service)
-    "ung_vien.loi_mot_ma": s_ung_vien.loi_mot_ma,
-    "ung_vien.chuan_hoa_ma": s_ung_vien.chuan_hoa_ma,
-    "ung_vien._neu_dong": s_ung_vien._neu_dong,
-    "ung_vien.doc_ho_so_theo_ma": s_ung_vien.doc_ho_so_theo_ma,
-    "ung_vien.kiem_nam_hoc": s_ung_vien.kiem_nam_hoc,
-    "ung_vien.tim_ho_so": s_ung_vien.tim_ho_so,
-    "ung_vien.doi_ma_thanh_id": s_ung_vien.doi_ma_thanh_id,
+    "ung_vien.loi_mot_ma": s_ung_vien.single_code_error,
+    "ung_vien.chuan_hoa_ma": s_ung_vien.normalize_codes,
+    "ung_vien._neu_dong": s_ung_vien._cite_rows,
+    "ung_vien.doc_ho_so_theo_ma": s_ung_vien.read_profiles_by_code,
+    "ung_vien.kiem_nam_hoc": s_ung_vien.check_academic_year,
+    "ung_vien.tim_ho_so": s_ung_vien.search_profiles,
+    "ung_vien.doi_ma_thanh_id": s_ung_vien.codes_to_ids,
     # dựng bộ / kiểm trước / xoá (council_document_set_service)
-    "bo.tao_bo_van_ban": s_bo.tao_bo_van_ban,
-    "bo.tao_bo_van_ban_theo_id": s_bo.tao_bo_van_ban_theo_id,
-    "bo.kiem_danh_sach_id": s_bo.kiem_danh_sach_id,
-    "bo.so_voi_kiem_truoc": s_bo.so_voi_kiem_truoc,
-    "bo.kiem_ly_do": s_bo.kiem_ly_do,
-    "bo.kiem_ly_do_xoa": s_bo.kiem_ly_do_xoa,
-    "bo._dung_va_ghi_bo": s_bo._dung_va_ghi_bo,  # thứ tự ba pha của POST /sets dạng mã (cú pháp → trần → khớp)
+    "bo.tao_bo_van_ban": s_bo.create_document_set,
+    "bo.tao_bo_van_ban_theo_id": s_bo.create_document_set_by_ids,
+    "bo.kiem_danh_sach_id": s_bo.check_id_list,
+    "bo.so_voi_kiem_truoc": s_bo.compare_with_preview,
+    "bo.kiem_ly_do": s_bo.check_reason,
+    "bo.kiem_ly_do_xoa": s_bo.check_delete_reason,
+    "bo._dung_va_ghi_bo": s_bo._build_and_write_set,  # thứ tự ba pha của POST /sets dạng mã (cú pháp → trần → khớp)
     # ghi nhận / huỷ ghi nhận (council_decision_service)
-    "qd.kiem_so_quyet_dinh": s_qd.kiem_so_quyet_dinh,
-    "qd.kiem_ngay": s_qd.kiem_ngay,
-    "qd.kiem_scan": s_qd.kiem_scan,
-    "qd.kiem_xac_nhan_trang_thai": s_qd.kiem_xac_nhan_trang_thai,
-    "qd._so_tham_so": s_qd._so_tham_so,
-    "qd._gia_tri_json": s_qd._gia_tri_json,  # chuẩn hoá giá trị trên giấy trước khi so với bản in
-    "qd._bo_qd_hop_le": s_qd._bo_qd_hop_le,
-    "qd._so_chua_dung": s_qd._so_chua_dung,
-    "qd.ghi_nhan_quyet_dinh": s_qd.ghi_nhan_quyet_dinh,
-    "qd.huy_ghi_nhan": s_qd.huy_ghi_nhan,
-    "luot.kiem_ma_luot": s_luot.kiem_ma_luot,
+    "qd.kiem_so_quyet_dinh": s_qd.check_decision_number,
+    "qd.kiem_ngay": s_qd.check_date,
+    "qd.kiem_scan": s_qd.check_scan,
+    "qd.kiem_xac_nhan_trang_thai": s_qd.check_status_confirmation,
+    "qd._so_tham_so": s_qd._compare_params,
+    "qd._gia_tri_json": s_qd._json_value,  # chuẩn hoá giá trị trên giấy trước khi so với bản in
+    "qd._bo_qd_hop_le": s_qd._set_decisions_valid,
+    "qd._so_chua_dung": s_qd._number_not_in_use,
+    "qd.ghi_nhan_quyet_dinh": s_qd.record_decision,
+    "qd.huy_ghi_nhan": s_qd.revoke_record,
+    "luot.kiem_ma_luot": s_luot.check_submission_code,
     # mẫu / tham số in
-    "mau.tai_mau_len": s_mau.tai_mau_len,
-    "mau.kiem_goi_mau": s_mau.kiem_goi_mau,  # kiểm tệp .docx (MSW chép phần chữ ký ZIP + câu lỗi)
+    "mau.tai_mau_len": s_mau.upload_template,
+    "mau.kiem_goi_mau": s_mau.check_template_package,  # kiểm tệp .docx (MSW chép phần chữ ký ZIP + câu lỗi)
     "dung.DecisionParams": s_dung.DecisionParams,
     # khuôn thân yêu cầu (schema)
     "schema.CouncilSetCreate": s_vb.CouncilSetCreate,
@@ -87,8 +87,8 @@ HAM = {
     "route.resolve_council_profile_codes": r_vb.resolve_council_profile_codes,
     "route.delete_council_document_set": r_vb.delete_council_document_set,
     "route.create_council_decision": r_vb.create_council_decision,
-    "route._json_xac_nhan": r_vb._json_xac_nhan,  # đọc xac_nhan_trang_thai (JSON) của Form ghi nhận
-    "route._doc_scan": r_vb._doc_scan,  # đọc tệp scan của Form ghi nhận
+    "route._json_xac_nhan": r_vb._confirmation_json,  # đọc xac_nhan_trang_thai (JSON) của Form ghi nhận
+    "route._doc_scan": r_vb._read_scan_upload,  # đọc tệp scan của Form ghi nhận
     "route.open_council_decision_submission": r_vb.open_council_decision_submission,
     "route.resolve_council_decision_submission": r_vb.resolve_council_decision_submission,
     "route.cancel_council_decision_record": r_vb.cancel_council_decision_record,
@@ -96,23 +96,23 @@ HAM = {
 
 #: hằng mô-đun — băm repr. Khoá = "<nhãn>.<TÊN>"; (mô-đun, tên) để ca bao phủ tra.
 HANG = {
-    "ung_vien.DAI_MA_TOI_DA": (s_ung_vien, "DAI_MA_TOI_DA"),
-    "ung_vien._RE_DINH_DANG_MA": (s_ung_vien, "_RE_DINH_DANG_MA"),
-    "ung_vien._NEU_TOI_DA": (s_ung_vien, "_NEU_TOI_DA"),
-    "ung_vien._CAU_LOI_MA": (s_ung_vien, "_CAU_LOI_MA"),
-    "ung_vien.TU_KHOA_TOI_DA": (s_ung_vien, "TU_KHOA_TOI_DA"),
-    "ung_vien.LOI_MA_KHONG_PHAI_CHUOI": (s_ung_vien, "LOI_MA_KHONG_PHAI_CHUOI"),
-    "ung_vien.LOI_MA_RONG": (s_ung_vien, "LOI_MA_RONG"),
-    "ung_vien.LOI_MA_KY_TU_LA": (s_ung_vien, "LOI_MA_KY_TU_LA"),
-    "ung_vien.LOI_MA_SAI_DINH_DANG": (s_ung_vien, "LOI_MA_SAI_DINH_DANG"),
-    "ung_vien.LOI_MA_TRUNG": (s_ung_vien, "LOI_MA_TRUNG"),
-    "ung_vien.LOI_MA_KHONG_KHOP": (s_ung_vien, "LOI_MA_KHONG_KHOP"),
-    "ung_vien.LOI_MA_NHIEU_HO_SO": (s_ung_vien, "LOI_MA_NHIEU_HO_SO"),
-    "bo.MA_LOI_DOI_TU_LUC_KIEM": (s_bo, "MA_LOI_DOI_TU_LUC_KIEM"),
-    "bo.CAU_DOI_TU_LUC_KIEM": (s_bo, "CAU_DOI_TU_LUC_KIEM"),
-    "qd.TRUONG_THAM_SO_GIAY": (s_qd, "TRUONG_THAM_SO_GIAY"),
-    "mau.TEN_LOAI": (s_mau, "TEN_LOAI"),
-    "model.LY_DO_XOA_TOI_DA": (m_vb, "LY_DO_XOA_TOI_DA"),
+    "ung_vien.DAI_MA_TOI_DA": (s_ung_vien, "MAX_CODE_LENGTH"),
+    "ung_vien._RE_DINH_DANG_MA": (s_ung_vien, "_RE_CODE_FORMAT"),
+    "ung_vien._NEU_TOI_DA": (s_ung_vien, "_MAX_CITED_ROWS"),
+    "ung_vien._CAU_LOI_MA": (s_ung_vien, "_CODE_ERROR_MESSAGES"),
+    "ung_vien.TU_KHOA_TOI_DA": (s_ung_vien, "MAX_KEYWORD_LENGTH"),
+    "ung_vien.LOI_MA_KHONG_PHAI_CHUOI": (s_ung_vien, "CODE_ERROR_NOT_STRING"),
+    "ung_vien.LOI_MA_RONG": (s_ung_vien, "CODE_ERROR_EMPTY"),
+    "ung_vien.LOI_MA_KY_TU_LA": (s_ung_vien, "CODE_ERROR_ODD_CHARACTER"),
+    "ung_vien.LOI_MA_SAI_DINH_DANG": (s_ung_vien, "CODE_ERROR_BAD_FORMAT"),
+    "ung_vien.LOI_MA_TRUNG": (s_ung_vien, "CODE_ERROR_DUPLICATE"),
+    "ung_vien.LOI_MA_KHONG_KHOP": (s_ung_vien, "CODE_ERROR_NO_MATCH"),
+    "ung_vien.LOI_MA_NHIEU_HO_SO": (s_ung_vien, "CODE_ERROR_MULTIPLE_PROFILES"),
+    "bo.MA_LOI_DOI_TU_LUC_KIEM": (s_bo, "CHANGED_SINCE_CHECK_ERROR_CODE"),
+    "bo.CAU_DOI_TU_LUC_KIEM": (s_bo, "CHANGED_SINCE_CHECK_MESSAGE"),
+    "qd.TRUONG_THAM_SO_GIAY": (s_qd, "PAPER_PARAM_FIELDS"),
+    "mau.TEN_LOAI": (s_mau, "KIND_NAMES"),
+    "model.LY_DO_XOA_TOI_DA": (m_vb, "MAX_DELETE_REASON_LENGTH"),
 }
 
 
@@ -126,40 +126,40 @@ GIA_TRI = {
     "cau_hinh.COUNCIL_SET_MAX_PROFILES": lambda: _mac_dinh("COUNCIL_SET_MAX_PROFILES"),
     "cau_hinh.COUNCIL_DECISION_SCAN_MAX_BYTES": lambda: _mac_dinh("COUNCIL_DECISION_SCAN_MAX_BYTES"),
     # tập trạng thái hợp lệ của bộ lọc tìm hồ sơ (MSW chép thành TRANG_THAI_HO_SO)
-    "ung_vien._trang_thai_hop_le()": lambda: repr(sorted(s_ung_vien._trang_thai_hop_le())),
+    "ung_vien._trang_thai_hop_le()": lambda: repr(sorted(s_ung_vien._valid_statuses())),
 }
 #: hàm mà luật nằm ở GIÁ TRỊ trả về (đã ghim ở GIA_TRI) — ca bao phủ coi như đã ghim
-HAM_GHIM_THEO_GIA_TRI = {s_ung_vien._trang_thai_hop_le}
+HAM_GHIM_THEO_GIA_TRI = {s_ung_vien._valid_statuses}
 
 #: tham chiếu ca bao phủ bỏ qua — MỖI mục một lý do. Thêm mục mới phải ghi lý do, không thêm "cho xanh".
 MIEN = {
     "logger": "ghi log, không phải luật",
     # cần CSDL — MSW cố ý KHÔNG mô phỏng (giới hạn đã ghi trong báo cáo MSW / gói Codex lần 21 mục 5)
-    "_doc_tho": "đọc hồ sơ thô từ CSDL",
-    "_dung_anh_chup": "dựng ảnh chụp hồ sơ từ CSDL",
-    "_chan_tinh_trang": "chặn theo Quyết định đang có của từng em — cần CSDL",
-    "_dem_doi_trang_thai": "đếm đổi trạng thái sau khi dựng — cần CSDL",
-    "_kiem_xac_nhan_dem": "khuôn 409 xác nhận số đếm — số đếm cần CSDL (MSW giữ các ca 409 có sẵn)",
-    "_kiem_mau_theo_ngay_ky": "kho mẫu theo ngày ký — cần CSDL",
-    "_dich_loi_csdl": "dịch lỗi ràng buộc CSDL",
+    "_read_raw": "đọc hồ sơ thô từ CSDL",
+    "_build_snapshot": "dựng ảnh chụp hồ sơ từ CSDL",
+    "_block_by_state": "chặn theo Quyết định đang có của từng em — cần CSDL",
+    "_count_status_changes": "đếm đổi trạng thái sau khi dựng — cần CSDL",
+    "_check_count_confirmation": "khuôn 409 xác nhận số đếm — số đếm cần CSDL (MSW giữ các ca 409 có sẵn)",
+    "_check_templates_by_signing_date": "kho mẫu theo ngày ký — cần CSDL",
+    "_translate_db_error": "dịch lỗi ràng buộc CSDL",
     "_scan": "dựng bản ghi scan để lưu",
-    "_sha_tep_quyet_dinh": "băm tệp Quyết định đã lưu — cần CSDL",
-    "_su_kien": "ghi sự kiện",
-    "canh_bao_da_luu": "đọc cảnh báo vượt chỉ tiêu đã lưu — cần CSDL",
-    "tinh_trang_qd": "tình trạng Quyết định của từng em — cần CSDL",
-    "TRANG_THAI_KHONG_CANH_BAO": "chỉ dùng khi đếm bật lại dòng của văn bản huỷ — cần CSDL",
-    "_dong_bo_tu_kiem": "dựng dòng bộ từ kết quả kiểm trước — cần CSDL",
-    "_ghi_bo_va_dong": "ghi bộ + dòng vào CSDL",
-    "don_vi_cua_bo": "đơn vị của bộ theo hồ sơ — cần CSDL",
-    "ngay_ky_chon_mau": "chọn ngày áp mẫu khi dựng — cần kho mẫu trong CSDL",
-    "chon_mau": "chọn mẫu hiệu lực từ kho — cần CSDL",
-    "PHIEN_BAN_MA": "nhãn phiên bản mã ghi vào thông tin dựng (kỹ thuật)",
-    "_KHUC": "kích thước khúc đọc gói zip của mẫu (kỹ thuật)",
+    "_decision_file_sha": "băm tệp Quyết định đã lưu — cần CSDL",
+    "_event": "ghi sự kiện",
+    "stored_warnings": "đọc cảnh báo vượt chỉ tiêu đã lưu — cần CSDL",
+    "decision_state": "tình trạng Quyết định của từng em — cần CSDL",
+    "NON_WARNING_STATUSES": "chỉ dùng khi đếm bật lại dòng của văn bản huỷ — cần CSDL",
+    "_set_row_from_check": "dựng dòng bộ từ kết quả kiểm trước — cần CSDL",
+    "_write_set_and_rows": "ghi bộ + dòng vào CSDL",
+    "set_unit": "đơn vị của bộ theo hồ sơ — cần CSDL",
+    "signing_date_for_template": "chọn ngày áp mẫu khi dựng — cần kho mẫu trong CSDL",
+    "pick_templates": "chọn mẫu hiệu lực từ kho — cần CSDL",
+    "CODE_VERSIONS": "nhãn phiên bản mã ghi vào thông tin dựng (kỹ thuật)",
+    "_CHUNK": "kích thước khúc đọc gói zip của mẫu (kỹ thuật)",
     # MSW nhận sẵn từ dữ liệu giả, không chép thuật toán
-    "chuan_hoa": "thứ tự chuẩn của kiểm trước — MSW nhận thứ tự chuẩn của ảnh chụp giả",
-    "dau_kiem_truoc": "chữ ký HMAC của kiểm trước — MSW dùng dấu mờ của dữ liệu giả",
+    "normalize_rows": "thứ tự chuẩn của kiểm trước — MSW nhận thứ tự chuẩn của ảnh chụp giả",
+    "preview_signature": "chữ ký HMAC của kiểm trước — MSW dùng dấu mờ của dữ liệu giả",
     # định dạng phản hồi, không phải luật thân yêu cầu
-    "_qd_ghi_out": "dựng DTO phản hồi ghi nhận",
+    "_recorded_decision_out": "dựng DTO phản hồi ghi nhận",
 }
 
 
@@ -180,51 +180,54 @@ def _nguon() -> dict:
 #: Mã băm @ LXT1 ``2c83f91b`` (mã máy chủ Hội đồng không đổi kể từ ``16ce6312``), 13-11-2026. Đợt đầu (lần 21) đã rà cùng bảng hợp
 #: đồng + MSW; đợt F286 (lần 22) thêm trần từ khoá, tập trạng thái, các hằng câu lỗi tách riêng và 5 hàm phụ. Đã biết: GIÁ TRỊ trần
 #: từ khoá và tập trạng thái khớp MSW, nhưng hai CÂU lỗi của ``luatTimHoSo`` trong MSW lệch chữ với máy chủ — giao phiên giao diện sửa.
+#: 15-11-2026 — đợt ĐỔI TÊN định danh mã ứng dụng sang tiếng Anh (refactor thuần, không đổi luật): băm HAM đổi vì tên định danh trong
+#: mã nguồn; băm HANG / GIA_TRI GIỮ NGUYÊN (giá trị hằng không đổi một byte). Cấu trúc AST từng tệp đã so với bản trước đợt đổi tên:
+#: giống hệt, chỉ khác định danh / docstring. MSW không phải sửa vì luật không đổi.
 GHIM = {
     "bo.CAU_DOI_TU_LUC_KIEM": "236fff0ad0195cf0",
     "bo.MA_LOI_DOI_TU_LUC_KIEM": "111c5b69b272ed2c",
-    "bo._dung_va_ghi_bo": "2ab2554c6a39f4d7",
-    "bo.kiem_danh_sach_id": "6cd148f854ea543d",  # review max PR #724: cận trên int4 — MSW chép cùng lượt
-    "bo.kiem_ly_do": "a3a6177fdef55e9f",
-    "bo.kiem_ly_do_xoa": "130741794b06a57c",
-    "bo.so_voi_kiem_truoc": "f1b793b23f4e2d81",
-    "bo.tao_bo_van_ban": "bbd2856bd47942da",
-    "bo.tao_bo_van_ban_theo_id": "db846adea3478a18",
+    "bo._dung_va_ghi_bo": "d9c3088d9a52984b",
+    "bo.kiem_danh_sach_id": "858d08fb92cca75a",  # review max PR #724: cận trên int4 — MSW chép cùng lượt
+    "bo.kiem_ly_do": "fc6a62b3da5c6187",
+    "bo.kiem_ly_do_xoa": "82d807e7fcf70d19",
+    "bo.so_voi_kiem_truoc": "ef089c77a7d56795",
+    "bo.tao_bo_van_ban": "590f755b6bd25e9f",
+    "bo.tao_bo_van_ban_theo_id": "5079197c8fe0bfeb",
     "cau_hinh.COUNCIL_DECISION_SCAN_MAX_BYTES": "cb01a688cfdfae4b",  # review max PR #724 R1: 9 MiB — MSW chép cùng lượt
     "cau_hinh.COUNCIL_SET_MAX_PROFILES": "b09d7b699cf5ffdf",
-    "dung.DecisionParams": "dd43050e54fbfacb",  # review max PR #724 R7: số in sẵn không 0 đầu — MSW chép cùng lượt
-    "luot.kiem_ma_luot": "308137227d71b47c",
+    "dung.DecisionParams": "0491086765b27d85",  # review max PR #724 R7: số in sẵn không 0 đầu — MSW chép cùng lượt
+    "luot.kiem_ma_luot": "069114521e4618bd",
     "mau.TEN_LOAI": "ff27ce4a7da9b1c2",
-    "mau.kiem_goi_mau": "ef70e2137b6bad3c",
-    "mau.tai_mau_len": "c84f9839f764bd0d",
+    "mau.kiem_goi_mau": "6c5b54edfd761661",
+    "mau.tai_mau_len": "8b73bdb7e073f6e7",
     "model.LY_DO_XOA_TOI_DA": "40510175845988f1",
     "qd.TRUONG_THAM_SO_GIAY": "742204c74c586740",
-    "qd._bo_qd_hop_le": "4bb5b9edd04eb5b6",
-    "qd._gia_tri_json": "5f4fbf80c0147a7f",
-    "qd._so_chua_dung": "a3830c24b477d7d0",
-    "qd._so_tham_so": "203bc74e40ef9fc6",
-    "qd.ghi_nhan_quyet_dinh": "9d8f98a70898d180",
-    "qd.huy_ghi_nhan": "ca9f7185490424e1",
-    "qd.kiem_ngay": "d6070d3bc5fc1283",  # review max PR #724 R7: ngày ký không sau hôm nay (giờ VN) — MSW chép cùng lượt
-    "qd.kiem_scan": "ee7b2cb1bf446f2b",
-    "qd.kiem_so_quyet_dinh": "a04ea3f45568c227",  # review max PR #724 R7: cấm 0 đầu — MSW chép cùng lượt
-    "qd.kiem_xac_nhan_trang_thai": "c17156d4d7c11784",
-    "route._doc_scan": "739d65dc50e09692",
-    "route._json_xac_nhan": "e157f11c63380f61",
-    "route.cancel_council_decision_record": "8652360e55420ed5",
-    "route.create_council_decision": "b6a564e00dfe18e9",
-    "route.create_council_document_set": "f14d7ca19acadabe",
-    "route.delete_council_document_set": "43d1c2e1e9a830f9",
-    "route.open_council_decision_submission": "60e4dd887b8d3f92",
-    "route.preview_council_document_set": "8e3538427a620866",
-    "route.resolve_council_decision_submission": "e05bcb1dd1001486",
-    "route.resolve_council_profile_codes": "395206373f6e37e6",
-    "route.search_council_profiles": "48917db783154124",
-    "route.upload_council_template": "c225df49a7b87cb0",
+    "qd._bo_qd_hop_le": "8233ad0644b78c7d",
+    "qd._gia_tri_json": "2e6e814855b117b3",
+    "qd._so_chua_dung": "2b64bc35e8577a50",
+    "qd._so_tham_so": "f86a51932da886f6",
+    "qd.ghi_nhan_quyet_dinh": "1fb9f6b2a9a84c7b",
+    "qd.huy_ghi_nhan": "2e623b1a543aca5f",
+    "qd.kiem_ngay": "532b647b87141549",  # review max PR #724 R7: ngày ký không sau hôm nay (giờ VN) — MSW chép cùng lượt
+    "qd.kiem_scan": "a51c3ba6959c9bf3",
+    "qd.kiem_so_quyet_dinh": "1ebd83ca1d32bce6",  # review max PR #724 R7: cấm 0 đầu — MSW chép cùng lượt
+    "qd.kiem_xac_nhan_trang_thai": "0ae641a688355679",
+    "route._doc_scan": "6a2e887efa3934ea",
+    "route._json_xac_nhan": "9a63504798a29a87",
+    "route.cancel_council_decision_record": "29cf5683136d9159",
+    "route.create_council_decision": "88d1e6b4a73ce80e",
+    "route.create_council_document_set": "17e0f109f8901c23",
+    "route.delete_council_document_set": "dd8794d86af3f7ea",
+    "route.open_council_decision_submission": "1fe073f4ee8bbe9e",
+    "route.preview_council_document_set": "56055899428cbdcb",
+    "route.resolve_council_decision_submission": "da2bdf33f67363bd",
+    "route.resolve_council_profile_codes": "f0c9acb165e23f2f",
+    "route.search_council_profiles": "da54c7d5e1226284",
+    "route.upload_council_template": "c1bd7d3b3b9e08e3",
     "schema.CouncilCodesIn": "b565161d8df6fba8",
     "schema.CouncilDecisionCancelIn": "fa53cae74ae5567c",
     "schema.CouncilProfileSearchIn": "5edfaebdfdaccde2",
-    "schema.CouncilSetCreate": "9505dc4c9b241ab3",
+    "schema.CouncilSetCreate": "1e68f824d4d373ec",
     "schema.CouncilSetDelete": "65ce52ad7d2280a9",
     "schema.CouncilSetPreviewIn": "9db8be743827b424",
     "ung_vien.DAI_MA_TOI_DA": "e29c9c180c6279b0",
@@ -239,14 +242,14 @@ GHIM = {
     "ung_vien._CAU_LOI_MA": "aaf141faadda3181",
     "ung_vien._NEU_TOI_DA": "f5ca38f748a1d6ea",
     "ung_vien._RE_DINH_DANG_MA": "9f7ff644b8abad78",
-    "ung_vien._neu_dong": "593f548219b1223e",
+    "ung_vien._neu_dong": "a8c0f83035fd75c8",
     "ung_vien._trang_thai_hop_le()": "0b3ef3f1a00a8bbd",
-    "ung_vien.chuan_hoa_ma": "209ee954e8e34a23",
-    "ung_vien.doc_ho_so_theo_ma": "1152bb4bef3510b7",
-    "ung_vien.doi_ma_thanh_id": "821fa31cffb1ed75",
-    "ung_vien.kiem_nam_hoc": "6c2368803370c343",
-    "ung_vien.loi_mot_ma": "616dcb2349645900",
-    "ung_vien.tim_ho_so": "cbd9ffc77774d53a",
+    "ung_vien.chuan_hoa_ma": "f20a365687bcbe74",
+    "ung_vien.doc_ho_so_theo_ma": "51123e4e5708dbbb",
+    "ung_vien.doi_ma_thanh_id": "289116fe5a318c05",
+    "ung_vien.kiem_nam_hoc": "c5f3d0d4eac8c0a3",
+    "ung_vien.loi_mot_ma": "519e68a62d3347c2",
+    "ung_vien.tim_ho_so": "3ffb0aa1327e22fc",
 }
 
 

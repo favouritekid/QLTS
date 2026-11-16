@@ -267,7 +267,7 @@ class AccountingOperationLocked(ConflictError):
         self.operation = operation
 
 
-class QuyetDinhKhoaHoSo(ConflictError):
+class ProfileLockedByDecisionError(ConflictError):
     """Hồ sơ có tên trong Quyết định ĐÃ KÝ đang hiệu lực (hoặc mang dấu "Đã trúng tuyển theo QĐ số …"
     nhập từ AppSheet — owner 07-11 E1), hoặc đang chờ Admin quyết sau khi Quyết định bị huỷ — thao tác
     bị chặn (HTTP 409). F230 lượt I; owner C4 (tạm chặn rút), C5 (không về Nháp), C7 (chờ Admin quyết),
@@ -939,7 +939,7 @@ EXCEPTION_HTTP_STATUS_MAP = {
     # 409 Conflict
     DuplicateResourceError: 409,
     ConflictError: 409,
-    QuyetDinhKhoaHoSo: 409,
+    ProfileLockedByDecisionError: 409,
     # 410 Gone
     GoneError: 410,
     RoundClosedError: 410,

@@ -2,7 +2,7 @@
 """Truy cập dữ liệu ghi nhận Quyết định đã ký (F230 — lượt I). Chỉ SQL / ORM; luật nghiệp vụ ở
 ``app/services/council_decision_service.py``. Khoá luôn theo thứ tự: văn bản → mục chờ → bộ → hồ sơ
 (id tăng dần) — đặc tả mục 2.2 / 2.5 / 8.5 (BS §4.6) — rồi dòng chỉ tiêu (chặng 2b,
-``quota_occupancy_service.khoa_chi_tieu_cua_dong_bo``)."""
+``quota_occupancy_service.lock_quota_of_set_rows``)."""
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from sqlalchemy import select, text
@@ -10,7 +10,7 @@ from sqlalchemy.orm import undefer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.council_document import (
-    DIEU_KIEN_DONG_HIEU_LUC,
+    EFFECTIVE_ROW_CONDITION,
     CouncilDecision,
     CouncilDecisionHold,
     CouncilDecisionRow,
@@ -21,24 +21,24 @@ from app.models.council_document import (
 )
 
 
-def ma_loi_csdl(e: BaseException) -> Tuple[Optional[str], Optional[str]]:
+def db_error_codes(e: BaseException) -> Tuple[Optional[str], Optional[str]]:
     """(SQLSTATE, tên ràng buộc) của một lỗi CSDL bọc bởi SQLAlchemy / asyncpg; không có ⇒ None.
     KHÔNG đọc thông điệp (có thể mang tham số câu lệnh)."""
     orig = getattr(e, "orig", None)
-    nguon = [orig, getattr(orig, "__cause__", None), e]
+    source = [orig, getattr(orig, "__cause__", None), e]
     sqlstate = None
-    rang_buoc = None
-    for o in nguon:
-        if o is None:
+    constraint = None
+    for cell in source:
+        if cell is None:
             continue
         for a in ("sqlstate", "pgcode"):
-            v = getattr(o, a, None)
+            v = getattr(cell, a, None)
             if sqlstate is None and isinstance(v, str):
                 sqlstate = v
-        v = getattr(o, "constraint_name", None)
-        if rang_buoc is None and isinstance(v, str):
-            rang_buoc = v
-    return sqlstate, rang_buoc
+        v = getattr(cell, "constraint_name", None)
+        if constraint is None and isinstance(v, str):
+            constraint = v
+    return sqlstate, constraint
 
 
 class CouncilDecisionRepository:
@@ -46,7 +46,7 @@ class CouncilDecisionRepository:
         self.db = db
 
     # ───────────────────────────── khoá ─────────────────────────────
-    async def khoa_bo(self, set_id: int) -> Optional[CouncilDocumentSet]:
+    async def lock_set(self, set_id: int) -> Optional[CouncilDocumentSet]:
         return (
             await self.db.execute(
                 select(CouncilDocumentSet)
@@ -55,7 +55,7 @@ class CouncilDecisionRepository:
             )
         ).scalar_one_or_none()
 
-    async def khoa_qd(self, decision_id: int) -> Optional[CouncilDecision]:
+    async def lock_decision(self, decision_id: int) -> Optional[CouncilDecision]:
         return (
             await self.db.execute(
                 select(CouncilDecision)
@@ -65,7 +65,7 @@ class CouncilDecisionRepository:
             )
         ).scalar_one_or_none()
 
-    async def khoa_ho_so(self, pids: Sequence[int]) -> Dict[int, str]:
+    async def lock_profiles(self, pids: Sequence[int]) -> Dict[int, str]:
         """Khoá ``FOR UPDATE`` các hồ sơ theo id TĂNG DẦN (một câu) ⇒ {id: trạng thái hiện tại}."""
         ids = sorted({int(p) for p in pids})
         if not ids:
@@ -79,7 +79,7 @@ class CouncilDecisionRepository:
         )
         return {row.id: row.status for row in r}
 
-    async def khoa_muc_cho(self, hold_id: int) -> Optional[CouncilDecisionHold]:
+    async def lock_hold(self, hold_id: int) -> Optional[CouncilDecisionHold]:
         return (
             await self.db.execute(
                 select(CouncilDecisionHold)
@@ -90,13 +90,13 @@ class CouncilDecisionRepository:
         ).scalar_one_or_none()
 
     # ───────────────────────────── đọc ─────────────────────────────
-    async def qd_theo_id(self, decision_id: int) -> Optional[CouncilDecision]:
+    async def decision_by_id(self, decision_id: int) -> Optional[CouncilDecision]:
         return await self.db.get(CouncilDecision, decision_id)
 
-    async def muc_cho_theo_id(self, hold_id: int) -> Optional[CouncilDecisionHold]:
+    async def hold_by_id(self, hold_id: int) -> Optional[CouncilDecisionHold]:
         return await self.db.get(CouncilDecisionHold, hold_id)
 
-    async def dong_bo(self, set_id: int) -> List[CouncilDocumentSetRow]:
+    async def set_rows(self, set_id: int) -> List[CouncilDocumentSetRow]:
         return list(
             (
                 await self.db.execute(
@@ -107,7 +107,7 @@ class CouncilDecisionRepository:
             ).scalars()
         )
 
-    async def van_ban_song_cua_bo(self, set_id: int) -> List[CouncilDecision]:
+    async def live_documents_of_set(self, set_id: int) -> List[CouncilDecision]:
         return list(
             (
                 await self.db.execute(
@@ -121,7 +121,7 @@ class CouncilDecisionRepository:
             ).scalars()
         )
 
-    async def van_ban_cua_bo(self, set_id: int) -> List[CouncilDecision]:
+    async def documents_of_set(self, set_id: int) -> List[CouncilDecision]:
         return list(
             (
                 await self.db.execute(
@@ -132,33 +132,33 @@ class CouncilDecisionRepository:
             ).scalars()
         )
 
-    async def so_da_dung(self, so: str, pham_vi: int) -> Optional[int]:
+    async def number_in_use(self, number: str, scope: int) -> Optional[int]:
         return (
             await self.db.execute(
                 select(CouncilDecision.id).where(
-                    CouncilDecision.so_quyet_dinh == so,
-                    CouncilDecision.pham_vi_so == pham_vi,
+                    CouncilDecision.so_quyet_dinh == number,
+                    CouncilDecision.pham_vi_so == scope,
                     CouncilDecision.trang_thai != "huy_ghi_nhan",
                 )
             )
         ).scalar_one_or_none()
 
-    async def chuoi(self, goc_id: int) -> List[CouncilDecision]:
+    async def chain(self, root_id: int) -> List[CouncilDecision]:
         """Gốc + bổ sung / điều chỉnh của gốc + văn bản huỷ trỏ tới bất kỳ văn bản nào trong đó."""
-        thanh_vien = list(
+        members = list(
             (
                 await self.db.execute(
                     select(CouncilDecision)
                     .where(
-                        (CouncilDecision.id == goc_id)
-                        | (CouncilDecision.goc_id == goc_id)
+                        (CouncilDecision.id == root_id)
+                        | (CouncilDecision.goc_id == root_id)
                     )
                     .order_by(CouncilDecision.id)
                 )
             ).scalars()
         )
-        ids = [d.id for d in thanh_vien]
-        huy = list(
+        ids = [d.id for d in members]
+        cancelled = list(
             (
                 await self.db.execute(
                     select(CouncilDecision)
@@ -167,23 +167,23 @@ class CouncilDecisionRepository:
                 )
             ).scalars()
         )
-        return thanh_vien + huy
+        return members + cancelled
 
-    async def dong_hieu_luc_cua_qd(self, decision_id: int) -> List[CouncilDecisionRow]:
+    async def effective_rows_of_decision(self, decision_id: int) -> List[CouncilDecisionRow]:
         return list(
             (
                 await self.db.execute(
                     select(CouncilDecisionRow)
                     .where(
                         CouncilDecisionRow.decision_id == decision_id,
-                        text(DIEU_KIEN_DONG_HIEU_LUC),
+                        text(EFFECTIVE_ROW_CONDITION),
                     )
                     .order_by(CouncilDecisionRow.stt)
                 )
             ).scalars()
         )
 
-    async def dong_cua_qd(self, decision_id: int) -> List[CouncilDecisionRow]:
+    async def rows_of_decision(self, decision_id: int) -> List[CouncilDecisionRow]:
         return list(
             (
                 await self.db.execute(
@@ -194,7 +194,7 @@ class CouncilDecisionRepository:
             ).scalars()
         )
 
-    async def dong_bi_bo_boi(self, decision_id: int) -> List[CouncilDecisionRow]:
+    async def rows_dropped_by(self, decision_id: int) -> List[CouncilDecisionRow]:
         return list(
             (
                 await self.db.execute(
@@ -205,7 +205,7 @@ class CouncilDecisionRepository:
             ).scalars()
         )
 
-    async def dong_theo_id(self, ids: Sequence[int]) -> List[CouncilDecisionRow]:
+    async def rows_by_id(self, ids: Sequence[int]) -> List[CouncilDecisionRow]:
         if not ids:
             return []
         return list(
@@ -218,7 +218,7 @@ class CouncilDecisionRepository:
             ).scalars()
         )
 
-    async def dong_hieu_luc_cua_ho_so(
+    async def effective_rows_of_profiles(
         self, pids: Sequence[int]
     ) -> Dict[int, CouncilDecisionRow]:
         if not pids:
@@ -227,13 +227,13 @@ class CouncilDecisionRepository:
             await self.db.execute(
                 select(CouncilDecisionRow).where(
                     CouncilDecisionRow.profile_id.in_(list(pids)),
-                    text(DIEU_KIEN_DONG_HIEU_LUC),
+                    text(EFFECTIVE_ROW_CONDITION),
                 )
             )
         ).scalars()
         return {d.profile_id: d for d in r}
 
-    async def muc_cho_cua_qd_huy(self, van_ban_huy_id: int) -> List[CouncilDecisionHold]:
+    async def holds_of_cancelled_decision(self, van_ban_huy_id: int) -> List[CouncilDecisionHold]:
         return list(
             (
                 await self.db.execute(
@@ -246,7 +246,7 @@ class CouncilDecisionRepository:
             ).scalars()
         )
 
-    async def muc_cho_dang_mo(self, pids: Sequence[int]) -> Dict[int, CouncilDecisionHold]:
+    async def open_holds(self, pids: Sequence[int]) -> Dict[int, CouncilDecisionHold]:
         if not pids:
             return {}
         r = (
@@ -259,8 +259,8 @@ class CouncilDecisionRepository:
         ).scalars()
         return {h.profile_id: h for h in r}
 
-    async def ho_so_o_bo_khac(
-        self, pids: Sequence[int], tru_set_id: Optional[int] = None
+    async def profiles_in_other_sets(
+        self, pids: Sequence[int], exclude_set_id: Optional[int] = None
     ) -> Dict[int, int]:
         """{id bộ khác: số hồ sơ trong ``pids`` có mặt ở bộ ấy} — chỉ id + số đếm (báo, không chặn)."""
         if not pids:
@@ -269,45 +269,45 @@ class CouncilDecisionRepository:
             select(CouncilDocumentSetRow.set_id, CouncilDocumentSetRow.profile_id)
             .where(CouncilDocumentSetRow.profile_id.in_(list(pids)))
         )
-        if tru_set_id is not None:
-            q = q.where(CouncilDocumentSetRow.set_id != tru_set_id)
+        if exclude_set_id is not None:
+            q = q.where(CouncilDocumentSetRow.set_id != exclude_set_id)
         out: Dict[int, int] = {}
         for sid, _ in (await self.db.execute(q)).all():
             out[sid] = out.get(sid, 0) + 1
         return dict(sorted(out.items()))
 
-    async def scan_cua_qd(
-        self, decision_id: int, *, kem_noi_dung: bool = False
+    async def decision_scan(
+        self, decision_id: int, *, with_content: bool = False
     ) -> Optional[CouncilDecisionScan]:
-        """``noi_dung`` là cột HOÃN (deferred) — chỉ nạp khi ``kem_noi_dung`` (tải bản scan); đọc thuộc
+        """``noi_dung`` là cột HOÃN (deferred) — chỉ nạp khi ``with_content`` (tải bản scan); đọc thuộc
         tính hoãn ngoài ``await`` ⇒ ``MissingGreenlet``."""
         cau = select(CouncilDecisionScan).where(CouncilDecisionScan.decision_id == decision_id)
-        if kem_noi_dung:
+        if with_content:
             cau = cau.options(undefer(CouncilDecisionScan.noi_dung))
         return (await self.db.execute(cau)).scalar_one_or_none()
 
-    async def danh_sach_qd(
+    async def list_decisions(
         self,
         *,
         set_id: Optional[int],
         limit: int,
         offset: int,
-        loai: Optional[str] = None,
-        trang_thai: Optional[str] = None,
+        kind: Optional[str] = None,
+        status: Optional[str] = None,
     ) -> List[CouncilDecision]:
         """Văn bản đã ký, mới trước. Vòng giao diện: lọc ``loai`` / ``trang_thai`` ở máy chủ (giá trị do router
         giới hạn đúng tập CHECK của bảng) — giao diện không lọc lại."""
         q = select(CouncilDecision).order_by(CouncilDecision.id.desc())
         if set_id is not None:
             q = q.where(CouncilDecision.set_id == set_id)
-        if loai is not None:
-            q = q.where(CouncilDecision.loai == loai)
-        if trang_thai is not None:
-            q = q.where(CouncilDecision.trang_thai == trang_thai)
+        if kind is not None:
+            q = q.where(CouncilDecision.loai == kind)
+        if status is not None:
+            q = q.where(CouncilDecision.trang_thai == status)
         return list((await self.db.execute(q.limit(limit).offset(offset))).scalars())
 
-    async def danh_sach_muc_cho(
-        self, *, trang_thai: Optional[str], limit: int, offset: int
+    async def list_holds(
+        self, *, status: Optional[str], limit: int, offset: int
     ) -> List[Tuple[CouncilDecisionHold, CouncilDecisionRow]]:
         q = (
             select(CouncilDecisionHold, CouncilDecisionRow)
@@ -317,11 +317,11 @@ class CouncilDecisionRepository:
             )
             .order_by(CouncilDecisionHold.id.desc())
         )
-        if trang_thai is not None:
-            q = q.where(CouncilDecisionHold.trang_thai == trang_thai)
+        if status is not None:
+            q = q.where(CouncilDecisionHold.trang_thai == status)
         return [tuple(r) for r in (await self.db.execute(q.limit(limit).offset(offset))).all()]
 
-    async def danh_sach_su_kien(
+    async def list_events(
         self,
         *,
         set_id: Optional[int],
@@ -337,11 +337,11 @@ class CouncilDecisionRepository:
         return list((await self.db.execute(q.limit(limit).offset(offset))).scalars())
 
     # ───────────────────────────── ghi ─────────────────────────────
-    async def them(self, *doi_tuong) -> None:
-        self.db.add_all(list(doi_tuong))
+    async def add_objects(self, *objects) -> None:
+        self.db.add_all(list(objects))
         await self.db.flush()
 
-    async def chen_dong_tu_bo(
+    async def insert_rows_from_set(
         self, decision_id: int, set_id: int, trang_thai_cha: str = "hieu_luc"
     ) -> int:
         """Chép MỌI dòng của bộ ``set_id`` thành dòng của văn bản ``decision_id`` trong MỘT câu

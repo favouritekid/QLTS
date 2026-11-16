@@ -14,42 +14,42 @@
  */
 import { create } from "zustand"
 
-import { THAM_SO_TRONG, type ThamSoNhap } from "@/lib/council-params"
+import { EMPTY_PARAMS, type InputParams } from "@/lib/council-params"
 
 interface CouncilSelectionState {
   /** năm học của lần dựng (bắt buộc trước khi chọn); `null` = chưa chọn */
-  namHoc: number | null
+  academicYear: number | null
   /** id hồ sơ (số nội bộ) theo thứ tự người dùng thêm; KHÔNG trùng. Máy chủ sắp lại thứ tự khi kiểm trước. */
-  idHoSo: number[]
-  thamSo: ThamSoNhap
+  profileId: number[]
+  params: InputParams
 
   /** Đổi năm ⇒ xoá danh sách chọn (giao diện đã hỏi xác nhận trước khi gọi). */
-  datNamHoc: (nam: number | null) => void
+  setAcademicYear: (year: number | null) => void
   /** Thêm id (bỏ trùng, giữ thứ tự thêm). */
-  them: (ids: readonly number[]) => void
-  bo: (id: number) => void
-  boTatCa: () => void
-  datThamSo: (patch: Partial<ThamSoNhap>) => void
+  add: (ids: readonly number[]) => void
+  docSet: (id: number) => void
+  clearAll: () => void
+  setParams: (patch: Partial<InputParams>) => void
   /** Ghi đè cả năm học lẫn danh sách (từ nút ở màn "Hồ sơ tuyển sinh"). Tham số giữ nguyên. */
-  thayThe: (nam: number, ids: readonly number[]) => void
+  replace: (year: number, ids: readonly number[]) => void
   /** Xoá hết (sau khi dựng xong, hoặc rời luồng). */
-  lamSach: () => void
+  reset: () => void
 }
 
-function boTrung(ids: readonly number[]): number[] {
+function dedupe(ids: readonly number[]): number[] {
   return Array.from(new Set(ids))
 }
 
 export const useCouncilSelectionStore = create<CouncilSelectionState>()((set) => ({
-  namHoc: null,
-  idHoSo: [],
-  thamSo: THAM_SO_TRONG,
+  academicYear: null,
+  profileId: [],
+  params: EMPTY_PARAMS,
 
-  datNamHoc: (nam) => set({ namHoc: nam, idHoSo: [] }),
-  them: (ids) => set((s) => ({ idHoSo: boTrung([...s.idHoSo, ...ids]) })),
-  bo: (id) => set((s) => ({ idHoSo: s.idHoSo.filter((x) => x !== id) })),
-  boTatCa: () => set({ idHoSo: [] }),
-  datThamSo: (patch) => set((s) => ({ thamSo: { ...s.thamSo, ...patch } })),
-  thayThe: (nam, ids) => set({ namHoc: nam, idHoSo: boTrung(ids) }),
-  lamSach: () => set({ namHoc: null, idHoSo: [], thamSo: THAM_SO_TRONG }),
+  setAcademicYear: (year) => set({ academicYear: year, profileId: [] }),
+  add: (ids) => set((s) => ({ profileId: dedupe([...s.profileId, ...ids]) })),
+  docSet: (id) => set((s) => ({ profileId: s.profileId.filter((x) => x !== id) })),
+  clearAll: () => set({ profileId: [] }),
+  setParams: (patch) => set((s) => ({ params: { ...s.params, ...patch } })),
+  replace: (year, ids) => set({ academicYear: year, profileId: dedupe(ids) }),
+  reset: () => set({ academicYear: null, profileId: [], params: EMPTY_PARAMS }),
 }))

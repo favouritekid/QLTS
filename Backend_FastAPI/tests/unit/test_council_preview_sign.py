@@ -5,7 +5,7 @@ Mỗi ca một bất biến (CLAUDE.md §3):
 
 * dấu NHẠY với phần dữ liệu in (đổi họ, giữ tên — ca F266), với dữ liệu kiểm ngoài ảnh in (khoá đếm
   ``nv_in_offering_id``), với kết quả cổng (mức / mã lý do), với năm học và với khoá HMAC;
-* dấu KHÔNG nhạy với vị trí đầu vào (``DuLieuKiem.stt`` + thứ tự dòng đưa vào) — ca ``pbk_dau_bat_bien_thu_tu_vao``
+* dấu KHÔNG nhạy với vị trí đầu vào (``CheckData.stt`` + thứ tự dòng đưa vào) — ca ``pbk_dau_bat_bien_thu_tu_vao``
   ở mức hàm;
 * thứ tự chuẩn: nhóm (ngành, trình độ) → điểm giảm → tên → id hồ sơ (phá hoà, ca ``pbk_hoa_diem_ten``);
 * MỘT nguồn khoá sắp: bộ dựng gọi đúng hai hàm khoá chung, không còn biểu thức sắp riêng.
@@ -17,19 +17,19 @@ from datetime import datetime, timezone
 
 import pytest
 
-from app.repositories.council_candidate_repository import ThongTinGiaoDich
-from app.services import council_document_render_service as bo_dung
+from app.repositories.council_candidate_repository import TransactionInfo
+from app.services import council_document_render_service as render_service
 from app.services import council_document_set_service as bo_vb
 from app.services import council_set_gate_service as cong
-from app.services.council_candidate_service import AnhChupHoSo
+from app.services.council_candidate_service import ProfileSnapshot
 
 pytestmark = pytest.mark.unit
 
-GD = ThongTinGiaoDich("repeatable read", "on", datetime(2026, 11, 11, tzinfo=timezone.utc), 1)
+GD = TransactionInfo("repeatable read", "on", datetime(2026, 11, 11, tzinfo=timezone.utc), 1)
 
 
-def _hang(**kw) -> bo_dung.CandidateRowV1:
-    gia_tri = {t: "" for t in bo_dung.CANDIDATE_FIELDS}
+def _hang(**kw) -> render_service.CandidateRowV1:
+    gia_tri = {t: "" for t in render_service.CANDIDATE_FIELDS}
     gia_tri.update(
         ma_ho_so="000000000001",
         ho="Họ Giả",
@@ -41,10 +41,10 @@ def _hang(**kw) -> bo_dung.CandidateRowV1:
         diem_ut="0",
     )
     gia_tri.update(kw)
-    return bo_dung.CandidateRowV1(**gia_tri)
+    return render_service.CandidateRowV1(**gia_tri)
 
 
-def _kiem(stt: int, **kw) -> cong.DuLieuKiem:
+def _kiem(stt: int, **kw) -> cong.CheckData:
     gia_tri = dict(
         stt=stt,
         status="approved",
@@ -67,18 +67,18 @@ def _kiem(stt: int, **kw) -> cong.DuLieuKiem:
         diem_chi_hs=0,
         kv_ly_do=None,
         kv_muc="0.25",
-        luat_kv=cong.LUAT_KV_CONG,
-        luat_ut=cong.LUAT_KV_CONG,
+        luat_kv=cong.AREA_RULE_ADD,
+        luat_ut=cong.AREA_RULE_ADD,
         nv_in_ai_id=11,
         nv_in_offering_id=12,
     )
     gia_tri.update(kw)
-    return cong.DuLieuKiem(**gia_tri)
+    return cong.CheckData(**gia_tri)
 
 
 def _anh(dong):
     """``dong`` = [(pid, hàng, dữ liệu kiểm KHÔNG có stt)] theo thứ tự ĐẦU VÀO — ``stt`` = vị trí (1…)."""
-    return AnhChupHoSo(
+    return ProfileSnapshot(
         rows=tuple(h for _, h, _ in dong),
         don_vi=tuple(1 for _ in dong),
         giao_dich=GD,
@@ -88,7 +88,7 @@ def _anh(dong):
 
 
 def _dau(anh, nam=2026):
-    return bo_vb.dau_kiem_truoc(bo_vb.chuan_hoa(anh, cong.danh_gia(anh.kiem)), nam)
+    return bo_vb.preview_signature(bo_vb.normalize_rows(anh, cong.evaluate(anh.kiem)), nam)
 
 
 A = (101, _hang(ten="An", tong_diem="18.00"), _kiem(0))
@@ -105,7 +105,7 @@ def test_dau_bat_bien_thu_tu_dau_vao():
     ds = [_anh(x) for x in ([A, B, C], [C, B, A], [B, C, A])]
     assert len({_dau(a) for a in ds}) == 1
     thu_tu = {
-        tuple(d.pid for d in bo_vb.chuan_hoa(a, cong.danh_gia(a.kiem))) for a in ds
+        tuple(d.pid for d in bo_vb.normalize_rows(a, cong.evaluate(a.kiem))) for a in ds
     }
     # Nhóm "Công nghệ ô tô" < "Điện" (chữ); trong nhóm điểm giảm: Bình 20 trước An 18.
     assert thu_tu == {(102, 101, 103)}
@@ -121,7 +121,7 @@ def test_dau_nhay_voi_khoa_dem_ngoai_anh_in():
     # pbk_doi_khoa_dem (mức hàm): đổi khoá đếm của NV in (không có trong ảnh in, không đổi cổng) ⇒ dấu đổi.
     doi = (A[0], A[1], dataclasses.replace(A[2], nv_in_offering_id=99))
     a1, a2 = _anh([A, B]), _anh([doi, B])
-    assert cong.danh_gia(a1.kiem).chan == cong.danh_gia(a2.kiem).chan == ()
+    assert cong.evaluate(a1.kiem).chan == cong.evaluate(a2.kiem).chan == ()
     assert _dau(a1) != _dau(a2)
 
 
@@ -131,8 +131,8 @@ def test_dau_nhay_voi_muc_cong():
     cung_muc = (A[0], A[1], dataclasses.replace(A[2], status="admitted"))
     assert _dau(_anh([A, B])) != _dau(_anh([cung_muc, B]))
     canh_bao = (A[0], A[1], dataclasses.replace(A[2], status="submitted"))
-    dc = bo_vb.chuan_hoa(_anh([canh_bao, B]), cong.danh_gia(_anh([canh_bao, B]).kiem))
-    assert {d.pid: d.muc for d in dc}[101] == bo_vb.MUC_CAN_XAC_NHAN
+    dc = bo_vb.normalize_rows(_anh([canh_bao, B]), cong.evaluate(_anh([canh_bao, B]).kiem))
+    assert {d.pid: d.muc for d in dc}[101] == bo_vb.ITEM_NEEDS_CONFIRMATION
 
 
 def test_dau_nhay_voi_nam_va_khoa_hmac(monkeypatch):
@@ -149,21 +149,21 @@ def test_thu_tu_pha_hoa_bang_id_ho_so():
     y = (204, _hang(ma_ho_so="000000000004", ten="An", tong_diem="18.00"), _kiem(0))
     for dong in ([x, y], [y, x]):
         a = _anh(dong)
-        assert [d.pid for d in bo_vb.chuan_hoa(a, cong.danh_gia(a.kiem))] == [204, 205]
+        assert [d.pid for d in bo_vb.normalize_rows(a, cong.evaluate(a.kiem))] == [204, 205]
 
 
 def test_dong_bi_chan_van_sap_duoc_va_mang_ma_ly_do():
     chan = (106, _hang(ma_ho_so="000000000006", ten="Dũng"), _kiem(0, hp_co=False))
     a = _anh([A, chan])
-    dc = {d.pid: d for d in bo_vb.chuan_hoa(a, cong.danh_gia(a.kiem))}
-    assert dc[106].muc == bo_vb.MUC_BI_CHAN and "thieu_hoc_phi_hk1" in dc[106].ma_ly_do
-    assert dc[101].muc == bo_vb.MUC_DUOC_DUNG and dc[101].ma_ly_do == ()
+    dc = {d.pid: d for d in bo_vb.normalize_rows(a, cong.evaluate(a.kiem))}
+    assert dc[106].muc == bo_vb.ITEM_BLOCKED and "thieu_hoc_phi_hk1" in dc[106].ma_ly_do
+    assert dc[101].muc == bo_vb.ITEM_BUILDABLE and dc[101].ma_ly_do == ()
 
 
 def test_bo_dung_dung_mot_nguon_khoa_sap():
     # MỘT nguồn (CLAUDE.md §7): mọi chỗ sắp trong nhóm của bộ dựng gọi hàm khoá chung; không còn biểu thức
     # sắp "-…tong_xt" viết tay; khoá nhóm của hồ sơ đã chuẩn bị đi qua hàm chung.
-    nguon = inspect.getsource(bo_dung)
-    assert nguon.count("khoa_trong_nhom_quyet_dinh(h.diem.tong_xt, h.dto.ten)") == 2
+    nguon = inspect.getsource(render_service)
+    assert nguon.count("decision_in_group_key(h.diem.tong_xt, h.dto.ten)") == 2
     assert not re.search(r"key=lambda h: \(-h\.diem\.tong_xt", nguon)
-    assert "return khoa_nhom_quyet_dinh(self.dto)" in inspect.getsource(bo_dung._HoSo)
+    assert "return decision_group_key(self.dto)" in inspect.getsource(render_service._Profile)

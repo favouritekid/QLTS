@@ -11,17 +11,17 @@ import type { CouncilSetPreview } from "@/lib/zod/council-documents"
 
 import { CouncilErrorAlert } from "./CouncilErrorAlert"
 import { CouncilPreviewSummary } from "./CouncilPreviewSummary"
-import { nganhTrinhDo, nhanMucKiem, nhanTrangThai, thoiDiem } from "./hien-thi"
+import { majorWithLevel, checkItemLabel, statusLabel, formatTime } from "./display"
 
 interface Props {
-  xemTruoc: CouncilSetPreview | undefined
-  dangKiem: boolean
-  loi?: unknown
+  preview: CouncilSetPreview | undefined
+  checking: boolean
+  error?: unknown
   /** id hồ sơ ĐÃ gửi kiểm, đúng thứ tự gửi — để đổi VỊ TRÍ `khong_tim_thay` (đếm từ 1) thành id */
-  idDaGui: readonly number[]
-  onKiemLai: () => void
-  onQuayLai: () => void
-  onTiep: () => void
+  submittedIds: readonly number[]
+  onRecheck: () => void
+  onBack: () => void
+  onNext: () => void
 }
 
 /**
@@ -29,28 +29,28 @@ interface Props {
  * máy chủ sắp, đổi chỗ ở đây không đổi được). Lý do chặn / cần xác nhận hiện NGUYÊN VĂN câu của cổng. "Chốt" bị khoá
  * khi còn dòng bị chặn hoặc kết quả kiểm cũ hơn lần đổi danh sách cuối.
  */
-export function CouncilCheckStep({ xemTruoc, dangKiem, loi, idDaGui, onKiemLai, onQuayLai, onTiep }: Props) {
-  const bo = useCouncilSelectionStore((s) => s.bo)
-  const soDangChon = useCouncilSelectionStore((s) => s.idHoSo.length)
-  const [daMo, setDaMo] = useState<ReadonlySet<number>>(new Set())
+export function CouncilCheckStep({ preview, checking, error, submittedIds, onRecheck, onBack, onNext }: Props) {
+  const docSet = useCouncilSelectionStore((s) => s.docSet)
+  const selectedCount = useCouncilSelectionStore((s) => s.profileId.length)
+  const [opened, setOpened] = useState<ReadonlySet<number>>(new Set())
 
-  const khongTimThay = useMemo(
+  const notFound = useMemo(
     () =>
-      (xemTruoc?.khong_tim_thay ?? [])
-        .map((viTri) => idDaGui[viTri - 1])
+      (preview?.khong_tim_thay ?? [])
+        .map((position) => submittedIds[position - 1])
         .filter((id): id is number => typeof id === "number"),
-    [xemTruoc, idDaGui],
+    [preview, submittedIds],
   )
 
-  const t = xemTruoc?.tom_tat
-  const lyDoKhoa = dangKiem
+  const t = preview?.tom_tat
+  const lockReason = checking
     ? "Đang kiểm lại — chờ kết quả."
-    : loi
+    : error
       ? "Chưa có kết quả kiểm — bấm “Kiểm tra lại”."
       : !t
         ? "Chưa có kết quả kiểm."
-        : khongTimThay.length > 0
-          ? `${khongTimThay.length} hồ sơ trong danh sách không còn tìm thấy — bỏ khỏi bộ.`
+        : notFound.length > 0
+          ? `${notFound.length} hồ sơ trong danh sách không còn tìm thấy — bỏ khỏi bộ.`
           : t.bi_chan > 0
             ? `Còn ${t.bi_chan} dòng bị chặn: sửa hồ sơ rồi bấm “Kiểm tra lại”, hoặc bỏ khỏi bộ.`
             : t.tong === 0
@@ -64,11 +64,11 @@ export function CouncilCheckStep({ xemTruoc, dangKiem, loi, idDaGui, onKiemLai, 
       </p>
 
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <CouncilPreviewSummary soDangChon={soDangChon} xemTruoc={xemTruoc} dangKiem={dangKiem} loi={loi} />
+        <CouncilPreviewSummary selectedCount={selectedCount} preview={preview} checking={checking} error={error} />
         <div className="flex items-center gap-3 text-sm text-muted-foreground">
-          {xemTruoc ? <span data-testid="kiem-luc">Kiểm lúc {thoiDiem(xemTruoc.kiem_luc)}</span> : null}
-          <Button type="button" variant="outline" size="sm" onClick={onKiemLai} disabled={dangKiem} data-testid="kiem-lai">
-            {dangKiem ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-1 h-4 w-4" />}
+          {preview ? <span data-testid="kiem-luc">Kiểm lúc {formatTime(preview.kiem_luc)}</span> : null}
+          <Button type="button" variant="outline" size="sm" onClick={onRecheck} disabled={checking} data-testid="kiem-lai">
+            {checking ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-1 h-4 w-4" />}
             Kiểm tra lại
           </Button>
         </div>
@@ -89,10 +89,10 @@ export function CouncilCheckStep({ xemTruoc, dangKiem, loi, idDaGui, onKiemLai, 
         </div>
       </details>
 
-      {khongTimThay.length > 0 ? (
+      {notFound.length > 0 ? (
         <div className="rounded border border-destructive/50 p-3 text-sm" role="alert" data-testid="khong-tim-thay">
           <p>
-            {khongTimThay.length} hồ sơ trong danh sách không còn tìm thấy (đã đổi năm học / ngoài phạm vi của bạn / không còn).
+            {notFound.length} hồ sơ trong danh sách không còn tìm thấy (đã đổi năm học / ngoài phạm vi của bạn / không còn).
           </p>
           <Button
             type="button"
@@ -101,7 +101,7 @@ export function CouncilCheckStep({ xemTruoc, dangKiem, loi, idDaGui, onKiemLai, 
             className="mt-2"
             data-testid="bo-khong-tim-thay"
             onClick={() => {
-              for (const id of khongTimThay) bo(id)
+              for (const id of notFound) docSet(id)
             }}
           >
             Bỏ các hồ sơ này khỏi danh sách
@@ -109,8 +109,8 @@ export function CouncilCheckStep({ xemTruoc, dangKiem, loi, idDaGui, onKiemLai, 
         </div>
       ) : null}
 
-      {xemTruoc ? (
-        <div className={cn("overflow-x-auto rounded border", dangKiem && "opacity-60")} aria-busy={dangKiem} data-testid="khung-bang-kiem-tra">
+      {preview ? (
+        <div className={cn("overflow-x-auto rounded border", checking && "opacity-60")} aria-busy={checking} data-testid="khung-bang-kiem-tra">
           <Table data-testid="bang-kiem-tra">
             <TableHeader>
               <TableRow>
@@ -123,7 +123,7 @@ export function CouncilCheckStep({ xemTruoc, dangKiem, loi, idDaGui, onKiemLai, 
               </TableRow>
             </TableHeader>
             <TableBody>
-              {xemTruoc.dong.map((d) => (
+              {preview.dong.map((d) => (
                 <TableRow
                   key={d.profile_id}
                   data-testid={`dong-${d.profile_id}`}
@@ -134,15 +134,15 @@ export function CouncilCheckStep({ xemTruoc, dangKiem, loi, idDaGui, onKiemLai, 
                   </TableCell>
                   <TableCell>
                     <div>{d.ho_ten}</div>
-                    <div className="text-xs text-muted-foreground">{nhanTrangThai(d.trang_thai)}</div>
+                    <div className="text-xs text-muted-foreground">{statusLabel(d.trang_thai)}</div>
                   </TableCell>
                   <TableCell>
-                    <div>{nganhTrinhDo(d.nganh_nhan, d.trinh_do)}</div>
+                    <div>{majorWithLevel(d.nganh_nhan, d.trinh_do)}</div>
                     <div className="text-xs text-muted-foreground">{d.duong_xet_nhan ?? "—"}</div>
                   </TableCell>
                   <TableCell>{d.diem_in ?? "—"}</TableCell>
                   <TableCell data-testid={`muc-${d.profile_id}`}>
-                    <div className="font-medium">{nhanMucKiem(d.muc)}</div>
+                    <div className="font-medium">{checkItemLabel(d.muc)}</div>
                     {d.ly_do.map((l) => (
                       <div key={l.ma} className="text-xs" data-testid={`ly-do-${d.profile_id}`}>
                         {l.cau}
@@ -156,7 +156,7 @@ export function CouncilCheckStep({ xemTruoc, dangKiem, loi, idDaGui, onKiemLai, 
                       rel="noopener noreferrer"
                       className="text-sm text-primary hover:underline"
                       data-testid={`mo-ho-so-${d.profile_id}`}
-                      onClick={() => setDaMo((s) => new Set(s).add(d.profile_id))}
+                      onClick={() => setOpened((s) => new Set(s).add(d.profile_id))}
                     >
                       Mở hồ sơ để sửa ↗
                     </a>
@@ -165,11 +165,11 @@ export function CouncilCheckStep({ xemTruoc, dangKiem, loi, idDaGui, onKiemLai, 
                       variant="ghost"
                       size="sm"
                       data-testid={`bo-khoi-bo-${d.profile_id}`}
-                      onClick={() => bo(d.profile_id)}
+                      onClick={() => docSet(d.profile_id)}
                     >
                       Bỏ khỏi bộ
                     </Button>
-                    {daMo.has(d.profile_id) ? (
+                    {opened.has(d.profile_id) ? (
                       <div className="text-xs text-muted-foreground" data-testid={`da-mo-${d.profile_id}`}>
                         Đã mở hồ sơ ở thẻ mới — sửa xong bấm “Kiểm tra lại”.
                       </div>
@@ -182,19 +182,19 @@ export function CouncilCheckStep({ xemTruoc, dangKiem, loi, idDaGui, onKiemLai, 
         </div>
       ) : null}
 
-      {!xemTruoc && !dangKiem && loi ? <CouncilErrorAlert error={loi} testId="kiem-tra-loi" /> : null}
+      {!preview && !checking && error ? <CouncilErrorAlert error={error} testId="kiem-tra-loi" /> : null}
 
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <Button type="button" variant="outline" onClick={onQuayLai} data-testid="quay-lai-chon">
+        <Button type="button" variant="outline" onClick={onBack} data-testid="quay-lai-chon">
           ← Quay lại chọn thêm
         </Button>
         <div className="flex items-center gap-3">
-          {lyDoKhoa ? (
+          {lockReason ? (
             <span className="text-sm text-muted-foreground" data-testid="ly-do-khoa-chot">
-              {lyDoKhoa}
+              {lockReason}
             </span>
           ) : null}
-          <Button type="button" onClick={onTiep} disabled={lyDoKhoa !== null} data-testid="chot-tiep">
+          <Button type="button" onClick={onNext} disabled={lockReason !== null} data-testid="chot-tiep">
             Chốt danh sách & tiếp →
           </Button>
         </div>

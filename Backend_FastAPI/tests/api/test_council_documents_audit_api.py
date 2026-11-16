@@ -179,7 +179,7 @@ async def test_xoa_bo_loi_o_cau_xoa_thi_khong_xoa_khong_vet(
 
 async def test_xoa_bo_loi_ghi_vet_thi_khong_xoa(client, tk, ba_bo, monkeypatch):
     h = await tk("admin")
-    monkeypatch.setattr(CouncilDocumentRepository, "them_vet_xoa", _loi_csdl_gia_async)
+    monkeypatch.setattr(CouncilDocumentRepository, "add_deletion_trace", _loi_csdl_gia_async)
     r = await _xoa(client, ba_bo["u1"][0], h)
     assert r.status_code == 500, r.text
     assert await _dem() == (0, 3, 3) and await _dem_vet() == (0, 0)
@@ -305,7 +305,7 @@ async def test_ghi_nhat_ky_loi_thi_khong_tra_bytes(client, tk, ba_bo, monkeypatc
     sid, b = ba_bo["u1"]
     h = await tk("admin")
     monkeypatch.setattr(
-        CouncilDocumentRepository, "them_nhat_ky_tai", _loi_csdl_gia_async
+        CouncilDocumentRepository, "add_download_log", _loi_csdl_gia_async
     )
     r = await client.get(P + "/sets/%d/files/1" % sid, headers=h)
     assert r.status_code == 500, r.text

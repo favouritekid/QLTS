@@ -224,11 +224,11 @@ async def test_dung_bo_dau_lech_mot_ky_tu_khong_bi_chan(client, hs, ad):
 
 
 async def test_tinh_trang_qd_cong_dung_bo_bang_ham_hoi_mot_nguon(client, hs, ad):
-    # Đặc tả 8.2: cột của SQL_KIEM_NGUON (cổng dựng bộ, giao dịch chỉ đọc) == hàm hỏi
+    # Đặc tả 8.2: cột của SQL_CHECK_SOURCE (cổng dựng bộ, giao dịch chỉ đọc) == hàm hỏi
     # ``tinh_trang_qd`` trên đủ năm tình trạng (HL, CQ, XL, KO, dấu AppSheet).
     from app.database import AsyncSessionLocal
     from app.services import council_decision_status_service as tq
-    from app.services.council_candidate_service import doc_ho_so_theo_id
+    from app.services.council_candidate_service import read_profiles_by_id
 
     _, x = await _qd_cua_bo(client, ad, hs, SACH[:2], "501")
     assert (await _huy_hieu_luc(client, ad, x["id"], "701")).status_code == 201
@@ -243,8 +243,8 @@ async def test_tinh_trang_qd_cong_dung_bo_bang_ham_hoi_mot_nguon(client, hs, ad)
     nhan = SACH + ["don_vi_khac", "khong_khu_vuc"]
     pids = [hs[n][1] for n in nhan]
     async with AsyncSessionLocal() as db:
-        tt = await tq.tinh_trang_qd(db, pids)
-    anh = await doc_ho_so_theo_id(csdl.engine, pids, academic_year=2026)
+        tt = await tq.decision_state(db, pids)
+    anh = await read_profiles_by_id(csdl.engine, pids, academic_year=2026)
     for k, p in zip(anh.kiem, pids):
         assert (k.qd_hieu_luc_id, k.qd_chuoi_id, k.cho_quyet_id, k.dau_appsheet) == (
             tt[p].qd_hieu_luc_id,
@@ -340,11 +340,11 @@ async def test_ghi_nhan_so_trung_trong_nam_409(client, hs, ad):
 async def test_ghi_nhan_so_qd_0_dau_400_khong_ghi(client, hs, ad):
     # Review max PR #724 (R7, owner 15-11): '07' / '007' từng là số KHÁC '7' trước luật không trùng số trong năm (U1).
     # Nay số có 0 đứng đầu bị từ chối ở service (câu tiếng Việt), không ghi gì.
-    from app.services.council_document_render_service import CAU_SO_QD_0_DAU
+    from app.services.council_document_render_service import QUERY_DECISION_NUMBER_LEADING_ZERO
 
     bo = await _bo_ok(client, ad, hs, SACH)
     r = await _ghi(client, ad, bo["id"], so="07", so_hs=3)
-    assert r.status_code == 400 and r.json()["detail"] == CAU_SO_QD_0_DAU, r.text
+    assert r.status_code == 400 and r.json()["detail"] == QUERY_DECISION_NUMBER_LEADING_ZERO, r.text
     assert await _q1("SELECT count(*) FROM council_decision") == 0
 
 
@@ -790,21 +790,21 @@ async def test_post_sets_khong_nhan_tham_so_noi_cong(client, hs, ad):
         assert r.status_code == 422, (k, r.text)
 
 
-@pytest.mark.parametrize("ham", ["tao_bo_van_ban", "tao_bo_van_ban_theo_id"])
+@pytest.mark.parametrize("ham", ["create_document_set", "create_document_set_by_ids"])
 def test_tao_bo_van_ban_goi_cong_day_du_khong_tham_so_noi(ham):
     # P1 (AST): HAI điểm vào dựng bộ XÉT MỚI (dạng mã; dạng id của vòng giao diện) không nhận tham số nới
-    # cổng; gọi lõi với HẰNG None; lõi gọi ``cong.danh_gia`` (không ``danh_gia_dung_lai``).
+    # cổng; gọi lõi với HẰNG None; lõi gọi ``cong.evaluate`` (không ``evaluate_rebuild``).
     f = getattr(bo_vb, ham)
     tham_so = set(inspect.signature(f).parameters)
-    assert not tham_so & {"chuoi_qd_cho_phep", "dong_sua_tay", "dung_lai_tu_set_id"}
+    assert not tham_so & {"allowed_decision_chain", "manual_edit_rows", "dung_lai_tu_set_id"}
     cay = ast.parse(textwrap.dedent(inspect.getsource(f)))
     goi = [n for n in ast.walk(cay) if isinstance(n, ast.Call)]
-    loi = [g for g in goi if getattr(g.func, "id", None) == "_dung_va_ghi_bo"]
+    loi = [g for g in goi if getattr(g.func, "id", None) == "_build_and_write_set"]
     assert len(loi) == 1
     kw = {k.arg: k.value for k in loi[0].keywords}
-    assert isinstance(kw["chuoi_qd_cho_phep"], ast.Constant) and kw["chuoi_qd_cho_phep"].value is None
-    nguon_loi = inspect.getsource(bo_vb._dung_va_ghi_bo)
-    assert "cong.danh_gia(" in nguon_loi and "danh_gia_dung_lai" not in nguon_loi
+    assert isinstance(kw["allowed_decision_chain"], ast.Constant) and kw["allowed_decision_chain"].value is None
+    nguon_loi = inspect.getsource(bo_vb._build_and_write_set)
+    assert "set_gate.evaluate(" in nguon_loi and "evaluate_rebuild" not in nguon_loi
 
 
 async def test_so_voi_hien_tai_chi_ten_truong_khong_gia_tri(client, hs, ad, tk):

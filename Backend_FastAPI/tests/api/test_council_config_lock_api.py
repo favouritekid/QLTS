@@ -11,7 +11,7 @@
 * xoá / đổi học vụ của đường xét, xoá học vụ, xoá DÂY CHUYỀN từ ngành ⇒ SQLSTATE riêng (đo ở tầng CSDL);
 * hai thứ tự cạnh tranh với ghi nhận và dòng THÊM của điều chỉnh (thao tác giữ khoá học vụ trước ⇒ lệnh sửa cấu hình
   chờ, rồi bị trigger chặn khi thấy dòng vừa commit);
-* vị từ "đã lệch" bằng SQL (migration dùng) = kết luận của ``kiem_khoa_dem_dong_bo`` (Python) — một nguồn nghĩa.
+* vị từ "đã lệch" bằng SQL (migration dùng) = kết luận của ``check_lock_and_count_set_rows`` (Python) — một nguồn nghĩa.
 """
 import asyncio
 
@@ -22,7 +22,7 @@ from sqlalchemy.exc import DBAPIError
 import app.database as csdl
 from app.database import AsyncSessionLocal
 from app.models import council_config_lock_ddl as k2
-from app.repositories.council_decision_repository import ma_loi_csdl
+from app.repositories.council_decision_repository import db_error_codes
 from app.services import council_decision_service as qd_vb
 from app.services import quota_occupancy_service as qos
 from app.utils.exceptions import ConflictError
@@ -52,7 +52,7 @@ async def _sql_loi(sql, **ts):
             await c.execute(text(sql), ts)
         return None
     except DBAPIError as e:
-        return ma_loi_csdl(e)[0]
+        return db_error_codes(e)[0]
 
 
 async def _nam(ai):
@@ -75,7 +75,7 @@ async def test_patch_nam_hoc_dong_da_dung_bi_409(client, hs, ad):  # noqa: F811
     _, o = await _qd_mot_em(client, ad, hs)
     r = await _patch_nam(client, ad, o["ai"], 2031)
     assert r.status_code == 409, r.text
-    assert r.json() == {"detail": k2.THONG_DIEP_CAU_HINH_DA_DUNG, "error_code": "CAU_HINH_DA_DUOC_QUYET_DINH_DUNG"}
+    assert r.json() == {"detail": k2.MESSAGE_CONFIG_IN_USE, "error_code": "CAU_HINH_DA_DUOC_QUYET_DINH_DUNG"}
     assert await _nam(o["ai"]) == 2026
 
 
@@ -100,7 +100,7 @@ async def test_doi_nganh_cua_hoc_vu_da_dung_bi_chan(client, hs, ad):  # noqa: F8
         # dọn dẹp: KHÔNG assert ở đây — khi guard hỏng (đổi ngành lọt), trả Y về chỗ cũ đụng ràng buộc duy nhất
         # (23505) và một assert ở đây sẽ CHE phép kiểm chính bên dưới (kiểm ngược F275 lần 2 vấp đúng chỗ này).
         await _sql_loi("UPDATE offering_academic_info SET academic_year = :n WHERE id = :y", n=nam_y, y=y[1])
-    assert loi == k2.SQLSTATE_CAU_HINH_DA_DUNG, loi
+    assert loi == k2.SQLSTATE_CONFIG_IN_USE, loi
     assert await qd._q1("SELECT offering_id FROM offering_academic_info WHERE id = :a", a=o["ai"]) == o["off"]
     assert await _nam(o["ai"]) == nam
 
@@ -152,18 +152,18 @@ async def test_doi_hoc_vu_cua_duong_xet_bi_chan(client, hs, ad):  # noqa: F811
     _, o = await _qd_mot_em(client, ad, hs)
     khac = await qd._q1("SELECT id FROM offering_academic_info WHERE id <> :a ORDER BY id LIMIT 1", a=o["ai"])
     loi = await _sql_loi("UPDATE admission_path SET academic_info_id = :k WHERE id = :p", k=khac, p=o["path"])
-    assert loi == k2.SQLSTATE_CAU_HINH_DA_DUNG
+    assert loi == k2.SQLSTATE_CONFIG_IN_USE
 
 
 async def test_xoa_duong_xet_bi_chan(client, hs, ad):  # noqa: F811
     _, o = await _qd_mot_em(client, ad, hs)
-    assert await _sql_loi("DELETE FROM admission_path WHERE id = :p", p=o["path"]) == k2.SQLSTATE_CAU_HINH_DA_DUNG
+    assert await _sql_loi("DELETE FROM admission_path WHERE id = :p", p=o["path"]) == k2.SQLSTATE_CONFIG_IN_USE
 
 
 async def test_xoa_hoc_vu_bi_chan(client, hs, ad):  # noqa: F811
     _, o = await _qd_mot_em(client, ad, hs)
     loi = await _sql_loi("DELETE FROM offering_academic_info WHERE id = :a", a=o["ai"])
-    assert loi == k2.SQLSTATE_CAU_HINH_DA_DUNG
+    assert loi == k2.SQLSTATE_CONFIG_IN_USE
 
 
 async def test_xoa_hoc_vu_khi_duong_xet_khong_con_thuoc_no_van_bi_chan(client, hs, ad):  # noqa: F811
@@ -182,7 +182,7 @@ async def test_xoa_hoc_vu_khi_duong_xet_khong_con_thuoc_no_van_bi_chan(client, h
         "WHERE ap.academic_info_id = :x", x=o["ai"]
     ) == 0, "tiền điều kiện: không đường xét được dùng nào còn thuộc học vụ X"
     loi = await _sql_loi("DELETE FROM offering_academic_info WHERE id = :a", a=o["ai"])
-    assert loi == k2.SQLSTATE_CAU_HINH_DA_DUNG, loi
+    assert loi == k2.SQLSTATE_CONFIG_IN_USE, loi
     assert await _nam(o["ai"]) == 2026
 
 
@@ -192,7 +192,7 @@ async def test_xoa_day_chuyen_tu_nganh_bi_chan(client, hs, ad):  # noqa: F811
     # SQLSTATE của trigger, và dòng học vụ phải còn.
     _, o = await _qd_mot_em(client, ad, hs)
     loi = await _sql_loi("DELETE FROM program_offering WHERE id = :o", o=o["off"])
-    assert loi == k2.SQLSTATE_CAU_HINH_DA_DUNG, loi
+    assert loi == k2.SQLSTATE_CONFIG_IN_USE, loi
     assert await _nam(o["ai"]) == 2026
 
 
@@ -232,14 +232,14 @@ async def test_thao_tac_giu_khoa_truoc_thi_sua_cau_hinh_bi_chan(client, hs, ad, 
         a=o["ai"],
     ) == 0
     diem = _Diem()
-    goc = qd_vb.khoa_chi_tieu_cua_dong_bo
+    goc = qd_vb.lock_quota_of_set_rows
 
     async def boc(*a_, **kw):
         kq = await goc(*a_, **kw)
         await diem.cho()  # GIỮ khoá học vụ / đường xét của dòng sắp ghi
         return kq
 
-    monkeypatch.setattr(qd_vb, "khoa_chi_tieu_cua_dong_bo", boc)
+    monkeypatch.setattr(qd_vb, "lock_quota_of_set_rows", boc)
     t_lam = asyncio.create_task(lam())
     await asyncio.wait_for(diem.toi.wait(), 30)
     t_ch = asyncio.create_task(_cau_hinh_chen(o["ai"], 2031))
@@ -248,7 +248,7 @@ async def test_thao_tac_giu_khoa_truoc_thi_sua_cau_hinh_bi_chan(client, hs, ad, 
     r, loi = await asyncio.gather(t_lam, t_ch)
     assert do == "chan", "phép đo không hợp lệ: lệnh sửa cấu hình không chờ khoá của thao tác"
     assert r.status_code == 201, r.text
-    assert loi == k2.SQLSTATE_CAU_HINH_DA_DUNG  # trigger thấy dòng vừa commit
+    assert loi == k2.SQLSTATE_CONFIG_IN_USE  # trigger thấy dòng vừa commit
     assert await _nam(o["ai"]) == 2026
 
 
@@ -279,7 +279,7 @@ async def _tat_trigger(bat):
 
 
 async def _dem_lech_hai_cach():
-    sql = await qd._q1(k2.SQL_DEM_LECH)
+    sql = await qd._q1(k2.SQL_COUNT_MISMATCH)
     async with AsyncSessionLocal() as db:
         dong = [
             (int(r[0]), int(r[1]))
@@ -293,7 +293,7 @@ async def _dem_lech_hai_cach():
             ).all()
         ]
         try:
-            await qos.kiem_khoa_dem_dong_bo(db, dong)
+            await qos.check_lock_and_count_set_rows(db, dong)
             py = 0
         except ConflictError as e:
             py = len(e.public_payload["dong_thieu_khoa_dem"])

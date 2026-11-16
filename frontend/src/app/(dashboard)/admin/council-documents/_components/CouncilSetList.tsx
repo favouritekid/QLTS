@@ -18,19 +18,19 @@ import {
 import { useAcademicYears } from "@/hooks/admissions/useAdmissions"
 import { useCouncilSetCreators, useCouncilSets, useDownloadCouncilSetZip } from "@/hooks/admin/useCouncilDocuments"
 import { useDebouncedValue } from "@/lib/hooks/use-debounced-value"
-import { NHAN_CHUA_XAC_DINH } from "@/lib/council-submission"
+import { UNDETERMINED_LABEL } from "@/lib/council-submission"
 
 import { CouncilErrorAlert } from "./CouncilErrorAlert"
 import {
-  CHU_THICH_CHUA_GHI_NHAN,
+  NOT_RECORDED_NOTE,
   ngay,
-  nguoiHienThi,
-  nhanTinhTrangBo,
-  thoiDiem,
-} from "./hien-thi"
+  userLabel,
+  setStateLabel,
+  formatTime,
+} from "./display"
 
-const CO_TRANG = 50
-const TINH_TRANG = ["chua_ghi_nhan", "con_hieu_luc", "het_hieu_luc", "da_huy_ghi_nhan", "chua_xac_dinh"] as const
+const PAGE_SIZE = 50
+const STATE_OPTIONS = ["chua_ghi_nhan", "con_hieu_luc", "het_hieu_luc", "da_huy_ghi_nhan", "chua_xac_dinh"] as const
 
 interface Props {
   canOpenDetail: boolean
@@ -48,28 +48,28 @@ interface Props {
  */
 export function CouncilSetList({ canOpenDetail, canZip = false, canFilterCreator = false }: Props) {
   const [offset, setOffset] = useState(0)
-  const [soQd, setSoQd] = useState("")
-  const soQdTre = useDebouncedValue(soQd, 400)
-  const [nam, setNam] = useState("")
+  const [decisionNumber, setDecisionNumber] = useState("")
+  const deferredDecisionNumber = useDebouncedValue(decisionNumber, 400)
+  const [year, setYear] = useState("")
   const [tt, setTt] = useState("")
-  const [nguoiTao, setNguoiTao] = useState("")
-  const { data: namCo } = useAcademicYears()
-  const nguoiTaoCo = useCouncilSetCreators(canFilterCreator)
+  const [creator, setCreator] = useState("")
+  const { data: yearOptions } = useAcademicYears()
+  const creatorOptions = useCouncilSetCreators(canFilterCreator)
   const zip = useDownloadCouncilSetZip()
 
   const q = useCouncilSets(
     {
-      limit: CO_TRANG,
+      limit: PAGE_SIZE,
       offset,
-      ...(soQdTre ? { so_quyet_dinh: soQdTre } : {}),
-      ...(nam ? { nam_hoc: Number(nam) } : {}),
+      ...(deferredDecisionNumber ? { so_quyet_dinh: deferredDecisionNumber } : {}),
+      ...(year ? { nam_hoc: Number(year) } : {}),
       ...(tt ? { tinh_trang: tt } : {}),
-      ...(canFilterCreator && nguoiTao ? { nguoi_tao_id: Number(nguoiTao) } : {}),
+      ...(canFilterCreator && creator ? { nguoi_tao_id: Number(creator) } : {}),
     },
     true,
   )
 
-  const dangLoc = soQd !== "" || nam !== "" || tt !== "" || (canFilterCreator && nguoiTao !== "")
+  const filtering = decisionNumber !== "" || year !== "" || tt !== "" || (canFilterCreator && creator !== "")
 
   const loc = (
     <div className={`grid grid-cols-1 gap-3 ${canFilterCreator ? "sm:grid-cols-4" : "sm:grid-cols-3"}`} data-testid="set-list-filters">
@@ -80,9 +80,9 @@ export function CouncilSetList({ canOpenDetail, canZip = false, canFilterCreator
           data-testid="loc-so-qd"
           inputMode="numeric"
           autoComplete="off"
-          value={soQd}
+          value={decisionNumber}
           onChange={(e) => {
-            setSoQd(e.target.value.replace(/[^0-9]/g, "").slice(0, 6))
+            setDecisionNumber(e.target.value.replace(/[^0-9]/g, "").slice(0, 6))
             setOffset(0)
           }}
         />
@@ -93,14 +93,14 @@ export function CouncilSetList({ canOpenDetail, canZip = false, canFilterCreator
           id="ds-nam"
           data-testid="loc-nam-bo"
           className="h-10 w-full rounded-md border border-border bg-card px-2 text-sm md:h-9"
-          value={nam}
+          value={year}
           onChange={(e) => {
-            setNam(e.target.value)
+            setYear(e.target.value)
             setOffset(0)
           }}
         >
           <option value="">Tất cả</option>
-          {(namCo ?? []).map((y) => (
+          {(yearOptions ?? []).map((y) => (
             <option key={y} value={y}>
               {y}
             </option>
@@ -120,9 +120,9 @@ export function CouncilSetList({ canOpenDetail, canZip = false, canFilterCreator
           }}
         >
           <option value="">Tất cả</option>
-          {TINH_TRANG.map((t) => (
+          {STATE_OPTIONS.map((t) => (
             <option key={t} value={t}>
-              {t === "chua_xac_dinh" ? `${nhanTinhTrangBo(t)} (lượt gửi chưa rõ)` : nhanTinhTrangBo(t)}
+              {t === "chua_xac_dinh" ? `${setStateLabel(t)} (lượt gửi chưa rõ)` : setStateLabel(t)}
             </option>
           ))}
         </select>
@@ -134,21 +134,21 @@ export function CouncilSetList({ canOpenDetail, canZip = false, canFilterCreator
             id="ds-nguoi-tao"
             data-testid="loc-nguoi-tao"
             className="h-10 w-full rounded-md border border-border bg-card px-2 text-sm md:h-9"
-            value={nguoiTao}
-            disabled={nguoiTaoCo.isError}
+            value={creator}
+            disabled={creatorOptions.isError}
             onChange={(e) => {
-              setNguoiTao(e.target.value)
+              setCreator(e.target.value)
               setOffset(0)
             }}
           >
             <option value="">Tất cả</option>
-            {(nguoiTaoCo.data ?? []).map((n) => (
+            {(creatorOptions.data ?? []).map((n) => (
               <option key={n.id} value={n.id}>
                 {n.ten}
               </option>
             ))}
           </select>
-          {nguoiTaoCo.isError ? (
+          {creatorOptions.isError ? (
             <p className="text-xs text-muted-foreground" data-testid="loc-nguoi-tao-loi">
               Không tải được danh sách người tạo — bộ lọc này tạm tắt.
             </p>
@@ -183,7 +183,7 @@ export function CouncilSetList({ canOpenDetail, canZip = false, canFilterCreator
       {loc}
       {ds.length === 0 ? (
         <p className="text-muted-foreground" data-testid="set-list-empty">
-          {offset > 0 ? "Hết danh sách." : dangLoc ? "Không có bộ nào khớp bộ lọc." : "Chưa có bộ văn bản nào trong phạm vi của bạn."}
+          {offset > 0 ? "Hết danh sách." : filtering ? "Không có bộ nào khớp bộ lọc." : "Chưa có bộ văn bản nào trong phạm vi của bạn."}
         </p>
       ) : (
         <Table data-testid="set-list">
@@ -201,9 +201,9 @@ export function CouncilSetList({ canOpenDetail, canZip = false, canFilterCreator
           </TableHeader>
           <TableBody>
             {ds.map((b) => {
-              const qd = b.quyet_dinh
-              const khongRo = b.tinh_trang === "chua_xac_dinh" || b.luot_gui_cho !== null
-              const href = `/admin/council-documents/${b.id}${khongRo ? "?buoc=ghi-nhan" : ""}`
+              const decision = b.quyet_dinh
+              const unknown = b.tinh_trang === "chua_xac_dinh" || b.luot_gui_cho !== null
+              const href = `/admin/council-documents/${b.id}${unknown ? "?buoc=ghi-nhan" : ""}`
               return (
                 <TableRow key={b.id} data-testid={`set-row-${b.id}`}>
                   <TableCell>
@@ -214,14 +214,14 @@ export function CouncilSetList({ canOpenDetail, canZip = false, canFilterCreator
                     <div className="text-xs text-muted-foreground">{b.trinh_do}</div>
                   </TableCell>
                   <TableCell data-testid={`qd-${b.id}`}>
-                    {qd ? (
+                    {decision ? (
                       <>
                         <div>
-                          Số {qd.so_quyet_dinh} · {ngay(qd.ngay_ky)}
+                          Số {decision.so_quyet_dinh} · {ngay(decision.ngay_ky)}
                         </div>
-                        {qd.goc ? (
+                        {decision.goc ? (
                           <div className="text-xs text-muted-foreground">
-                            bổ sung cho số {qd.goc.so_quyet_dinh} ({ngay(qd.goc.ngay_ky)})
+                            bổ sung cho số {decision.goc.so_quyet_dinh} ({ngay(decision.goc.ngay_ky)})
                           </div>
                         ) : null}
                       </>
@@ -231,19 +231,19 @@ export function CouncilSetList({ canOpenDetail, canZip = false, canFilterCreator
                   </TableCell>
                   <TableCell className="text-right">{b.so_ho_so}</TableCell>
                   <TableCell data-testid={`tt-${b.id}`}>
-                    {b.tinh_trang === null && !khongRo ? (
+                    {b.tinh_trang === null && !unknown ? (
                       "—"
                     ) : (
                       <>
-                        <div>{khongRo ? NHAN_CHUA_XAC_DINH : nhanTinhTrangBo(b.tinh_trang ?? "")}</div>
-                        {!khongRo && b.tinh_trang === "chua_ghi_nhan" ? (
-                          <div className="text-xs text-muted-foreground">{CHU_THICH_CHUA_GHI_NHAN}</div>
+                        <div>{unknown ? UNDETERMINED_LABEL : setStateLabel(b.tinh_trang ?? "")}</div>
+                        {!unknown && b.tinh_trang === "chua_ghi_nhan" ? (
+                          <div className="text-xs text-muted-foreground">{NOT_RECORDED_NOTE}</div>
                         ) : null}
                       </>
                     )}
                   </TableCell>
-                  <TableCell>{nguoiHienThi(b.nguoi_tao_ten, b.nguoi_tao_id)}</TableCell>
-                  <TableCell>{thoiDiem(b.tao_luc)}</TableCell>
+                  <TableCell>{userLabel(b.nguoi_tao_ten, b.nguoi_tao_id)}</TableCell>
+                  <TableCell>{formatTime(b.tao_luc)}</TableCell>
                   <TableCell className="whitespace-nowrap">
                     {canOpenDetail ? (
                       <Button asChild variant="outline" size="sm">
@@ -282,19 +282,19 @@ export function CouncilSetList({ canOpenDetail, canZip = false, canFilterCreator
           variant="outline"
           size="sm"
           disabled={offset === 0 || q.isFetching}
-          onClick={() => setOffset((o) => Math.max(0, o - CO_TRANG))}
+          onClick={() => setOffset((o) => Math.max(0, o - PAGE_SIZE))}
           data-testid="set-list-prev"
         >
           Trang trước
         </Button>
         <span className="text-sm text-muted-foreground">
-          Trang {Math.floor(offset / CO_TRANG) + 1}
+          Trang {Math.floor(offset / PAGE_SIZE) + 1}
         </span>
         <Button
           variant="outline"
           size="sm"
-          disabled={ds.length < CO_TRANG || q.isFetching}
-          onClick={() => setOffset((o) => o + CO_TRANG)}
+          disabled={ds.length < PAGE_SIZE || q.isFetching}
+          onClick={() => setOffset((o) => o + PAGE_SIZE)}
           data-testid="set-list-next"
         >
           Trang sau

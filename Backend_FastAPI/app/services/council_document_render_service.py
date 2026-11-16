@@ -21,7 +21,7 @@ Ranh giới — đọc trước khi sửa
   ba chỗ owner chốt 03-11 (kế hoạch §1, ``Y-TUONG`` J1 dòng 20) — thống kê trình độ
   của Biên bản, viết hoa đơn vị hành chính ghép trong địa chỉ, cách viết tháng. Điểm
   ưu tiên lấy NGUYÊN từ DTO (``diem_kv``, ``diem_ut``); KHÔNG gọi phân giải ưu tiên v2.
-* **Một nguồn cho điểm in**: :func:`tinh_diem_in` — cả Biên bản (điểm xét trúng
+* **Một nguồn cho điểm in**: :func:`compute_printed_scores` — cả Biên bản (điểm xét trúng
   tuyển), Quyết định (thứ tự người) lẫn Danh sách (cột điểm, thứ tự) đều đi qua nó.
 * **Thứ tự đầu vào có nghĩa.** Mọi phép sắp ở đây là sắp ổn định: hai hồ sơ trùng
   khoá sắp giữ thứ tự đầu vào (bộ xuất cũng vậy). Người gọi truyền danh sách theo
@@ -29,8 +29,8 @@ Ranh giới — đọc trước khi sửa
 * **Không ghi dữ liệu cá nhân vào thông báo lỗi** — chỉ số thứ tự dòng đầu vào (và tên
   trường), không bao giờ có giá trị.
 * **Ký tự ghi được vào Word / Excel** (tập Char của XML 1.0) kiểm MỘT lần ở đầu vào
-  (:func:`_chuan_bi`), trước khi dựng tệp nào. Tham số Quyết định kiểm LẠI ở điểm vào
-  (:func:`kiem_lai_tham_so_quyet_dinh` — ``model_construct`` bỏ qua pydantic).
+  (:func:`_prepare`), trước khi dựng tệp nào. Tham số Quyết định kiểm LẠI ở điểm vào
+  (:func:`recheck_decision_params` — ``model_construct`` bỏ qua pydantic).
 * **Phép kiểm mẫu = MỘT nguồn** (:func:`kiem_mau`): kho mẫu chạy đúng phép kiểm này lúc
   tải lên, bộ dựng chạy lại trước khi dựng. Vùng dữ liệu của mẫu chỉ được có cấu trúc
   CHO PHÉP (F207): dòng tiêu đề + đúng một dòng mẫu (+ dòng tổng của Biên bản); ô / đoạn
@@ -39,13 +39,13 @@ Ranh giới — đọc trước khi sửa
 Luật v1.1 — ba chỗ khác v1 (owner chốt 03-11 lượt 7)
 ====================================================
 * **Thống kê trình độ của Biên bản.** Văn hoá bắt buộc, đếm trước: mỗi em đúng MỘT
-  cột văn hoá (:data:`VAN_HOA_THEO_COT`); tổng ba cột văn hoá = "Cộng", lệch ⇒ DỪNG.
+  cột văn hoá (:data:`CULTURE_BY_COLUMN`); tổng ba cột văn hoá = "Cộng", lệch ⇒ DỪNG.
   Chuyên môn ĐẾM THÊM: ``trung_cap`` ⇒ cột Trung cấp, ``cao_dang`` ⇒ cột Cao đẳng,
   không phân biệt chính quy / liên thông (bộ dựng không nhận loại hình — loại hình
   không ảnh hưởng cách đếm); ``so_cap`` / ``none`` / rỗng ⇒ chỉ đếm văn hoá; cột Đại
   học = 0. Nhãn văn hoá rỗng / lạ hoặc chuyên môn lạ ⇒ DỪNG.
 * **Địa chỉ trên Danh sách**: sau khi viết hoa chữ đầu mỗi từ, đơn vị hành chính ghép
-  nhiều từ trả về đúng chính tả (``Thành phố``, ``Thị trấn``… — :data:`DON_VI_GHEP`),
+  nhiều từ trả về đúng chính tả (``Thành phố``, ``Thị trấn``… — :data:`MERGED_UNITS`),
   như bộ xuất đang dùng.
 * **Tháng**: "tháng 9" mọi chỗ — chỉ tháng 1, 2 thêm số 0 (:func:`_thang`).
 
@@ -88,43 +88,43 @@ from pydantic import field_validator, model_validator
 from app.utils.exceptions import DataValidationError, FileValidationError
 
 # Nhãn luật render — ghi vào metadata của mỗi bộ văn bản.
-LUAT_RENDER = "v1.1"
+RENDER_RULE = "v1.1"
 
 # Trần tổng điểm ưu tiên (khu vực + đối tượng) của luật v1.1 (= v1) — bộ xuất ghim 2.75 theo
 # ``max_total_bonus`` của quy tắc mặc định trên production lúc in. KHÔNG phải cấu
 # hình sống: giai đoạn 2 dùng bộ phân giải ưu tiên v2, không dùng hằng số này.
-TRAN_UU_TIEN_V1 = 2.75
+PRIORITY_CAP_V1 = 2.75
 
 # Trạng thái giấy tờ được coi là ĐÃ NỘP (ký hiệu C/Ct/Pt; ngoài ra là K).
-DA_NOP = ("paper_submitted", "verified")
+SUBMITTED_STATUSES = ("paper_submitted", "verified")
 
 # Truy vấn nguồn chỉ lấy hai trình độ này (``WHERE … IN ('Cao đẳng','Trung cấp')``).
-TRINH_DO_HOP_LE = ("Cao đẳng", "Trung cấp")
+VALID_LEVELS = ("Cao đẳng", "Trung cấp")
 
 # Cột văn hoá của Biên bản ← nhãn ``van_hoa`` (cột CSV của ``xettuyen_theo_ds.sql``):
 # nhãn cũ (ảnh chụp trước 23-10, "… (chưa TN)") lẫn nhãn mới ("Hoàn thành …"). Đây là
 # NGUỒN DUY NHẤT: tập nhãn hợp lệ = hợp các tập dưới đây. THCS gồm cả em hoàn thành
 # chương trình THCS (Thông tư 10/2026 bỏ cấp bằng tốt nghiệp THCS).
-VAN_HOA_THEO_COT: Tuple[Tuple[str, frozenset], ...] = (
+CULTURE_BY_COLUMN: Tuple[Tuple[str, frozenset], ...] = (
     ("THCS", frozenset({"THCS", "THCS (chưa TN)", "Hoàn thành THCS"})),
     ("Hoàn thành THPT", frozenset({"THPT (chưa TN)", "Hoàn thành THPT"})),
     ("THPT", frozenset({"THPT", "GDTX"})),
 )
-NHAN_VAN_HOA_HOP_LE = frozenset().union(*(nhan for _, nhan in VAN_HOA_THEO_COT))
+VALID_CULTURE_LABELS = frozenset().union(*(nhan for _, nhan in CULTURE_BY_COLUMN))
 
 # ``vocational_qualification`` (CHECK của model: none | so_cap | trung_cap | cao_dang,
 # NOT NULL) — rỗng = ảnh chụp không có cột này (trước 23-10). Chỉ trung cấp / cao đẳng
 # có cột trên Biên bản; sơ cấp và không có ⇒ chỉ đếm văn hoá.
-CHUYEN_MON_HOP_LE = ("", "none", "so_cap", "trung_cap", "cao_dang")
+VALID_SPECIALTIES = ("", "none", "so_cap", "trung_cap", "cao_dang")
 
-_KY_HIEU = {"certified_copy": "Ct", "photo": "Pt", "original": "C"}
+_SYMBOLS = {"certified_copy": "Ct", "photo": "Pt", "original": "C"}
 
 # Số chỗ trống của từng tham số trong mẫu Quyết định đang dùng. Lệch ⇒ mẫu đã đổi cấu
 # trúc ⇒ DỪNG thay vì in một văn bản điền nửa vời.
-SO_CHO_SO_QD = 2  # ô tiêu đề "Số:" + đoạn "(Ban hành kèm theo Quyết định số"
-SO_CHO_NGAY_QD = 2  # ô tiêu đề "…, ngày … tháng … năm" + đoạn "Ban hành kèm theo"
-SO_CHO_DOT = 3  # tiêu đề "kỳ tuyển sinh … đợt", căn cứ Biên bản, Điều 1
-SO_CHO_SO_BB = 1  # "Căn cứ Biên bản số …/BB-"
+DECISION_NUMBER_PLACEHOLDER_COUNT = 2  # ô tiêu đề "Số:" + đoạn "(Ban hành kèm theo Quyết định số"
+DECISION_DATE_PLACEHOLDER_COUNT = 2  # ô tiêu đề "…, ngày … tháng … năm" + đoạn "Ban hành kèm theo"
+BATCH_PLACEHOLDER_COUNT = 3  # tiêu đề "kỳ tuyển sinh … đợt", căn cứ Biên bản, Điều 1
+MINUTES_NUMBER_PLACEHOLDER_COUNT = 1  # "Căn cứ Biên bản số …/BB-"
 
 
 # ═══════════════════════════════ DTO + tham số ═══════════════════════════════
@@ -184,8 +184,8 @@ class CandidateRowV1(BaseModel):
 #: Tên các cột CSV mà DTO dùng — cũng là danh sách trường phải so ở N1b.
 CANDIDATE_FIELDS: Tuple[str, ...] = tuple(CandidateRowV1.model_fields)
 
-#: Các trường CHUỖI của DTO — đều phải qua phép kiểm ký tự ở :func:`_chuan_bi`.
-_TRUONG_CHUOI: Tuple[str, ...] = tuple(
+#: Các trường CHUỖI của DTO — đều phải qua phép kiểm ký tự ở :func:`_prepare`.
+_STRING_FIELDS: Tuple[str, ...] = tuple(
     k for k, f in CandidateRowV1.model_fields.items() if f.annotation is str
 )
 
@@ -194,12 +194,12 @@ _TRUONG_CHUOI: Tuple[str, ...] = tuple(
 # NHẬN chúng vào DTO; lxml từ chối giữa lúc dựng docx (``ValueError``, surrogate thì
 # ``UnicodeEncodeError``) và openpyxl cấm một phần (``ILLEGAL_CHARACTERS_RE`` — tập này
 # BAO TRÙM tập ấy). Chặn ở đầu vào để mọi đầu vào xấu thành lỗi miền, không lộ giá trị.
-_RE_NGOAI_XML = re.compile(r"[^\t\n\r\x20-\uD7FF\uE000-\uFFFD\U00010000-\U0010FFFF]")
+_RE_OUTSIDE_XML = re.compile(r"[^\t\n\r\x20-\uD7FF\uE000-\uFFFD\U00010000-\U0010FFFF]")
 
 
 #: Review max PR #724 (R7, owner 15-11): câu DUY NHẤT cho luật "số Quyết định không bắt đầu bằng số 0" — dùng ở
 #: ``DecisionParams`` (số in sẵn lúc dựng bộ) và ``council_decision_service.kiem_so_quyet_dinh`` (số lúc ghi nhận).
-CAU_SO_QD_0_DAU = "Số Quyết định không bắt đầu bằng số 0 — ví dụ nhập 7, không nhập 07."
+QUERY_DECISION_NUMBER_LEADING_ZERO = "Số Quyết định không bắt đầu bằng số 0 — ví dụ nhập 7, không nhập 07."
 
 
 class DecisionParams(BaseModel):
@@ -218,16 +218,16 @@ class DecisionParams(BaseModel):
 
     @field_validator("so_quyet_dinh")
     @classmethod
-    def _kiem_so_khong_0_dau(cls, v: Optional[str]) -> Optional[str]:
+    def _check_number_no_leading_zero(cls, v: Optional[str]) -> Optional[str]:
         # Review max PR #724 (R7, §6 — nhánh anh em): số in sẵn có 0 đầu thì lúc ghi nhận (phải gõ lại ĐÚNG số đã
         # in) không bao giờ qua ``kiem_so_quyet_dinh`` ⇒ chặn ngay lúc dựng. Ngày Quyết định in sẵn KHÔNG chặn
         # "sau hôm nay" (văn bản có thể in trước ngày ký).
         if v is not None and v.startswith("0"):
-            raise ValueError(CAU_SO_QD_0_DAU)
+            raise ValueError(QUERY_DECISION_NUMBER_LEADING_ZERO)
         return v
 
     @model_validator(mode="after")
-    def _kiem_cap(self) -> "DecisionParams":
+    def _check_cap(self) -> "DecisionParams":
         if (self.dot_so is None) != (self.dot_thang is None):
             raise ValueError("đợt xét tuyển cần đủ cả số đợt và tháng")
         if (
@@ -271,39 +271,39 @@ def so(v, m: float = 0.0) -> float:
 
 
 @dataclass(frozen=True)
-class DiemIn:
+class PrintedScores:
     kv: float  # điểm khu vực, chưa trần — cột "ƯT Khu vực"
     ut: float  # điểm đối tượng, chưa trần — cột "ƯT Đối tượng"
-    ut_tong: float  # min(kv + ut, TRAN_UU_TIEN_V1)
+    ut_tong: float  # min(kv + ut, PRIORITY_CAP_V1)
     tong_mon: float  # tổng điểm các môn
     tong_xt: float  # round(tong_mon + ut_tong, 2) — "Tổng điểm xét tuyển"
 
 
-def tinh_diem_in(tong_diem: str, diem_kv: str, diem_ut: str) -> DiemIn:
+def compute_printed_scores(tong_diem: str, diem_kv: str, diem_ut: str) -> PrintedScores:
     """Nguồn chuẩn DUY NHẤT của điểm in trên mọi văn bản Hội đồng v1."""
     kv = so(diem_kv)
     ut = so(diem_ut)
-    ut_tong = min(kv + ut, TRAN_UU_TIEN_V1)
+    ut_tong = min(kv + ut, PRIORITY_CAP_V1)
     tong_mon = so(tong_diem)
-    return DiemIn(kv, ut, ut_tong, tong_mon, round(tong_mon + ut_tong, 2))
+    return PrintedScores(kv, ut, ut_tong, tong_mon, round(tong_mon + ut_tong, 2))
 
 
 # ═══════════════════════════════ chuẩn hoá chữ in ════════════════════════════
-def khong_dau(s: str) -> str:
+def strip_accents(s: str) -> str:
     s = unicodedata.normalize("NFD", s)
     s = "".join(c for c in s if unicodedata.category(c) != "Mn")
     return s.replace("đ", "d").replace("Đ", "D")
 
 
-def _ten_tep(s: str) -> str:
-    return re.sub(r"[^A-Za-z0-9]+", "-", khong_dau(s)).strip("-")
+def _file_name(s: str) -> str:
+    return re.sub(r"[^A-Za-z0-9]+", "-", strip_accents(s)).strip("-")
 
 
 # "Tổ dân phố" viết nhiều kiểu ⇒ thống nhất "TDP" TRƯỚC bước viết hoa.
-_RE_TDP = re.compile("\\bTổ\\s+dân\\s+phố\\b", re.IGNORECASE)
+_RE_RESIDENTIAL_GROUP = re.compile("\\bTổ\\s+dân\\s+phố\\b", re.IGNORECASE)
 
 
-def _hoa_dau(s: str) -> str:
+def _capitalize_first(s: str) -> str:
     """Viết hoa chữ cái đầu mỗi từ, GIỮ phần còn lại (không dùng ``str.title()``:
     nó hạ ``TDP`` thành ``Tdp``). Từ mở đầu bằng số giữ nguyên."""
     return re.sub(
@@ -317,11 +317,11 @@ def _hoa_dau(s: str) -> str:
     )
 
 
-# Đơn vị hành chính GHÉP nhiều từ: chỉ chữ ĐẦU viết hoa. ``_hoa_dau`` viết hoa MỌI từ
+# Đơn vị hành chính GHÉP nhiều từ: chỉ chữ ĐẦU viết hoa. ``_capitalize_first`` viết hoa MỌI từ
 # nên "Thành phố X" thành "Thành Phố X" — sai chính tả và lệch tên ở danh mục hành chính.
-# Trả về đúng dạng SAU ``_hoa_dau``; khớp không phân biệt hoa thường, khoảng trắng bên
+# Trả về đúng dạng SAU ``_capitalize_first``; khớp không phân biệt hoa thường, khoảng trắng bên
 # trong gộp về một dấu cách (như bộ xuất đang dùng — luật v1.1).
-DON_VI_GHEP = (
+MERGED_UNITS = (
     "Thành phố",
     "Thị xã",
     "Thị trấn",
@@ -333,27 +333,27 @@ DON_VI_GHEP = (
     "Khu dân cư",
     "Tổ dân cư",
 )
-_RE_DON_VI_GHEP = tuple(
+_RE_MERGED_UNITS = tuple(
     (re.compile(r"\b" + g.replace(" ", r"\s+") + r"\b", re.IGNORECASE), g)
-    for g in DON_VI_GHEP
+    for g in MERGED_UNITS
 )
 
 
-def chuan_dia_chi(s: str) -> str:
-    s = _hoa_dau(_RE_TDP.sub("TDP", s))
-    for rx, dung in _RE_DON_VI_GHEP:
-        s = rx.sub(dung, s)
+def normalize_address(s: str) -> str:
+    s = _capitalize_first(_RE_RESIDENTIAL_GROUP.sub("TDP", s))
+    for rx, in_use in _RE_MERGED_UNITS:
+        s = rx.sub(in_use, s)
     return s
 
 
-def _thang(m: int) -> str:
+def _month(m: int) -> str:
     """Tháng theo quy ước văn thư: tháng 1, 2 thêm số 0 (``01``, ``02``, ``9``, ``12``)."""
     return "%02d" % m if m in (1, 2) else str(m)
 
 
-def _ngay_thang(d: date) -> Tuple[str, str]:
+def _date_parts(d: date) -> Tuple[str, str]:
     """(ngày, tháng) theo quy ước văn thư: ngày < 10 và tháng 1, 2 thêm số 0."""
-    return "%02d" % d.day, _thang(d.month)
+    return "%02d" % d.day, _month(d.month)
 
 
 # ═══════════════════════════════ thứ tự trên Quyết định — MỘT nguồn ══════════════════
@@ -361,36 +361,36 @@ def _ngay_thang(d: date) -> Tuple[str, str]:
 # cùng gọi HAI hàm dưới. Nhóm = cặp (ngành, trình độ) theo thứ tự chữ tăng; trong nhóm theo
 # (-tổng điểm xét tuyển, tên). Phần tử phá hoà cuối (id hồ sơ) do phía dựng bộ thêm: renderer sắp ỔN
 # ĐỊNH nên giữ đúng thứ tự đầu vào của các em hoà nhau.
-def khoa_nhom_quyet_dinh(dto: CandidateRowV1) -> Tuple[str, str]:
+def decision_group_key(dto: CandidateRowV1) -> Tuple[str, str]:
     """Khoá NHÓM của một hồ sơ trên Quyết định: CẶP (ngành, trình độ đã cắt khoảng trắng) — "Công
     nghệ ô tô" có ở cả hai trình độ."""
     return (dto.nganh, dto.trinh_do.strip())
 
 
-def khoa_trong_nhom_quyet_dinh(tong_xt: float, ten: str) -> Tuple[float, str]:
+def decision_in_group_key(tong_xt: float, name: str) -> Tuple[float, str]:
     """Khoá sắp TRONG một nhóm của Quyết định (và bảng điểm của Danh sách): điểm xét tuyển giảm dần,
     rồi tên."""
-    return (-tong_xt, ten)
+    return (-tong_xt, name)
 
 
 # ═══════════════════════════════ hồ sơ đã chuẩn bị ═══════════════════════════
 @dataclass(frozen=True)
-class _HoSo:
+class _Profile:
     dto: CandidateRowV1
-    diem: DiemIn
+    diem: PrintedScores
     dia_chi: str  # địa chỉ đã chuẩn hoá để in
     td: str  # trình độ (đã cắt khoảng trắng)
 
     @property
-    def khoa_nganh(self) -> Tuple[str, str]:
-        return khoa_nhom_quyet_dinh(self.dto)
+    def major_key(self) -> Tuple[str, str]:
+        return decision_group_key(self.dto)
 
 
-def _chuan_bi(rows: Sequence[CandidateRowV1]) -> List[_HoSo]:
+def _prepare(rows: Sequence[CandidateRowV1]) -> List[_Profile]:
     if not rows:
         raise DataValidationError("Danh sách hồ sơ rỗng — không dựng văn bản.")
-    gap: Dict[str, int] = {}
-    out: List[_HoSo] = []
+    first_seen: Dict[str, int] = {}
+    out: List[_Profile] = []
     for i, r in enumerate(rows, 1):
         if not isinstance(r, CandidateRowV1):
             raise DataValidationError("Dòng %d không phải CandidateRowV1." % i)
@@ -398,91 +398,91 @@ def _chuan_bi(rows: Sequence[CandidateRowV1]) -> List[_HoSo]:
         # TRƯỚC mọi phép kiểm khác (thông báo nêu đúng trường) và trước khi dựng tệp
         # nào. Kiểu lạ (``model_copy`` / ``model_construct`` bỏ qua kiểm kiểu của
         # pydantic) cũng dừng ở đây. Thông báo: số dòng + tên trường, KHÔNG có giá trị.
-        for ten in _TRUONG_CHUOI:
-            v = getattr(r, ten)
+        for name in _STRING_FIELDS:
+            v = getattr(r, name)
             if not isinstance(v, str):
                 raise DataValidationError(
-                    "Dòng %d, trường %s: không phải chuỗi." % (i, ten)
+                    "Dòng %d, trường %s: không phải chuỗi." % (i, name)
                 )
-            if _RE_NGOAI_XML.search(v):
+            if _RE_OUTSIDE_XML.search(v):
                 raise DataValidationError(
                     "Dòng %d, trường %s: có ký tự không ghi được vào Word / Excel "
                     "(ký tự điều khiển hoặc ngoài tập ký tự XML) — không dựng văn bản."
-                    % (i, ten)
+                    % (i, name)
                 )
-        if r.ma_ho_so in gap:
+        if r.ma_ho_so in first_seen:
             raise DataValidationError(
                 "Danh sách có mã hồ sơ TRÙNG (dòng %d trùng dòng %d) — mỗi người một dòng."
-                % (i, gap[r.ma_ho_so])
+                % (i, first_seen[r.ma_ho_so])
             )
-        gap[r.ma_ho_so] = i
+        first_seen[r.ma_ho_so] = i
         td = r.trinh_do.strip()
-        if td not in TRINH_DO_HOP_LE:
+        if td not in VALID_LEVELS:
             raise DataValidationError(
-                "Dòng %d: trình độ không thuộc %s." % (i, " / ".join(TRINH_DO_HOP_LE))
+                "Dòng %d: trình độ không thuộc %s." % (i, " / ".join(VALID_LEVELS))
             )
         # Văn hoá BẮT BUỘC (owner 03-11): rỗng hay lạ là lỗi dữ liệu ⇒ dừng, không
         # đếm sót im lặng. Chuyên môn: chỉ các giá trị của CHECK trên model (+ rỗng).
-        if r.van_hoa not in NHAN_VAN_HOA_HOP_LE:
+        if r.van_hoa not in VALID_CULTURE_LABELS:
             raise DataValidationError(
                 "Dòng %d: trình độ văn hoá rỗng hoặc không thuộc nhãn đã biết "
                 "— không dựng thống kê Biên bản." % i
             )
-        if r.chuyen_mon not in CHUYEN_MON_HOP_LE:
+        if r.chuyen_mon not in VALID_SPECIALTIES:
             raise DataValidationError(
                 "Dòng %d: trình độ chuyên môn không thuộc %s."
-                % (i, " / ".join(repr(x) for x in CHUYEN_MON_HOP_LE))
+                % (i, " / ".join(repr(x) for x in VALID_SPECIALTIES))
             )
         out.append(
-            _HoSo(
+            _Profile(
                 r,
-                tinh_diem_in(r.tong_diem, r.diem_kv, r.diem_ut),
-                chuan_dia_chi(r.dia_chi),
+                compute_printed_scores(r.tong_diem, r.diem_kv, r.diem_ut),
+                normalize_address(r.dia_chi),
                 td,
             )
         )
     return out
 
 
-def _ma_nganh(
-    hs: Sequence[_HoSo], nganh_ds: Sequence[Tuple[str, str]]
+def _major_code(
+    hs: Sequence[_Profile], majors: Sequence[Tuple[str, str]]
 ) -> Dict[Tuple[str, str], str]:
     """Mã ngành theo (ngành, trình độ): lấy từ hồ sơ ĐẦU của nhóm (như bộ xuất);
     thiếu hoặc các hồ sơ cùng nhóm ghi mã khác nhau ⇒ DỪNG."""
-    ma: Dict[Tuple[str, str], str] = {}
+    code: Dict[Tuple[str, str], str] = {}
     for i, h in enumerate(hs, 1):
-        ng = h.khoa_nganh
-        if ng not in ma:
-            ma[ng] = h.dto.ma_nganh
-        elif ma[ng] != h.dto.ma_nganh:
+        ng = h.major_key
+        if ng not in code:
+            code[ng] = h.dto.ma_nganh
+        elif code[ng] != h.dto.ma_nganh:
             raise DataValidationError(
                 "Dòng %d: mã ngành khác các hồ sơ cùng ngành, cùng trình độ." % i
             )
-    thieu = [ng for ng in nganh_ds if not ma.get(ng)]
-    if thieu:
+    missing = [ng for ng in majors if not code.get(ng)]
+    if missing:
         raise DataValidationError(
-            "Thiếu mã ngành cho %d nhóm ngành — không dựng được Điều 1." % len(thieu)
+            "Thiếu mã ngành cho %d nhóm ngành — không dựng được Điều 1." % len(missing)
         )
-    return ma
+    return code
 
 
 # ═══════════════════════════════ thao tác Word (giữ định dạng mẫu) ═══════════
 #: Cờ của một mục zip mà ``zipfile`` không đọc được nếu không có mật khẩu: bit 0 (mã hoá
 #: — ``RuntimeError`` "password required") và bit 6 (mã hoá mạnh — ``NotImplementedError``).
-_CO_MA_HOA_ZIP = 0x01 | 0x40
+_ZIP_ENCRYPTED_FLAGS = 0x01 | 0x40
 
 
-def kiem_goi_khong_ma_hoa(z: zipfile.ZipFile, ten: str) -> None:
+def check_package_not_encrypted(z: zipfile.ZipFile, name: str) -> None:
     """Gói zip có mục MÃ HOÁ (đặt mật khẩu) ⇒ ``FileValidationError``.
 
     ``zipfile`` chỉ biết mục bị mã hoá khi MỞ nó — và báo bằng ``RuntimeError`` (lỗi rất
     rộng của Python). Kiểm CỜ trong thư mục trung tâm TRƯỚC khi đọc thay vì bắt
-    ``RuntimeError`` quanh cả luồng (F211). Gọi qua :func:`kiem_goi_truoc_khi_mo`."""
-    n = sum(1 for m in z.infolist() if m.flag_bits & _CO_MA_HOA_ZIP)
+    ``RuntimeError`` quanh cả luồng (F211). Gọi qua :func:`check_package_before_open`."""
+    n = sum(1 for m in z.infolist() if m.flag_bits & _ZIP_ENCRYPTED_FLAGS)
     if n:
         raise FileValidationError(
             "Mẫu %s: gói zip có %d mục được mã hoá (đặt mật khẩu) — không đọc được."
-            % (ten, n)
+            % (name, n)
         )
 
 
@@ -492,23 +492,23 @@ def kiem_goi_khong_ma_hoa(z: zipfile.ZipFile, ten: str) -> None:
 #: ``data[:self._left]`` ⇒ một khúc nén nhỏ nở ra rất lớn trong RAM TRƯỚC khi bị cắt theo số
 #: khai. Word chỉ ghi STORED / DEFLATED; ``compress_type`` mà ``zipfile`` dùng khi mở mục
 #: lấy từ thư mục trung tâm (đo: ``cong-cu/kham_pha_e3.py``) ⇒ kiểm ở đó là đủ.
-MA_NEN_CHO_PHEP = frozenset({zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED})
+ALLOWED_COMPRESSION = frozenset({zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED})
 
 
-def kiem_goi_truoc_khi_mo(z: zipfile.ZipFile, ten: str) -> None:
+def check_package_before_open(z: zipfile.ZipFile, name: str) -> None:
     """MỘT nguồn cho MỌI điểm mở gói mẫu — kho mẫu (``kiem_goi_mau``, đọc bằng
-    ``zipfile``) và :func:`_mo_docx` (python-docx). Chỉ đọc THƯ MỤC TRUNG TÂM, chạy TRƯỚC
+    ``zipfile``) và :func:`_open_docx` (python-docx). Chỉ đọc THƯ MỤC TRUNG TÂM, chạy TRƯỚC
     khi mở bất kỳ mục nào (chưa bộ giải nén nào được tạo):
 
-    1. mã nén của mọi mục thuộc :data:`MA_NEN_CHO_PHEP` (F216) — mã lạ ⇒ lỗi miền;
-    2. không mục nào mã hoá (F211, :func:`kiem_goi_khong_ma_hoa`)."""
-    la = sum(1 for m in z.infolist() if m.compress_type not in MA_NEN_CHO_PHEP)
-    if la:
+    1. mã nén của mọi mục thuộc :data:`ALLOWED_COMPRESSION` (F216) — mã lạ ⇒ lỗi miền;
+    2. không mục nào mã hoá (F211, :func:`check_package_not_encrypted`)."""
+    odd = sum(1 for m in z.infolist() if m.compress_type not in ALLOWED_COMPRESSION)
+    if odd:
         raise FileValidationError(
             "Mẫu %s: gói zip có %d mục dùng kiểu nén ngoài danh sách cho phép (chỉ lưu "
-            "thẳng hoặc DEFLATE) — không mở." % (ten, la)
+            "thẳng hoặc DEFLATE) — không mở." % (name, odd)
         )
-    kiem_goi_khong_ma_hoa(z, ten)
+    check_package_not_encrypted(z, name)
 
 
 # ═══════════════════ CÁC PHẦN của gói Word — danh sách CHO PHÉP (E3, owner 04-11) ═══════════
@@ -527,7 +527,7 @@ _CT_WORD = _CT_OFFICE + "wordprocessingml."
 #: Loại quan hệ (``Relationship/@Type``) được phép. Ngoài danh sách — attachedTemplate,
 #: oleObject, package (nhúng), control / activeX, vbaProject, aFChunk (altChunk),
 #: subDocument, frame, hyperlink, … — ⇒ từ chối.
-LOAI_QUAN_HE_CHO_PHEP = frozenset(
+ALLOWED_RELATIONSHIP_TYPES = frozenset(
     {
         "http://schemas.openxmlformats.org/package/2006/relationships/metadata/"
         "core-properties",
@@ -566,7 +566,7 @@ LOAI_QUAN_HE_CHO_PHEP = frozenset(
 #: chứng: footer (cùng lược đồ + cùng phép kiểm với header), ``image/png`` (ảnh raster thường gặp
 #: ở đầu trang). BỎ (Codex lần 6, E4): custom-properties, ``image/gif``, ``image/x-emf``,
 #: ``image/x-wmf`` (metafile — chuỗi bản ghi lệnh vẽ) — chưa mẫu nào dùng, mỗi loại có ca chặn.
-KIEU_NOI_DUNG_CHO_PHEP = frozenset(
+ALLOWED_CONTENT_TYPES = frozenset(
     {
         "application/vnd.openxmlformats-package.relationships+xml",
         "application/vnd.openxmlformats-package.core-properties+xml",
@@ -598,15 +598,15 @@ KIEU_NOI_DUNG_CHO_PHEP = frozenset(
 #: phần nào mà ``[Content_Types].xml`` KHAI là XML ⇒ từ chối (F232: phần khai kiểu khác — vd ảnh —
 #: không được đọc như XML; chưa chứng minh Word bỏ qua / nhận một phần XML khai giả là ảnh). Không mở sẵn mã nào (DATE, PAGE, MERGEFIELD, HYPERLINK … đều
 #: chưa dùng); mở một mã = thêm vào đây + ca đối chứng + review. Đọc lúc gọi (không chép sẵn).
-MA_TRUONG_CHO_PHEP = frozenset()
-_PARSER_GOI = etree.XMLParser(
+ALLOWED_FIELD_CODES = frozenset()
+_PACKAGE_PARSER = etree.XMLParser(
     resolve_entities=False, no_network=True, load_dtd=False, huge_tree=False
 )
 #: Loại của một câu lệnh trường = từ ĐẦU (chỉ khoảng trắng ASCII đứng trước, 1–24 chữ cái ASCII,
 #: không chữ cái nào liền sau). Không khớp (``= 1+1``, rỗng, ký tự lạ) ⇒ loại "không xác định" —
 #: cũng ngoài danh sách cho phép. Tên loại vào thông báo chỉ khi khớp mẫu này (nhãn an toàn).
-_RE_LOAI_TRUONG = re.compile(r"[ \t\r\n]*([A-Za-z]{1,24})(?![A-Za-z])")
-_RE_NHAN_LOAI = re.compile(r"[A-Za-z0-9.+/-]{1,120}")
+_RE_FIELD_KIND = re.compile(r"[ \t\r\n]*([A-Za-z]{1,24})(?![A-Za-z])")
+_RE_KIND_LABEL = re.compile(r"[A-Za-z0-9.+/-]{1,120}")
 _W_FLDSIMPLE, _W_FLDCHAR, _W_INSTRTEXT, _W_DELINSTRTEXT = (
     qn("w:fldSimple"),
     qn("w:fldChar"),
@@ -615,75 +615,75 @@ _W_FLDSIMPLE, _W_FLDCHAR, _W_INSTRTEXT, _W_DELINSTRTEXT = (
 )
 
 
-def _nhan_loai(s: Optional[str]) -> str:
+def _kind_label(s: Optional[str]) -> str:
     """Tên LOẠI để đưa vào thông báo lỗi: chỉ đoạn cuối của URI loại quan hệ / kiểu nội dung
     khi nó gồm ký tự an toàn — chuỗi lạ (do mẫu tự đặt) ⇒ nhãn cố định, không nêu nội dung.
     """
     if not isinstance(s, str):
         return "(không có)"
     s = s.rstrip("/").rsplit("/", 1)[-1] if s.startswith("http") else s
-    return s if _RE_NHAN_LOAI.fullmatch(s) else "(loại lạ)"
+    return s if _RE_KIND_LABEL.fullmatch(s) else "(loại lạ)"
 
 
-def _xml_cua_phan(z: zipfile.ZipFile, phan: str, ten: str):
+def _part_xml(z: zipfile.ZipFile, part: str, name: str):
     """Đọc MỘT phần XML của gói (lxml không nạp DTD / thực thể / mạng) — phần có DOCTYPE ⇒
-    từ chối. Mỗi phần chỉ đọc một lần (:func:`kiem_cac_phan_goi_word`, bước 2)."""
+    từ chối. Mỗi phần chỉ đọc một lần (:func:`check_word_package_parts`, bước 2)."""
     try:
-        goc = etree.fromstring(z.read(phan), _PARSER_GOI)
+        root = etree.fromstring(z.read(part), _PACKAGE_PARSER)
     except etree.XMLSyntaxError:
         raise FileValidationError(
-            "Mẫu %s: một phần XML của gói Word hỏng." % ten
+            "Mẫu %s: một phần XML của gói Word hỏng." % name
         ) from None
-    if goc.getroottree().docinfo.doctype:
+    if root.getroottree().docinfo.doctype:
         raise FileValidationError(
-            "Mẫu %s: một phần XML của gói Word có khai báo DOCTYPE." % ten
+            "Mẫu %s: một phần XML của gói Word có khai báo DOCTYPE." % name
         )
-    return goc
+    return root
 
 
-def _lenh_cac_truong(goc) -> List[str]:
+def _field_commands(root) -> List[str]:
     """Câu lệnh của từng trường trong một phần XML: ``w:fldSimple/@w:instr`` và trường phức
     (``w:fldChar`` begin → các ``w:instrText`` / ``w:delInstrText`` → separate / end, lồng nhau
     được) — GHÉP mọi mảnh của CÙNG một trường (Word hay tách câu lệnh ra nhiều run); trường lồng
     là MỘT câu lệnh riêng (trường ngoài không nuốt câu lệnh của trường trong)."""
     ra: List[str] = []
-    ngan_xep: List[Optional[List[str]]] = []  # None = trường đã qua "separate"
-    for e in goc.iter(_W_FLDSIMPLE, _W_FLDCHAR, _W_INSTRTEXT, _W_DELINSTRTEXT):
+    stack: List[Optional[List[str]]] = []  # None = trường đã qua "separate"
+    for e in root.iter(_W_FLDSIMPLE, _W_FLDCHAR, _W_INSTRTEXT, _W_DELINSTRTEXT):
         if e.tag == _W_FLDSIMPLE:
             ra.append(e.get(qn("w:instr")) or "")
         elif e.tag in (_W_INSTRTEXT, _W_DELINSTRTEXT):
-            if ngan_xep and ngan_xep[-1] is not None:
-                ngan_xep[-1].append(e.text or "")
+            if stack and stack[-1] is not None:
+                stack[-1].append(e.text or "")
             else:  # mảnh câu lệnh ngoài trường nào: xét riêng
                 ra.append(e.text or "")
         else:
-            loai = e.get(qn("w:fldCharType"))
-            if loai == "begin":
-                ngan_xep.append([])
-            elif ngan_xep and loai in ("separate", "end"):
-                dinh = ngan_xep.pop() if loai == "end" else ngan_xep[-1]
-                if dinh is not None:
-                    ra.append("".join(dinh))
-                if loai == "separate":
-                    ngan_xep[-1] = None
-    ra.extend("".join(x) for x in ngan_xep if x is not None)
+            kind = e.get(qn("w:fldCharType"))
+            if kind == "begin":
+                stack.append([])
+            elif stack and kind in ("separate", "end"):
+                top = stack.pop() if kind == "end" else stack[-1]
+                if top is not None:
+                    ra.append("".join(top))
+                if kind == "separate":
+                    stack[-1] = None
+    ra.extend("".join(x) for x in stack if x is not None)
     return ra
 
 
-def kiem_cac_phan_goi_word(z: zipfile.ZipFile, ten: str) -> None:
+def check_word_package_parts(z: zipfile.ZipFile, name: str) -> None:
     """MỘT nguồn kiểm CÁC PHẦN của gói Word (ngoài vùng dữ liệu của ``document.xml``) — gọi
-    ở mọi điểm mở gói, cùng chỗ với :func:`kiem_goi_truoc_khi_mo` (kho mẫu ``kiem_goi_mau``
-    sau khi đọc thử mọi mục có trần; :func:`_mo_docx` của bộ dựng). Theo thứ tự:
+    ở mọi điểm mở gói, cùng chỗ với :func:`check_package_before_open` (kho mẫu ``kiem_goi_mau``
+    sau khi đọc thử mọi mục có trần; :func:`_open_docx` của bộ dựng). Theo thứ tự:
 
     1. mọi phần (trừ ``[Content_Types].xml``) có kiểu nội dung thuộc
-       :data:`KIEU_NOI_DUNG_CHO_PHEP` (không có kiểu ⇒ từ chối);
+       :data:`ALLOWED_CONTENT_TYPES` (không có kiểu ⇒ từ chối);
     2. đọc MỌI phần mà ``[Content_Types].xml`` KHAI là XML (kiểu ``…+xml`` / ``application/xml``)
        và mọi ``*.rels`` đúng MỘT lần —
        phần có DOCTYPE ⇒ từ chối. Bước riêng: không phụ thuộc bước 3 / 4 (gỡ quét mã trường
        không gỡ chặn DOCTYPE, và ngược lại — E3 §9 mục 4);
     3. mọi quan hệ trong mọi ``*.rels``: KHÔNG ``TargetMode="External"`` (kể cả hyperlink) và
-       loại thuộc :data:`LOAI_QUAN_HE_CHO_PHEP`;
-    4. mọi trường ở MỌI phần KHAI là XML (trừ ``*.rels``) có loại thuộc :data:`MA_TRUONG_CHO_PHEP`
+       loại thuộc :data:`ALLOWED_RELATIONSHIP_TYPES`;
+    4. mọi trường ở MỌI phần KHAI là XML (trừ ``*.rels``) có loại thuộc :data:`ALLOWED_FIELD_CODES`
        (hiện rỗng ⇒ mọi trường bị từ chối).
 
     Giới hạn (F232, Codex lần 7): phép kiểm tin kiểu nội dung KHAI trong ``[Content_Types].xml`` —
@@ -692,71 +692,71 @@ def kiem_cac_phan_goi_word(z: zipfile.ZipFile, ten: str) -> None:
     Lỗi miền chỉ nêu tên mẫu + LOẠI phần / quan hệ / mã trường (nhãn an toàn) — không nêu đích
     liên kết hay chữ của mẫu.
     """
-    phan = [i.filename for i in z.infolist() if not i.filename.endswith("/")]
-    if "[Content_Types].xml" not in phan:
-        raise FileValidationError("Mẫu %s: gói Word thiếu [Content_Types].xml." % ten)
-    ct = _xml_cua_phan(z, "[Content_Types].xml", ten)
-    mac_dinh = {
+    part = [i.filename for i in z.infolist() if not i.filename.endswith("/")]
+    if "[Content_Types].xml" not in part:
+        raise FileValidationError("Mẫu %s: gói Word thiếu [Content_Types].xml." % name)
+    ct = _part_xml(z, "[Content_Types].xml", name)
+    defaults = {
         (e.get("Extension") or "").lower(): e.get("ContentType")
         for e in ct.iter(_NS_CT + "Default")
     }
-    ghi_de = {
+    overrides = {
         (e.get("PartName") or "").lower(): e.get("ContentType")
         for e in ct.iter(_NS_CT + "Override")
     }
-    kieu_cua = {}
-    for p in phan:
+    kinds = {}
+    for p in part:
         if p == "[Content_Types].xml":
             continue
-        cuoi = p.rsplit("/", 1)[-1]
-        duoi = cuoi.rsplit(".", 1)[-1].lower() if "." in cuoi else ""
-        k = ghi_de.get("/" + p.lower()) or mac_dinh.get(duoi)
-        if k not in KIEU_NOI_DUNG_CHO_PHEP:
+        last_part = p.rsplit("/", 1)[-1]
+        suffix = last_part.rsplit(".", 1)[-1].lower() if "." in last_part else ""
+        k = overrides.get("/" + p.lower()) or defaults.get(suffix)
+        if k not in ALLOWED_CONTENT_TYPES:
             raise FileValidationError(
                 "Mẫu %s: gói Word có phần kiểu nội dung không được phép (%s)."
-                % (ten, _nhan_loai(k))
+                % (name, _kind_label(k))
             )
-        kieu_cua[p] = k
-    cay = {
-        p: _xml_cua_phan(z, p, ten)
-        for p, k in kieu_cua.items()
+        kinds[p] = k
+    tree = {
+        p: _part_xml(z, p, name)
+        for p, k in kinds.items()
         if p.lower().endswith(".rels") or k.endswith("+xml") or k == "application/xml"
     }
-    for p, goc in cay.items():
+    for p, root in tree.items():
         if not p.lower().endswith(".rels"):
             continue
-        for r in goc.iter(_NS_RELS + "Relationship"):
-            loai = r.get("Type")
+        for r in root.iter(_NS_RELS + "Relationship"):
+            kind = r.get("Type")
             if (r.get("TargetMode") or "").strip().lower() == "external":
                 raise FileValidationError(
                     "Mẫu %s: gói Word có quan hệ trỏ RA NGOÀI gói (TargetMode External, "
-                    "loại %s)." % (ten, _nhan_loai(loai))
+                    "loại %s)." % (name, _kind_label(kind))
                 )
-            if loai not in LOAI_QUAN_HE_CHO_PHEP:
+            if kind not in ALLOWED_RELATIONSHIP_TYPES:
                 raise FileValidationError(
                     "Mẫu %s: gói Word có quan hệ loại không được phép (%s)."
-                    % (ten, _nhan_loai(loai))
+                    % (name, _kind_label(kind))
                 )
-    for p, goc in cay.items():
+    for p, root in tree.items():
         if p.lower().endswith(".rels"):
             continue
-        for lenh in _lenh_cac_truong(goc):
-            loai = _loai_truong(lenh)
-            if loai not in MA_TRUONG_CHO_PHEP:
+        for command in _field_commands(root):
+            kind = _field_kind(command)
+            if kind not in ALLOWED_FIELD_CODES:
                 raise FileValidationError(
                     "Mẫu %s: gói Word có mã trường %s ngoài danh sách cho phép."
-                    % (ten, loai or "(không xác định)")
+                    % (name, kind or "(không xác định)")
                 )
 
 
-def _loai_truong(lenh: str) -> Optional[str]:
-    """Loại (chữ HOA) của một câu lệnh trường theo :data:`_RE_LOAI_TRUONG`; không xác định ⇒
+def _field_kind(command: str) -> Optional[str]:
+    """Loại (chữ HOA) của một câu lệnh trường theo :data:`_RE_FIELD_KIND`; không xác định ⇒
     ``None``."""
-    m = _RE_LOAI_TRUONG.match(lenh or "")
+    m = _RE_FIELD_KIND.match(command or "")
     return m.group(1).upper() if m else None
 
 
-def _mo_docx(b: bytes, ten: str):
+def _open_docx(b: bytes, name: str):
     """Mở mẫu Word. Gói hỏng (không phải zip, thiếu phần, XML hỏng — kể cả
     ``[Content_Types].xml`` / quan hệ — dòng nén hỏng, mục mã hoá, kiểu nén ngoài danh sách
     cho phép, phần / quan hệ / mã trường ngoài danh sách cho phép của gói Word) hoặc phần
@@ -765,8 +765,8 @@ def _mo_docx(b: bytes, ten: str):
     """
     try:
         with zipfile.ZipFile(io.BytesIO(b)) as z:
-            kiem_goi_truoc_khi_mo(z, ten)
-            kiem_cac_phan_goi_word(z, ten)
+            check_package_before_open(z, name)
+            check_word_package_parts(z, name)
         d = docx.Document(io.BytesIO(b))
     except (
         PackageNotFoundError,
@@ -777,22 +777,22 @@ def _mo_docx(b: bytes, ten: str):
         zlib.error,
     ) as e:
         raise FileValidationError(
-            "Mẫu %s không đọc được như tệp Word (.docx)." % ten
+            "Mẫu %s không đọc được như tệp Word (.docx)." % name
         ) from e
     if d.element.tag != qn("w:document") or d.element.find(qn("w:body")) is None:
         raise FileValidationError(
-            "Mẫu %s: phần chính của tệp không phải văn bản Word (w:document)." % ten
+            "Mẫu %s: phần chính của tệp không phải văn bản Word (w:document)." % name
         )
     return d
 
 
-def _luu_docx(d) -> bytes:
+def _save_docx(d) -> bytes:
     buf = io.BytesIO()
     d.save(buf)
     return buf.getvalue()
 
 
-def _dat_o(cell, txt: str) -> None:
+def _set_cell(cell, txt: str) -> None:
     """Ghi chữ vào ô, GIỮ định dạng của mẫu. Ô rỗng: chép ``w:pPr/w:rPr`` (định dạng
     đầu đoạn) vào run mới — không thì chữ rơi về ``docDefaults`` của tệp."""
     p = cell.paragraphs[0]
@@ -803,14 +803,14 @@ def _dat_o(cell, txt: str) -> None:
     else:
         run = p.add_run(txt)
         pPr = p._p.find(qn("w:pPr"))
-        mau = pPr.find(qn("w:rPr")) if pPr is not None else None
-        if mau is not None:
-            run._r.insert(0, copy.deepcopy(mau))  # w:rPr phải là con ĐẦU của w:r
+        template = pPr.find(qn("w:rPr")) if pPr is not None else None
+        if template is not None:
+            run._r.insert(0, copy.deepcopy(template))  # w:rPr phải là con ĐẦU của w:r
     for extra in cell.paragraphs[1:]:
         extra._element.getparent().remove(extra._element)
 
 
-def _dat_doan(p, txt: str) -> None:
+def _set_paragraph(p, txt: str) -> None:
     if p.runs:
         p.runs[0].text = txt
         for r_ in p.runs[1:]:
@@ -819,7 +819,7 @@ def _dat_doan(p, txt: str) -> None:
         p.add_run(txt)
 
 
-_RE_SO_NGUYEN_ASCII = re.compile(r"[0-9]+")
+_RE_ASCII_INTEGER = re.compile(r"[0-9]+")
 
 #: Trần SỐ CHỮ SỐ của một thuộc tính số nguyên đọc từ mẫu — kiểm TRƯỚC ``int()`` (``int()``
 #: của Python từ chối chuỗi quá 4.300 chữ số bằng ``ValueError`` thô; đo E3). 20 = số chữ số
@@ -827,67 +827,67 @@ _RE_SO_NGUYEN_ASCII = re.compile(r"[0-9]+")
 #: (``ST_HpsMeasure``) và ``w:gridCol/@w:w`` (``ST_TwipsMeasure``) trong ECMA-376 Part 1.
 #: ``w:gridSpan`` (``ST_DecimalNumber`` = ``xsd:integer``, không trần) dùng chung trần này —
 #: giá trị của nó còn bị chặn bởi số cột lưới.
-SO_CHU_SO_TOI_DA = 20
+MAX_DIGITS = 20
 #: Trần GIÁ TRỊ kỹ thuật (giới hạn của Microsoft Word, ĐẶC TẢ OOXML không đặt trần):
 #: cỡ chữ Word nhận 1–1.638 pt ⇒ ``w:sz`` (nửa-point) ≤ 3.276; khổ giấy lớn nhất của Word
 #: 22 in ⇒ một cột lưới ``w:gridCol/@w:w`` (twip) ≤ 22 × 1.440 = 31.680.
-SZ_TOI_DA = 3276
-GRIDCOL_TOI_DA = 31680
+MAX_SZ = 3276
+MAX_GRIDCOL = 31680
 
 
-def _so_nguyen_ascii(v: Optional[str]) -> Optional[int]:
-    """NGUỒN DUY NHẤT đổi một thuộc tính số của mẫu sang ``int``: 1..``SO_CHU_SO_TOI_DA``
+def _ascii_integer(v: Optional[str]) -> Optional[int]:
+    """NGUỒN DUY NHẤT đổi một thuộc tính số của mẫu sang ``int``: 1..``MAX_DIGITS``
     chữ số ASCII ⇒ số; thiếu / dài hơn / ký tự khác (``int()`` còn nhận "+2", " 2", "2_0",
     chữ số toàn hình) ⇒ ``None``. Độ dài kiểm TRƯỚC ``int()``."""
-    if v is None or len(v) > SO_CHU_SO_TOI_DA or not _RE_SO_NGUYEN_ASCII.fullmatch(v):
+    if v is None or len(v) > MAX_DIGITS or not _RE_ASCII_INTEGER.fullmatch(v):
         return None
     return int(v)
 
 
-def _do_rong_o(tc, so_luoi: int, ten: str) -> int:
+def _cell_width(tc, grid_total: int, name: str) -> int:
     """NGUỒN DUY NHẤT đọc độ rộng (số cột lưới) của một ô ``w:tc`` = ``w:tcPr/w:gridSpan``.
 
     Mọi chỗ của bộ dựng cần biết một ô phủ bao nhiêu cột (kiểm dòng mẫu, kiểm dòng
     "Tổng cộng", đặt bề rộng ô) đều đọc qua đây — hai cách đọc một thuộc tính thì khác
     nhau đúng ở XML hỏng (CLAUDE.md §7). Giá trị phải HỢP LỆ, không chỉ đọc được: không
     có ``gridSpan`` ⇒ 1; có mà thiếu ``w:val``, không phải số nguyên (qua
-    :func:`_so_nguyen_ascii` — chỉ chữ số ASCII, tối đa ``SO_CHU_SO_TOI_DA`` chữ số), ≤ 0,
+    :func:`_ascii_integer` — chỉ chữ số ASCII, tối đa ``MAX_DIGITS`` chữ số), ≤ 0,
     vượt số cột lưới, hoặc hai thẻ ``gridSpan`` trong một ô ⇒ ``FileValidationError``.
     Thông báo chỉ có tên mẫu và số đếm."""
     pr = tc.find(qn("w:tcPr"))
-    the = pr.findall(qn("w:gridSpan")) if pr is not None else []
-    if not the:
+    tag = pr.findall(qn("w:gridSpan")) if pr is not None else []
+    if not tag:
         return 1
-    if len(the) > 1:
-        raise FileValidationError("Mẫu %s: một ô có %d thẻ gridSpan." % (ten, len(the)))
-    n = _so_nguyen_ascii(the[0].get(qn("w:val")))
+    if len(tag) > 1:
+        raise FileValidationError("Mẫu %s: một ô có %d thẻ gridSpan." % (name, len(tag)))
+    n = _ascii_integer(tag[0].get(qn("w:val")))
     if n is None:
         raise FileValidationError(
             "Mẫu %s: gridSpan của ô thiếu giá trị hoặc không phải số nguyên (tối đa %d "
-            "chữ số)." % (ten, SO_CHU_SO_TOI_DA)
+            "chữ số)." % (name, MAX_DIGITS)
         )
-    if not 1 <= n <= so_luoi:
+    if not 1 <= n <= grid_total:
         raise FileValidationError(
             "Mẫu %s: gridSpan của ô là %d, ngoài khoảng 1..%d cột lưới."
-            % (ten, n, so_luoi)
+            % (name, n, grid_total)
         )
     return n
 
 
 # ═══════════════════════════════ cấu trúc mẫu được phép (F207) ═══════════════
 # Bộ dựng chỉ ghi đè chữ của RUN TRỰC TIẾP trong đoạn văn trực tiếp của ô / đoạn
-# (``_dat_o``, ``_dat_doan``, ``_dat_dong_nganh``). Chữ nằm chỗ khác — hyperlink, trường
+# (``_dat_o``, ``_set_paragraph``, ``_set_major_row``). Chữ nằm chỗ khác — hyperlink, trường
 # (``w:fldSimple`` / ``w:fldChar``), khung nội dung (``w:sdt``), sửa đổi theo dõi
 # (``w:ins``), bảng lồng, hình, khung chữ — KHÔNG bị xoá: ô / đoạn in ra = dữ liệu + chữ
 # sót của mẫu, mà bộ dựng vẫn trả bộ tệp. Vì vậy ở MỌI chỗ bộ dựng viết lại, mẫu chỉ được
 # có các thẻ trong danh sách CHO PHÉP dưới đây — thẻ lạ ⇒ từ chối, không đoán nó vô hại.
 # Đo ba mẫu thật (03-11): mọi chỗ ấy chỉ có các thẻ này.
 _NS_W = qn("w:p")[1:].split("}")[0]
-_THE_BANG = frozenset(qn("w:" + t) for t in ("tblPr", "tblGrid", "tr"))
-_THE_DONG = frozenset(qn("w:" + t) for t in ("trPr", "tblPrEx", "tc"))
-_THE_O = frozenset(qn("w:" + t) for t in ("tcPr", "p"))
-_THE_DOAN = frozenset(qn("w:" + t) for t in ("pPr", "r"))
-_THE_RUN = frozenset(
+_TABLE_TAGS = frozenset(qn("w:" + t) for t in ("tblPr", "tblGrid", "tr"))
+_ROW_TAGS = frozenset(qn("w:" + t) for t in ("trPr", "tblPrEx", "tc"))
+_CELL_TAGS = frozenset(qn("w:" + t) for t in ("tcPr", "p"))
+_PARAGRAPH_TAGS = frozenset(qn("w:" + t) for t in ("pPr", "r"))
+_RUN_TAGS = frozenset(
     qn("w:" + t)
     for t in (
         "rPr",
@@ -902,63 +902,63 @@ _THE_RUN = frozenset(
 )
 
 
-def _ten_the(e) -> str:
+def _tag_name(e) -> str:
     """Tên thẻ dạng ``w:xxx`` để nêu trong thông báo — không bao giờ có chữ của mẫu."""
     t = e.tag
     if not isinstance(t, str):  # chú thích / chỉ thị xử lý XML
         return "nút %s" % type(e).__name__
     if t.startswith("{"):
-        ns, _, cuc_bo = t[1:].partition("}")
-        return ("w:" + cuc_bo) if ns == _NS_W else cuc_bo
+        ns, _, local_name = t[1:].partition("}")
+        return ("w:" + local_name) if ns == _NS_W else local_name
     return t
 
 
-def _the_ngoai(e, cho_phep) -> Optional[str]:
-    """Tên con TRỰC TIẾP đầu tiên của ``e`` không thuộc ``cho_phep`` (None = sạch)."""
-    for con in e:
-        if con.tag not in cho_phep:
-            return _ten_the(con)
+def _outside_tag(e, allowed) -> Optional[str]:
+    """Tên con TRỰC TIẾP đầu tiên của ``e`` không thuộc ``allowed`` (None = sạch)."""
+    for children in e:
+        if children.tag not in allowed:
+            return _tag_name(children)
     return None
 
 
-def _loi_chi_run(ten: str, cho: str, the: str) -> FileValidationError:
+def _runs_only_error(name: str, location: str, tag: str) -> FileValidationError:
     return FileValidationError(
         "Mẫu %s: %s chỉ được có đoạn văn với run trực tiếp — gặp <%s> (hyperlink, "
         "trường, khung nội dung, hình, khung chữ, bảng lồng… để sót chữ của mẫu bên "
-        "cạnh dữ liệu)." % (ten, cho, the)
+        "cạnh dữ liệu)." % (name, location, tag)
     )
 
 
-def _kiem_doan_chi_run(p, ten: str, cho: str) -> None:
+def _check_paragraph_runs_only(p, name: str, location: str) -> None:
     """Đoạn ``w:p`` mà bộ dựng viết lại: chỉ ``w:pPr`` + run trực tiếp; run chỉ có chữ /
-    tab / ngắt dòng (danh sách cho phép ``_THE_DOAN`` / ``_THE_RUN``)."""
-    la = _the_ngoai(p, _THE_DOAN)
-    if la is None:
+    tab / ngắt dòng (danh sách cho phép ``_PARAGRAPH_TAGS`` / ``_RUN_TAGS``)."""
+    odd = _outside_tag(p, _PARAGRAPH_TAGS)
+    if odd is None:
         for r in p.iterchildren(qn("w:r")):
-            la = _the_ngoai(r, _THE_RUN)
-            if la is not None:
+            odd = _outside_tag(r, _RUN_TAGS)
+            if odd is not None:
                 break
-    if la is not None:
-        raise _loi_chi_run(ten, cho, la)
+    if odd is not None:
+        raise _runs_only_error(name, location, odd)
 
 
-def _kiem_o_chi_run(tc, ten: str, cho: str) -> None:
+def _check_cell_runs_only(tc, name: str, location: str) -> None:
     """Ô ``w:tc`` mà bộ dựng ghi dữ liệu vào: chỉ ``w:tcPr`` + đoạn văn (không bảng lồng,
     không khung nội dung mức ô), ÍT NHẤT một đoạn (:func:`_dat_o` ghi vào đoạn ĐẦU — ô
     không có đoạn nào thì nổ ``IndexError`` lúc dựng); mỗi đoạn qua
-    :func:`_kiem_doan_chi_run`."""
-    la = _the_ngoai(tc, _THE_O)
-    if la is not None:
-        raise _loi_chi_run(ten, cho, la)
+    :func:`_check_paragraph_runs_only`."""
+    odd = _outside_tag(tc, _CELL_TAGS)
+    if odd is not None:
+        raise _runs_only_error(name, location, odd)
     if tc.find(qn("w:p")) is None:
         raise FileValidationError(
-            "Mẫu %s: %s không có đoạn văn nào (w:p)." % (ten, cho)
+            "Mẫu %s: %s không có đoạn văn nào (w:p)." % (name, location)
         )
     for p in tc.iterchildren(qn("w:p")):
-        _kiem_doan_chi_run(p, ten, cho)
+        _check_paragraph_runs_only(p, name, location)
 
 
-def _o_luoi_cua_dong(tbl, tr, ten: str, so_dong: int):
+def _row_grid_cell(tbl, tr, name: str, row_count: int):
     """``_Row.cells`` của python-docx — đọc ở ĐÚNG MỘT chỗ để bắt đúng lỗi của nó.
 
     Ô gộp dọc ``vMerge`` "continue" (hoặc ``vMerge`` không có ``w:val`` — mặc định là
@@ -971,309 +971,309 @@ def _o_luoi_cua_dong(tbl, tr, ten: str, so_dong: int):
     except ValueError:
         raise FileValidationError(
             "Mẫu %s: dòng %d của bảng có ô gộp dọc (vMerge) không có ô gốc ở dòng trên "
-            "— không đọc được ô của bảng." % (ten, so_dong)
+            "— không đọc được ô của bảng." % (name, row_count)
         ) from None
 
 
-def _kiem_dong_mau(
-    tbl, mau_idx: int, so_truong: int, ten: str, dong_sau: int = 0
+def _check_template_rows(
+    tbl, template_index: int, field_count: int, name: str, rows_after: int = 0
 ) -> None:
     """NGUỒN DUY NHẤT kiểm VÙNG DỮ LIỆU của mọi bảng dữ liệu (Biên bản, Quyết định, Danh
     sách).
 
-    * Dòng mẫu phải có ĐÚNG ``so_truong`` ô ``w:tc``, mỗi ô đúng MỘT cột lưới (độ rộng
-      đọc qua :func:`_do_rong_o`; không ``vMerge`` / ``hMerge``, dòng không
-      ``gridBefore`` / ``gridAfter``) và lưới bảng đúng ``so_truong`` cột. Thiếu cột thì
+    * Dòng mẫu phải có ĐÚNG ``field_count`` ô ``w:tc``, mỗi ô đúng MỘT cột lưới (độ rộng
+      đọc qua :func:`_cell_width`; không ``vMerge`` / ``hMerge``, dòng không
+      ``gridBefore`` / ``gridAfter``) và lưới bảng đúng ``field_count`` cột. Thiếu cột thì
       dữ liệu bị cắt bớt im lặng, ô gộp thì hai trường ghi đè lên cùng một ô ⇒ DỪNG.
-    * (F207) Bảng chỉ gồm ``mau_idx`` dòng tiêu đề + ĐÚNG MỘT dòng mẫu + ``dong_sau``
+    * (F207) Bảng chỉ gồm ``template_index`` dòng tiêu đề + ĐÚNG MỘT dòng mẫu + ``rows_after``
       dòng (dòng "Tổng cộng" của Biên bản). Hàm đổ bảng chỉ xoá MỘT dòng mẫu: dòng dư
       (vd. một người mẫu) bị IN KÈM dữ liệu trong khi tổng và metadata chỉ tính đầu vào.
     * (F207) Bảng và dòng mẫu chỉ có thẻ cho phép (dòng / ô ẩn trong khung nội dung thì
       python-docx không thấy); mọi ô của dòng mẫu chỉ có đoạn văn với run trực tiếp
-      (:func:`_kiem_o_chi_run`).
+      (:func:`_check_cell_runs_only`).
 
     Thông báo chỉ có tên mẫu và số đếm / tên thẻ, không có dữ liệu."""
     rows = tbl._tbl.findall(qn("w:tr"))
-    if mau_idx >= len(rows):
-        raise FileValidationError("Mẫu %s: không có dòng mẫu dữ liệu." % ten)
-    tr = rows[mau_idx]
+    if template_index >= len(rows):
+        raise FileValidationError("Mẫu %s: không có dòng mẫu dữ liệu." % name)
+    tr = rows[template_index]
     grid = tbl._tbl.find(qn("w:tblGrid"))
-    so_luoi = len(grid.findall(qn("w:gridCol"))) if grid is not None else 0
+    grid_total = len(grid.findall(qn("w:gridCol"))) if grid is not None else 0
     # gridSpan của MỌI ô của bảng (kể cả dòng tiêu đề / dòng tổng) phải hợp lệ TRƯỚC khi
     # bất kỳ chỗ nào chạm ``_Row.cells`` (python-docx tự đọc gridSpan ở đó, nổ lỗi thư
     # viện với giá trị hỏng) hoặc đặt bề rộng ô.
     for x in rows:
         for tc in x.findall(qn("w:tc")):
-            _do_rong_o(tc, so_luoi, ten)
-    # Rồi ``_Row.cells`` của MỌI dòng phải đọc được (``_dong_tong`` duyệt mọi dòng của bảng
+            _cell_width(tc, grid_total, name)
+    # Rồi ``_Row.cells`` của MỌI dòng phải đọc được (``_total_row`` duyệt mọi dòng của bảng
     # số liệu Biên bản qua nó): ô gộp dọc không có ô gốc ⇒ lỗi miền ngay ở phép kiểm mẫu.
     for k, x in enumerate(rows, 1):
-        _o_luoi_cua_dong(tbl, x, ten, k)
+        _row_grid_cell(tbl, x, name, k)
     tcs = tr.findall(qn("w:tc"))
-    gop = 0
+    merged = 0
     for tc in tcs:
         pr = tc.find(qn("w:tcPr"))
-        if _do_rong_o(tc, so_luoi, ten) != 1 or (
+        if _cell_width(tc, grid_total, name) != 1 or (
             pr is not None
             and (
                 pr.find(qn("w:vMerge")) is not None
                 or pr.find(qn("w:hMerge")) is not None
             )
         ):
-            gop += 1
+            merged += 1
     trpr = tr.find(qn("w:trPr"))
-    lech = trpr is not None and (
+    mismatch = trpr is not None and (
         trpr.find(qn("w:gridBefore")) is not None
         or trpr.find(qn("w:gridAfter")) is not None
     )
-    if len(tcs) != so_truong or so_luoi != so_truong or gop or lech:
+    if len(tcs) != field_count or grid_total != field_count or merged or mismatch:
         raise FileValidationError(
             "Mẫu %s: dòng mẫu dữ liệu phải có đúng %d ô KHÔNG gộp trên lưới %d cột "
             "(đo được: %d ô, lưới %d cột, %d ô gộp%s)."
             % (
-                ten,
-                so_truong,
-                so_truong,
+                name,
+                field_count,
+                field_count,
                 len(tcs),
-                so_luoi,
-                gop,
-                ", dòng lệch lưới" if lech else "",
+                grid_total,
+                merged,
+                ", dòng lệch lưới" if mismatch else "",
             )
         )
-    la = _the_ngoai(tbl._tbl, _THE_BANG) or _the_ngoai(tr, _THE_DONG)
-    if la is not None:
+    odd = _outside_tag(tbl._tbl, _TABLE_TAGS) or _outside_tag(tr, _ROW_TAGS)
+    if odd is not None:
         raise FileValidationError(
             "Mẫu %s: bảng dữ liệu / dòng mẫu có phần tử <%s> ngoài dòng / ô thường — "
-            "dòng hoặc ô nằm trong đó không kiểm được." % (ten, la)
+            "dòng hoặc ô nằm trong đó không kiểm được." % (name, odd)
         )
-    can = mau_idx + 1 + dong_sau
-    if len(rows) != can:
+    next_row = template_index + 1 + rows_after
+    if len(rows) != next_row:
         raise FileValidationError(
             "Mẫu %s: bảng dữ liệu phải có đúng %d dòng (%d dòng tiêu đề + MỘT dòng "
             "mẫu%s), đo được %d — dòng dư bị in kèm dữ liệu."
-            % (ten, can, mau_idx, " + dòng tổng" if dong_sau else "", len(rows))
+            % (name, next_row, template_index, " + dòng tổng" if rows_after else "", len(rows))
         )
     for j, tc in enumerate(tcs, 1):
-        _kiem_o_chi_run(tc, ten, "ô %d của dòng mẫu" % j)
+        _check_cell_runs_only(tc, name, "ô %d của dòng mẫu" % j)
 
 
-def _do_bang_chen_truoc(tbl, data, mau_idx: int) -> None:
+def _fit_table_insert_before(tbl, data, template_index: int) -> None:
     """Nhân bản dòng mẫu cho từng dòng dữ liệu, chèn NGAY TRƯỚC dòng mẫu rồi xoá
     dòng mẫu — bảng có dòng "Tổng cộng" ở cuối thì dữ liệu nằm trên dòng tổng.
-    Dòng mẫu đã qua :func:`_kiem_dong_mau`: mỗi trường đúng một ô, không cắt bớt."""
-    mau = tbl.rows[mau_idx]._tr
+    Dòng mẫu đã qua :func:`_check_template_rows`: mỗi trường đúng một ô, không cắt bớt."""
+    template = tbl.rows[template_index]._tr
     for dl in data:
-        tr = copy.deepcopy(mau)
-        mau.addprevious(tr)
-        for o, v in zip(_Row(tr, tbl).cells, dl, strict=True):
-            _dat_o(o, v)
-    mau.getparent().remove(mau)
+        tr = copy.deepcopy(template)
+        template.addprevious(tr)
+        for cell, v in zip(_Row(tr, tbl).cells, dl, strict=True):
+            _set_cell(cell, v)
+    template.getparent().remove(template)
 
 
-def _do_bang_noi_cuoi(tbl, data, mau_idx: int = 3) -> None:
+def _fit_table_append(tbl, data, template_index: int = 3) -> None:
     """Nhân bản dòng mẫu cho từng dòng dữ liệu, NỐI vào cuối bảng rồi xoá dòng mẫu.
-    Dòng mẫu đã qua :func:`_kiem_dong_mau`: mỗi trường đúng một ô, không cắt bớt."""
-    mau = tbl.rows[mau_idx]._tr
+    Dòng mẫu đã qua :func:`_check_template_rows`: mỗi trường đúng một ô, không cắt bớt."""
+    template = tbl.rows[template_index]._tr
     for dl in data:
-        tr = copy.deepcopy(mau)
+        tr = copy.deepcopy(template)
         tbl._tbl.append(tr)
-        for o, v in zip(_Row(tr, tbl).cells, dl, strict=True):
-            _dat_o(o, v)
-    mau.getparent().remove(mau)
+        for cell, v in zip(_Row(tr, tbl).cells, dl, strict=True):
+            _set_cell(cell, v)
+    template.getparent().remove(template)
 
 
-def _dong_tong(tbl, ten: str):
+def _total_row(tbl, name: str):
     """Dòng "Tổng cộng" THẬT — không dùng ``rows[-1]``. Bảng phải có ĐÚNG MỘT dòng tổng:
     hai dòng thì chỉ dòng đầu nhận số, dòng sau giữ nguyên chữ mẫu mà bộ dựng vẫn trả
-    bộ tệp ⇒ DỪNG. Dùng chung cho phép kiểm mẫu (:func:`_kiem_dong_tong`) và chỗ ghi."""
-    dong = [
+    bộ tệp ⇒ DỪNG. Dùng chung cho phép kiểm mẫu (:func:`_check_total_row`) và chỗ ghi."""
+    row = [
         h
         for h in tbl.rows
         if h.cells and h.cells[0].text.strip().lower().startswith("tổng cộng")
     ]
-    if len(dong) != 1:
+    if len(row) != 1:
         raise FileValidationError(
-            "Mẫu %s: cần đúng MỘT dòng `Tổng cộng`, đo được %d." % (ten, len(dong))
+            "Mẫu %s: cần đúng MỘT dòng `Tổng cộng`, đo được %d." % (name, len(row))
         )
-    return dong[0]
+    return row[0]
 
 
-def _kiem_dong_tong(tbl, so_truong: int, bo: int, ten: str, mau_idx: int) -> None:
+def _check_total_row(tbl, field_count: int, boundary: int, name: str, template_index: int) -> None:
     """NGUỒN DUY NHẤT (tầng chủ sở hữu) kiểm dòng "Tổng cộng" của bảng số liệu Biên bản
-    — gọi trong :func:`_kiem_mau_bien_ban`, tức TRƯỚC khi dựng bất kỳ tệp nào.
+    — gọi trong :func:`_check_minutes_template`, tức TRƯỚC khi dựng bất kỳ tệp nào.
 
     ``_Row.cells`` của python-docx trả MỘT phần tử cho MỖI cột lưới: ô ``gridSpan=k``
     lặp k lần, ô ``vMerge`` "continue" trả ô GỐC ở dòng trên, ô thiếu ở cuối dòng thì
     danh sách ngắn hơn. Ghi tổng theo chỉ số cột trên một dòng như thế thì mất số tổng
     (thiếu ô), hai số ghi đè cùng một ô (gộp ngang) hoặc số tổng đè lên dòng dữ liệu
     phía trên (gộp dọc) — mà vẫn trả bộ tệp. Vì vậy dòng tổng phải: đúng MỘT dòng
-    (:func:`_dong_tong`); nằm SAU dòng mẫu dữ liệu ``mau_idx`` (nằm trên thì tổng in
+    (:func:`_total_row`); nằm SAU dòng mẫu dữ liệu ``template_index`` (nằm trên thì tổng in
     trên dữ liệu; trùng dòng mẫu thì bị xoá cùng dòng mẫu lúc đổ bảng); không
     ``gridBefore`` / ``gridAfter``; tổng ``gridSpan`` các ô = số cột lưới =
-    ``so_truong``; vùng nhãn phủ đúng các cột ``[0, bo)`` — gộp nhãn "Tổng cộng" như mẫu
+    ``field_count``; vùng nhãn phủ đúng các cột ``[0, bo)`` — gộp nhãn "Tổng cộng" như mẫu
     đang dùng là HỢP LỆ — và không ô nào vắt qua ranh giới nhãn / số; mọi ô từ cột
     ``bo`` trở đi đúng MỘT cột lưới, không ``vMerge`` / ``hMerge``, và (F207) chỉ có đoạn
     văn với run trực tiếp (bộ dựng ghi số tổng vào đó). Độ rộng đọc qua
-    :func:`_do_rong_o`. Thông báo chỉ có tên mẫu và số đếm, không có dữ liệu."""
-    tr = _dong_tong(tbl, ten)._tr
+    :func:`_cell_width`. Thông báo chỉ có tên mẫu và số đếm, không có dữ liệu."""
+    tr = _total_row(tbl, name)._tr
     vi_tri = next(i for i, x in enumerate(tbl._tbl.findall(qn("w:tr"))) if x is tr)
-    if vi_tri <= mau_idx:
+    if vi_tri <= template_index:
         raise FileValidationError(
             "Mẫu %s: dòng `Tổng cộng` phải nằm SAU dòng mẫu dữ liệu (dòng tổng là dòng "
-            "%d, dòng mẫu là dòng %d)." % (ten, vi_tri + 1, mau_idx + 1)
+            "%d, dòng mẫu là dòng %d)." % (name, vi_tri + 1, template_index + 1)
         )
     grid = tbl._tbl.find(qn("w:tblGrid"))
-    so_luoi = len(grid.findall(qn("w:gridCol"))) if grid is not None else 0
+    grid_total = len(grid.findall(qn("w:gridCol"))) if grid is not None else 0
     trpr = tr.find(qn("w:trPr"))
-    lech = trpr is not None and (
+    mismatch = trpr is not None and (
         trpr.find(qn("w:gridBefore")) is not None
         or trpr.find(qn("w:gridAfter")) is not None
     )
     tcs = tr.findall(qn("w:tc"))
-    cot = 0  # cột lưới bắt đầu của ô đang xét = TỔNG gridSpan các ô đứng trước
-    vat_qua = gop = 0
-    o_so = []
+    col_no = 0  # cột lưới bắt đầu của ô đang xét = TỔNG gridSpan các ô đứng trước
+    crossed = merged = 0
+    cells = []
     for tc in tcs:
-        rong = _do_rong_o(tc, so_luoi, ten)
+        width = _cell_width(tc, grid_total, name)
         pr = tc.find(qn("w:tcPr"))
-        gop_doc = pr is not None and (
+        merge_continues = pr is not None and (
             pr.find(qn("w:vMerge")) is not None or pr.find(qn("w:hMerge")) is not None
         )
-        if cot < bo < cot + rong:
-            vat_qua += 1
-        elif cot >= bo and (rong != 1 or gop_doc):
-            gop += 1
-        if cot >= bo:
-            o_so.append(tc)
-        cot += rong
-    if lech or so_luoi != so_truong or cot != so_luoi or vat_qua or gop:
+        if col_no < boundary < col_no + width:
+            crossed += 1
+        elif col_no >= boundary and (width != 1 or merge_continues):
+            merged += 1
+        if col_no >= boundary:
+            cells.append(tc)
+        col_no += width
+    if mismatch or grid_total != field_count or col_no != grid_total or crossed or merged:
         raise FileValidationError(
             "Mẫu %s: dòng `Tổng cộng` phải phủ đúng %d cột lưới — nhãn ở %d cột "
             "đầu, mỗi cột số một ô KHÔNG gộp (đo được: %d ô phủ %d cột, lưới %d "
             "cột, %d ô vắt qua ranh giới nhãn, %d ô số gộp%s)."
             % (
-                ten,
-                so_truong,
-                bo,
+                name,
+                field_count,
+                boundary,
                 len(tcs),
-                cot,
-                so_luoi,
-                vat_qua,
-                gop,
-                ", dòng lệch lưới" if lech else "",
+                col_no,
+                grid_total,
+                crossed,
+                merged,
+                ", dòng lệch lưới" if mismatch else "",
             )
         )
-    la = _the_ngoai(tr, _THE_DONG)
-    if la is not None:
+    odd = _outside_tag(tr, _ROW_TAGS)
+    if odd is not None:
         raise FileValidationError(
-            "Mẫu %s: dòng `Tổng cộng` có phần tử <%s> ngoài ô thường." % (ten, la)
+            "Mẫu %s: dòng `Tổng cộng` có phần tử <%s> ngoài ô thường." % (name, odd)
         )
-    for tc in o_so:
-        _kiem_o_chi_run(tc, ten, "ô số của dòng `Tổng cộng`")
+    for tc in cells:
+        _check_cell_runs_only(tc, name, "ô số của dòng `Tổng cộng`")
 
 
-def _thay_trong_doan(par, pattern: "re.Pattern[str]", repl: str) -> List[str]:
+def _replace_in_paragraph(par, pattern: "re.Pattern[str]", repl: str) -> List[str]:
     """Thay mọi khớp của ``pattern`` trên CHỮ của đoạn (nối các run) bằng ``repl``,
     giữ cấu trúc run: chữ thay vào run chứa ký tự đầu của khớp, phần khớp ở các run
     sau bị cắt khỏi run ấy. Trả chữ CUỐI của đoạn, lặp một lần cho mỗi khớp (để
     người gọi đếm số chỗ đã điền và soát chữ sau khi điền)."""
     runs = par.runs
     texts = [r.text for r in runs]
-    dai_goc = [len(t) for t in texts]
+    original_lengths = [len(t) for t in texts]
     full = "".join(texts)
-    khop = list(pattern.finditer(full))
-    if not khop:
+    matches = list(pattern.finditer(full))
+    if not matches:
         return []
-    dau: List[int] = []
+    mark: List[int] = []
     n = 0
     for t in texts:
-        dau.append(n)
+        mark.append(n)
         n += len(t)
 
-    def run_cua(vt: int) -> int:
+    def run_at(vt: int) -> int:
         """Chỉ số run (theo độ dài GỐC) chứa ký tự ở vị trí ``vt``."""
-        for i, s in enumerate(dau):
-            if s <= vt < s + dai_goc[i]:
+        for i, s in enumerate(mark):
+            if s <= vt < s + original_lengths[i]:
                 return i
         raise ValueError("vị trí ngoài chữ của đoạn")
 
-    for m in reversed(khop):
+    for m in reversed(matches):
         s, e = m.span()
-        ks, ke = run_cua(s), run_cua(e - 1)
-        moi = m.expand(repl)
-        if ks == ke:
-            texts[ks] = texts[ks][: s - dau[ks]] + moi + texts[ks][e - dau[ks] :]
+        run_start, run_end = run_at(s), run_at(e - 1)
+        new = m.expand(repl)
+        if run_start == run_end:
+            texts[run_start] = texts[run_start][: s - mark[run_start]] + new + texts[run_start][e - mark[run_start] :]
         else:
-            texts[ks] = texts[ks][: s - dau[ks]] + moi
-            for k in range(ks + 1, ke):
+            texts[run_start] = texts[run_start][: s - mark[run_start]] + new
+            for k in range(run_start + 1, run_end):
                 texts[k] = ""
-            texts[ke] = texts[ke][e - dau[ke] :]
+            texts[run_end] = texts[run_end][e - mark[run_end] :]
     for r, t in zip(runs, texts):
         if r.text != t:
             r.text = t
-    return ["".join(texts)] * len(khop)
+    return ["".join(texts)] * len(matches)
 
 
-def _moi_doan(d):
+def _new_paragraph(d):
     """Mọi đoạn của thân văn bản, kể cả đoạn trong ô bảng (theo thứ tự tài liệu)."""
     body = d.element.body
     return [Paragraph(p, d) for p in body.iter(qn("w:p"))]
 
 
 # ═══════════════════════════════ thống kê Biên bản (v1.1) ════════════════════
-def _thong_ke(rs: Sequence[_HoSo]):
+def _stats(rs: Sequence[_Profile]):
     """(cộng, THCS, hoàn thành THPT, THPT, TC, CĐ, ĐH, nữ, dân tộc) — luật v1.1.
 
-    Văn hoá: mỗi em đúng MỘT cột (``VAN_HOA_THEO_COT``); tổng ba cột = cộng, lệch ⇒
+    Văn hoá: mỗi em đúng MỘT cột (``CULTURE_BY_COLUMN``); tổng ba cột = cộng, lệch ⇒
     DỪNG. Chuyên môn đếm THÊM (một em có thể ở một cột văn hoá + một cột chuyên môn),
     không theo loại hình. Đại học = 0 (CSDL không có mức này)."""
     van_hoa = [
-        sum(1 for h in rs if h.dto.van_hoa in nhan) for _, nhan in VAN_HOA_THEO_COT
+        sum(1 for h in rs if h.dto.van_hoa in label) for _, label in CULTURE_BY_COLUMN
     ]
     if sum(van_hoa) != len(rs):
         raise DataValidationError(
             "Thống kê Biên bản: tổng cột văn hoá %d ≠ Cộng %d — không dựng văn bản."
             % (sum(van_hoa), len(rs))
         )
-    trung_cap = sum(1 for h in rs if h.dto.chuyen_mon == "trung_cap")
-    cao_dang = sum(1 for h in rs if h.dto.chuyen_mon == "cao_dang")
+    vocational_count = sum(1 for h in rs if h.dto.chuyen_mon == "trung_cap")
+    college_count = sum(1 for h in rs if h.dto.chuyen_mon == "cao_dang")
     return (
         len(rs),
         *van_hoa,
-        trung_cap,
-        cao_dang,
+        vocational_count,
+        college_count,
         0,  # Đại học
         sum(1 for h in rs if h.dto.gioi_tinh == "Nữ"),
         sum(1 for h in rs if h.dto.dan_toc not in ("Kinh", "")),
     )
 
 
-def _trinh_do_chung(hs: Sequence[_HoSo]) -> str:
-    bac = sorted({h.td for h in hs})
-    return bac[0] if len(bac) == 1 else " và ".join(bac)
+def _common_level(hs: Sequence[_Profile]) -> str:
+    levels = sorted({h.td for h in hs})
+    return levels[0] if len(levels) == 1 else " và ".join(levels)
 
 
 # ═══════════════════════════════ BIÊN BẢN ════════════════════════════════════
 # Số trường của một dòng bảng số liệu: TT + ngành + 9 số đếm (+ tổ hợp | số xét tuyển
-# + điểm). Bằng số ô của dòng mẫu — :func:`_kiem_dong_mau`.
-SO_COT_BIEN_BAN_1 = 2 + 9 + 1
-SO_COT_BIEN_BAN_2 = 4 + 9
+# + điểm). Bằng số ô của dòng mẫu — :func:`_check_template_rows`.
+MINUTES_COLUMNS_1 = 2 + 9 + 1
+MINUTES_COLUMNS_2 = 4 + 9
 # Dòng "Tổng cộng": nhãn ở hai cột đầu (TT + ngành); số tổng ghi từ cột này trở đi.
-SO_COT_NHAN_TONG_BB = 2
+MINUTES_TOTAL_LABEL_COLUMNS = 2
 # (chỉ số bảng, số trường, tên trong thông báo) — dùng chung cho phép kiểm và chỗ ghi.
-_BANG_BIEN_BAN = (
-    (1, SO_COT_BIEN_BAN_1, "Biên bản (bảng số liệu 1)"),
-    (2, SO_COT_BIEN_BAN_2, "Biên bản (bảng số liệu 2)"),
+_MINUTES_TABLES = (
+    (1, MINUTES_COLUMNS_1, "Biên bản (bảng số liệu 1)"),
+    (2, MINUTES_COLUMNS_2, "Biên bản (bảng số liệu 2)"),
 )
 
 
 # Dòng mẫu dữ liệu của hai bảng số liệu (sau 4 dòng tiêu đề); dòng "Tổng cộng" ở ngay sau.
-DONG_MAU_BIEN_BAN = 4
+MINUTES_TEMPLATE_ROW = 4
 
 # Chỗ điền trình độ của Biên bản: (chữ của mẫu, cách viết lại). Thứ tự QUAN TRỌNG: mẫu
 # DÀI khớp trước, không thì mẫu ngắn ăn mất mẫu dài. Dùng chung cho phép kiểm mẫu (đoạn
 # nào có chỗ điền thì bị VIẾT LẠI cả đoạn) và chỗ điền.
-_CHO_TRINH_DO_BB = (
+_MINUTES_LEVEL_PLACEHOLDERS = (
     ("ngành nghề …… trình độ ……", "{nghe} trình độ {td}"),
     ("ngành nghề trình độ ……..", "{nghe} trình độ {td}"),
     ("ngành nghề trình độ (có danh sách", "{nghe} trình độ {td} (có danh sách"),
@@ -1281,87 +1281,87 @@ _CHO_TRINH_DO_BB = (
 )
 
 
-def _kiem_mau_bien_ban(d) -> None:
+def _check_minutes_template(d) -> None:
     if len(d.tables) < 3 or len(d.tables[1].rows) < 6 or len(d.tables[2].rows) < 6:
         raise FileValidationError(
             "Mẫu Biên bản không đúng cấu trúc mẫu đang dùng (cần bảng số liệu 1 và 2, "
             "mỗi bảng ≥ 6 dòng)."
         )
-    for i, so_truong, ten in _BANG_BIEN_BAN:
-        _kiem_dong_mau(d.tables[i], DONG_MAU_BIEN_BAN, so_truong, ten, dong_sau=1)
-    for i, so_truong, ten in _BANG_BIEN_BAN:
-        _kiem_dong_tong(
-            d.tables[i], so_truong, SO_COT_NHAN_TONG_BB, ten, DONG_MAU_BIEN_BAN
+    for i, field_count, name in _MINUTES_TABLES:
+        _check_template_rows(d.tables[i], MINUTES_TEMPLATE_ROW, field_count, name, rows_after=1)
+    for i, field_count, name in _MINUTES_TABLES:
+        _check_total_row(
+            d.tables[i], field_count, MINUTES_TOTAL_LABEL_COLUMNS, name, MINUTES_TEMPLATE_ROW
         )
     # Đoạn có chỗ điền trình độ bị viết lại CẢ ĐOẠN từ ``p.text`` (gồm chữ của hyperlink)
     # ⇒ phải chỉ có run trực tiếp, không thì phần ngoài run bị in hai lần (F207).
     for k, p in enumerate(d.paragraphs, 1):
-        if any(cu in p.text for cu, _ in _CHO_TRINH_DO_BB):
-            _kiem_doan_chi_run(p._p, "Biên bản", "đoạn %d (chỗ điền trình độ)" % k)
+        if any(old in p.text for old, _ in _MINUTES_LEVEL_PLACEHOLDERS):
+            _check_paragraph_runs_only(p._p, "Biên bản", "đoạn %d (chỗ điền trình độ)" % k)
 
 
-def _dung_bien_ban(hs, nganh_ds, trinh_do: str, mau: bytes) -> bytes:
-    d = _mo_docx(mau, "Biên bản")
-    _kiem_mau_bien_ban(d)
+def _build_minutes(hs, majors, level: str, template: bytes) -> bytes:
+    d = _open_docx(template, "Biên bản")
+    _check_minutes_template(d)
     b1, b2 = [], []
-    for i, ng in enumerate(nganh_ds, 1):
-        rn = [h for h in hs if h.khoa_nganh == ng]
+    for i, ng in enumerate(majors, 1):
+        rn = [h for h in hs if h.major_key == ng]
         d3 = list(rn)  # theo danh sách đã chọn: mọi hồ sơ là trúng tuyển
         th = sorted({h.dto.to_hop for h in rn})
-        c = _thong_ke(rn)
+        c = _stats(rn)
         b1.append([str(i), "%s - %s" % ng] + [str(x) for x in c] + [", ".join(th)])
-        c3 = _thong_ke(d3)
+        c3 = _stats(d3)
         # "Điểm xét trúng tuyển" = điểm THẤP NHẤT của danh sách trúng tuyển ngành.
-        diem = ("%.2f" % min(h.diem.tong_xt for h in d3)) if d3 else ""
-        b2.append([str(i), "%s - %s" % ng, str(len(rn)), diem] + [str(x) for x in c3])
+        score = ("%.2f" % min(h.diem.tong_xt for h in d3)) if d3 else ""
+        b2.append([str(i), "%s - %s" % ng, str(len(rn)), score] + [str(x) for x in c3])
 
-    _do_bang_chen_truoc(d.tables[1], b1, mau_idx=DONG_MAU_BIEN_BAN)
-    _do_bang_chen_truoc(d.tables[2], b2, mau_idx=DONG_MAU_BIEN_BAN)
-    for (i, so_truong, ten), ds in zip(_BANG_BIEN_BAN, (b1, b2), strict=True):
-        hang = _dong_tong(d.tables[i], ten)
-        # Lớp PHỤ. Tầng chủ sở hữu là :func:`_kiem_dong_tong` (gọi trong
-        # _kiem_mau_bien_ban, TRƯỚC khi dựng tệp nào): qua nó thì mỗi cột từ
-        # SO_COT_NHAN_TONG_BB là đúng một ô riêng của dòng tổng ⇒ ở đây chỉ khẳng định.
-        if len(hang.cells) != so_truong or len(ds[0]) != so_truong:
+    _fit_table_insert_before(d.tables[1], b1, template_index=MINUTES_TEMPLATE_ROW)
+    _fit_table_insert_before(d.tables[2], b2, template_index=MINUTES_TEMPLATE_ROW)
+    for (i, field_count, name), ds in zip(_MINUTES_TABLES, (b1, b2), strict=True):
+        total_row = _total_row(d.tables[i], name)
+        # Lớp PHỤ. Tầng chủ sở hữu là :func:`_check_total_row` (gọi trong
+        # _check_minutes_template, TRƯỚC khi dựng tệp nào): qua nó thì mỗi cột từ
+        # MINUTES_TOTAL_LABEL_COLUMNS là đúng một ô riêng của dòng tổng ⇒ ở đây chỉ khẳng định.
+        if len(total_row.cells) != field_count or len(ds[0]) != field_count:
             raise FileValidationError(
                 "Mẫu %s: dòng `Tổng cộng` có %d cột, bảng có %d trường."
-                % (ten, len(hang.cells), so_truong)
+                % (name, len(total_row.cells), field_count)
             )
-        for j in range(SO_COT_NHAN_TONG_BB, so_truong):
-            cot = [x[j] for x in ds]
-            if all(re.fullmatch(r"\d+", x or "") for x in cot):
-                _dat_o(hang.cells[j], str(sum(int(x) for x in cot)))
+        for j in range(MINUTES_TOTAL_LABEL_COLUMNS, field_count):
+            column_values = [x[j] for x in ds]
+            if all(re.fullmatch(r"\d+", x or "") for x in column_values):
+                _set_cell(total_row.cells[j], str(sum(int(x) for x in column_values)))
             else:
-                _dat_o(hang.cells[j], "")
+                _set_cell(total_row.cells[j], "")
     # Bảng 2: cột 2 là "Số lượng xét tuyển" (cộng được), cột 3 là điểm (không cộng).
-    ht = _dong_tong(d.tables[2], _BANG_BIEN_BAN[1][2])
-    _dat_o(ht.cells[2], str(sum(int(x[2]) for x in b2)))
-    _dat_o(ht.cells[3], "")
+    ht = _total_row(d.tables[2], _MINUTES_TABLES[1][2])
+    _set_cell(ht.cells[2], str(sum(int(x[2]) for x in b2)))
+    _set_cell(ht.cells[3], "")
 
     # "ngành nghề …… trình độ ……" ⇒ "các ngành, nghề trình độ <trình độ>" — theo
-    # :data:`_CHO_TRINH_DO_BB` (mẫu DÀI khớp trước).
-    td_mau = [
-        (cu, moi.format(nghe="các ngành, nghề", td=trinh_do))
-        for cu, moi in _CHO_TRINH_DO_BB
+    # :data:`_MINUTES_LEVEL_PLACEHOLDERS` (mẫu DÀI khớp trước).
+    level_patterns = [
+        (old, new.format(nghe="các ngành, nghề", td=level))
+        for old, new in _MINUTES_LEVEL_PLACEHOLDERS
     ]
-    da_dien = 0
+    filled = 0
     for p in d.paragraphs:
         t = p.text
-        for cu, moi in td_mau:
-            if cu in t:
-                t = t.replace(cu, moi)
+        for old, new in level_patterns:
+            if old in t:
+                t = t.replace(old, new)
         if t != p.text:
-            _dat_doan(p, t)
-            da_dien += 1
-    if da_dien == 0:
+            _set_paragraph(p, t)
+            filled += 1
+    if filled == 0:
         raise FileValidationError(
             "Mẫu Biên bản: không có chỗ điền `trình độ` — mẫu đã đổi?"
         )
-    return _luu_docx(d)
+    return _save_docx(d)
 
 
 # ═══════════════════════════════ QUYẾT ĐỊNH ══════════════════════════════════
-def _kiem_mau_quyet_dinh(d) -> None:
+def _check_decision_template(d) -> None:
     ps = d.paragraphs
     ok = (
         len(ps) >= 25
@@ -1384,49 +1384,49 @@ def _kiem_mau_quyet_dinh(d) -> None:
     # dựng lấy bảng theo chỉ số (bảng 3 nhân cho mọi ngành, bảng 4 bị XOÁ cùng khối
     # mẫu thứ hai): lệch vị trí thì xoá nhầm một bảng khác của mẫu, hoặc danh sách
     # ngành 1 nằm dưới tiêu đề ngành khác — mà vẫn trả bộ tệp ⇒ DỪNG.
-    lien = [
+    consecutive = [
         ps[a]._p.getnext() is d.tables[t]._tbl
         and d.tables[t]._tbl.getnext() is ps[b]._p
         for a, t, b in ((20, 3, 21), (22, 4, 23))
     ]
-    if not all(lien):
+    if not all(consecutive):
         raise FileValidationError(
             "Mẫu Quyết định: khối ngành phải là đoạn `Ngành:`, bảng danh sách, đoạn "
             "`Số thí sinh` liền nhau (khối 1: %s, khối 2: %s)."
-            % tuple("liền" if x else "KHÔNG liền" for x in lien)
+            % tuple("liền" if x else "KHÔNG liền" for x in consecutive)
         )
     # Bảng danh sách của khối ngành thứ NHẤT là bản gốc được nhân cho mọi ngành.
-    _kiem_dong_mau(d.tables[3], 1, SO_COT_QUYET_DINH, "Quyết định (bảng danh sách)")
+    _check_template_rows(d.tables[3], 1, DECISION_COLUMNS, "Quyết định (bảng danh sách)")
     # Chỉ đoạn "Điều 1." ĐẦU nhận số thí sinh + dòng ngành: đoạn thứ hai giữ nguyên chữ
     # mẫu (chỗ trống chưa điền) mà bộ dựng vẫn trả bộ tệp ⇒ DỪNG.
-    dieu1 = [p for p in ps if p.text.strip().startswith("Điều 1.")]
-    if len(dieu1) != 1:
+    article1 = [p for p in ps if p.text.strip().startswith("Điều 1.")]
+    if len(article1) != 1:
         raise FileValidationError(
-            "Mẫu Quyết định: cần đúng MỘT đoạn `Điều 1.`, đo được %d." % len(dieu1)
+            "Mẫu Quyết định: cần đúng MỘT đoạn `Điều 1.`, đo được %d." % len(article1)
         )
-    # Đoạn bị VIẾT LẠI cả đoạn (_dat_doan / _dat_dong_nganh — đoạn khối ngành 1 còn được
+    # Đoạn bị VIẾT LẠI cả đoạn (_set_paragraph / _set_major_row — đoạn khối ngành 1 còn được
     # nhân cho mọi ngành) ⇒ chỉ run trực tiếp (F207).
-    viet_lai = {
+    rewrites = {
         11: "Điều 1 / số thí sinh",
         20: "khối ngành",
         21: "số thí sinh của khối",
     }
-    viet_lai[len(ps) - 1] = "dòng tổng"
+    rewrites[len(ps) - 1] = "dòng tổng"
     for k, p in enumerate(ps):
         if "trinh_do" in p.text:
-            viet_lai.setdefault(k, "chỗ điền trình độ")
-    for k in sorted(viet_lai):
-        _kiem_doan_chi_run(
-            ps[k]._p, "Quyết định", "đoạn %d (%s)" % (k + 1, viet_lai[k])
+            rewrites.setdefault(k, "chỗ điền trình độ")
+    for k in sorted(rewrites):
+        _check_paragraph_runs_only(
+            ps[k]._p, "Quyết định", "đoạn %d (%s)" % (k + 1, rewrites[k])
         )
-    _kiem_doan_chi_run(dieu1[0]._p, "Quyết định", "đoạn `Điều 1.`")
+    _check_paragraph_runs_only(article1[0]._p, "Quyết định", "đoạn `Điều 1.`")
 
 
 # TT · số CCCD · họ · tên · giới tính · ngày sinh · nơi sinh · dân tộc
-SO_COT_QUYET_DINH = 8
+DECISION_COLUMNS = 8
 
 
-def _dat_dong_nganh(par, txt: str) -> None:
+def _set_major_row(par, txt: str) -> None:
     """Dòng ngành ở Điều 1: không đậm, gạch đầu dòng bằng KÝ TỰ ``-`` (mẫu không có
     ``numbering.xml``), thụt treo 851/284 twip, 13pt, căn đều, tab 4820/7371."""
     for r_ in list(par.runs):
@@ -1445,27 +1445,27 @@ def _dat_dong_nganh(par, txt: str) -> None:
         pf.tab_stops.add_tab_stop(Twips(pos))
 
 
-def _dung_quyet_dinh(
-    hs, nganh_ds, trinh_do: str, ma: Dict, mau: bytes, ts: Optional[DecisionParams]
+def _build_decision(
+    hs, majors, level: str, code: Dict, template: bytes, ts: Optional[DecisionParams]
 ):
-    d = _mo_docx(mau, "Quyết định")
-    _kiem_mau_quyet_dinh(d)
-    tong_tt = len(hs)
+    d = _open_docx(template, "Quyết định")
+    _check_decision_template(d)
+    total_count = len(hs)
 
     # Điều 1 — số thí sinh
-    _dat_doan(
+    _set_paragraph(
         d.paragraphs[11],
         d.paragraphs[11].text.replace(
-            "Công nhận …. thí sinh", "Công nhận %d thí sinh" % tong_tt
+            "Công nhận …. thí sinh", "Công nhận %d thí sinh" % total_count
         ),
     )
     # Chỗ <<trinh_do>> / <<[trinh_do]>> — dữ liệu, điền luôn.
     for p in d.paragraphs:
         if "trinh_do" in p.text:
-            _dat_doan(
+            _set_paragraph(
                 p,
-                p.text.replace("<<[trinh_do]>>", trinh_do).replace(
-                    "<<trinh_do>>", trinh_do
+                p.text.replace("<<[trinh_do]>>", level).replace(
+                    "<<trinh_do>>", level
                 ),
             )
 
@@ -1478,28 +1478,28 @@ def _dung_quyet_dinh(
         el.getparent().remove(el)
     # Chụp bản SẠCH trước khi đổ dữ liệu — nhân bản trong vòng lặp sẽ chép bảng
     # đã điền của ngành trước.
-    sach = (copy.deepcopy(p20), copy.deepcopy(tbl3), copy.deepcopy(p21))
-    khoi = [(p20, tbl3, p21)]
-    sau = p21
-    for _ in nganh_ds[1:]:
+    copies = (copy.deepcopy(p20), copy.deepcopy(tbl3), copy.deepcopy(p21))
+    blocks = [(p20, tbl3, p21)]
+    after = p21
+    for _ in majors[1:]:
         e_p, e_t, e_s = (
-            copy.deepcopy(sach[0]),
-            copy.deepcopy(sach[1]),
-            copy.deepcopy(sach[2]),
+            copy.deepcopy(copies[0]),
+            copy.deepcopy(copies[1]),
+            copy.deepcopy(copies[2]),
         )
-        sau.addnext(e_s)
-        sau.addnext(e_t)
-        sau.addnext(e_p)
-        khoi.append((e_p, e_t, e_s))
-        sau = e_s
-    for stt, ((e_p, e_t, e_s), ng) in enumerate(zip(khoi, nganh_ds), 1):
+        after.addnext(e_s)
+        after.addnext(e_t)
+        after.addnext(e_p)
+        blocks.append((e_p, e_t, e_s))
+        after = e_s
+    for stt, ((e_p, e_t, e_s), ng) in enumerate(zip(blocks, majors), 1):
         d3 = sorted(
-            [h for h in hs if h.khoa_nganh == ng],
-            key=lambda h: khoa_trong_nhom_quyet_dinh(h.diem.tong_xt, h.dto.ten),
+            [h for h in hs if h.major_key == ng],
+            key=lambda h: decision_in_group_key(h.diem.tong_xt, h.dto.ten),
         )
-        _dat_doan(Paragraph(e_p, d), "%d.Ngành: %s - Trình độ: %s" % ((stt,) + ng))
-        _dat_doan(Paragraph(e_s, d), "Số thí sinh: %d" % len(d3))
-        _do_bang_chen_truoc(
+        _set_paragraph(Paragraph(e_p, d), "%d.Ngành: %s - Trình độ: %s" % ((stt,) + ng))
+        _set_paragraph(Paragraph(e_s, d), "Số thí sinh: %d" % len(d3))
+        _fit_table_insert_before(
             Table(e_t, d),
             [
                 [
@@ -1514,137 +1514,137 @@ def _dung_quyet_dinh(
                 ]
                 for i, h in enumerate(d3, 1)
             ],
-            mau_idx=1,
+            template_index=1,
         )
 
     # Điều 1: chèn dòng "-\tNgành <tên>\tMã ngành: <mã>\t<n> thí sinh" ngay sau, theo
     # thứ tự NGƯỢC (mỗi dòng addnext ngay sau Điều 1) để giữ thứ tự ngành.
-    dieu1 = next(p for p in d.paragraphs if p.text.strip().startswith("Điều 1."))
-    for ng in reversed(nganh_ds):
-        n = sum(1 for h in hs if h.khoa_nganh == ng)
-        moi = copy.deepcopy(dieu1._p)
-        dieu1._p.addnext(moi)
-        _dat_dong_nganh(
-            Paragraph(moi, d),
-            "-\tNgành %s\tMã ngành: %s\t%d thí sinh" % (ng[0], ma[ng], n),
+    article1 = next(p for p in d.paragraphs if p.text.strip().startswith("Điều 1."))
+    for ng in reversed(majors):
+        n = sum(1 for h in hs if h.major_key == ng)
+        new = copy.deepcopy(article1._p)
+        article1._p.addnext(new)
+        _set_major_row(
+            Paragraph(new, d),
+            "-\tNgành %s\tMã ngành: %s\t%d thí sinh" % (ng[0], code[ng], n),
         )
     # "Điều 1." đậm, phần còn lại của câu không đậm.
-    d1 = Paragraph(dieu1._p, d)
+    d1 = Paragraph(article1._p, d)
     for r_ in list(d1.runs[1:]):
         if not r_.text:
             r_._r.getparent().remove(r_._r)
     if d1.runs and d1.runs[0].text.startswith("Điều 1."):
         r0 = d1.runs[0]
-        con = r0.text[len("Điều 1.") :]
+        children = r0.text[len("Điều 1.") :]
         r0.text = "Điều 1."
         r0.bold = True
-        if con:
-            r1 = d1.add_run(con)
+        if children:
+            r1 = d1.add_run(children)
             r1.bold = False
             r1.font.size = r0.font.size
 
-    cuoi = d.paragraphs[-1]
-    _dat_doan(cuoi, "Tổng số thí sinh theo danh sách:  %d thí sinh./." % tong_tt)
+    last_part = d.paragraphs[-1]
+    _set_paragraph(last_part, "Tổng số thí sinh theo danh sách:  %d thí sinh./." % total_count)
 
-    da_dien = _dien_tham_so_quyet_dinh(d, ts) if ts is not None else {}
-    return _luu_docx(d), da_dien
+    filled = _fill_decision_params(d, ts) if ts is not None else {}
+    return _save_docx(d), filled
 
 
 # Chỗ trống của mẫu Quyết định đang dùng (khớp trên CHỮ của đoạn, xuyên run).
-_RE_SO_QD = re.compile(r"(?<=Số:)\s+(?=/QĐ)|(?<=Quyết định số)\s+(?=/QĐ)")
-_RE_NGAY_QD = re.compile(r"ngày\s+tháng\s+năm")
-_RE_DOT = re.compile(r"đợt\s*…+\.*\s*tháng\s*…+\.*\s*(?=năm)")
-_RE_SO_BB = re.compile(r"(?<=Biên bản số)\s+(?=/BB-)")
-_RE_KY_HIEU_BB = re.compile(r"(Biên bản số[ \t]*[0-9]*/BB-\S+)")
-_RE_NAM_SAU = re.compile(r"ngày \d{2} tháng \d{1,2} năm\s+(\d{4})")
+_RE_DECISION_NUMBER = re.compile(r"(?<=Số:)\s+(?=/QĐ)|(?<=Quyết định số)\s+(?=/QĐ)")
+_RE_DECISION_DATE = re.compile(r"ngày\s+tháng\s+năm")
+_RE_BATCH = re.compile(r"đợt\s*…+\.*\s*tháng\s*…+\.*\s*(?=năm)")
+_RE_MINUTES_NUMBER = re.compile(r"(?<=Biên bản số)\s+(?=/BB-)")
+_RE_MINUTES_SYMBOL = re.compile(r"(Biên bản số[ \t]*[0-9]*/BB-\S+)")
+_RE_YEAR_AFTER = re.compile(r"ngày \d{2} tháng \d{1,2} năm\s+(\d{4})")
 
 
-def _dien_tham_so_quyet_dinh(d, ts: DecisionParams) -> Dict[str, int]:
+def _fill_decision_params(d, ts: DecisionParams) -> Dict[str, int]:
     """Điền số + ngày QĐ, đợt, số + ngày Biên bản vào đúng chỗ trống của mẫu đang dùng.
     Mỗi tham số CÓ GIÁ TRỊ phải khớp đúng số chỗ trống của mẫu đang dùng; lệch ⇒ DỪNG.
     """
-    doan = _moi_doan(d)
-    da: Dict[str, int] = {}
+    paragraph = _new_paragraph(d)
+    done: Dict[str, int] = {}
 
-    def dien(ten: str, pattern, repl: str, can: int) -> List[str]:
-        sau: List[str] = []
-        for p in doan:
-            sau += _thay_trong_doan(p, pattern, repl)
-        if len(sau) != can:
+    def filled(name: str, pattern, repl: str, next_row: int) -> List[str]:
+        after: List[str] = []
+        for p in paragraph:
+            after += _replace_in_paragraph(p, pattern, repl)
+        if len(after) != next_row:
             raise FileValidationError(
                 "Mẫu Quyết định: chỗ điền `%s` có %d, mẫu đang dùng có %d — mẫu đã đổi?"
-                % (ten, len(sau), can)
+                % (name, len(after), next_row)
             )
-        da[ten] = len(sau)
-        return sau
+        done[name] = len(after)
+        return after
 
     if ts.so_quyet_dinh is not None:
-        dien("so_quyet_dinh", _RE_SO_QD, " " + ts.so_quyet_dinh, SO_CHO_SO_QD)
+        filled("so_quyet_dinh", _RE_DECISION_NUMBER, " " + ts.so_quyet_dinh, DECISION_NUMBER_PLACEHOLDER_COUNT)
     if ts.ngay_quyet_dinh is not None:
-        ngay, thang = _ngay_thang(ts.ngay_quyet_dinh)
-        for chu in dien(
+        day, month = _date_parts(ts.ngay_quyet_dinh)
+        for fill_text in filled(
             "ngay_quyet_dinh",
-            _RE_NGAY_QD,
-            "ngày %s tháng %s năm" % (ngay, thang),
-            SO_CHO_NGAY_QD,
+            _RE_DECISION_DATE,
+            "ngày %s tháng %s năm" % (day, month),
+            DECISION_DATE_PLACEHOLDER_COUNT,
         ):
-            nam = [m.group(1) for m in _RE_NAM_SAU.finditer(chu)]
-            if nam != [str(ts.ngay_quyet_dinh.year)] * len(nam) or not nam:
+            year = [m.group(1) for m in _RE_YEAR_AFTER.finditer(fill_text)]
+            if year != [str(ts.ngay_quyet_dinh.year)] * len(year) or not year:
                 raise DataValidationError(
                     "Năm của ngày Quyết định khác năm in sẵn trong mẫu."
                 )
     if ts.dot_so is not None:
-        repl = "đợt %s tháng %s " % (ts.dot_so, _thang(ts.dot_thang))
-        dien("dot", _RE_DOT, repl, SO_CHO_DOT)
+        repl = "đợt %s tháng %s " % (ts.dot_so, _month(ts.dot_thang))
+        filled("dot", _RE_BATCH, repl, BATCH_PLACEHOLDER_COUNT)
     if ts.so_bien_ban is not None:
-        dien("so_bien_ban", _RE_SO_BB, " " + ts.so_bien_ban, SO_CHO_SO_BB)
+        filled("so_bien_ban", _RE_MINUTES_NUMBER, " " + ts.so_bien_ban, MINUTES_NUMBER_PLACEHOLDER_COUNT)
     if ts.ngay_bien_ban is not None:
-        for p in doan:
-            m = _RE_KY_HIEU_BB.search(p.text)
+        for p in paragraph:
+            m = _RE_MINUTES_SYMBOL.search(p.text)
             if m and p.text[m.end() :].lstrip().startswith("ngày"):
                 raise FileValidationError(
                     "Mẫu Quyết định: căn cứ Biên bản đã có chữ `ngày` — "
                     "luật điền hiện hành không áp được."
                 )
-        ngay, thang = _ngay_thang(ts.ngay_bien_ban)
-        dien(
+        day, month = _date_parts(ts.ngay_bien_ban)
+        filled(
             "ngay_bien_ban",
-            _RE_KY_HIEU_BB,
-            r"\1 ngày %s/%s/%d" % (ngay, thang, ts.ngay_bien_ban.year),
-            SO_CHO_SO_BB,
+            _RE_MINUTES_SYMBOL,
+            r"\1 ngày %s/%s/%d" % (day, month, ts.ngay_bien_ban.year),
+            MINUTES_NUMBER_PLACEHOLDER_COUNT,
         )
-    return da
+    return done
 
 
 # ═══════════════════════════════ DANH SÁCH XÉT TUYỂN ═════════════════════════
-def _ky_hieu(status: str, fmt: str) -> str:
-    if status not in DA_NOP:
+def _symbol(status: str, fmt: str) -> str:
+    if status not in SUBMITTED_STATUSES:
         return "K"
-    return _KY_HIEU.get((fmt or "").strip(), "C")
+    return _SYMBOLS.get((fmt or "").strip(), "C")
 
 
-def _co_khong(status: str) -> str:
-    return "C" if status in DA_NOP else "K"
+def _yes_no(status: str) -> str:
+    return "C" if status in SUBMITTED_STATUSES else "K"
 
 
-def _dong_ds1(i: int, h: _HoSo) -> List[str]:
+def _list1_row(i: int, h: _Profile) -> List[str]:
     r = h.dto
     return [
         str(i), r.ma_ho_so, r.ho, r.ten, r.gioi_tinh, r.ngay_sinh, r.noi_sinh, r.dan_toc, h.dia_chi, r.van_hoa,
-        _co_khong(r.s_phieu), _co_khong(r.s_soyeu),
-        _ky_hieu(r.s_hocba, r.f_hocba),
+        _yes_no(r.s_phieu), _yes_no(r.s_soyeu),
+        _symbol(r.s_hocba, r.f_hocba),
         "",  # Xác nhận KQHT — QLTS không có loại giấy này
         # Bằng tốt nghiệp chính thức / giấy CN tốt nghiệp TẠM THỜI — hai cột riêng.
-        _ky_hieu(r.s_bang, r.f_bang) if r.k_bang == "official_diploma" else "K",
-        _ky_hieu(r.s_bang, r.f_bang) if r.k_bang == "provisional_cert" else "K",
-        _ky_hieu(r.s_cngdpt, r.f_cngdpt),
-        _ky_hieu(r.s_ks, r.f_ks),
-        _ky_hieu(r.s_cccd, r.f_cccd),
-        _ky_hieu(r.s_anh, r.f_anh),
+        _symbol(r.s_bang, r.f_bang) if r.k_bang == "official_diploma" else "K",
+        _symbol(r.s_bang, r.f_bang) if r.k_bang == "provisional_cert" else "K",
+        _symbol(r.s_cngdpt, r.f_cngdpt),
+        _symbol(r.s_ks, r.f_ks),
+        _symbol(r.s_cccd, r.f_cccd),
+        _symbol(r.s_anh, r.f_anh),
     ]  # fmt: skip
 
 
-def _dong_diem(i: int, h: _HoSo) -> List[str]:
+def _score_row(i: int, h: _Profile) -> List[str]:
     r, dm = h.dto, h.diem
     return [
         str(i), r.ma_ho_so, r.ho, r.ten, r.gioi_tinh, r.ngay_sinh, r.noi_sinh, r.dan_toc,
@@ -1663,34 +1663,34 @@ HDR_DS1 = ["TT", "Mã hồ sơ", "Họ", "Tên", "Giới tính", "Ngày sinh", "
            "Học bạ trung học", "Xác nhận KQHT", "Bằng tốt nghiệp trung học",
            "Chứng nhận tốt nghiệp", "CN hoàn thành văn hóa", "Giấy khai sinh",
            "CCCD/CMND", "Ảnh 3x4"]  # fmt: skip
-HDR_DIEM = ["TT", "Mã hồ sơ", "Họ", "Tên", "Giới tính", "Ngày sinh", "Nơi sinh", "Dân tộc",
+SCORE_HEADERS = ["TT", "Mã hồ sơ", "Họ", "Tên", "Giới tính", "Ngày sinh", "Nơi sinh", "Dân tộc",
             "Đối tượng", "Khu vực", "Mã tổ hợp môn", "Môn 1", "Môn 2", "Môn 3",
             "Điểm TB", "Tổng điểm", "ƯT Đối tượng", "ƯT Khu vực",
             "Tổng điểm xét tuyển", "Ghi chú"]  # fmt: skip
 
 # Bề rộng tối thiểu một cột (twip) — đủ cho số thứ tự "[NN]" cỡ 6pt ở hàng tiêu đề.
-SAN_COT = 280
+MIN_COLUMN_WIDTH = 280
 
 
-def _so_nguyen_duong(e, thuoc_tinh: str, ten: str, cho: str, toi_da: int) -> int:
+def _positive_integer(e, attribute: str, name: str, location: str, max_count: int) -> int:
     """Giá trị thuộc tính ``thuoc_tinh`` của phần tử ``e`` trong mẫu — số nguyên ASCII trong
-    khoảng 1..``toi_da`` (trần KỸ THUẬT — xem ``SZ_TOI_DA`` / ``GRIDCOL_TOI_DA``).
+    khoảng 1..``toi_da`` (trần KỸ THUẬT — xem ``MAX_SZ`` / ``MAX_GRIDCOL``).
 
-    Thiếu, không phải chữ số ASCII, dài quá ``SO_CHU_SO_TOI_DA`` chữ số (đọc qua
-    :func:`_so_nguyen_ascii` — không bao giờ tới ``int()`` với chuỗi dài), < 1 hoặc vượt
+    Thiếu, không phải chữ số ASCII, dài quá ``MAX_DIGITS`` chữ số (đọc qua
+    :func:`_ascii_integer` — không bao giờ tới ``int()`` với chuỗi dài), < 1 hoặc vượt
     ``toi_da`` ⇒ ``FileValidationError`` (chỉ tên mẫu + chỗ + trần, không có chữ của mẫu).
-    Dùng ở điểm ĐỌC của bộ dựng (:func:`_doc_luoi`), nên phép kiểm mẫu gọi lại đúng hàm ấy
+    Dùng ở điểm ĐỌC của bộ dựng (:func:`_read_grid`), nên phép kiểm mẫu gọi lại đúng hàm ấy
     là đủ để mẫu hỏng bị từ chối lúc tải lên, không nổ lúc dựng (F211)."""
-    n = _so_nguyen_ascii(e.get(qn(thuoc_tinh)))
-    if n is None or not 1 <= n <= toi_da:
+    n = _ascii_integer(e.get(qn(attribute)))
+    if n is None or not 1 <= n <= max_count:
         raise FileValidationError(
             "Mẫu %s: %s thiếu giá trị, không phải số nguyên dương hoặc vượt trần kỹ thuật "
-            "%d." % (ten, cho, toi_da)
+            "%d." % (name, location, max_count)
         )
     return n
 
 
-def _rong_ky_tu(cell, ten: str) -> float:
+def _char_width(cell, name: str) -> float:
     """Twip cho một ký tự — Times New Roman rộng trung bình ≈ 0,5 × cỡ chữ."""
     p = cell.paragraphs[0]._p
     r = p.find(qn("w:r"))
@@ -1702,82 +1702,82 @@ def _rong_ky_tu(cell, ten: str) -> float:
     if sz is None:
         return 10.0 * 10
     return (
-        _so_nguyen_duong(sz, "w:val", ten, "cỡ chữ (w:sz) ở dòng mẫu", SZ_TOI_DA)
+        _positive_integer(sz, "w:val", name, "cỡ chữ (w:sz) ở dòng mẫu", MAX_SZ)
         / 2.0
         * 10
     )
 
 
-def _doc_luoi(tbl, ten: str) -> Tuple[List[int], List[float]]:
+def _read_grid(tbl, name: str) -> Tuple[List[int], List[float]]:
     """(bề rộng cũ từng cột lưới, twip / ký tự từng cột theo cỡ chữ dòng mẫu) — NGUỒN DUY
-    NHẤT đọc hai giá trị số này của mẫu Danh sách; :func:`_tinh_luoi` và phép kiểm mẫu
-    (:func:`_kiem_mau_danh_sach`) cùng gọi. Bề rộng = 0 ở mọi cột thì phép chia ở
-    :func:`_dat_rong` nổ ⇒ mỗi cột phải ≥ 1."""
+    NHẤT đọc hai giá trị số này của mẫu Danh sách; :func:`_compute_grid` và phép kiểm mẫu
+    (:func:`_check_list_template`) cùng gọi. Bề rộng = 0 ở mọi cột thì phép chia ở
+    :func:`_set_widths` nổ ⇒ mỗi cột phải ≥ 1."""
     grid = tbl._tbl.find(qn("w:tblGrid"))
-    cu = [
-        _so_nguyen_duong(c, "w:w", ten, "bề rộng cột lưới (w:gridCol)", GRIDCOL_TOI_DA)
+    old = [
+        _positive_integer(c, "w:w", name, "bề rộng cột lưới (w:gridCol)", MAX_GRIDCOL)
         for c in grid.findall(qn("w:gridCol"))
     ]
-    rk = [_rong_ky_tu(tbl.rows[3].cells[j], ten) for j in range(len(cu))]
-    return cu, rk
+    rk = [_char_width(tbl.rows[3].cells[j], name) for j in range(len(old))]
+    return old, rk
 
 
-def _dat_rong(tbl, moi: Sequence[int]) -> None:
+def _set_widths(tbl, new: Sequence[int]) -> None:
     """Ghi bề rộng vào CẢ ``w:gridCol`` LẪN ``w:tcW`` từng ô (``tcW`` kiểu ``pct``
     đè ``gridCol``); ô gộp ngang (``gridSpan``) nhận TỔNG các cột nó trùm."""
-    tong = sum(moi)
+    total = sum(new)
     grid = tbl._tbl.find(qn("w:tblGrid"))
-    for c, w in zip(grid.findall(qn("w:gridCol")), moi):
+    for c, w in zip(grid.findall(qn("w:gridCol")), new):
         c.set(qn("w:w"), str(w))
     for tr in tbl._tbl.findall(qn("w:tr")):
         j = 0
         for tc in tr.findall(qn("w:tc")):
-            n = _do_rong_o(tc, len(moi), "Danh sách xét tuyển")
+            n = _cell_width(tc, len(new), "Danh sách xét tuyển")
             tcPr = tc.find(qn("w:tcPr"))
             if tcPr is None:
                 j += n
                 continue
-            rong = sum(moi[j : j + n])
+            width = sum(new[j : j + n])
             tcW = tcPr.find(qn("w:tcW"))
             if tcW is not None:
                 if tcW.get(qn("w:type")) == "pct":
-                    tcW.set(qn("w:w"), str(int(round(rong * 5000.0 / tong))))
+                    tcW.set(qn("w:w"), str(int(round(width * 5000.0 / total))))
                 else:
-                    tcW.set(qn("w:w"), str(rong))
+                    tcW.set(qn("w:w"), str(width))
             j += n
 
 
-def _tinh_luoi(tbl, noi_dung) -> List[int]:
+def _compute_grid(tbl, content) -> List[int]:
     """Bề rộng mới cho từng cột, tính trên MỌI dòng dữ liệu của cả bộ (một lưới
     chung cho mọi ngành — tính riêng từng ngành thì in cạnh nhau cột lệch nhau).
     Lấy bớt từ cột thừa, đơn sang cột thiếu; TỔNG bề rộng bất biến."""
-    cu, rk = _doc_luoi(tbl, "Danh sách xét tuyển")
-    tong = sum(cu)
-    nc = len(cu)
-    dai = [0] * nc
-    for dl in noi_dung:
-        # Lưới = số trường (đã qua _kiem_dong_mau) ⇒ ghép đủ cặp, không cắt bớt.
+    old, rk = _read_grid(tbl, "Danh sách xét tuyển")
+    total = sum(old)
+    nc = len(old)
+    lengths = [0] * nc
+    for dl in content:
+        # Lưới = số trường (đã qua _check_template_rows) ⇒ ghép đủ cặp, không cắt bớt.
         for j, v in zip(range(nc), dl, strict=True):
-            dai[j] = max(dai[j], len(str(v or "")))
-    can = [max(int((dai[j] + 1) * rk[j]), SAN_COT) for j in range(nc)]
-    if sum(can) <= tong:
-        du = tong - sum(can)
-        moi = [can[j] + int(du * can[j] / sum(can)) for j in range(nc)]
+            lengths[j] = max(lengths[j], len(str(v or "")))
+    next_row = [max(int((lengths[j] + 1) * rk[j]), MIN_COLUMN_WIDTH) for j in range(nc)]
+    if sum(next_row) <= total:
+        duplicates = total - sum(next_row)
+        new = [next_row[j] + int(duplicates * next_row[j] / sum(next_row)) for j in range(nc)]
     else:
-        moi = list(can)
-        thieu = sum(can) - tong
-        while thieu > 0:
-            j = max(range(nc), key=lambda k: moi[k] - SAN_COT)
-            cat = min(thieu, max(1, int(moi[j] * 0.02)))
-            moi[j] -= cat
-            thieu -= cat
-    moi[0] += tong - sum(moi)  # bù tròn số, giữ TỔNG bất biến
-    if sum(moi) != tong:
+        new = list(next_row)
+        missing = sum(next_row) - total
+        while missing > 0:
+            j = max(range(nc), key=lambda k: new[k] - MIN_COLUMN_WIDTH)
+            cut_amount = min(missing, max(1, int(new[j] * 0.02)))
+            new[j] -= cut_amount
+            missing -= cut_amount
+    new[0] += total - sum(new)  # bù tròn số, giữ TỔNG bất biến
+    if sum(new) != total:
         raise RuntimeError("tổng bề rộng bảng bị đổi")
-    return moi
+    return new
 
 
-def _kiem_mau_danh_sach(d) -> None:
+def _check_list_template(d) -> None:
     ps = d.paragraphs
     ok = (
         len(ps) >= 14
@@ -1793,64 +1793,64 @@ def _kiem_mau_danh_sach(d) -> None:
             "Mẫu Danh sách xét tuyển không đúng cấu trúc mẫu đang dùng (ba danh sách + "
             "bảng phương thức)."
         )
-    for i, so_cot, ten in (
+    for i, column_count, name in (
         (1, len(HDR_DS1), "hồ sơ đăng ký"),
-        (4, len(HDR_DIEM), "xét tuyển"),
-        (8, len(HDR_DIEM), "trúng tuyển"),
+        (4, len(SCORE_HEADERS), "xét tuyển"),
+        (8, len(SCORE_HEADERS), "trúng tuyển"),
     ):
-        _kiem_dong_mau(d.tables[i], 3, so_cot, "Danh sách xét tuyển (%s)" % ten)
-    _kiem_dong_mau(
-        d.tables[5], 1, SO_COT_PHUONG_THUC, "Danh sách xét tuyển (phương thức)"
+        _check_template_rows(d.tables[i], 3, column_count, "Danh sách xét tuyển (%s)" % name)
+    _check_template_rows(
+        d.tables[5], 1, METHOD_COLUMNS, "Danh sách xét tuyển (phương thức)"
     )
     # Bề rộng cột lưới + cỡ chữ dòng mẫu mà bộ dựng ĐỌC để tính lưới (bảng 1 và 4 —
     # bảng 8 dùng lưới của bảng 4): đọc thử bằng ĐÚNG hàm đọc của bộ dựng (F211).
     for i in (1, 4):
-        _doc_luoi(d.tables[i], "Danh sách xét tuyển")
-    # Sáu đoạn bị VIẾT LẠI cả đoạn (_dat_doan): tiêu đề ngành + dòng tổng của ba danh
+        _read_grid(d.tables[i], "Danh sách xét tuyển")
+    # Sáu đoạn bị VIẾT LẠI cả đoạn (_set_paragraph): tiêu đề ngành + dòng tổng của ba danh
     # sách ⇒ chỉ run trực tiếp (F207).
     for k in (1, 3, 6, 8, 12, 13):
-        _kiem_doan_chi_run(ps[k]._p, "Danh sách xét tuyển", "đoạn %d" % (k + 1))
+        _check_paragraph_runs_only(ps[k]._p, "Danh sách xét tuyển", "đoạn %d" % (k + 1))
 
 
 # TT · ký hiệu · phương thức · tổ hợp / điểm sử dụng · số thí sinh · ghi chú
-SO_COT_PHUONG_THUC = 6
+METHOD_COLUMNS = 6
 
 
-def _dung_ds_docx(mau: bytes, ng, ds1, ds2, ds3, pt_rows, luoi) -> bytes:
-    d = _mo_docx(mau, "Danh sách xét tuyển")
-    tieu_de = "Ngành: %s - Trình độ: %s - Đợt xét tuyển:………….." % ng
+def _build_list_docx(template: bytes, ng, ds1, ds2, ds3, pt_rows, grid) -> bytes:
+    d = _open_docx(template, "Danh sách xét tuyển")
+    title = "Ngành: %s - Trình độ: %s - Đợt xét tuyển:………….." % ng
     for i in (1, 6, 12):
-        _dat_doan(d.paragraphs[i], tieu_de)
-    nu = sum(1 for h in ds1 if h.dto.gioi_tinh == "Nữ")
-    dt = sum(1 for h in ds1 if h.dto.dan_toc not in ("Kinh", ""))
-    _dat_doan(
+        _set_paragraph(d.paragraphs[i], title)
+    female = sum(1 for h in ds1 if h.dto.gioi_tinh == "Nữ")
+    ethnic_minority = sum(1 for h in ds1 if h.dto.dan_toc not in ("Kinh", ""))
+    _set_paragraph(
         d.paragraphs[3],
         "Tổng số hồ sơ thí sinh theo danh sách: %d thí sinh. Trong đó, Nữ: %d thí sinh; "
-        "Dân tộc thiểu số/ít người: %d thí sinh./." % (len(ds1), nu, dt),
+        "Dân tộc thiểu số/ít người: %d thí sinh./." % (len(ds1), female, ethnic_minority),
     )
-    _dat_doan(
+    _set_paragraph(
         d.paragraphs[8], "Tổng số thí sinh theo danh sách: %d thí sinh." % len(ds2)
     )
-    _dat_doan(
+    _set_paragraph(
         d.paragraphs[13], "Tổng số thí sinh theo danh sách: %d thí sinh." % len(ds3)
     )
-    _do_bang_noi_cuoi(d.tables[1], [_dong_ds1(i, h) for i, h in enumerate(ds1, 1)])
-    _do_bang_noi_cuoi(d.tables[4], [_dong_diem(i, h) for i, h in enumerate(ds2, 1)])
-    _do_bang_noi_cuoi(d.tables[8], [_dong_diem(i, h) for i, h in enumerate(ds3, 1)])
-    _do_bang_noi_cuoi(d.tables[5], pt_rows, mau_idx=1)
-    for bi in (1, 4, 8):
-        if luoi and bi in luoi:
-            _dat_rong(d.tables[bi], luoi[bi])
-    return _luu_docx(d)
+    _fit_table_append(d.tables[1], [_list1_row(i, h) for i, h in enumerate(ds1, 1)])
+    _fit_table_append(d.tables[4], [_score_row(i, h) for i, h in enumerate(ds2, 1)])
+    _fit_table_append(d.tables[8], [_score_row(i, h) for i, h in enumerate(ds3, 1)])
+    _fit_table_append(d.tables[5], pt_rows, template_index=1)
+    for table_index in (1, 4, 8):
+        if grid and table_index in grid:
+            _set_widths(d.tables[table_index], grid[table_index])
+    return _save_docx(d)
 
 
-_VIEN = Border(*[Side(style="thin", color="BFBFBF")] * 4)
+_BORDER = Border(*[Side(style="thin", color="BFBFBF")] * 4)
 
 # Giới hạn ký tự một ô của Excel — openpyxl CẮT im lặng phần thừa ⇒ dừng thay vì mất chữ.
-_O_XLSX_TOI_DA = 32767
+_MAX_XLSX_CELL = 32767
 
 
-def _ghi_o_xlsx(ws, hang: int, cot: int, v):
+def _write_xlsx_cell(ws, row_no: int, col_no: int, v):
     """NGUỒN DUY NHẤT ghi ô xlsx của bộ dựng (mọi sheet, mọi dòng, kể cả tiêu đề và
     bảng phương thức).
 
@@ -1861,73 +1861,73 @@ def _ghi_o_xlsx(ws, hang: int, cot: int, v):
     Thông báo lỗi chỉ có toạ độ ô, không có giá trị.
 
     Ký tự điều khiển: nhánh ``IllegalCharacterError`` là lớp PHỤ. Tầng chủ sở hữu là
-    phép kiểm đầu vào ở :func:`_chuan_bi` (``_RE_NGOAI_XML``, bao trùm tập cấm của
+    phép kiểm đầu vào ở :func:`_prepare` (``_RE_OUTSIDE_XML``, bao trùm tập cấm của
     openpyxl) — chuỗi từ DTO không tới được đây với ký tự cấm."""
-    o = ws.cell(row=hang, column=cot)
+    cell = ws.cell(row=row_no, column=col_no)
     if isinstance(v, str):
-        if len(v) > _O_XLSX_TOI_DA:
+        if len(v) > _MAX_XLSX_CELL:
             raise DataValidationError(
                 "Danh sách xlsx: ô %s dài hơn %d ký tự."
-                % (o.coordinate, _O_XLSX_TOI_DA)
+                % (cell.coordinate, _MAX_XLSX_CELL)
             )
         try:
-            o.value = v
+            cell.value = v
         except IllegalCharacterError:
             raise DataValidationError(
                 "Danh sách xlsx: ô %s chứa ký tự điều khiển không ghi được."
-                % o.coordinate
+                % cell.coordinate
             ) from None
-        o.data_type = "s"
+        cell.data_type = "s"
     else:
-        o.value = v
-    return o
+        cell.value = v
+    return cell
 
 
-def _ghi_dong_xlsx(ws, hang: int, gia_tri) -> None:
-    for cot, v in enumerate(gia_tri, 1):
-        _ghi_o_xlsx(ws, hang, cot, v)
+def _write_xlsx_row(ws, row_no: int, value) -> None:
+    for col_no, v in enumerate(value, 1):
+        _write_xlsx_cell(ws, row_no, col_no, v)
 
 
-def _dung_ds_xlsx(ng, ds1, ds2, ds3, pt_rows) -> bytes:
+def _build_list_xlsx(ng, ds1, ds2, ds3, pt_rows) -> bytes:
     wb = Workbook()
     wb.remove(wb.active)
-    for ten, hdr, data, fn in (
-        ("1-Hồ sơ đăng ký", HDR_DS1, ds1, _dong_ds1),
-        ("2-Xét tuyển", HDR_DIEM, ds2, _dong_diem),
-        ("3-Trúng tuyển", HDR_DIEM, ds3, _dong_diem),
+    for name, hdr, data, fn in (
+        ("1-Hồ sơ đăng ký", HDR_DS1, ds1, _list1_row),
+        ("2-Xét tuyển", SCORE_HEADERS, ds2, _score_row),
+        ("3-Trúng tuyển", SCORE_HEADERS, ds3, _score_row),
     ):
-        ws = wb.create_sheet(ten)
+        ws = wb.create_sheet(name)
         # Dòng 1 tiêu đề · dòng 2 trống · dòng 3 tên cột · dòng 4.. dữ liệu · một dòng
         # trống · dòng TỔNG CỘNG (đúng bố cục của bộ xuất).
-        _ghi_dong_xlsx(
-            ws, 1, ["%s — Ngành: %s — Trình độ: %s" % ((ten[2:].upper(),) + ng)]
+        _write_xlsx_row(
+            ws, 1, ["%s — Ngành: %s — Trình độ: %s" % ((name[2:].upper(),) + ng)]
         )
-        _ghi_dong_xlsx(ws, 3, hdr)
+        _write_xlsx_row(ws, 3, hdr)
         for c in ws[3]:
             c.font = Font(bold=True, color="FFFFFF", size=10)
             c.fill = PatternFill("solid", fgColor="1F4E79")
             c.alignment = Alignment(
                 horizontal="center", vertical="center", wrap_text=True
             )
-            c.border = _VIEN
+            c.border = _BORDER
         for i, h in enumerate(data, 1):
-            _ghi_dong_xlsx(ws, 3 + i, fn(i, h))
+            _write_xlsx_row(ws, 3 + i, fn(i, h))
             for c in ws[3 + i]:
-                c.border = _VIEN
+                c.border = _BORDER
                 c.alignment = Alignment(vertical="center", wrap_text=True)
-        _ghi_dong_xlsx(ws, 3 + len(data) + 2, ["TỔNG CỘNG", len(data), "hồ sơ"])
+        _write_xlsx_row(ws, 3 + len(data) + 2, ["TỔNG CỘNG", len(data), "hồ sơ"])
         ws.freeze_panes = "A4"
         ws.auto_filter.ref = "A3:%s%d" % (chr(64 + len(hdr)), 3 + len(data))
         for j, hd in enumerate(hdr, 1):
-            dai = (
+            lengths = (
                 max([len(hd)] + [len(str(fn(1, h)[j - 1])) for h in data[:200]])
                 if data
                 else len(hd)
             )
-            ws.column_dimensions[chr(64 + j)].width = min(max(dai + 2, 8), 30)
+            ws.column_dimensions[chr(64 + j)].width = min(max(lengths + 2, 8), 30)
         ws.row_dimensions[3].height = 34
     ws = wb.create_sheet("4-Phương thức")
-    _ghi_dong_xlsx(
+    _write_xlsx_row(
         ws,
         1,
         [
@@ -1943,7 +1943,7 @@ def _dung_ds_xlsx(ng, ds1, ds2, ds3, pt_rows) -> bytes:
         c.font = Font(bold=True, color="FFFFFF")
         c.fill = PatternFill("solid", fgColor="1F4E79")
     for k, dl in enumerate(pt_rows, 2):
-        _ghi_dong_xlsx(ws, k, dl)
+        _write_xlsx_row(ws, k, dl)
     for j, w in enumerate([5, 10, 30, 34, 12, 20], 1):
         ws.column_dimensions[chr(64 + j)].width = w
     buf = io.BytesIO()
@@ -1951,55 +1951,55 @@ def _dung_ds_xlsx(ng, ds1, ds2, ds3, pt_rows) -> bytes:
     return buf.getvalue()
 
 
-def _bang_phuong_thuc(ds2: Sequence[_HoSo]) -> List[List[str]]:
+def _method_table(ds2: Sequence[_Profile]) -> List[List[str]]:
     """Bảng "Phương thức sử dụng xét tuyển": MỖI TỔ HỢP một dòng + số thí sinh riêng;
     mã PT gán theo phương thức (nhiều tổ hợp cùng phương thức cùng mã)."""
-    ma_pt: Dict[str, str] = {}
-    gom: Dict[Tuple[str, str], Dict[str, object]] = {}
+    method_codes: Dict[str, str] = {}
+    groups: Dict[Tuple[str, str], Dict[str, object]] = {}
     for h in ds2:
         k = (h.dto.phuong_thuc, h.dto.to_hop)
-        g = gom.setdefault(k, {"n": 0, "mon": ""})
+        g = groups.setdefault(k, {"n": 0, "mon": ""})
         g["n"] += 1
         if not g["mon"] and h.dto.mon_to_hop:
             g["mon"] = h.dto.mon_to_hop
-    for ten_pt, _ in sorted(gom):
-        if ten_pt not in ma_pt:
-            ma_pt[ten_pt] = "PT%d" % (len(ma_pt) + 1)
+    for method_name, _ in sorted(groups):
+        if method_name not in method_codes:
+            method_codes[method_name] = "PT%d" % (len(method_codes) + 1)
     pt = []
-    for i, ((ten_pt, th), g) in enumerate(sorted(gom.items(), key=lambda kv: kv[0]), 1):
-        nhan = ("%s - %s" % (th, g["mon"])) if g["mon"] else th
-        pt.append([str(i), ma_pt[ten_pt], ten_pt, nhan, str(g["n"]), ""])
+    for i, ((method_name, th), g) in enumerate(sorted(groups.items(), key=lambda kv: kv[0]), 1):
+        label = ("%s - %s" % (th, g["mon"])) if g["mon"] else th
+        pt.append([str(i), method_codes[method_name], method_name, label, str(g["n"]), ""])
     return pt
 
 
-def _dung_danh_sach(hs, nganh_ds, mau: bytes) -> List[RenderedFile]:
-    m = _mo_docx(mau, "Danh sách xét tuyển")
-    _kiem_mau_danh_sach(m)
+def _build_list(hs, majors, template: bytes) -> List[RenderedFile]:
+    m = _open_docx(template, "Danh sách xét tuyển")
+    _check_list_template(m)
     # Lưới cột CHUNG cho mọi ngành — tính MỘT LẦN trên toàn bộ danh sách đầu vào.
-    luoi = {
-        1: _tinh_luoi(m.tables[1], [_dong_ds1(i, h) for i, h in enumerate(hs, 1)]),
-        4: _tinh_luoi(m.tables[4], [_dong_diem(i, h) for i, h in enumerate(hs, 1)]),
+    grid = {
+        1: _compute_grid(m.tables[1], [_list1_row(i, h) for i, h in enumerate(hs, 1)]),
+        4: _compute_grid(m.tables[4], [_score_row(i, h) for i, h in enumerate(hs, 1)]),
     }
-    luoi[8] = luoi[4]  # bảng 8 cùng bộ cột với bảng 4
+    grid[8] = grid[4]  # bảng 8 cùng bộ cột với bảng 4
     out: List[RenderedFile] = []
-    for stt, ng in enumerate(nganh_ds, 1):
-        r_ng = [h for h in hs if h.khoa_nganh == ng]
+    for stt, ng in enumerate(majors, 1):
+        r_ng = [h for h in hs if h.major_key == ng]
         ds1 = sorted(r_ng, key=lambda h: (h.dto.ten, h.dto.ho))
         ds2 = list(ds1)
         ds3 = sorted(
-            r_ng, key=lambda h: khoa_trong_nhom_quyet_dinh(h.diem.tong_xt, h.dto.ten)
+            r_ng, key=lambda h: decision_in_group_key(h.diem.tong_xt, h.dto.ten)
         )
-        pt = _bang_phuong_thuc(ds2)
-        ma_td = "CD" if ng[1] == "Cao đẳng" else "TC"
-        goc = "DanhSachXetTuyen/%02d-%s-%s/DanhSachXetTuyen-%s-%s" % (
+        pt = _method_table(ds2)
+        level_code = "CD" if ng[1] == "Cao đẳng" else "TC"
+        root = "DanhSachXetTuyen/%02d-%s-%s/DanhSachXetTuyen-%s-%s" % (
             stt,
-            ma_td,
-            _ten_tep(ng[0]),
-            ma_td,
-            _ten_tep(ng[0]),
+            level_code,
+            _file_name(ng[0]),
+            level_code,
+            _file_name(ng[0]),
         )
-        out.append(_tep(goc + ".docx", _dung_ds_docx(mau, ng, ds1, ds2, ds3, pt, luoi)))
-        out.append(_tep(goc + ".xlsx", _dung_ds_xlsx(ng, ds1, ds2, ds3, pt)))
+        out.append(_file(root + ".docx", _build_list_docx(template, ng, ds1, ds2, ds3, pt, grid)))
+        out.append(_file(root + ".xlsx", _build_list_xlsx(ng, ds1, ds2, ds3, pt)))
     return out
 
 
@@ -2008,11 +2008,11 @@ def _sha(b: bytes) -> str:
     return hashlib.sha256(b).hexdigest()
 
 
-def _tep(path: str, b: bytes) -> RenderedFile:
+def _file(path: str, b: bytes) -> RenderedFile:
     return RenderedFile(path, b, _sha(b))
 
 
-def _phien_ban_thu_vien() -> Dict[str, str]:
+def _library_versions() -> Dict[str, str]:
     import lxml.etree
     import openpyxl
 
@@ -2025,28 +2025,28 @@ def _phien_ban_thu_vien() -> Dict[str, str]:
 
 #: Ba loại mẫu của một bộ văn bản — trùng tên trường của :class:`CouncilTemplates` và giá
 #: trị cột ``loai`` của kho mẫu.
-LOAI_MAU: Tuple[str, ...] = ("bien_ban", "quyet_dinh", "danh_sach")
+TEMPLATE_KINDS: Tuple[str, ...] = ("bien_ban", "quyet_dinh", "danh_sach")
 
-_KIEM_MAU = {
-    "bien_ban": ("Biên bản", _kiem_mau_bien_ban),
-    "quyet_dinh": ("Quyết định", _kiem_mau_quyet_dinh),
-    "danh_sach": ("Danh sách xét tuyển", _kiem_mau_danh_sach),
+_TEMPLATE_CHECKS = {
+    "bien_ban": ("Biên bản", _check_minutes_template),
+    "quyet_dinh": ("Quyết định", _check_decision_template),
+    "danh_sach": ("Danh sách xét tuyển", _check_list_template),
 }
 
 
-def kiem_mau(loai: str, noi_dung: bytes) -> None:
+def check_template(kind: str, content: bytes) -> None:
     """Mở mẫu ``loai`` và chạy ĐÚNG phép kiểm cấu trúc mà bộ dựng chạy trước khi dựng —
     MỘT nguồn cho kho mẫu (lúc tải lên) lẫn điểm vào bộ dựng. Mẫu không đọc được / sai cấu
     trúc ⇒ ``FileValidationError`` (thông báo không có chữ của mẫu)."""
-    if loai not in _KIEM_MAU:
-        raise DataValidationError("Loại mẫu không thuộc %s." % " / ".join(LOAI_MAU))
-    ten, kiem = _KIEM_MAU[loai]
-    if not isinstance(noi_dung, bytes):
-        raise FileValidationError("Mẫu %s: nội dung không phải bytes." % ten)
-    kiem(_mo_docx(noi_dung, ten))
+    if kind not in _TEMPLATE_CHECKS:
+        raise DataValidationError("Loại mẫu không thuộc %s." % " / ".join(TEMPLATE_KINDS))
+    name, check = _TEMPLATE_CHECKS[kind]
+    if not isinstance(content, bytes):
+        raise FileValidationError("Mẫu %s: nội dung không phải bytes." % name)
+    check(_open_docx(content, name))
 
 
-def kiem_lai_tham_so_quyet_dinh(
+def recheck_decision_params(
     ts: Optional[DecisionParams],
 ) -> Optional[DecisionParams]:
     """Kiểm LẠI tham số Quyết định ở điểm vào và trả bản ĐÃ kiểm (dùng bản này, không dùng
@@ -2061,18 +2061,18 @@ def kiem_lai_tham_so_quyet_dinh(
         return None
     if not isinstance(ts, DecisionParams):
         raise DataValidationError("Tham số Quyết định không đúng kiểu.")
-    gia_tri = {k: getattr(ts, k, None) for k in DecisionParams.model_fields}
+    value = {k: getattr(ts, k, None) for k in DecisionParams.model_fields}
     try:
-        return DecisionParams.model_validate(gia_tri)
+        return DecisionParams.model_validate(value)
     except PydanticValidationError as e:
-        truong = sorted(
+        field = sorted(
             {
-                str(loi["loc"][0]) if loi.get("loc") else "ràng buộc giữa các trường"
-                for loi in e.errors(include_url=False, include_input=False)
+                str(error["loc"][0]) if error.get("loc") else "ràng buộc giữa các trường"
+                for error in e.errors(include_url=False, include_input=False)
             }
         )
         raise DataValidationError(
-            "Tham số Quyết định không hợp lệ ở: %s." % ", ".join(truong)
+            "Tham số Quyết định không hợp lệ ở: %s." % ", ".join(field)
         ) from None
 
 
@@ -2085,27 +2085,27 @@ def render_council_documents(
     truyền vào. Không lọc, không đọc CSDL, không ghi đĩa. Kiểm ĐỦ đầu vào (hồ sơ + tham
     số Quyết định) và CẢ BA mẫu trước khi dựng tệp nào — lỗi ở bất kỳ đâu ⇒ không trả tệp
     nào."""
-    hs = _chuan_bi(list(rows))
-    decision_params = kiem_lai_tham_so_quyet_dinh(decision_params)
-    for loai in LOAI_MAU:
-        kiem_mau(loai, getattr(templates, loai))
-    nganh_ds = sorted({h.khoa_nganh for h in hs})
-    ma = _ma_nganh(hs, nganh_ds)
-    trinh_do = _trinh_do_chung(hs)
-    duoi = khong_dau(trinh_do).replace(" ", "-")
+    hs = _prepare(list(rows))
+    decision_params = recheck_decision_params(decision_params)
+    for kind in TEMPLATE_KINDS:
+        check_template(kind, getattr(templates, kind))
+    majors = sorted({h.major_key for h in hs})
+    code = _major_code(hs, majors)
+    level = _common_level(hs)
+    suffix = strip_accents(level).replace(" ", "-")
 
-    bb = _dung_bien_ban(hs, nganh_ds, trinh_do, templates.bien_ban)
-    qd, da_dien = _dung_quyet_dinh(
-        hs, nganh_ds, trinh_do, ma, templates.quyet_dinh, decision_params
+    bb = _build_minutes(hs, majors, level, templates.bien_ban)
+    decision, filled = _build_decision(
+        hs, majors, level, code, templates.quyet_dinh, decision_params
     )
     files = [
-        _tep("HoiDong/BienBanXetTuyen-%s.docx" % duoi, bb),
-        _tep("HoiDong/QuyetDinhTrungTuyen-%s.docx" % duoi, qd),
-    ] + _dung_danh_sach(hs, nganh_ds, templates.danh_sach)
+        _file("HoiDong/BienBanXetTuyen-%s.docx" % suffix, bb),
+        _file("HoiDong/QuyetDinhTrungTuyen-%s.docx" % suffix, decision),
+    ] + _build_list(hs, majors, templates.danh_sach)
 
     metadata: Dict[str, object] = {
-        "luat_render": LUAT_RENDER,
-        "tran_uu_tien": TRAN_UU_TIEN_V1,
+        "luat_render": RENDER_RULE,
+        "tran_uu_tien": PRIORITY_CAP_V1,
         "sha256_mau": {
             "bien_ban": _sha(templates.bien_ban),
             "quyet_dinh": _sha(templates.quyet_dinh),
@@ -2114,23 +2114,23 @@ def render_council_documents(
         # Danh sách mã đầu vào ĐÚNG THỨ TỰ — là đầu vào của bộ, lưu cùng bộ (có PII).
         "ma_ho_so_dau_vao": [h.dto.ma_ho_so for h in hs],
         "so_ho_so": len(hs),
-        "trinh_do": trinh_do,
+        "trinh_do": level,
         "nganh": [
             {
                 "nganh": ng[0],
                 "trinh_do": ng[1],
-                "ma_nganh": ma[ng],
-                "so_thi_sinh": sum(1 for h in hs if h.khoa_nganh == ng),
+                "ma_nganh": code[ng],
+                "so_thi_sinh": sum(1 for h in hs if h.major_key == ng),
             }
-            for ng in nganh_ds
+            for ng in majors
         ],
         "tham_so_quyet_dinh": (
             decision_params.model_dump(mode="json")
             if decision_params is not None
             else None
         ),
-        "cho_da_dien_quyet_dinh": da_dien,
-        "thu_vien": _phien_ban_thu_vien(),
+        "cho_da_dien_quyet_dinh": filled,
+        "thu_vien": _library_versions(),
         "tep": [{"path": f.path, "sha256": f.sha256} for f in files],
     }
     return CouncilDocumentSet(tuple(files), metadata)

@@ -41,7 +41,7 @@ from app.utils.exceptions import (
     BusinessRuleViolation,
     ConflictError,
     PermissionDeniedError,
-    QuyetDinhKhoaHoSo,
+    ProfileLockedByDecisionError,
     ResourceNotFoundError,
 )
 
@@ -1356,7 +1356,7 @@ async def untick_priority_object_evidence(
         )
         return await _evidence_response(db, profile_id, current_user)
 
-    except QuyetDinhKhoaHoSo:
+    except ProfileLockedByDecisionError:
         # Review max PR #724 (R8): GIỮ error_code + public_payload (handler toàn cục) — gói thành
         # HTTPException làm giao diện mất mã COUNCIL_DECISION_LOCKS_PROFILE và câu hướng dẫn.
         raise

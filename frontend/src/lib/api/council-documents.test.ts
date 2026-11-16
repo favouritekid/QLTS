@@ -13,7 +13,7 @@ import { http, HttpResponse } from "msw"
 
 import { server } from "@/test/mocks/server"
 import { NO_COUNCIL_PERMISSIONS } from "@/hooks/admin/useCouncilDocuments"
-import { CO_CHO_MAY_CHU, councilDocumentPermissionsSchema, councilQuotaWarningSchema } from "@/lib/zod/council-documents"
+import { SERVER_PENDING_FLAGS, councilDocumentPermissionsSchema, councilQuotaWarningSchema } from "@/lib/zod/council-documents"
 import {
   COUNCIL_DOCUMENTS_PREFIX as P,
   createCouncilSet,
@@ -155,8 +155,8 @@ describe("getCouncilDocumentPermissions", () => {
     const macDinh = Object.entries(councilDocumentPermissionsSchema.shape)
       .filter(([, v]) => v.safeParse(undefined).success)
       .map(([ten]) => ten)
-    expect([...macDinh].sort()).toEqual([...CO_CHO_MAY_CHU].sort())
-    expect([...CO_CHO_MAY_CHU]).toEqual([])
+    expect([...macDinh].sort()).toEqual([...SERVER_PENDING_FLAGS].sort())
+    expect([...SERVER_PENDING_FLAGS]).toEqual([])
   })
 
   it("thiếu cờ ⇒ NỔ (không tự coi là tắt / bật)", async () => {

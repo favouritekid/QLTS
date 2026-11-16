@@ -2,7 +2,7 @@
 import { Suspense } from "react"
 import { notFound } from "next/navigation"
 
-import { docBuoc } from "../_components/buoc"
+import { readStep } from "../_components/steps"
 import { CouncilSetDetailClient } from "../_components/CouncilSetDetailClient"
 
 // Tham số giữ chỗ cho bước kiểm build của Next.js 16 cacheComponents (như finance/fees/[feeId]).
@@ -25,16 +25,16 @@ interface PageProps {
 export default function CouncilSetDetailPage(props: PageProps) {
   return (
     <Suspense fallback={<p className="text-muted-foreground">Đang tải…</p>}>
-      <ChiTietBo {...props} />
+      <SetDetail {...props} />
     </Suspense>
   )
 }
 
-async function ChiTietBo({ params, searchParams }: PageProps) {
+async function SetDetail({ params, searchParams }: PageProps) {
   const { setId } = await params
-  const { buoc } = await searchParams
+  const { buoc: step } = await searchParams
   if (setId === "__placeholder__" || !/^[1-9]\d{0,17}$/.test(setId)) {
     notFound()
   }
-  return <CouncilSetDetailClient setId={Number(setId)} buocBanDau={docBuoc(buoc)} />
+  return <CouncilSetDetailClient setId={Number(setId)} initialStep={readStep(step)} />
 }

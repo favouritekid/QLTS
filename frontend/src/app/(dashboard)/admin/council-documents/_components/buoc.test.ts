@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest"
 
-import { BUOC_HOP_LE, docBuoc } from "./buoc"
+import { VALID_STEPS, readStep } from "./steps"
 
 describe("docBuoc — tên bước trong URL theo danh sách ĐÓNG", () => {
-  it.each(BUOC_HOP_LE.map((b) => [b]))("%s hợp lệ", (b) => {
-    expect(docBuoc(b)).toBe(b)
+  it.each(VALID_STEPS.map((b) => [b]))("%s hợp lệ", (b) => {
+    expect(readStep(b)).toBe(b)
   })
 
   it.each([
@@ -15,11 +15,11 @@ describe("docBuoc — tên bước trong URL theo danh sách ĐÓNG", () => {
     ["tiền tố", "tai-ca-bo"],
     ["giống nhưng chèn", "tai&cccd=1"],
   ])("%s ⇒ null (không đoán)", (_t, v) => {
-    expect(docBuoc(v)).toBeNull()
+    expect(readStep(v)).toBeNull()
   })
 
   it("mảng (khoá lặp) hoặc vắng ⇒ null", () => {
-    expect(docBuoc(["tai", "ghi-nhan"])).toBeNull()
-    expect(docBuoc(undefined)).toBeNull()
+    expect(readStep(["tai", "ghi-nhan"])).toBeNull()
+    expect(readStep(undefined)).toBeNull()
   })
 })

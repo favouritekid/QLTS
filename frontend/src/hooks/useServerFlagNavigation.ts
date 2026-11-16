@@ -10,25 +10,25 @@ import { useMemo } from "react";
 import { useCouncilDocumentPermissions } from "@/hooks/admin/useCouncilDocuments";
 import type { NavGroup, NavItem } from "@/types/navigation";
 
-function coMucCanCo(items: NavItem[]): boolean {
+function hasServerFlagItem(items: NavItem[]): boolean {
   return items.some(
-    (i) => i.serverFlag !== undefined || (i.children ? coMucCanCo(i.children) : false),
+    (i) => i.serverFlag !== undefined || (i.children ? hasServerFlagItem(i.children) : false),
   );
 }
 
 export function useServerFlagNavigation(navigation: NavGroup[]): NavGroup[] {
-  const canHoi = navigation.some((g) => coMucCanCo(g.items));
-  const vanBan = useCouncilDocumentPermissions({ enabled: canHoi });
-  const vanBanMo =
-    vanBan.state === "ready" && Object.values(vanBan.permissions).some((v) => v === true);
+  const needsQuery = navigation.some((g) => hasServerFlagItem(g.items));
+  const document = useCouncilDocumentPermissions({ enabled: needsQuery });
+  const openDocument =
+    document.state === "ready" && Object.values(document.permissions).some((v) => v === true);
 
   return useMemo(() => {
-    const giu = (items: NavItem[]): NavItem[] =>
+    const hold = (items: NavItem[]): NavItem[] =>
       items
-        .filter((i) => i.serverFlag === undefined || (i.serverFlag === "council-documents" && vanBanMo))
-        .map((i) => (i.children ? { ...i, children: giu(i.children) } : i));
+        .filter((i) => i.serverFlag === undefined || (i.serverFlag === "council-documents" && openDocument))
+        .map((i) => (i.children ? { ...i, children: hold(i.children) } : i));
     return navigation
-      .map((g) => ({ ...g, items: giu(g.items) }))
+      .map((g) => ({ ...g, items: hold(g.items) }))
       .filter((g) => g.items.length > 0);
-  }, [navigation, vanBanMo]);
+  }, [navigation, openDocument]);
 }

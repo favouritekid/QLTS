@@ -18,6 +18,69 @@ from app.models import council_document as m
 
 pytestmark = pytest.mark.unit
 
+#: tên hằng ở MIGRATION (giữ nguyên, tiếng Việt) → tên hằng cùng chuỗi ở model (đã đổi sang tiếng Anh)
+TEN_MODEL = {
+    "CHECK_BO_BAN_KY_DU": "CHECK_SET_SIGNED_COPY_COMPLETE",
+    "CHECK_BO_DUNG_LAI_CO_BAN_KY": "CHECK_SET_REBUILD_HAS_SIGNED_COPY",
+    "CHECK_BO_MOT_CHE_DO": "CHECK_SET_ONE_MODE",
+    "CHECK_BO_SO_BAN_KY": "CHECK_SET_SIGNED_COPY_NUMBER",
+    "CHECK_CHO_H3": "CHECK_HOLD_H3",
+    "CHECK_CHO_H4_CQ": "CHECK_HOLD_H4_CQ",
+    "CHECK_CHO_H4_VH": "CHECK_HOLD_H4_VH",
+    "CHECK_CHO_H4_XL": "CHECK_HOLD_H4_XL",
+    "CHECK_CHO_LY_DO": "CHECK_HOLD_REASON",
+    "CHECK_CHO_LY_DO_VAO": "CHECK_HOLD_ENTRY_REASON",
+    "CHECK_CHO_TRANG_THAI": "CHECK_HOLD_STATUS",
+    "CHECK_DANH_SACH_TEP": "CHECK_FILE_LIST",
+    "CHECK_DONG_BO_STT": "CHECK_SET_ROW_SEQ",
+    "CHECK_DONG_QD_BO": "CHECK_DECISION_ROW_SET",
+    "CHECK_DONG_QD_K5A": "CHECK_DECISION_ROW_K5A",
+    "CHECK_DONG_QD_K5B": "CHECK_DECISION_ROW_K5B",
+    "CHECK_DONG_QD_K5C": "CHECK_DECISION_ROW_K5C",
+    "CHECK_DONG_QD_STT": "CHECK_DECISION_ROW_SEQ",
+    "CHECK_KICH_THUOC": "CHECK_SIZE",
+    "CHECK_LOAI_MAU": "CHECK_TEMPLATE_KIND",
+    "CHECK_LUOT_BO_KHOP": "CHECK_SUBMISSION_SET_MATCH",
+    "CHECK_LUOT_CHO_CO_BO": "CHECK_SUBMISSION_PENDING_HAS_SET",
+    "CHECK_LUOT_KET_THUC": "CHECK_SUBMISSION_FINISHED",
+    "CHECK_LUOT_QD": "CHECK_SUBMISSION_DECISION",
+    "CHECK_LUOT_SHA": "CHECK_SUBMISSION_SHA",
+    "CHECK_LUOT_SHA_HEX": "CHECK_SUBMISSION_SHA_HEX",
+    "CHECK_LUOT_TRANG_THAI": "CHECK_SUBMISSION_STATUS",
+    "CHECK_LY_DO": "CHECK_REASON",
+    "CHECK_MANG_DTO": "CHECK_DTO_ARRAY",
+    "CHECK_MANG_MA": "CHECK_CODE_ARRAY",
+    "CHECK_QD_K3_GOC": "CHECK_DECISION_K3_ROOT",
+    "CHECK_QD_K3_HET": "CHECK_DECISION_K3_EXPIRED",
+    "CHECK_QD_K3_HGN": "CHECK_DECISION_K3_HGN",
+    "CHECK_QD_K3_HUY": "CHECK_DECISION_K3_CANCEL",
+    "CHECK_QD_K3_LY_DO": "CHECK_DECISION_K3_REASON",
+    "CHECK_QD_K3_PHAM_VI": "CHECK_DECISION_K3_SCOPE",
+    "CHECK_QD_K3_SO": "CHECK_DECISION_K3_NUMBER",
+    "CHECK_QD_K3_TU_TRO": "CHECK_DECISION_K3_SELF_REFERENCE",
+    "CHECK_QD_K3_VBH": "CHECK_DECISION_K3_VBH",
+    "CHECK_QD_K4": "CHECK_DECISION_K4",
+    "CHECK_QD_K4B": "CHECK_DECISION_K4B",
+    "CHECK_QD_K4C": "CHECK_DECISION_K4C",
+    "CHECK_QD_K4D": "CHECK_DECISION_K4D",
+    "CHECK_QD_LOAI": "CHECK_DECISION_KIND",
+    "CHECK_QD_SHA_TEP": "CHECK_DECISION_FILE_SHA",
+    "CHECK_QD_SO_HO_SO": "CHECK_DECISION_PROFILE_COUNT",
+    "CHECK_QD_TRANG_THAI": "CHECK_DECISION_STATUS",
+    "CHECK_SCAN_KIEU": "CHECK_SCAN_TYPE",
+    "CHECK_SHA_NOI_DUNG": "CHECK_SHA_CONTENT",
+    "CHECK_SU_KIEN_LOAI": "CHECK_EVENT_KIND",
+    "CHECK_SU_KIEN_SO_LIEU": "CHECK_EVENT_FIGURES",
+    "DIEU_KIEN_DONG_GIU_HO_SO": "ROW_HOLDS_PROFILE_CONDITION",
+    "DIEU_KIEN_DONG_HIEU_LUC": "EFFECTIVE_ROW_CONDITION",
+    "DIEU_KIEN_H1": "CONDITION_H1",
+    "DIEU_KIEN_LUOT_CHO_GUI": "PENDING_SUBMISSION_CONDITION",
+    "DIEU_KIEN_U1": "CONDITION_U1",
+    "DIEU_KIEN_U2": "CONDITION_U2",
+    "DIEU_KIEN_U4": "CONDITION_U4",
+    "LY_DO_XOA_TOI_DA": "MAX_DELETE_REASON_LENGTH",
+}
+
 GOC = Path(__file__).resolve().parents[2]
 VERS = GOC / "alembic" / "versions"
 TEP = VERS / "hdts20261107_council_decision.py"
@@ -50,9 +113,9 @@ def test_moi_chuoi_check_va_dieu_kien_chi_muc_bang_nhau_model_migration():
     ]
     assert len(ten) >= 40, "phép đo rỗng: %d hằng" % len(ten)
     for t in ten:
-        assert getattr(MIG, t) == getattr(m, t), t
-    assert MIG.LOAI_SU_KIEN == m.LOAI_SU_KIEN
-    assert MIG.LY_DO_TOI_DA == m.LY_DO_XOA_TOI_DA
+        assert getattr(MIG, t) == getattr(m, TEN_MODEL.get(t, t)), t
+    assert MIG.LOAI_SU_KIEN == m.EVENT_KINDS
+    assert MIG.LY_DO_TOI_DA == m.MAX_DELETE_REASON_LENGTH
 
 
 def _ten_rang_buoc(lop):
@@ -195,19 +258,19 @@ def test_moi_cot_cho_null_trong_khoa_ngoai_ghep_co_check_not_null():
 
 
 def test_bieu_thuc_mot_nguon_cho_dong_hieu_luc_va_dau_appsheet():
-    assert m.DIEU_KIEN_DONG_HIEU_LUC in m.SQL_COT_TINH_TRANG_QD
-    assert m.DIEU_KIEN_DONG_GIU_HO_SO in m.SQL_COT_TINH_TRANG_QD
-    assert m.SQL_DAU_APPSHEET in m.SQL_COT_TINH_TRANG_QD
+    assert m.EFFECTIVE_ROW_CONDITION in m.SQL_DECISION_STATE_COLUMNS
+    assert m.ROW_HOLDS_PROFILE_CONDITION in m.SQL_DECISION_STATE_COLUMNS
+    assert m.SQL_APPSHEET_MARK in m.SQL_DECISION_STATE_COLUMNS
     u3 = [
         i
         for i in m.CouncilDecisionRow.__table__.indexes
         if i.name == "uq_council_decision_row_u3_ho_so"
     ][0]
-    assert str(u3.dialect_options["postgresql"]["where"]) == m.DIEU_KIEN_DONG_HIEU_LUC
-    assert m.DAU_APPSHEET_TIEN_TO == "Đã trúng tuyển theo QĐ số "
-    assert ("LIKE '%s%%'" % m.DAU_APPSHEET_TIEN_TO) in m.SQL_DAU_APPSHEET
-    assert ("method = '%s'" % SYSTEM_CONSULTATION_METHOD) in m.SQL_DAU_APPSHEET
-    assert "deleted_at" not in m.SQL_DAU_APPSHEET  # fail-closed: không lọc lần tư vấn đã xoá
+    assert str(u3.dialect_options["postgresql"]["where"]) == m.EFFECTIVE_ROW_CONDITION
+    assert m.APPSHEET_MARK_PREFIX == "Đã trúng tuyển theo QĐ số "
+    assert ("LIKE '%s%%'" % m.APPSHEET_MARK_PREFIX) in m.SQL_APPSHEET_MARK
+    assert ("method = '%s'" % SYSTEM_CONSULTATION_METHOD) in m.SQL_APPSHEET_MARK
+    assert "deleted_at" not in m.SQL_APPSHEET_MARK  # fail-closed: không lọc lần tư vấn đã xoá
 
 
 def test_cot_bytes_scan_deferred():
@@ -215,9 +278,9 @@ def test_cot_bytes_scan_deferred():
 
 
 def test_ma_loi_csdl_chi_doc_thuoc_tinh_khong_doc_chu():
-    # ``ma_loi_csdl`` đứng trong ``_S6_HAM_BOC`` (test_che_log_pii) ⇒ phải CHỈ đọc thuộc tính (SQLSTATE, tên
+    # ``db_error_codes`` đứng trong ``_S6_HAM_BOC`` (test_che_log_pii) ⇒ phải CHỈ đọc thuộc tính (SQLSTATE, tên
     # ràng buộc), không bao giờ ``str``/``args`` — chữ lỗi CSDL có thể mang tham số câu lệnh (CCCD giả ở đây).
-    from app.repositories.council_decision_repository import ma_loi_csdl
+    from app.repositories.council_decision_repository import db_error_codes
 
     class Goc(Exception):
         sqlstate = "23505"
@@ -231,6 +294,6 @@ def test_ma_loi_csdl_chi_doc_thuoc_tinh_khong_doc_chu():
             super().__init__("CANARY 099999000E99 boc")
             self.orig = Goc()
 
-    kq = ma_loi_csdl(Boc())
+    kq = db_error_codes(Boc())
     assert kq == ("23505", "uq_council_decision_u1_so")
     assert "CANARY" not in repr(kq) and "099999000E99" not in repr(kq)

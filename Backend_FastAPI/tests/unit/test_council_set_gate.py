@@ -36,13 +36,13 @@ def _trang_thai_cua_check():
 
 # ═══════════════════════════════ F228 — ba mức phủ đủ 15 trạng thái ═══════════════════════
 def test_ba_muc_dung_nguyen_van_owner_05_11():
-    assert cong.TRANG_THAI_CHAN == {
+    assert cong.BLOCKING_STATUSES == {
         "draft",
         "rejected",
         "withdrawal_pending",
         "withdrawn",
     }
-    assert cong.TRANG_THAI_CANH_BAO == {
+    assert cong.WARNING_STATUSES == {
         "submitted",
         "resubmitted",
         "reviewing",
@@ -50,7 +50,7 @@ def test_ba_muc_dung_nguyen_van_owner_05_11():
         "waitlisted",
         "result_published",
     }
-    assert cong.TRANG_THAI_KHONG_CANH_BAO == {
+    assert cong.NON_WARNING_STATUSES == {
         "approved",
         "admitted",
         "confirmed",
@@ -61,9 +61,9 @@ def test_ba_muc_dung_nguyen_van_owner_05_11():
 
 def test_ba_muc_roi_nhau_va_phu_dung_15_trang_thai_cua_check_enum_va_bang_chuyen():
     ba = (
-        cong.TRANG_THAI_CHAN,
-        cong.TRANG_THAI_CANH_BAO,
-        cong.TRANG_THAI_KHONG_CANH_BAO,
+        cong.BLOCKING_STATUSES,
+        cong.WARNING_STATUSES,
+        cong.NON_WARNING_STATUSES,
     )
     hop = set().union(*ba)
     assert sum(len(t) for t in ba) == len(hop) == 15  # rời nhau
@@ -75,26 +75,26 @@ def test_ba_muc_roi_nhau_va_phu_dung_15_trang_thai_cua_check_enum_va_bang_chuyen
     assert hop == tu_check == tu_enum == tu_bang
 
 
-@pytest.mark.parametrize("s", sorted(cong.TRANG_THAI_CHAN))
+@pytest.mark.parametrize("s", sorted(cong.BLOCKING_STATUSES))
 def test_muc_chan(s):
-    assert cong.muc_trang_thai(s) == cong.MUC_CHAN
+    assert cong.status_level(s) == cong.LEVEL_BLOCK
 
 
-@pytest.mark.parametrize("s", sorted(cong.TRANG_THAI_CANH_BAO))
+@pytest.mark.parametrize("s", sorted(cong.WARNING_STATUSES))
 def test_muc_canh_bao(s):
-    assert cong.muc_trang_thai(s) == cong.MUC_CANH_BAO
+    assert cong.status_level(s) == cong.LEVEL_WARNING
 
 
-@pytest.mark.parametrize("s", sorted(cong.TRANG_THAI_KHONG_CANH_BAO))
+@pytest.mark.parametrize("s", sorted(cong.NON_WARNING_STATUSES))
 def test_muc_khong(s):
-    assert cong.muc_trang_thai(s) == cong.MUC_KHONG
+    assert cong.status_level(s) == cong.LEVEL_NONE
 
 
 @pytest.mark.parametrize(
     "s", ["trang_thai_moi_sau_nay", "Approved", " approved", "", None, 1, ["approved"]]
 )
 def test_trang_thai_la_thi_chan_fail_closed(s):
-    assert cong.muc_trang_thai(s) == cong.MUC_CHAN
+    assert cong.status_level(s) == cong.LEVEL_BLOCK
 
 
 # ═══════════════════════════════ F229 / F231 — luật từng dòng ═════════════════════════════
@@ -123,11 +123,11 @@ def _sach(**kw):
         diem_chi_hs=0,
         kv_ly_do=None,
         kv_muc="0.75",
-        luat_kv=cong.LUAT_KV_CONG,  # câu 22 (lượt H): đường xét in cộng điểm KV
-        luat_ut=cong.LUAT_KV_CONG,  # lượt H2: đường xét in cộng điểm đối tượng
+        luat_kv=cong.AREA_RULE_ADD,  # câu 22 (lượt H): đường xét in cộng điểm KV
+        luat_ut=cong.AREA_RULE_ADD,  # lượt H2: đường xét in cộng điểm đối tượng
     )
     goc.update(kw)
-    return cong.DuLieuKiem(**goc)
+    return cong.CheckData(**goc)
 
 
 def _sach_mot_nv(**kw):
@@ -144,8 +144,8 @@ def _sach_mot_nv(**kw):
 
 
 def test_dong_sach_khong_ly_do():
-    assert cong.ly_do_cua_dong(_sach()) == []
-    assert cong.ly_do_cua_dong(_sach_mot_nv()) == []
+    assert cong.row_block_reason(_sach()) == []
+    assert cong.row_block_reason(_sach_mot_nv()) == []
 
 
 @pytest.mark.parametrize(
@@ -166,7 +166,7 @@ def test_dong_sach_khong_ly_do():
         (dict(hp_nganh_id=None), "hoc_phi_chua_gan_nganh"),
         (dict(hp_nganh_id=6), "hoc_phi_khac_nganh_nv"),
         (dict(kv_ly_do="thieu_khu_vuc", kv_muc=None), "thieu_khu_vuc"),
-        # Câu 21 (lượt H): mã do hàm đọc điền phải có trong bảng lý do (danh_gia sắp theo bảng).
+        # Câu 21 (lượt H): mã do hàm đọc điền phải có trong bảng lý do (evaluate sắp theo bảng).
         (
             dict(kv_ly_do="khu_vuc_doi_sau_anh_chup", kv_muc=None),
             "khu_vuc_doi_sau_anh_chup",
@@ -178,11 +178,11 @@ def test_dong_sach_khong_ly_do():
     ],
 )
 def test_bo_may_nguyen_vong_mot_ly_do(sua, ma):
-    assert cong.ly_do_cua_dong(_sach(**sua)) == [ma]
+    assert cong.row_block_reason(_sach(**sua)) == [ma]
 
 
 def test_nv1_trung_thi_khong_chan():
-    assert cong.ly_do_cua_dong(_sach(so_nv_trung=1, nv_trung_id=11)) == []
+    assert cong.row_block_reason(_sach(so_nv_trung=1, nv_trung_id=11)) == []
 
 
 @pytest.mark.parametrize(
@@ -203,13 +203,13 @@ def test_nv1_trung_thi_khong_chan():
     ],
 )  # fmt: skip
 def test_mot_nguyen_vong_mot_ly_do(sua, ma):
-    assert cong.ly_do_cua_dong(_sach_mot_nv(**sua)) == [ma]
+    assert cong.row_block_reason(_sach_mot_nv(**sua)) == [ma]
 
 
 def test_bo_may_nguyen_vong_khong_doi_bang_diem_ho_so_khi_chi_mot_ben():
     # Bộ máy nguyện vọng: nguồn = điểm nguyện vọng; bảng điểm hồ sơ vắng môn ⇒ KHÔNG lệch.
-    assert cong.ly_do_cua_dong(_sach(diem_chi_nv=3)) == []
-    assert cong.ly_do_cua_dong(_sach(diem_chi_hs=3)) == []
+    assert cong.row_block_reason(_sach(diem_chi_nv=3)) == []
+    assert cong.row_block_reason(_sach(diem_chi_hs=3)) == []
 
 
 # ═══════════════════════════════ đánh giá cả danh sách + xác nhận ═════════════════════════
@@ -220,7 +220,7 @@ def _ds(*trang_thai):
 
 
 def test_danh_gia_gom_theo_ly_do_va_trang_thai_so_dong_tang_dan():
-    kq = cong.danh_gia(
+    kq = cong.evaluate(
         _ds("approved", "draft", "submitted", "withdrawn", "submitted", "draft", "lạ")
     )
     assert kq.chan == (
@@ -229,9 +229,9 @@ def test_danh_gia_gom_theo_ly_do_va_trang_thai_so_dong_tang_dan():
         ("trang_thai_la", "lạ", (7,)),
     )
     assert kq.canh_bao == {"submitted": (3, 5)}
-    assert kq.so_canh_bao() == {"submitted": 2}
+    assert kq.warning_count() == {"submitted": 2}
     assert kq.diem_kv == tuple("0.%d0" % i for i in range(1, 8))
-    assert kq.so_theo_trang_thai() == {
+    assert kq.count_by_status() == {
         "approved": 1,
         "draft": 2,
         "lạ": 1,
@@ -241,15 +241,15 @@ def test_danh_gia_gom_theo_ly_do_va_trang_thai_so_dong_tang_dan():
 
 
 def test_chan_thi_400_lie_ke_tung_dong_xac_nhan_khong_go_duoc():
-    kq = cong.danh_gia(_ds("approved", "draft", "reviewing"))
+    kq = cong.evaluate(_ds("approved", "draft", "reviewing"))
     with pytest.raises(DataValidationError) as e:
-        cong.kiem_va_xac_nhan(kq, xac_nhan={"reviewing": 1}, duoc_xac_nhan=True)
+        cong.check_and_confirm(kq, confirmation={"reviewing": 1}, can_confirm=True)
     p = e.value.public_payload["kiem_tra_dung_bo"]
     assert p["muc"] == "chan" and p["so_dong"] == 3
     assert p["chan"] == [
         {
             "ma": "trang_thai_chan",
-            "mo_ta": cong.LY_DO["trang_thai_chan"],
+            "mo_ta": cong.BLOCK_REASONS["trang_thai_chan"],
             "trang_thai": "draft",
             "so_ho_so": 1,
             "dong": [2],
@@ -259,10 +259,10 @@ def test_chan_thi_400_lie_ke_tung_dong_xac_nhan_khong_go_duoc():
 
 
 def test_canh_bao_khong_xac_nhan_thi_409_kem_so_dem_va_dong():
-    kq = cong.danh_gia(_ds("approved", "reviewing", "submitted", "submitted"))
+    kq = cong.evaluate(_ds("approved", "reviewing", "submitted", "submitted"))
     for duoc in (True, False):
         with pytest.raises(ConflictError) as e:
-            cong.kiem_va_xac_nhan(kq, xac_nhan=None, duoc_xac_nhan=duoc)
+            cong.check_and_confirm(kq, confirmation=None, can_confirm=duoc)
         p = e.value.public_payload["kiem_tra_dung_bo"]
         assert p["muc"] == "can_xac_nhan" and p["chan"] == []
         assert p["canh_bao"] == {
@@ -274,12 +274,12 @@ def test_canh_bao_khong_xac_nhan_thi_409_kem_so_dem_va_dong():
 
 
 def test_xac_nhan_dung_so_dem_thi_qua_lech_thi_409():
-    kq = cong.danh_gia(_ds("approved", "reviewing", "submitted", "submitted"))
+    kq = cong.evaluate(_ds("approved", "reviewing", "submitted", "submitted"))
     dung = {"reviewing": 1, "submitted": 2}
-    assert cong.kiem_va_xac_nhan(kq, xac_nhan=dung, duoc_xac_nhan=True) == dung
+    assert cong.check_and_confirm(kq, confirmation=dung, can_confirm=True) == dung
     for lech in ({"reviewing": 1, "submitted": 1}, {"submitted": 2}, {"reviewing": 1}):
         with pytest.raises(ConflictError) as e:
-            cong.kiem_va_xac_nhan(kq, xac_nhan=lech, duoc_xac_nhan=True)
+            cong.check_and_confirm(kq, confirmation=lech, can_confirm=True)
         assert e.value.public_payload["kiem_tra_dung_bo"]["muc"] == "xac_nhan_lech"
 
 
@@ -295,9 +295,9 @@ def test_xac_nhan_dung_so_dem_thi_qua_lech_thi_409():
     ids=["cung_tap_cung_tong_khac_phan_bo", "cung_tong_khac_tap"],
 )
 def test_xac_nhan_cung_tong_lech_phan_bo_thi_409(lech):
-    kq = cong.danh_gia(_ds("approved", "reviewing", "submitted", "submitted"))
+    kq = cong.evaluate(_ds("approved", "reviewing", "submitted", "submitted"))
     with pytest.raises(ConflictError) as e:
-        cong.kiem_va_xac_nhan(kq, xac_nhan=lech, duoc_xac_nhan=True)
+        cong.check_and_confirm(kq, confirmation=lech, can_confirm=True)
     p = e.value.public_payload["kiem_tra_dung_bo"]
     assert p["muc"] == "xac_nhan_lech"
     # Phản hồi trả số đếm THẬT để admin xác nhận lại.
@@ -305,21 +305,21 @@ def test_xac_nhan_cung_tong_lech_phan_bo_thi_409(lech):
 
 
 def test_khong_canh_bao_ma_van_gui_xac_nhan_thi_409():
-    kq = cong.danh_gia(_ds("approved", "enrolled"))
-    assert cong.kiem_va_xac_nhan(kq, xac_nhan=None, duoc_xac_nhan=True) is None
+    kq = cong.evaluate(_ds("approved", "enrolled"))
+    assert cong.check_and_confirm(kq, confirmation=None, can_confirm=True) is None
     with pytest.raises(ConflictError):
-        cong.kiem_va_xac_nhan(kq, xac_nhan={"submitted": 1}, duoc_xac_nhan=True)
+        cong.check_and_confirm(kq, confirmation={"submitted": 1}, can_confirm=True)
 
 
 @pytest.mark.parametrize("duoc", [False, None, 1, "True"])
 def test_chi_admin_duoc_gui_xac_nhan(duoc):
     # Kể cả khi xác nhận ĐÚNG số đếm: người không được xác nhận ⇒ 403 (chỉ ``True`` thật).
-    kq = cong.danh_gia(_ds("submitted"))
+    kq = cong.evaluate(_ds("submitted"))
     with pytest.raises(PermissionDeniedError):
-        cong.kiem_va_xac_nhan(kq, xac_nhan={"submitted": 1}, duoc_xac_nhan=duoc)
+        cong.check_and_confirm(kq, confirmation={"submitted": 1}, can_confirm=duoc)
     with pytest.raises(PermissionDeniedError):
-        cong.kiem_quyen_xac_nhan({"submitted": 1}, duoc)
-    cong.kiem_quyen_xac_nhan(None, duoc)  # không xác nhận ⇒ không cần quyền
+        cong.check_confirm_permission({"submitted": 1}, duoc)
+    cong.check_confirm_permission(None, duoc)  # không xác nhận ⇒ không cần quyền
 
 
 @pytest.mark.parametrize(
@@ -337,12 +337,12 @@ def test_chi_admin_duoc_gui_xac_nhan(duoc):
 )
 def test_xac_nhan_sai_dang_thi_400(xn):
     with pytest.raises(DataValidationError):
-        cong.kiem_dang_xac_nhan(xn)
+        cong.check_confirmation_shape(xn)
 
 
 def test_payload_chi_so_dong_ma_ly_do_trang_thai():
     # Không mã hồ sơ, không giá trị dữ liệu: mọi lá là số / mã lý do / trạng thái / câu cố định.
-    kq = cong.danh_gia(
+    kq = cong.evaluate(
         [
             _sach(stt=1, status="draft"),
             _sach(stt=2, status="submitted", hp_nganh_id=9),
@@ -350,7 +350,7 @@ def test_payload_chi_so_dong_ma_ly_do_trang_thai():
         ]
     )
     with pytest.raises(DataValidationError) as e:
-        cong.kiem_va_xac_nhan(kq, xac_nhan=None, duoc_xac_nhan=True)
+        cong.check_and_confirm(kq, confirmation=None, can_confirm=True)
     p = e.value.public_payload["kiem_tra_dung_bo"]
     assert {c["ma"] for c in p["chan"]} == {
         "trang_thai_chan",
@@ -360,37 +360,37 @@ def test_payload_chi_so_dong_ma_ly_do_trang_thai():
     assert all(
         set(c) == {"ma", "mo_ta", "trang_thai", "so_ho_so", "dong"} for c in p["chan"]
     )
-    assert all(c["mo_ta"] == cong.LY_DO[c["ma"]] for c in p["chan"])
+    assert all(c["mo_ta"] == cong.BLOCK_REASONS[c["ma"]] for c in p["chan"])
     assert not re.search(r"\d{9,}", str(e.value.public_payload) + e.value.detail)
 
 
 # ═══════════════ Câu 22 (owner 06-11) — điểm KV in theo luật cộng điểm của đường xét ═══════════
 def test_luat_cong_kv_thi_in_muc_theo_nam_hoc():
-    assert cong.danh_gia([_sach()]).diem_kv == ("0.75",)
+    assert cong.evaluate([_sach()]).diem_kv == ("0.75",)
 
 
-@pytest.mark.parametrize("luat", [cong.LUAT_KV_TAT, cong.LUAT_KV_KHONG_CO])
+@pytest.mark.parametrize("luat", [cong.AREA_RULE_OFF, cong.AREA_RULE_NONE])
 def test_luat_tat_hoac_khong_co_luat_thi_in_0(luat):
-    kq = cong.danh_gia([_sach(luat_kv=luat)])
-    assert kq.chan == () and kq.diem_kv == (cong.DIEM_KV_KHONG_CONG,)
+    kq = cong.evaluate([_sach(luat_kv=luat)])
+    assert kq.chan == () and kq.diem_kv == (cong.AREA_SCORE_NOT_ADDED,)
 
 
 @pytest.mark.parametrize("luat", [None, "la", True])
 def test_luat_khong_xac_dinh_thi_chan(luat):
     k = _sach(luat_kv=luat)
-    assert cong.ly_do_cua_dong(k) == ["khong_xac_dinh_luat_cong_diem_kv"]
-    assert cong.danh_gia([k]).diem_kv == (None,)
+    assert cong.row_block_reason(k) == ["khong_xac_dinh_luat_cong_diem_kv"]
+    assert cong.evaluate([k]).diem_kv == (None,)
 
 
 def test_dem_so_ho_so_theo_luat_kv():
-    kq = cong.danh_gia(
+    kq = cong.evaluate(
         [
             _sach(stt=1),
-            _sach(stt=2, luat_kv=cong.LUAT_KV_TAT),
-            _sach(stt=3, luat_kv=cong.LUAT_KV_TAT),
+            _sach(stt=2, luat_kv=cong.AREA_RULE_OFF),
+            _sach(stt=3, luat_kv=cong.AREA_RULE_OFF),
         ]
     )
-    assert kq.so_theo_luat_kv() == {"cong": 1, "tat": 2}
+    assert kq.count_by_area_rule() == {"cong": 1, "tat": 2}
 
 
 @pytest.mark.parametrize(
@@ -411,40 +411,40 @@ def test_area_bonus_enabled_mot_nguon_voi_t6(luat, mong):
 
 # ═══════ Lượt H2 (owner 06-11) — điểm ĐỐI TƯỢNG theo công tắc của đường xét, giữ cách tính v1 ═══════
 def test_cong_tac_doi_tuong_bat_thi_giu_diem_v1():
-    assert cong.diem_ut_in(cong.LUAT_KV_CONG, "2.00") == "2.00"
+    assert cong.printed_priority_score(cong.AREA_RULE_ADD, "2.00") == "2.00"
 
 
-@pytest.mark.parametrize("luat", [cong.LUAT_KV_TAT, cong.LUAT_KV_KHONG_CO])
+@pytest.mark.parametrize("luat", [cong.AREA_RULE_OFF, cong.AREA_RULE_NONE])
 def test_cong_tac_doi_tuong_tat_hoac_khong_co_luat_thi_in_0(luat):
-    assert cong.diem_ut_in(luat, "2.00") == cong.DIEM_UT_KHONG_CONG == "0"
+    assert cong.printed_priority_score(luat, "2.00") == cong.PRIORITY_SCORE_NOT_ADDED == "0"
 
 
 @pytest.mark.parametrize("luat", [None, "la"])
 def test_cong_tac_doi_tuong_khong_xac_dinh_thi_none(luat):
-    assert cong.diem_ut_in(luat, "2.00") is None
+    assert cong.printed_priority_score(luat, "2.00") is None
 
 
 def test_luat_doi_tuong_khong_xac_dinh_thi_chan():
-    assert cong.ly_do_cua_dong(_sach(luat_ut=None)) == [
+    assert cong.row_block_reason(_sach(luat_ut=None)) == [
         "khong_xac_dinh_luat_cong_diem_ut"
     ]
 
 
 def test_hai_cong_tac_doc_lap():
     # Tắt đối tượng không đổi điểm KV in; tắt KV không đổi công tắc đối tượng.
-    kq = cong.danh_gia(
+    kq = cong.evaluate(
         [
-            _sach(stt=1, luat_ut=cong.LUAT_KV_TAT),
-            _sach(stt=2, luat_kv=cong.LUAT_KV_TAT),
+            _sach(stt=1, luat_ut=cong.AREA_RULE_OFF),
+            _sach(stt=2, luat_kv=cong.AREA_RULE_OFF),
         ]
     )
-    assert kq.diem_kv == ("0.75", cong.DIEM_KV_KHONG_CONG)
-    assert kq.luat_ut == (cong.LUAT_KV_TAT, cong.LUAT_KV_CONG)
+    assert kq.diem_kv == ("0.75", cong.AREA_SCORE_NOT_ADDED)
+    assert kq.luat_ut == (cong.AREA_RULE_OFF, cong.AREA_RULE_ADD)
 
 
 def test_dem_so_ho_so_theo_luat_doi_tuong():
-    kq = cong.danh_gia([_sach(stt=1), _sach(stt=2, luat_ut=cong.LUAT_KV_KHONG_CO)])
-    assert kq.so_theo_luat_ut() == {"cong": 1, "khong_co_luat": 1}
+    kq = cong.evaluate([_sach(stt=1), _sach(stt=2, luat_ut=cong.AREA_RULE_NONE)])
+    assert kq.count_by_priority_rule() == {"cong": 1, "khong_co_luat": 1}
 
 
 @pytest.mark.parametrize(

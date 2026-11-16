@@ -57,7 +57,7 @@ export const councilDocumentPermissionsSchema = z.object({
  * Cờ giao diện CHƯA có ở máy chủ (đang `.default(false)`). RỖNG từ đợt 2 (`083a428d`): máy chủ đã trả đủ — thêm cờ mới
  * chờ máy chủ thì thêm tên vào đây VÀ `.default(false)` ở schema; test `council-documents.test.ts` khoá hai vế khớp nhau.
  */
-export const CO_CHO_MAY_CHU: readonly CouncilDocumentPermissionKey[] = []
+export const SERVER_PENDING_FLAGS: readonly CouncilDocumentPermissionKey[] = []
 export type CouncilDocumentPermissions = z.infer<
   typeof councilDocumentPermissionsSchema
 >
@@ -187,17 +187,17 @@ export type CouncilDownloadLog = z.infer<typeof councilDownloadLogSchema>
 export const councilDownloadLogListSchema = z.array(councilDownloadLogSchema)
 
 // ── yêu cầu ──────────────────────────────────────────────────────────────────
-const ngayIso = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Ngày dạng YYYY-MM-DD")
+const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Ngày dạng YYYY-MM-DD")
 
 /** `DecisionParams` (extra="forbid"): mọi trường tuỳ chọn, vắng thì chỗ ấy để trống. */
 export const decisionParamsSchema = z
   .object({
     so_quyet_dinh: z.string().regex(/^[0-9]{1,6}$/, "1–6 chữ số").nullable().optional(),
-    ngay_quyet_dinh: ngayIso.nullable().optional(),
+    ngay_quyet_dinh: isoDate.nullable().optional(),
     dot_so: z.string().regex(/^[0-9]{1,2}$/, "1–2 chữ số").nullable().optional(),
     dot_thang: z.number().int().min(1).max(12).nullable().optional(),
     so_bien_ban: z.string().regex(/^[0-9]{1,6}$/, "1–6 chữ số").nullable().optional(),
-    ngay_bien_ban: ngayIso.nullable().optional(),
+    ngay_bien_ban: isoDate.nullable().optional(),
   })
   .strict()
 export type DecisionParams = z.infer<typeof decisionParamsSchema>
@@ -247,11 +247,11 @@ export type CouncilSetDelete = z.infer<typeof councilSetDeleteSchema>
 // ═══════════════════════ Vòng giao diện GĐ1 — chọn hồ sơ → kiểm trước → dựng (đặc tả 3.1–3.3, 3.11) ═══════════════════
 // Máy chủ đã giao `kiem-truoc`, `doi-ma`, `tim-ho-so`, `POST /sets` dạng id từ `5feb425d`; schema dưới ĐÃ đối chiếu từng
 // trường với `schemas/council_document.py` ở SHA ấy (11-11). Đính chính so với đặc tả: máy chủ trả MÃ trạng thái, KHÔNG
-// trả `trang_thai_nhan` — nhãn lấy từ `status-config` (nguồn nhãn duy nhất, `nhanTrangThai`).
+// trả `trang_thai_nhan` — nhãn lấy từ `status-config` (nguồn nhãn duy nhất, `statusLabel`).
 // ⚠️ Các DTO dưới có `ho_ten` / `cccd` (dữ liệu cá nhân): chỉ ở bộ nhớ React Query với `gcTime: 0`, không storage,
 // không URL, không log (xem hook). Cả ba route kiểm / tìm / đổi mã trả `Cache-Control: no-store`.
 
-/** Mức kiểm trước của một dòng — máy chủ quyết. Giá trị lạ ⇒ `nhanMucKiem` in nguyên (không suy). */
+/** Mức kiểm trước của một dòng — máy chủ quyết. Giá trị lạ ⇒ `checkItemLabel` in nguyên (không suy). */
 export const COUNCIL_PREVIEW_LEVELS = ["duoc_dung", "can_xac_nhan", "bi_chan"] as const
 
 export const councilPreviewReasonSchema = z.object({
@@ -268,7 +268,7 @@ export const councilPreviewRowSchema = z.object({
   stt_qd: z.number().int(),
   profile_id: z.number().int(),
   ho_ten: z.string(),
-  /** MÃ trạng thái hồ sơ — nhãn do giao diện ánh xạ (`nhanTrangThai`), máy chủ không trả nhãn */
+  /** MÃ trạng thái hồ sơ — nhãn do giao diện ánh xạ (`statusLabel`), máy chủ không trả nhãn */
   trang_thai: z.string(),
   nganh_nhan: z.string(),
   trinh_do: z.string(),
@@ -355,7 +355,7 @@ export const councilProfileSearchRowSchema = z.object({
   trinh_do: z.string(),
   /** danh sách dạng nhẹ không nạp nguyện vọng ⇒ máy chủ LUÔN trả `null`; đường xét / điểm in chính xác chỉ ở `kiem-truoc` */
   duong_xet_nhan: z.string().nullable(),
-  /** MÃ trạng thái — nhãn do giao diện ánh xạ (`nhanTrangThai`) */
+  /** MÃ trạng thái — nhãn do giao diện ánh xạ (`statusLabel`) */
   trang_thai: z.string(),
   academic_year: z.number().int(),
 })

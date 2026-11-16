@@ -197,14 +197,14 @@ def t6_profile_load_options() -> list:
 # ``quota_occupancy_service`` (module nhẹ, không import admission_service ⇒ hết lý do
 # chép tay vì vòng import); tên cũ trỏ vào CÙNG đối tượng. Hai mức đếm của
 # ``check_choice_admit_capacity`` cũng đi qua helper ấy (Phần A + Phần B).
-_QUOTA_OCCUPYING_STATUSES: tuple[str, ...] = _qos.TRANG_THAI_CHIEM_CHO
+_QUOTA_OCCUPYING_STATUSES: tuple[str, ...] = _qos.OCCUPYING_STATUSES
 
 
-def _dong_chi_tieu_se_khoa(path: Any) -> Tuple[Optional[int], Optional[int]]:
+def _quota_rows_to_lock(path: Any) -> Tuple[Optional[int], Optional[int]]:
     """MỘT nguồn (F259): (id học vụ, id đường xét) mà :func:`check_choice_admit_capacity` sẽ ``FOR UPDATE``
     cho đường xét ``path`` — học vụ chỉ khi đặt chỉ tiêu năm; đường xét khi có chỉ tiêu năm hoặc chỉ tiêu
     đường xét; không chỉ tiêu nào ⇒ (None, None) (hàm ấy trả "cho phép" không khoá). Công bố khoá TRƯỚC đúng
-    các dòng này cho MỌI nguyện vọng theo thứ tự chuẩn (``_qos.khoa_o_chi_tieu``)."""
+    các dòng này cho MỌI nguyện vọng theo thứ tự chuẩn (``_qos.lock_quota_cells``)."""
     academic_info = getattr(path, "academic_info", None)
     annual_cap_hint = (
         getattr(academic_info, "annual_admission_quota", None)
@@ -315,15 +315,15 @@ async def check_choice_admit_capacity(
     #       ->>admission_path_id ∈ {paths under academic_info X},
     #       restricted to uses_choice_engine=FALSE to avoid double-counting
     #       with (a).
-    oai_khoa, path_khoa = _dong_chi_tieu_se_khoa(path)
-    if path_khoa is None:
+    offering_lock_id, path_lock_id = _quota_rows_to_lock(path)
+    if path_lock_id is None:
         return CapacityCheck(allowed=True)
 
-    if oai_khoa is not None:
+    if offering_lock_id is not None:
         ai_locked = (
             await db.execute(
                 select(models.OfferingAcademicInfo)
-                .where(models.OfferingAcademicInfo.id == oai_khoa)
+                .where(models.OfferingAcademicInfo.id == offering_lock_id)
                 .with_for_update()
             )
         ).scalar_one()
@@ -334,7 +334,7 @@ async def check_choice_admit_capacity(
         # under it, ``uses_choice_engine=FALSE``) — Phần A, chỉ hồ sơ KHÔNG có dòng
         # Quyết định hiệu lực — + Phần B (dòng Quyết định hiệu lực theo
         # ``academic_info_id`` CHỤP ở dòng bộ). MỘT nguồn: quota_occupancy_service.
-        annual_count = await _qos.dem_theo_thong_tin_hoc_vu(
+        annual_count = await _qos.count_by_academic_info(
             db,
             academic_info_id=ai_locked.id,
             exclude_profile_id=admission_profile_id,
@@ -366,7 +366,7 @@ async def check_choice_admit_capacity(
     # applied_rules snapshot (``uses_choice_engine=False``) — Phần A, chỉ hồ sơ
     # KHÔNG có dòng Quyết định hiệu lực — + Phần B (dòng Quyết định hiệu lực theo
     # ``admission_path_id`` CHỤP ở dòng bộ). MỘT nguồn: quota_occupancy_service.
-    current_count = await _qos.dem_theo_duong_xet(
+    current_count = await _qos.count_by_path(
         db,
         admission_path_id=path_locked.id,
         exclude_profile_id=admission_profile_id,
@@ -899,16 +899,16 @@ async def evaluate_cascade(
     )
 
     # F259 (Codex lần 15): khoá TRƯỚC mọi dòng chỉ tiêu mà các nguyện vọng có thể dùng theo THỨ TỰ CHUẨN
-    # (học vụ id tăng dần rồi đường xét id tăng dần — ``_qos.khoa_o_chi_tieu``), KHÔNG theo thứ tự nguyện
+    # (học vụ id tăng dần rồi đường xét id tăng dần — ``_qos.lock_quota_cells``), KHÔNG theo thứ tự nguyện
     # vọng. Trước đây ``check_choice_admit_capacity`` khoá học vụ → đường xét của NV1 rồi NV2… (vòng Q lớn → Q
     # nhỏ khi NV1 ở ô id lớn hơn) ngược với ghi nhận khoá tăng dần ⇒ vòng chờ. Thứ tự XÉT nguyện vọng giữ
     # nguyên; khoá trong ``check_choice_admit_capacity`` chỉ còn là khoá lại dòng đã giữ.
-    se_khoa = [
-        _dong_chi_tieu_se_khoa(c.admission_path)
+    to_lock = [
+        _quota_rows_to_lock(c.admission_path)
         for c in sorted_choices
         if getattr(c, "admission_path", None) is not None
     ]
-    await _qos.khoa_o_chi_tieu(db, [k[0] for k in se_khoa], [k[1] for k in se_khoa])
+    await _qos.lock_quota_cells(db, [k[0] for k in to_lock], [k[1] for k in to_lock])
 
     admitted_found = False
     for choice in sorted_choices:
@@ -1248,9 +1248,9 @@ async def publish_result(
         )
     # Lượt I (F230 — N11 suy owner đồng ý, C7, E1): công bố theo nguyện vọng là một lần xét ⇒ bỏ qua em có
     # Quyết định đã ký / đang chờ Admin quyết / mang dấu AppSheet (đơn lẻ ⇒ từ chối kèm lý do).
-    from .council_decision_status_service import kiem_xet_moi
+    from .council_decision_status_service import check_new_admission
 
-    await kiem_xet_moi(db, profile.id, "cong_bo_theo_nguyen_vong")
+    await check_new_admission(db, profile.id, "cong_bo_theo_nguyen_vong")
 
     # Đổi ngành: CHẶN công bố kết quả khi đang chu kỳ đổi ngành (học phí chưa
     # chốt / chờ kế toán) — không quyết định trúng tuyển với nghĩa vụ tiền chưa
@@ -1318,21 +1318,21 @@ async def publish_result(
     # giao dịch còn sống trước khi trả cho router commit.
     from sqlalchemy.exc import DBAPIError
 
-    from ..repositories.council_decision_repository import ma_loi_csdl
+    from ..repositories.council_decision_repository import db_error_codes
     from ..utils.exceptions import ConflictError
 
-    # SQLSTATE đọc bằng ``ma_loi_csdl`` (thuộc tính, không đọc chữ ngoại lệ — guard che log §6).
+    # SQLSTATE đọc bằng ``db_error_codes`` (thuộc tính, không đọc chữ ngoại lệ — guard che log §6).
     try:
         kq = await evaluate_cascade(db, profile, actor=actor)
     except DBAPIError as e:
-        if ma_loi_csdl(e)[0] == _qos.SQLSTATE_DEADLOCK:
-            raise ConflictError(_qos.THONG_DIEP_XUNG_DOT) from None
+        if db_error_codes(e)[0] == _qos.SQLSTATE_DEADLOCK:
+            raise ConflictError(_qos.CONFLICT_MESSAGE) from None
         raise
-    gd = db.sync_session.get_transaction()
-    if gd is not None and not gd.is_active:
-        goc = _qos.loi_goc_giao_dich(gd)  # D.2: một chỗ đọc thuộc tính riêng của SQLAlchemy
-        if ma_loi_csdl(goc)[0] == _qos.SQLSTATE_DEADLOCK:
-            raise ConflictError(_qos.THONG_DIEP_XUNG_DOT)
+    transaction = db.sync_session.get_transaction()
+    if transaction is not None and not transaction.is_active:
+        goc = _qos.transaction_root_error(transaction)  # D.2: một chỗ đọc thuộc tính riêng của SQLAlchemy
+        if db_error_codes(goc)[0] == _qos.SQLSTATE_DEADLOCK:
+            raise ConflictError(_qos.CONFLICT_MESSAGE)
         if goc is not None:
             raise goc
     return kq
@@ -1379,9 +1379,9 @@ async def promote_waitlisted_choice(
             f"Hồ sơ phải ở trạng thái 'waitlisted'; current: '{profile.status}'"
         )
     # Lượt I (F230): đưa em danh sách chờ lên trúng tuyển = một lần xét ⇒ như ``publish_result``.
-    from .council_decision_status_service import kiem_xet_moi
+    from .council_decision_status_service import check_new_admission
 
-    await kiem_xet_moi(db, profile.id, "cong_bo_theo_nguyen_vong")
+    await check_new_admission(db, profile.id, "cong_bo_theo_nguyen_vong")
 
     # PR-1 (2026-05-28) — Re-check capacity AT promote-time. Cascade
     # capacity gate only fires at T6; between T6 and T10 (admin click)
@@ -1587,9 +1587,9 @@ async def admin_rollback_profile(
     # Lượt I (F230, owner C5 + E1): không trả về Nháp em có Quyết định đã ký / dấu AppSheet — TRƯỚC nhánh
     # "đã ở Nháp" (vẫn mở chu kỳ đổi ngành), từ chối yêu cầu hoàn, mở chu kỳ đổi ngành. Chốt cuối:
     # ``transition``.
-    from .council_decision_status_service import kiem_som_khoa_trang_thai
+    from .council_decision_status_service import early_check_status_lock
 
-    await kiem_som_khoa_trang_thai(db, profile.id, "tra_ve_nhap")
+    await early_check_status_lock(db, profile.id, "tra_ve_nhap")
 
     # W9-J.7.idem fix 2026-05-16: idempotent no-op khi đã ở 'draft'.
     # Trước: state machine raise "Invalid transition: draft → draft"

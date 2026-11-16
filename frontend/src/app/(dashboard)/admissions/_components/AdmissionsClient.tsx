@@ -602,7 +602,7 @@ export function AdmissionsClient({ initialData, initialQueryParams }: Admissions
         isLoading={isAnyLoading}
         extraActions={
           // Chỉ ĐẨY id + năm học sang trang Hội đồng (store riêng); chốt xoá lựa chọn ở trên giữ nguyên.
-          <CouncilHandoffButton hoSo={selectedProfiles} disabled={isAnyLoading} />
+          <CouncilHandoffButton profile={selectedProfiles} disabled={isAnyLoading} />
         }
       />
 

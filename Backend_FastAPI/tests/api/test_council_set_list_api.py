@@ -20,7 +20,7 @@ import pytest_asyncio
 from sqlalchemy import event, text
 
 import app.database as csdl
-from app.models.council_document import DAU_APPSHEET_TIEN_TO
+from app.models.council_document import APPSHEET_MARK_PREFIX
 from app.main import fastapi_app
 from tests.api import test_council_decisions_api as qd
 from tests.api import test_council_documents_api as api
@@ -228,7 +228,7 @@ async def test_tai_ca_bo_tep_hong_thi_500_khong_nhat_ky(client, hs, ad, monkeypa
     from app.repositories.council_document_repository import CouncilDocumentRepository as Kho
 
     bo = await qd._bo_ok(client, ad, hs, SACH)
-    goc = Kho.tep_cua_bo_kem_noi_dung
+    goc = Kho.set_files_with_content
 
     async def doc_hong(self, set_id):
         ds = await goc(self, set_id)
@@ -240,7 +240,7 @@ async def test_tai_ca_bo_tep_hong_thi_500_khong_nhat_ky(client, hs, ad, monkeypa
             out.append(SimpleNamespace(thu_tu=x.thu_tu, path=x.path, sha256=x.sha256, noi_dung=bytes(b)))
         return out
 
-    monkeypatch.setattr(Kho, "tep_cua_bo_kem_noi_dung", doc_hong)
+    monkeypatch.setattr(Kho, "set_files_with_content", doc_hong)
     r = await client.get(P + "/sets/%d/tai-ca-bo" % bo["id"], headers=ad)
     assert r.status_code == 500 and r.headers.get("content-type") != "application/zip", r.text
     assert await qd._q1(
@@ -329,7 +329,7 @@ async def test_o_quyet_dinh_dau_appsheet_tach_rieng(client, hs, ad):
     pid = hs[SACH[0]][1]
     await qd._sql(
         "UPDATE admission_profile SET revision_reason = :r WHERE id = :p",
-        r=DAU_APPSHEET_TIEN_TO + "1234 ngày 01/03/2026",
+        r=APPSHEET_MARK_PREFIX + "1234 ngày 01/03/2026",
         p=pid,
     )
     o = await _o(client, ad, pid)

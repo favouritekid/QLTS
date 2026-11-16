@@ -16,7 +16,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 
 import app.database as csdl
-from app.repositories.council_decision_repository import ma_loi_csdl
+from app.repositories.council_decision_repository import db_error_codes
 from tests.fixtures.hoi_dong_seed import danh_muc, ho_so, ma_gia
 
 pytestmark = pytest.mark.integration
@@ -140,7 +140,7 @@ async def _thu(c, cau, **ts):
         await c.execute(text(cau), ts)
     except DBAPIError as e:
         await sp.rollback()
-        return ma_loi_csdl(e)
+        return db_error_codes(e)
     await sp.commit()
     return None
 
@@ -344,7 +344,7 @@ async def test_xoa_bo_cua_ban_ghi_huy_co_dong_thi_duoc_va_giu_so(c):
     # set_id ⇒ NULL (khoá ngoại ghép theo văn bản lan xuống); hồ sơ giữ. ``set_row_id`` ⇒ NULL HOẶC trỏ
     # một dòng bộ KHÔNG còn: thứ tự hai hành động tham chiếu do PostgreSQL quyết, MATCH SIMPLE không
     # kiểm khoá ngoại có cột NULL — đo lượt I chặng 2a: trên CSDL dựng bằng create_all thứ tự khác bản
-    # nguyên mẫu chặng 1 (T6b). Service dọn hẳn trước khi xoá bộ (``xoa_bo_van_ban``).
+    # nguyên mẫu chặng 1 (T6b). Service dọn hẳn trước khi xoá bộ (``delete_document_set``).
     assert hang[0] is None and hang[2] == p
     if hang[1] is not None:
         assert (
@@ -589,7 +589,7 @@ async def test_chen_dong_tu_bo_trong_mot_cau_khop_dong_bo(c):
     s1, (r1, r2) = await _bo(c, [a, b])
     qd = await _qd(c, s1)
     async with AsyncSession(bind=c) as db:
-        n = await CouncilDecisionRepository(db).chen_dong_tu_bo(qd, s1)
+        n = await CouncilDecisionRepository(db).insert_rows_from_set(qd, s1)
     assert n == 2
     hang = (
         await c.execute(

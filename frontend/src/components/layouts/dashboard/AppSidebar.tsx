@@ -58,9 +58,9 @@ const AppTitle = ({ isCollapsed }: { isCollapsed: boolean }) => (
 
 export function AppSidebar() {
   const { isSidebarCollapsed } = useUIStore();
-  const { navigation: navigationTheoVai } = useAppNavigation();
+  const { navigation: navigationByRole } = useAppNavigation();
   // F238: mục có `serverFlag` chỉ hiện khi cờ quyền của máy chủ cho phép (không theo vai).
-  const navigation = useServerFlagNavigation(navigationTheoVai);
+  const navigation = useServerFlagNavigation(navigationByRole);
 
   // Fetch unread notification count for badge
   const { data: notificationsData } = useNotifications({

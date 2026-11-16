@@ -33,7 +33,7 @@ import {
 } from "@/lib/zod/council-documents"
 
 import { CouncilErrorAlert } from "./CouncilErrorAlert"
-import { kichThuoc, ngay, nguoi, nhanLoaiMau, shaRutGon, thoiDiem } from "./hien-thi"
+import { formatSize, ngay, nguoi, templateKindLabel, shortSha, formatTime } from "./display"
 
 /** Kho mẫu: danh sách (cờ `xem_mau`) + tải mẫu mới (cờ `tai_mau_len`). */
 export function CouncilTemplatePanel({ canUpload }: { canUpload: boolean }) {
@@ -67,14 +67,14 @@ export function CouncilTemplatePanel({ canUpload }: { canUpload: boolean }) {
           <TableBody>
             {q.data.map((m) => (
               <TableRow key={m.id} data-testid={`template-row-${m.id}`}>
-                <TableCell>{nhanLoaiMau(m.loai)}</TableCell>
+                <TableCell>{templateKindLabel(m.loai)}</TableCell>
                 <TableCell>{ngay(m.hieu_luc_tu)}</TableCell>
                 <TableCell className="font-mono text-xs" title={m.sha256}>
-                  {shaRutGon(m.sha256)}
+                  {shortSha(m.sha256)}
                 </TableCell>
-                <TableCell className="text-right">{kichThuoc(m.kich_thuoc)}</TableCell>
+                <TableCell className="text-right">{formatSize(m.kich_thuoc)}</TableCell>
                 <TableCell>{nguoi(m.nguoi_tai_id)}</TableCell>
-                <TableCell>{thoiDiem(m.tai_luc)}</TableCell>
+                <TableCell>{formatTime(m.tai_luc)}</TableCell>
                 <TableCell className="max-w-xs whitespace-pre-line">{m.ghi_chu ?? ""}</TableCell>
               </TableRow>
             ))}
@@ -87,12 +87,12 @@ export function CouncilTemplatePanel({ canUpload }: { canUpload: boolean }) {
 
 function UploadTemplateForm() {
   const tai = useUploadCouncilTemplate()
-  const [loai, setLoai] = useState<CouncilTemplateKind | "">("")
-  const [hieuLuc, setHieuLuc] = useState("")
-  const [ghiChu, setGhiChu] = useState("")
-  const [tep, setTep] = useState<File | null>(null)
-  const oTep = useRef<HTMLInputElement>(null)
-  const guiDuoc = loai !== "" && hieuLuc !== "" && tep !== null && !tai.isPending
+  const [loai, setKind] = useState<CouncilTemplateKind | "">("")
+  const [effective, setEffective] = useState("")
+  const [note, setNote] = useState("")
+  const [tep, setFile] = useState<File | null>(null)
+  const fileCell = useRef<HTMLInputElement>(null)
+  const submittable = loai !== "" && effective !== "" && tep !== null && !tai.isPending
 
   return (
     <form
@@ -100,15 +100,15 @@ function UploadTemplateForm() {
       data-testid="upload-template-form"
       onSubmit={(e) => {
         e.preventDefault()
-        if (loai === "" || hieuLuc === "" || tep === null || tai.isPending) return
+        if (loai === "" || effective === "" || tep === null || tai.isPending) return
         tai.mutate(
-          { loai, hieu_luc_tu: hieuLuc, ghi_chu: ghiChu.trim() || undefined, file: tep },
+          { loai, hieu_luc_tu: effective, ghi_chu: note.trim() || undefined, file: tep },
           {
             onSuccess: (m) => {
-              toast.success(`Đã tải mẫu ${nhanLoaiMau(m.loai)}, áp cho văn bản ký từ ${ngay(m.hieu_luc_tu)}.`)
-              setTep(null)
-              setGhiChu("")
-              if (oTep.current) oTep.current.value = ""
+              toast.success(`Đã tải mẫu ${templateKindLabel(m.loai)}, áp cho văn bản ký từ ${ngay(m.hieu_luc_tu)}.`)
+              setFile(null)
+              setNote("")
+              if (fileCell.current) fileCell.current.value = ""
             },
           },
         )
@@ -118,14 +118,14 @@ function UploadTemplateForm() {
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <div className="space-y-1">
           <Label htmlFor="mau-loai">Loại mẫu</Label>
-          <Select value={loai} onValueChange={(v) => setLoai(v as CouncilTemplateKind)}>
+          <Select value={loai} onValueChange={(v) => setKind(v as CouncilTemplateKind)}>
             <SelectTrigger id="mau-loai" data-testid="upload-loai">
               <SelectValue placeholder="Chọn loại" />
             </SelectTrigger>
             <SelectContent>
               {COUNCIL_TEMPLATE_KINDS.map((k) => (
                 <SelectItem key={k} value={k}>
-                  {nhanLoaiMau(k)}
+                  {templateKindLabel(k)}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -137,19 +137,19 @@ function UploadTemplateForm() {
             id="mau-hieu-luc"
             type="date"
             data-testid="upload-hieu-luc"
-            value={hieuLuc}
-            onChange={(e) => setHieuLuc(e.target.value)}
+            value={effective}
+            onChange={(e) => setEffective(e.target.value)}
           />
         </div>
         <div className="space-y-1">
           <Label htmlFor="mau-tep">Tệp mẫu Word (.docx)</Label>
           <Input
             id="mau-tep"
-            ref={oTep}
+            ref={fileCell}
             type="file"
             data-testid="upload-file"
             accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            onChange={(e) => setTep(e.target.files?.[0] ?? null)}
+            onChange={(e) => setFile(e.target.files?.[0] ?? null)}
           />
         </div>
       </div>
@@ -158,12 +158,12 @@ function UploadTemplateForm() {
         <Textarea
           id="mau-ghi-chu"
           data-testid="upload-ghi-chu"
-          value={ghiChu}
-          onChange={(e) => setGhiChu(e.target.value)}
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
         />
       </div>
       <CouncilErrorAlert error={tai.error} testId="upload-template-error" />
-      <Button type="submit" disabled={!guiDuoc} data-testid="upload-template-submit">
+      <Button type="submit" disabled={!submittable} data-testid="upload-template-submit">
         {tai.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
         Tải mẫu lên
       </Button>

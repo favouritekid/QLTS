@@ -6,7 +6,7 @@
  */
 import type { DecisionParams } from "@/lib/zod/council-documents"
 
-export interface ThamSoNhap {
+export interface InputParams {
   so_quyet_dinh: string
   ngay_quyet_dinh: string
   dot_so: string
@@ -15,7 +15,7 @@ export interface ThamSoNhap {
   ngay_bien_ban: string
 }
 
-export const THAM_SO_TRONG: ThamSoNhap = {
+export const EMPTY_PARAMS: InputParams = {
   so_quyet_dinh: "",
   ngay_quyet_dinh: "",
   dot_so: "",
@@ -29,14 +29,14 @@ export const THAM_SO_TRONG: ThamSoNhap = {
  * lỗi theo SỐ DÒNG, đếm từ 1). Chỉ bỏ các dòng trống ở CUỐI (không làm lệch số dòng nào). Không tự sửa / lọc mã —
  * máy chủ kiểm định dạng, trùng, khớp hồ sơ.
  */
-export function dongNhapThanhDanhSach(van_ban: string): string[] {
+export function parseRowsToList(van_ban: string): string[] {
   const dong = van_ban.split(/\r?\n/)
   while (dong.length > 0 && dong[dong.length - 1].trim() === "") dong.pop()
   return dong
 }
 
 /** Chỉ gửi ô đã điền; không điền ô nào ⇒ không gửi tham số (chỗ ấy để trống trên văn bản). */
-export function thamSoGui(t: ThamSoNhap): DecisionParams | null {
+export function submitParams(t: InputParams): DecisionParams | null {
   const out: DecisionParams = {}
   if (t.so_quyet_dinh.trim()) out.so_quyet_dinh = t.so_quyet_dinh.trim()
   if (t.ngay_quyet_dinh) out.ngay_quyet_dinh = t.ngay_quyet_dinh

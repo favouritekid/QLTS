@@ -189,8 +189,8 @@ async def _diem_ho_so(hs, pid, bang):
 
 
 async def _cong(ma, nam=2026):
-    anh = await doc.doc_ho_so_theo_ma(csdl.engine, ma, academic_year=nam)
-    return cong.danh_gia(anh.kiem), anh
+    anh = await doc.read_profiles_by_code(csdl.engine, ma, academic_year=nam)
+    return cong.evaluate(anh.kiem), anh
 
 
 def _mot_ly_do(ma):
@@ -208,13 +208,13 @@ async def test_ho_so_sach_qua_cong_va_diem_kv_theo_nam(hs):
 # ═══════════════════════════════ F228 — 15 trạng thái qua tao_bo_van_ban ══════════════════
 async def _tao(ma, **kw):
     async with AsyncSessionLocal() as db:
-        bo, _ = await bo_vb.tao_bo_van_ban(
+        bo, _ = await bo_vb.create_document_set(
             db,
             csdl.engine,
-            ma_ho_so=ma,
+            profile_codes=ma,
             academic_year=kw.pop("nam", 2026),
-            tham_so=None,
-            nguoi_tao_id=kw.pop("nguoi", None),
+            params=None,
+            creator_id=kw.pop("nguoi", None),
             **kw,
         )
         await db.commit()
@@ -243,7 +243,7 @@ async def test_trang_thai_canh_bao_thi_409_khong_ghi(hs, s):
         await db.commit()
     cccd, _ = await _mot(hs, status=s)
     with pytest.raises(ConflictError) as e:
-        await _tao([cccd], duoc_xac_nhan=True)
+        await _tao([cccd], can_confirm=True)
     p = e.value.public_payload["kiem_tra_dung_bo"]
     assert p["muc"] == "can_xac_nhan" and p["chan"] == []
     assert p["canh_bao"]["so_ho_so_theo_trang_thai"] == {s: 1}
@@ -379,15 +379,15 @@ async def test_xac_nhan_dung_so_dem_thi_dung_va_ghi_vet(hs):
         await _tao(
             [a, b, c, e_],
             nguoi=nguoi,
-            xac_nhan_trang_thai={"submitted": 1, "reviewing": 1},
-            duoc_xac_nhan=True,
+            confirm_status={"submitted": 1, "reviewing": 1},
+            can_confirm=True,
         )
     assert await _dem() == (0, 0)
     sid = await _tao(
         [a, b, c, e_],
         nguoi=nguoi,
-        xac_nhan_trang_thai={"submitted": 2, "reviewing": 1},
-        duoc_xac_nhan=True,
+        confirm_status={"submitted": 2, "reviewing": 1},
+        can_confirm=True,
     )
     async with AsyncSessionLocal() as db:
         bo = await db.get(CouncilDocumentSet, sid)
@@ -405,10 +405,10 @@ async def test_xac_nhan_dung_so_dem_thi_dung_va_ghi_vet(hs):
 
 async def test_khong_duoc_xac_nhan_thi_403_truoc_khi_doc(hs, monkeypatch):
     goi = []
-    monkeypatch.setattr(bo_vb, "doc_ho_so_theo_ma", lambda *a, **k: goi.append(1))
+    monkeypatch.setattr(bo_vb, "read_profiles_by_code", lambda *a, **k: goi.append(1))
     cccd, _ = await _mot(hs, status="submitted")
     with pytest.raises(PermissionDeniedError):
-        await _tao([cccd], xac_nhan_trang_thai={"submitted": 1}, duoc_xac_nhan=False)
+        await _tao([cccd], confirm_status={"submitted": 1}, can_confirm=False)
     assert goi == [] and await _dem() == (0, 0)
 
 
@@ -915,7 +915,7 @@ async def test_tinh_lai_kv_khong_ghi_gi_vao_ho_so(hs):
         "WHERE id = :p"
     )
     truoc = (await _sql(q, p=pid)).one()
-    anh = await doc.doc_ho_so_theo_ma(csdl.engine, [cccd], academic_year=2026)
+    anh = await doc.read_profiles_by_code(csdl.engine, [cccd], academic_year=2026)
     # Phép đo hợp lệ: đã tính lại (và thấy lệch).
     assert anh.kiem[0].kv_ly_do == "khu_vuc_doi_sau_anh_chup"
     assert anh.giao_dich.transaction_read_only == "on"
@@ -1096,6 +1096,6 @@ async def test_khong_co_luat_thi_diem_doi_tuong_0_nhu_t6(hs):
 async def test_giao_dich_doc_van_chi_doc_khi_tra_an_dinh_thu_cong(hs):
     # Phiên ORM tra sổ ấn định chạy TRÊN kết nối chỉ đọc: không mở giao dịch ghi nào.
     cccd, _ = await _an_dinh_thu_cong(hs)
-    anh = await doc.doc_ho_so_theo_ma(csdl.engine, [cccd], academic_year=2026)
+    anh = await doc.read_profiles_by_code(csdl.engine, [cccd], academic_year=2026)
     assert anh.giao_dich.transaction_read_only == "on"
     assert anh.kiem[0].kv_ly_do is None

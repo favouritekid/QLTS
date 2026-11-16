@@ -210,25 +210,25 @@ export function readApiError(error: unknown): ApiErrorView {
     res.data && typeof res.data === "object" && !Array.isArray(res.data)
       ? (res.data as Record<string, unknown>)
       : undefined
-  const chuoi = (v: unknown) => (typeof v === "string" && v.length > 0 ? v : undefined)
+  const asString = (v: unknown) => (typeof v === "string" && v.length > 0 ? v : undefined)
   const errors = Array.isArray(data?.errors) ? (data?.errors as unknown[]) : []
   const validation = errors
     .map((x): ApiValidationIssue | undefined => {
       const o = x && typeof x === "object" ? (x as Record<string, unknown>) : {}
-      const msg = chuoi(o.msg)
+      const msg = asString(o.msg)
       if (!msg) return undefined
       const loc = Array.isArray(o.loc) ? o.loc.filter((p): p is string => typeof p === "string") : []
       return { loc, msg }
     })
     .filter((x): x is ApiValidationIssue => x !== undefined)
-  const serverCode = chuoi(data?.code)
+  const serverCode = asString(data?.code)
   return {
     isAxios: true,
     hasResponse: true,
     status: res.status,
-    errorCode: chuoi(data?.error_code),
+    errorCode: asString(data?.error_code),
     serverCode,
-    detail: chuoi(data?.detail),
+    detail: asString(data?.detail),
     validation,
     frozen: res.status === 503 && serverCode === "ADMISSION_FROZEN",
     data,

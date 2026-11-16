@@ -61,7 +61,7 @@ def patched_audit_and_dispatch():
 
     Returns (audit_mock, dispatch_mock) so each test can assert calls.
     """
-    # F230 (85c71119): ``transition`` gọi chốt ``kiem_chuyen_trang_thai`` (đọc Quyết định đã ký từ CSDL). CSDL ở đây là MagicMock
+    # F230 (85c71119): ``transition`` gọi chốt ``check_status_transition`` (đọc Quyết định đã ký từ CSDL). CSDL ở đây là MagicMock
     # ⇒ chốt được thay bằng AsyncMock "cho phép" (hồ sơ thử không có Quyết định). Hành vi chốt canh ở
     # tests/api/test_council_decision_profile_gates_api.py; nối dây ở tests/unit/test_admission_state_service.py.
     with patch(
@@ -71,7 +71,7 @@ def patched_audit_and_dispatch():
         "app.services.notification_dispatcher.dispatch_event",
         new=AsyncMock(return_value=None),
     ) as dispatch_mock, patch(
-        "app.services.council_decision_status_service.kiem_chuyen_trang_thai",
+        "app.services.council_decision_status_service.check_status_transition",
         new=AsyncMock(return_value=None),
     ):
         yield audit_mock, dispatch_mock

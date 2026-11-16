@@ -1,10 +1,10 @@
 /**
  * Văn bản Hội đồng — bộ điều khiển bước 6 "Ghi nhận" (đặc tả 5.6 + bản 2 mục 3.7.5, 5.6.1).
  *
- * Bất biến (test `useGhiNhanQuyetDinh.test.tsx` khoá từng điều):
+ * Bất biến (test `useRecordDecision.test.tsx` khoá từng điều):
  *   • Lượt gửi được mở NGAY trước khi gửi, không mở khi vào bước 6 (vào rồi bỏ đi sẽ để lại lượt treo).
  *   • Mã lượt CHỈ nằm trong bộ nhớ (`useRef`) — không storage, không URL, không log. Tải lại trang ⇒ lấy lại qua
- *     `GET /sets/{id}/luot-ghi-nhan` (`khoiPhuc`).
+ *     `GET /sets/{id}/luot-ghi-nhan` (`restore`).
  *   • Bị từ chối dứt khoát (4xx đã định) ⇒ mở khoá biểu mẫu, gửi lại CÙNG mã (lượt vẫn `cho_gui`).
  *   • Mất mạng / hết giờ / 5xx / 404 / 2xx không đọc được ⇒ "Chưa xác định". KHÔNG bao giờ suy "chưa ghi", và KHÔNG
  *     có đường "gửi lại" từ trạng thái này — chỉ có "Kiểm tra trên máy chủ" (phân xử).
@@ -12,7 +12,7 @@
  *     luỹ đẳng) — không bao giờ suy "chưa ghi". Giờ của lượt (`luc`) GIỮ NGUYÊN qua các lần phân xử không kết luận (không bị
  *     thay bằng giờ bấm kiểm); phân xử ra "đã chặn" thì làm mới bộ + danh sách lượt để dòng "Tình trạng" theo máy chủ (bước đang xem do trang giữ, không bị
  *     kéo đi khi danh sách lượt đổi — F281).
- *   • Mã của lượt đã `da_ghi` chỉ bị bỏ SAU KHI máy chủ xác nhận huỷ ghi nhận (`batDauLuotMoiSauHuy`); lỗi nghiệp vụ khi gửi
+ *   • Mã của lượt đã `da_ghi` chỉ bị bỏ SAU KHI máy chủ xác nhận huỷ ghi nhận (`startNewSubmissionAfterCancel`); lỗi nghiệp vụ khi gửi
  *     KHÔNG bỏ mã (lượt vẫn `cho_gui`) — F276.
  *   • Chống bấm đúp bằng cờ đồng bộ (không chờ React render).
  *
@@ -30,11 +30,11 @@ import {
   type CreateCouncilDecisionInput,
 } from "@/lib/api/council-documents"
 import {
-  giaiNghiaPhanXu,
-  huongXuLyLoiGui,
-  luotDangCho,
-  phanLoaiLoiGui,
-  type HuongXuLyLoiGui,
+  explainAdjudication,
+  submissionErrorHandling,
+  pendingSubmission,
+  classifySubmissionError,
+  type SubmissionErrorHandling,
 } from "@/lib/council-submission"
 import { readApiError } from "@/lib/error-handler"
 import type { CouncilDecisionWrite, CouncilSubmission } from "@/lib/zod/council-documents"
@@ -42,7 +42,7 @@ import type { CouncilDecisionWrite, CouncilSubmission } from "@/lib/zod/council-
 import { councilDocumentKeys } from "./useCouncilDocuments"
 
 /** Vì sao đang "chưa xác định" — chỉ để chọn câu hướng dẫn, không đổi nghĩa. */
-export type LyDoChuaRo =
+export type UnclearReason =
   | "gui" // mất phản hồi / lỗi lúc gửi
   | "mo_luot" // đã có lượt `cho_gui` (mở trùng, hoặc mất phản hồi lúc mở)
   | "tai_lai_trang" // khôi phục từ `GET /sets/{id}/luot-ghi-nhan`
@@ -51,86 +51,86 @@ export type LyDoChuaRo =
   | "dong_bang" // phân xử bị đóng băng tuyển sinh chặn (503 ADMISSION_FROZEN): vẫn chưa rõ, đợi hết đóng băng
   | "van_chua_ro" // phân xử trả `ket_qua` lạ
 
-export type TrangThaiGhiNhan =
+export type RecordStatus =
   | { kieu: "nhap" }
   | { kieu: "dang_gui" }
   /** máy chủ TỪ CHỐI dứt khoát; `huong` cho biết bước tiếp theo hợp lệ */
-  | { kieu: "bi_tu_choi"; loi: unknown; huong: HuongXuLyLoiGui }
+  | { kieu: "bi_tu_choi"; loi: unknown; huong: SubmissionErrorHandling }
   /** không mở được lượt — CHƯA gửi gì, thử lại an toàn */
   | { kieu: "loi_mo_luot"; loi: unknown }
   /** bộ không còn (404 khi mở lượt) */
   | { kieu: "bo_khong_con" }
-  | { kieu: "chua_xac_dinh"; ma: string; luc: string; lyDo: LyDoChuaRo }
+  | { kieu: "chua_xac_dinh"; ma: string; luc: string; reason: UnclearReason }
   | { kieu: "dang_phan_xu"; ma: string; luc: string }
-  /** `quyetDinh` null = máy chủ báo ĐÃ ghi mà không kèm chi tiết */
-  | { kieu: "da_ghi"; quyetDinh: CouncilDecisionWrite | null }
+  /** `decision` null = máy chủ báo ĐÃ ghi mà không kèm chi tiết */
+  | { kieu: "da_ghi"; decision: CouncilDecisionWrite | null }
   /** lượt đã bị chặn: chắc chắn CHƯA có văn bản */
   | { kieu: "chua_ghi_da_chan" }
 
-export type DuLieuGuiGhiNhan = Omit<CreateCouncilDecisionInput, "set_id" | "ma_luot_gui">
+export type RecordSubmissionData = Omit<CreateCouncilDecisionInput, "set_id" | "ma_luot_gui">
 
 /** Giờ của lượt gửi đang mang trong trạng thái chưa rõ / đang phân xử; không có thì giờ hiện tại. */
-function gioCuaLuot(t: TrangThaiGhiNhan): string {
+function submissionTime(t: RecordStatus): string {
   return t.kieu === "chua_xac_dinh" || t.kieu === "dang_phan_xu" ? t.luc : new Date().toISOString()
 }
 
-type KetQuaMoLuot =
+type OpenSubmissionResult =
   | { kieu: "ok"; ma: string }
   | { kieu: "chua_xac_dinh"; ma: string }
   | { kieu: "bo_khong_con" }
   | { kieu: "loi"; loi: unknown }
 
-export function useGhiNhanQuyetDinh(setId: number) {
+export function useRecordDecision(setId: number) {
   const qc = useQueryClient()
-  const [trangThai, setTrangThai] = useState<TrangThaiGhiNhan>({ kieu: "nhap" })
+  const [status, setStatus] = useState<RecordStatus>({ kieu: "nhap" })
   const maRef = useRef<string | null>(null)
-  const dangChay = useRef(false)
+  const running = useRef(false)
 
-  const lamMoiSauGhi = useCallback(() => {
+  const refreshAfterRecord = useCallback(() => {
     void qc.invalidateQueries({ queryKey: councilDocumentKeys.sets() })
     void qc.invalidateQueries({ queryKey: councilDocumentKeys.decisions() })
   }, [qc])
 
-  const moLuot = useCallback(async (): Promise<KetQuaMoLuot> => {
+  const openSubmission = useCallback(async (): Promise<OpenSubmissionResult> => {
     try {
       const r = await openCouncilSubmission(setId)
       return { kieu: "ok", ma: r.ma }
-    } catch (loi) {
-      const c = councilErrorCode(loi)
-      const status = readApiError(loi).status
-      if (status === 409 && c.maLoi === "luot_dang_cho" && c.ma) return { kieu: "chua_xac_dinh", ma: c.ma }
+    } catch (error) {
+      const c = councilErrorCode(error)
+      const status = readApiError(error).status
+      if (status === 409 && c.errorCode === "luot_dang_cho" && c.ma) return { kieu: "chua_xac_dinh", ma: c.ma }
       if (status === 404) return { kieu: "bo_khong_con" }
       // `luot_dang_thay_doi` hoặc mất phản hồi / 5xx lúc mở: lượt có thể ĐÃ được tạo mà ta chưa biết mã ⇒ đọc lại.
       try {
-        const cho = luotDangCho(await listCouncilSubmissions(setId))
+        const cho = pendingSubmission(await listCouncilSubmissions(setId))
         if (cho) return { kieu: "chua_xac_dinh", ma: cho.ma }
       } catch {
         /* không đọc lại được: CHƯA gửi gì, báo lỗi mở lượt (thử lại an toàn) */
       }
-      return { kieu: "loi", loi }
+      return { kieu: "loi", loi: error }
     }
   }, [setId])
 
   const gui = useCallback(
-    async (du_lieu: DuLieuGuiGhiNhan) => {
-      if (dangChay.current) return
-      dangChay.current = true
-      setTrangThai({ kieu: "dang_gui" })
+    async (du_lieu: RecordSubmissionData) => {
+      if (running.current) return
+      running.current = true
+      setStatus({ kieu: "dang_gui" })
       try {
         let ma = maRef.current
         if (ma === null) {
-          const r = await moLuot()
+          const r = await openSubmission()
           if (r.kieu === "chua_xac_dinh") {
             maRef.current = r.ma
-            setTrangThai({ kieu: "chua_xac_dinh", ma: r.ma, luc: new Date().toISOString(), lyDo: "mo_luot" })
+            setStatus({ kieu: "chua_xac_dinh", ma: r.ma, luc: new Date().toISOString(), reason: "mo_luot" })
             return
           }
           if (r.kieu === "bo_khong_con") {
-            setTrangThai({ kieu: "bo_khong_con" })
+            setStatus({ kieu: "bo_khong_con" })
             return
           }
           if (r.kieu === "loi") {
-            setTrangThai({ kieu: "loi_mo_luot", loi: r.loi })
+            setStatus({ kieu: "loi_mo_luot", loi: r.loi })
             return
           }
           ma = r.ma
@@ -138,84 +138,84 @@ export function useGhiNhanQuyetDinh(setId: number) {
         }
         try {
           const qd = await createCouncilDecision({ ...du_lieu, set_id: setId, ma_luot_gui: ma })
-          setTrangThai({ kieu: "da_ghi", quyetDinh: qd })
-          lamMoiSauGhi()
-        } catch (loi) {
-          if (phanLoaiLoiGui(loi) === "bi_tu_choi") {
-            const huong = huongXuLyLoiGui(loi)
+          setStatus({ kieu: "da_ghi", decision: qd })
+          refreshAfterRecord()
+        } catch (error) {
+          if (classifySubmissionError(error) === "bi_tu_choi") {
+            const huong = submissionErrorHandling(error)
             if (huong === "mo_luot_moi") maRef.current = null
-            setTrangThai({ kieu: "bi_tu_choi", loi, huong })
+            setStatus({ kieu: "bi_tu_choi", loi: error, huong })
           } else {
-            setTrangThai({ kieu: "chua_xac_dinh", ma, luc: new Date().toISOString(), lyDo: "gui" })
+            setStatus({ kieu: "chua_xac_dinh", ma, luc: new Date().toISOString(), reason: "gui" })
           }
         }
       } finally {
-        dangChay.current = false
+        running.current = false
       }
     },
-    [moLuot, setId, lamMoiSauGhi],
+    [openSubmission, setId, refreshAfterRecord],
   )
 
-  const phanXu = useCallback(async () => {
+  const adjudicate = useCallback(async () => {
     const ma = maRef.current
-    if (ma === null || dangChay.current) return
-    dangChay.current = true
+    if (ma === null || running.current) return
+    running.current = true
     // `luc` = GIỜ CỦA LƯỢT GỬI (khung "Chưa xác định" ghi "Lượt gửi lúc …"), KHÔNG phải giờ bấm kiểm: lấy từ trạng thái đang
     // đứng (chưa rõ / đang kiểm) và giữ nguyên qua mọi lần phân xử không kết luận. Chỉ khi trạng thái hiện tại không mang giờ
     // (không xảy ra qua giao diện) mới lấy giờ hiện tại. Đọc qua hàm cập nhật để không phụ thuộc bản chụp cũ của trạng thái.
-    setTrangThai((cu) => ({ kieu: "dang_phan_xu", ma, luc: gioCuaLuot(cu) }))
+    setStatus((cu) => ({ kieu: "dang_phan_xu", ma, luc: submissionTime(cu) }))
     try {
-      const kq = giaiNghiaPhanXu(await resolveCouncilSubmission(ma))
+      const kq = explainAdjudication(await resolveCouncilSubmission(ma))
       switch (kq.kieu) {
         case "da_ghi":
-          setTrangThai({ kieu: "da_ghi", quyetDinh: kq.quyetDinh })
-          lamMoiSauGhi()
+          setStatus({ kieu: "da_ghi", decision: kq.decision })
+          refreshAfterRecord()
           break
         case "da_ghi_thieu_chi_tiet":
-          setTrangThai({ kieu: "da_ghi", quyetDinh: null })
-          lamMoiSauGhi()
+          setStatus({ kieu: "da_ghi", decision: null })
+          refreshAfterRecord()
           break
         case "chua_ghi_da_chan":
           maRef.current = null
-          setTrangThai({ kieu: "chua_ghi_da_chan" })
+          setStatus({ kieu: "chua_ghi_da_chan" })
           // Máy chủ vừa đổi tình trạng của bộ (từ `chua_xac_dinh` sang `chua_ghi_nhan`) và đóng lượt (`da_chan`): làm mới bộ + danh
           // sách lượt, nếu không dòng "Tình trạng" đầu trang còn nguyên bản đã tải lúc lượt chưa rõ (Đ2-2) và bản lưu của danh sách
           // lượt còn `cho_gui` cũ (khôi phục nhầm "Chưa xác định" khi vào lại trang). Làm mới cả danh sách lượt AN TOÀN vì bước đang
           // xem do trang giữ (F281: `CouncilSetDetailClient` không suy lại bước từ dữ liệu) — cùng đường với `da_ghi`.
-          lamMoiSauGhi()
+          refreshAfterRecord()
           break
         case "dang_xu_ly":
-          setTrangThai((cu) => ({ kieu: "chua_xac_dinh", ma, luc: gioCuaLuot(cu), lyDo: "dang_xu_ly" }))
+          setStatus((cu) => ({ kieu: "chua_xac_dinh", ma, luc: submissionTime(cu), reason: "dang_xu_ly" }))
           break
         default:
-          setTrangThai((cu) => ({ kieu: "chua_xac_dinh", ma, luc: gioCuaLuot(cu), lyDo: "van_chua_ro" }))
+          setStatus((cu) => ({ kieu: "chua_xac_dinh", ma, luc: submissionTime(cu), reason: "van_chua_ro" }))
       }
-    } catch (loi) {
+    } catch (error) {
       // mất mạng / hết giờ / 404 / 5xx / phản hồi không đọc được: KHÔNG kết luận gì. Đóng băng tuyển sinh (503 ADMISSION_FROZEN)
       // chặn CẢ việc phân xử: máy chủ vẫn trả lời nên không phải "mất mạng" — nói riêng để người dùng biết đợi hết đóng băng.
-      const lyDo: LyDoChuaRo = readApiError(loi).frozen ? "dong_bang" : "phan_xu_loi"
-      setTrangThai((cu) => ({ kieu: "chua_xac_dinh", ma, luc: gioCuaLuot(cu), lyDo }))
+      const reason: UnclearReason = readApiError(error).frozen ? "dong_bang" : "phan_xu_loi"
+      setStatus((cu) => ({ kieu: "chua_xac_dinh", ma, luc: submissionTime(cu), reason }))
     } finally {
-      dangChay.current = false
+      running.current = false
     }
-  }, [lamMoiSauGhi])
+  }, [refreshAfterRecord])
 
   /** Tải lại trang: thấy lượt `cho_gui` ⇒ vào thẳng "Chưa xác định" (chỉ khi đang ở `nhap`). */
-  const khoiPhuc = useCallback((ds: readonly CouncilSubmission[]) => {
-    const cho = luotDangCho(ds)
+  const restore = useCallback((ds: readonly CouncilSubmission[]) => {
+    const cho = pendingSubmission(ds)
     if (!cho) return
-    setTrangThai((cu) => {
+    setStatus((cu) => {
       if (cu.kieu !== "nhap") return cu
       maRef.current = cho.ma
-      return { kieu: "chua_xac_dinh", ma: cho.ma, luc: cho.tao_luc, lyDo: "tai_lai_trang" }
+      return { kieu: "chua_xac_dinh", ma: cho.ma, luc: cho.tao_luc, reason: "tai_lai_trang" }
     })
   }, [])
 
   /**
    * Về biểu mẫu sau khi lượt đã bị CHẶN (`chua_ghi_da_chan`, mã đã bỏ lúc phân xử). CHỈ đổi trạng thái: KHÔNG đụng mã, nên
-   * KHÔNG dùng sau khi huỷ ghi nhận (xem `batDauLuotMoiSauHuy`).
+   * KHÔNG dùng sau khi huỷ ghi nhận (xem `startNewSubmissionAfterCancel`).
    */
-  const veBieuMau = useCallback(() => setTrangThai({ kieu: "nhap" }), [])
+  const backToForm = useCallback(() => setStatus({ kieu: "nhap" }), [])
 
   /**
    * Gọi CHỈ SAU KHI máy chủ đã xác nhận huỷ ghi nhận văn bản của lượt này (`CouncilCancelDialog.onXong`: huỷ thành công, hoặc
@@ -225,10 +225,10 @@ export function useGhiNhanQuyetDinh(setId: number) {
    * KHÔNG mở lượt ngay ở đây (lượt chỉ mở NGAY trước khi gửi — vào bước rồi bỏ đi sẽ để lại lượt treo). KHÔNG gọi khi huỷ
    * chưa được xác nhận, và KHÔNG gọi ở nhánh lỗi nghiệp vụ khi gửi (lượt vẫn `cho_gui`, gửi lại CÙNG mã).
    */
-  const batDauLuotMoiSauHuy = useCallback(() => {
+  const startNewSubmissionAfterCancel = useCallback(() => {
     maRef.current = null
-    setTrangThai({ kieu: "nhap" })
+    setStatus({ kieu: "nhap" })
   }, [])
 
-  return { trangThai, gui, phanXu, khoiPhuc, veBieuMau, batDauLuotMoiSauHuy }
+  return { status, gui, adjudicate, restore: restore, backToForm, startNewSubmissionAfterCancel }
 }
