@@ -76,7 +76,7 @@ def submission_content_sha(
 ) -> str:
     """sha256 của dạng JSON CHUẨN (khoá sắp xếp, không khoảng trắng) mọi thứ đã gửi trong một lần ghi nhận — gồm sha
     của tệp scan (không phải bytes). Cùng mã + cùng sha ⇒ gửi lặp (trả lại bản cũ); khác sha ⇒ 409."""
-    ts = {
+    paper_values = {
         k: (v.isoformat() if isinstance(v, date) else v)
         for k, v in sorted((paper_params or {}).items())
     }
@@ -86,7 +86,7 @@ def submission_content_sha(
         "goc_id": root_id,
         "so_quyet_dinh": decision_number,
         "ngay_ky": signing_date.isoformat(),
-        "tham_so_giay": ts,
+        "tham_so_giay": paper_values,
         "xac_nhan_so_ho_so": confirm_profile_count,
         "xac_nhan_khop_ban_in": confirm_printed_copy_match,
         "xac_nhan_trang_thai": dict(sorted((confirm_status or {}).items())),

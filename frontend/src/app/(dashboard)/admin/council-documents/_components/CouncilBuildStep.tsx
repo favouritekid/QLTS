@@ -51,7 +51,7 @@ export function CouncilBuildStep({ academicYear, preview, onBack, onBuildDone, o
   const reset = useCouncilSelectionStore((s) => s.reset)
   const create = useCreateCouncilSetByIds()
   const t = preview.tom_tat
-  const ts = submitParams(inputParams)
+  const decisionParams = submitParams(inputParams)
 
   const needsConfirmation = useMemo(() => Object.entries(t.can_xac_nhan_theo_trang_thai), [t.can_xac_nhan_theo_trang_thai])
   const [typed, setTyped] = useState<Record<string, string>>({})
@@ -81,7 +81,7 @@ export function CouncilBuildStep({ academicYear, preview, onBack, onBuildDone, o
         profile_ids: preview.dong.map((d) => d.profile_id),
         phien_ban_kiem: preview.phien_ban_kiem,
         academic_year: academicYear,
-        ...(ts ? { tham_so_quyet_dinh: ts } : {}),
+        ...(decisionParams ? { tham_so_quyet_dinh: decisionParams } : {}),
         ...(needsConfirmation.length > 0 ? { xac_nhan_trang_thai: t.can_xac_nhan_theo_trang_thai } : {}),
       },
       {
@@ -103,7 +103,7 @@ export function CouncilBuildStep({ academicYear, preview, onBack, onBuildDone, o
       <div className="rounded border p-3 text-sm" data-testid="se-dung">
         <div className="font-medium">Sẽ dựng</div>
         <div>
-          {t.tong} hồ sơ · {t.so_nhom} nhóm ngành – trình độ · theo danh sách đã chốt · {paramsQueryString(ts)}
+          {t.tong} hồ sơ · {t.so_nhom} nhóm ngành – trình độ · theo danh sách đã chốt · {paramsQueryString(decisionParams)}
         </div>
         <div className="mt-1 text-muted-foreground" data-testid="du-kien-tep">
           Sẽ tạo {t.du_kien_so_tep} tệp: Biên bản và Quyết định (2 tệp chung) + Danh sách xét tuyển Word và Excel cho mỗi nhóm

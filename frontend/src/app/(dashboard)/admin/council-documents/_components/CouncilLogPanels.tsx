@@ -25,13 +25,13 @@ const PAGE_SIZE = 100
 function Pagination({
   offset,
   setOffset,
-  day,
+  hasMore,
   loading,
   name,
 }: {
   offset: number
   setOffset: (f: (o: number) => number) => void
-  day: boolean
+  hasMore: boolean
   loading: boolean
   name: string
 }) {
@@ -50,7 +50,7 @@ function Pagination({
       <Button
         variant="outline"
         size="sm"
-        disabled={!day || loading}
+        disabled={!hasMore || loading}
         onClick={() => setOffset((o) => o + PAGE_SIZE)}
         data-testid={`${name}-next`}
       >
@@ -115,7 +115,7 @@ export function CouncilDownloadLogPanel({ setId }: { setId?: number }) {
       <Pagination
         offset={offset}
         setOffset={setOffset}
-        day={q.data.length === PAGE_SIZE}
+        hasMore={q.data.length === PAGE_SIZE}
         loading={q.isFetching}
         name="download-log"
       />
@@ -182,7 +182,7 @@ export function CouncilDeletionLogPanel() {
       <Pagination
         offset={offset}
         setOffset={setOffset}
-        day={q.data.length === PAGE_SIZE}
+        hasMore={q.data.length === PAGE_SIZE}
         loading={q.isFetching}
         name="deletion-log"
       />

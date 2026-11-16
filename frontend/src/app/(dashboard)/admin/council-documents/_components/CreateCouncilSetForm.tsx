@@ -53,12 +53,12 @@ export function CreateCouncilSetForm({ canOpenDetail }: { canOpenDetail: boolean
 
   const submit = (confirm?: Record<string, number>) => {
     if (!submittable || academicYearNumber === null) return
-    const ts = submitParams(params)
+    const decisionParams = submitParams(params)
     create.mutate(
       {
         ma_ho_so: list,
         academic_year: academicYearNumber,
-        ...(ts ? { tham_so_quyet_dinh: ts } : {}),
+        ...(decisionParams ? { tham_so_quyet_dinh: decisionParams } : {}),
         ...(confirm ? { xac_nhan_trang_thai: confirm } : {}),
       },
       {

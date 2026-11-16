@@ -111,8 +111,8 @@ def set_unit(profile_units: Sequence[Optional[int]]) -> Optional[int]:
     NULL (bộ chỉ admin xem)."""
     unit_set = set(profile_units)
     if len(unit_set) == 1:
-        (dv,) = unit_set
-        return dv
+        (unit,) = unit_set
+        return unit
     return None
 
 
@@ -294,8 +294,8 @@ def normalize_rows(snapshot: "_candidate_service.ProfileSnapshot", gate_result: 
             else (ITEM_NEEDS_CONFIRMATION if k.stt in warnings else ITEM_BUILDABLE)
         )
         area = gate_result.area_scores[i]
-        lu = gate_result.priority_rules[i]
-        priority = set_gate.printed_priority_score(lu, r.diem_ut)
+        priority_rule = gate_result.priority_rules[i]
+        priority = set_gate.printed_priority_score(priority_rule, r.diem_ut)
         # Điểm IN chưa có (dòng bị chặn) ⇒ ô rỗng ⇒ ``so`` đọc 0: vẫn sắp được, như nhau ở hai phía.
         total = render_service.compute_printed_scores(r.tong_diem, area or "", priority or "").admission_total
         out.append(
@@ -308,7 +308,7 @@ def normalize_rows(snapshot: "_candidate_service.ProfileSnapshot", gate_result: 
                 item=item,
                 reason_codes=code,
                 area_score=area,
-                priority_rule=lu,
+                priority_rule=priority_rule,
                 priority_score=priority,
                 admission_total=total,
                 sort_key=(
@@ -341,7 +341,7 @@ def preview_signature(row: Sequence[NormalizedRow], academic_year: int) -> str:
         "dau": [SIGNATURE_VERSION_MARK, academic_year, render_service.RENDER_RULE, CODE_VERSIONS],
         "dong": [
             {
-                "stt_chuan": stt,
+                "stt_chuan": seq,
                 "row": d.row.model_dump(mode="json"),
                 "kiem": {k: v for k, v in asdict(d.check_data).items() if k != "stt"},
                 "pid": d.pid,
@@ -352,7 +352,7 @@ def preview_signature(row: Sequence[NormalizedRow], academic_year: int) -> str:
                 "luat_ut": d.priority_rule,
                 "diem_ut": d.priority_score,
             }
-            for stt, d in enumerate(row, 1)
+            for seq, d in enumerate(row, 1)
         ],
     }
     b = json.dumps(
@@ -370,10 +370,10 @@ def compare_with_preview(
     """``POST /sets`` dạng id (đặc tả bản 2 mục 3.1.1 bước 2 + 4): thứ tự gửi khác thứ tự chuẩn của ảnh
     chụp, HOẶC dấu tính lại khác dấu đã kiểm (so bằng ``hmac.compare_digest``) ⇒ 409
     ``du_lieu_doi_tu_luc_kiem``. Không tự sắp lại."""
-    dc = normalize_rows(snapshot, gate_result)
-    in_order = [d.pid for d in dc] == list(by_id_request.profile_ids)
+    normalized = normalize_rows(snapshot, gate_result)
+    in_order = [d.pid for d in normalized] == list(by_id_request.profile_ids)
     signature_matches = hmac.compare_digest(
-        preview_signature(dc, academic_year).encode("ascii"),
+        preview_signature(normalized, academic_year).encode("ascii"),
         by_id_request.check_signature.encode("utf-8"),
     )
     if not (in_order and signature_matches):
@@ -400,28 +400,28 @@ async def preview(
         engine, ids, academic_year=year, all_units=all_units, only_unit_id=only_unit_id
     )
     if snapshot is None:
-        dc: List[NormalizedRow] = []
+        normalized: List[NormalizedRow] = []
         checked_at = datetime.now(timezone.utc)
         warning_count: Dict[str, int] = {}
     else:
         result = set_gate.evaluate(snapshot.check_data)
-        dc = normalize_rows(snapshot, result)
+        normalized = normalize_rows(snapshot, result)
         checked_at = snapshot.transaction.snapshot_at
         warning_count = result.warning_count()
     rows_out: List[Dict[str, Any]] = []
     group: Dict[Tuple[str, str], int] = {}
-    for stt, d in enumerate(dc, 1):
-        ng = render_service.decision_group_key(d.row)
-        group[ng] = group.get(ng, 0) + 1
+    for seq, d in enumerate(normalized, 1):
+        group_key = render_service.decision_group_key(d.row)
+        group[group_key] = group.get(group_key, 0) + 1
         rows_out.append(
             {
-                "stt": stt,
-                "stt_qd": group[ng],
+                "stt": seq,
+                "stt_qd": group[group_key],
                 "profile_id": d.pid,
                 "ho_ten": ("%s %s" % (d.row.ho.strip(), d.row.ten.strip())).strip(),
                 "trang_thai": d.check_data.status if isinstance(d.check_data.status, str) else "",
-                "nganh_nhan": ng[0],
-                "trinh_do": ng[1],
+                "nganh_nhan": group_key[0],
+                "trinh_do": group_key[1],
                 "duong_xet_nhan": d.row.phuong_thuc.strip() or None,
                 "diem_in": (
                     "%.2f" % d.admission_total
@@ -436,22 +436,22 @@ async def preview(
             }
         )
     item_counts = {
-        m: sum(1 for d in dc if d.item == m)
+        m: sum(1 for d in normalized if d.item == m)
         for m in (ITEM_BUILDABLE, ITEM_NEEDS_CONFIRMATION, ITEM_BLOCKED)
     }
     return {
         "kiem_luc": checked_at,
-        "phien_ban_kiem": preview_signature(dc, year),
+        "phien_ban_kiem": preview_signature(normalized, year),
         "dong": rows_out,
         "khong_tim_thay": not_found,
         "tom_tat": {
-            "tong": len(dc),
+            "tong": len(normalized),
             "duoc_dung": item_counts[ITEM_BUILDABLE],
             "can_xac_nhan": item_counts[ITEM_NEEDS_CONFIRMATION],
             "bi_chan": item_counts[ITEM_BLOCKED],
             "theo_nganh": [
-                {"nganh_nhan": ng[0], "trinh_do": ng[1], "so": number}
-                for ng, number in group.items()
+                {"nganh_nhan": group_key[0], "trinh_do": group_key[1], "so": number}
+                for group_key, number in group.items()
             ],
             "can_xac_nhan_theo_trang_thai": warning_count,
             "so_nhom": len(group),
@@ -537,7 +537,7 @@ async def _build_and_write_set(
     # Lượt H2 (owner 06-11): điểm đối tượng in theo công tắc của đường xét — bật thì GIỮ điểm luật v1
     # của DTO, tắt / không có luật thì 0 (cổng tính — ``printed_priority_score``).
     priority_scores = tuple(
-        set_gate.printed_priority_score(lu, r.diem_ut) for lu, r in zip(gate_result.priority_rules, snapshot.rows)
+        set_gate.printed_priority_score(priority_rule, r.diem_ut) for priority_rule, r in zip(gate_result.priority_rules, snapshot.rows)
     )
     if len(priority_scores) != len(snapshot.rows) or any(u is None for u in priority_scores):
         raise ServiceError("Thiếu luật cộng điểm đối tượng sau cổng — không dựng.")
@@ -1252,8 +1252,8 @@ async def create_signed_copy_rebuild_set(
         raise DataValidationError(
             "Ngày ký trước ngày in bộ ban đầu (giờ Việt Nam) — giấy không thể ký trước khi in."
         )
-    ts0 = dict(s0.tham_so_quyet_dinh or {})
-    if ts0.get("so_quyet_dinh") not in (None, number) or ts0.get("ngay_quyet_dinh") not in (
+    original_params = dict(s0.tham_so_quyet_dinh or {})
+    if original_params.get("so_quyet_dinh") not in (None, number) or original_params.get("ngay_quyet_dinh") not in (
         None,
         date_value.isoformat(),
     ):
@@ -1325,10 +1325,10 @@ async def create_signed_copy_rebuild_set(
             "Admin đối chiếu từng dòng khác bản in với bản ký rồi gửi lại đúng danh sách.",
             public_payload={"dong_khac": other},
         )
-    mdd = (s0.thong_tin_dung or {}).get("mau_da_dung") or {}
-    template = await _templates_by_id(db, mdd)
+    used_templates = (s0.thong_tin_dung or {}).get("mau_da_dung") or {}
+    template = await _templates_by_id(db, used_templates)
     params = render_service.recheck_decision_params(
-        render_service.DecisionParams(**{**ts0, "so_quyet_dinh": number, "ngay_quyet_dinh": date_value})
+        render_service.DecisionParams(**{**original_params, "so_quyet_dinh": number, "ngay_quyet_dinh": date_value})
     )
     if not await CouncilDocumentRepository(db).try_build_lock():
         raise ConflictError("Đang dựng một bộ văn bản khác — chờ bộ ấy xong rồi thử lại.")
@@ -1342,7 +1342,7 @@ async def create_signed_copy_rebuild_set(
     md = dict(rendered.metadata)
     md.pop("ma_ho_so_dau_vao", None)
     md.pop("tham_so_quyet_dinh", None)
-    md["mau_da_dung"] = mdd
+    md["mau_da_dung"] = used_templates
     md["ngay_ky_chon_mau"] = (s0.thong_tin_dung or {}).get("ngay_ky_chon_mau")
     md["nam_hoc"] = year
     md["phien_ban_ma"] = dict(CODE_VERSIONS)

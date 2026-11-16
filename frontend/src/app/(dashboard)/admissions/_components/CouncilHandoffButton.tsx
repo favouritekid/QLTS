@@ -84,7 +84,7 @@ export function CouncilHandoffButton({ profile, disabled = false }: Props) {
   const locked = disabled || academicYear === undefined
   const lockReason = common.kind === "chua_ro" || common.kind === "nhieu_nam" ? LOCK_REASONS[common.kind] : undefined
 
-  const day = () => {
+  const handOff = () => {
     if (academicYear === undefined) return
     replace(academicYear, profileId)
     router.push(BUILD_DOCUMENT_PATH)
@@ -99,7 +99,7 @@ export function CouncilHandoffButton({ profile, disabled = false }: Props) {
         holding.profileId.length !== profileId.length ||
         holding.profileId.some((id) => !profileId.includes(id)))
     if (other) setAsking(true)
-    else day()
+    else handOff()
   }
 
   return (
@@ -132,7 +132,7 @@ export function CouncilHandoffButton({ profile, disabled = false }: Props) {
               data-testid="thay-danh-sach-dong-y"
               onClick={() => {
                 setAsking(false)
-                day()
+                handOff()
               }}
             >
               Thay bằng danh sách này

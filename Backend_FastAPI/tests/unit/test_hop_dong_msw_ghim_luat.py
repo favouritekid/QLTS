@@ -188,14 +188,16 @@ def _nguon() -> dict:
 #: 16-11-2026 — F339 (Codex 46): đổi nốt tên NỘI BỘ tiếng Việt (tham số / biến / trường lớp nội bộ) — refactor thuần, không đổi
 #: luật: 17 băm HAM đổi vì tên trong mã nguồn; HANG / GIA_TRI giữ nguyên; AST từng tệp so với ``a30a69c6`` chỉ khác định danh
 #: (137 cặp, đúng bảng ``kiem-thu-phien-a/ma/f339/bang-nguon.txt``) + docstring. MSW không phải sửa.
+#: 16-11-2026 — F339 vòng 2 (lượt quét không dựa từ điển): đổi thêm tên nội bộ (``stt``/``ts``/``ng``/``gh``…) — 7 băm HAM
+#: đổi; HANG / GIA_TRI giữ nguyên; AST so với ``39915c60`` chỉ khác định danh (đúng bảng ``ma/f339/bang-nguon-2.txt``).
 GHIM = {
     "bo.CAU_DOI_TU_LUC_KIEM": "236fff0ad0195cf0",
     "bo.MA_LOI_DOI_TU_LUC_KIEM": "111c5b69b272ed2c",
-    "bo._dung_va_ghi_bo": "91e56cc88da8bd9e",
+    "bo._dung_va_ghi_bo": "6adf60fd1da96bb7",
     "bo.kiem_danh_sach_id": "858d08fb92cca75a",  # review max PR #724: cận trên int4 — MSW chép cùng lượt
     "bo.kiem_ly_do": "fc6a62b3da5c6187",
     "bo.kiem_ly_do_xoa": "82d807e7fcf70d19",
-    "bo.so_voi_kiem_truoc": "a671e64a5618ffdf",
+    "bo.so_voi_kiem_truoc": "de1502cdb888302d",
     "bo.tao_bo_van_ban": "590f755b6bd25e9f",
     "bo.tao_bo_van_ban_theo_id": "f1895ec7745d819e",
     "cau_hinh.COUNCIL_DECISION_SCAN_MAX_BYTES": "cb01a688cfdfae4b",  # review max PR #724 R1: 9 MiB — MSW chép cùng lượt
@@ -203,7 +205,7 @@ GHIM = {
     "dung.DecisionParams": "6e651ef48bffd4b4",  # review max PR #724 R7: số in sẵn không 0 đầu; Codex 42 F337 "0" nhận — MSW chép cùng lượt
     "luot.kiem_ma_luot": "069114521e4618bd",
     "mau.TEN_LOAI": "ff27ce4a7da9b1c2",
-    "mau.kiem_goi_mau": "26fe78bd367aa519",
+    "mau.kiem_goi_mau": "5b682ba925fc1997",
     "mau.tai_mau_len": "8b73bdb7e073f6e7",
     "model.LY_DO_XOA_TOI_DA": "40510175845988f1",
     "qd.TRUONG_THAM_SO_GIAY": "742204c74c586740",
@@ -211,7 +213,7 @@ GHIM = {
     "qd._bo_qd_hop_le": "8233ad0644b78c7d",
     "qd._gia_tri_json": "2e6e814855b117b3",
     "qd._so_chua_dung": "2b64bc35e8577a50",
-    "qd._so_tham_so": "f86a51932da886f6",
+    "qd._so_tham_so": "95712773fd768856",
     "qd.ghi_nhan_quyet_dinh": "ad8d9ea16ca62c50",
     "qd.huy_ghi_nhan": "9feb998b06a85fd5",
     "qd.kiem_ngay": "ff50f4a05fb99172",  # review max PR #724 R7: ngày ký không sau hôm nay (giờ VN), câu = hằng nguyên văn — MSW chép cùng lượt
@@ -252,11 +254,11 @@ GHIM = {
     "ung_vien._neu_dong": "a8c0f83035fd75c8",
     "ung_vien._trang_thai_hop_le()": "0b3ef3f1a00a8bbd",
     "ung_vien.chuan_hoa_ma": "f20a365687bcbe74",
-    "ung_vien.doc_ho_so_theo_ma": "28950f69441d50f4",
-    "ung_vien.doi_ma_thanh_id": "ea5d41f5ed209af4",
+    "ung_vien.doc_ho_so_theo_ma": "04b81c443ca75ff5",
+    "ung_vien.doi_ma_thanh_id": "61a0d07fa2e20213",
     "ung_vien.kiem_nam_hoc": "c5f3d0d4eac8c0a3",
     "ung_vien.loi_mot_ma": "519e68a62d3347c2",
-    "ung_vien.tim_ho_so": "3866ec2cb1f985fa",
+    "ung_vien.tim_ho_so": "2ce00d8d84a223b0",
 }
 
 

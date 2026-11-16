@@ -71,7 +71,7 @@ export function CouncilSetList({ canOpenDetail, canZip = false, canFilterCreator
 
   const filtering = decisionNumber !== "" || year !== "" || status !== "" || (canFilterCreator && creator !== "")
 
-  const loc = (
+  const filters = (
     <div className={`grid grid-cols-1 gap-3 ${canFilterCreator ? "sm:grid-cols-4" : "sm:grid-cols-3"}`} data-testid="set-list-filters">
       <div className="space-y-1">
         <Label htmlFor="ds-so-qd">Tìm theo số Quyết định</Label>
@@ -161,7 +161,7 @@ export function CouncilSetList({ canOpenDetail, canZip = false, canFilterCreator
   if (q.isPending) {
     return (
       <div className="space-y-3">
-        {loc}
+        {filters}
         <div className="flex items-center gap-2 text-muted-foreground" data-testid="set-list-loading">
           <Loader2 className="h-4 w-4 animate-spin" /> Đang tải danh sách bộ văn bản…
         </div>
@@ -171,7 +171,7 @@ export function CouncilSetList({ canOpenDetail, canZip = false, canFilterCreator
   if (q.isError) {
     return (
       <div className="space-y-3">
-        {loc}
+        {filters}
         <CouncilErrorAlert error={q.error} testId="set-list-error" />
       </div>
     )
@@ -180,7 +180,7 @@ export function CouncilSetList({ canOpenDetail, canZip = false, canFilterCreator
   const rows = q.data
   return (
     <div className="space-y-3">
-      {loc}
+      {filters}
       {rows.length === 0 ? (
         <p className="text-muted-foreground" data-testid="set-list-empty">
           {offset > 0 ? "Hết danh sách." : filtering ? "Không có bộ nào khớp bộ lọc." : "Chưa có bộ văn bản nào trong phạm vi của bạn."}

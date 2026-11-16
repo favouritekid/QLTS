@@ -76,9 +76,9 @@ function submissionTime(t: RecordStatus): string {
 
 type OpenSubmissionResult =
   | { kind: "ok"; code: string }
-  | { kind: "chua_xac_dinh"; ma: string }
+  | { kind: "chua_xac_dinh"; code: string }
   | { kind: "bo_khong_con" }
-  | { kind: "loi"; loi: unknown }
+  | { kind: "loi"; failure: unknown }
 
 export function useRecordDecision(setId: number) {
   const qc = useQueryClient()
@@ -98,16 +98,16 @@ export function useRecordDecision(setId: number) {
     } catch (error) {
       const c = councilErrorCode(error)
       const status = readApiError(error).status
-      if (status === 409 && c.errorCode === "luot_dang_cho" && c.submissionCode) return { kind: "chua_xac_dinh", ma: c.submissionCode }
+      if (status === 409 && c.errorCode === "luot_dang_cho" && c.submissionCode) return { kind: "chua_xac_dinh", code: c.submissionCode }
       if (status === 404) return { kind: "bo_khong_con" }
       // `luot_dang_thay_doi` hoặc mất phản hồi / 5xx lúc mở: lượt có thể ĐÃ được tạo mà ta chưa biết mã ⇒ đọc lại.
       try {
         const pending = pendingSubmission(await listCouncilSubmissions(setId))
-        if (pending) return { kind: "chua_xac_dinh", ma: pending.ma }
+        if (pending) return { kind: "chua_xac_dinh", code: pending.ma }
       } catch {
         /* không đọc lại được: CHƯA gửi gì, báo lỗi mở lượt (thử lại an toàn) */
       }
-      return { kind: "loi", loi: error }
+      return { kind: "loi", failure: error }
     }
   }, [setId])
 
@@ -121,8 +121,8 @@ export function useRecordDecision(setId: number) {
         if (code === null) {
           const r = await openSubmission()
           if (r.kind === "chua_xac_dinh") {
-            codeRef.current = r.ma
-            setStatus({ kind: "chua_xac_dinh", code: r.ma, at: new Date().toISOString(), reason: "mo_luot" })
+            codeRef.current = r.code
+            setStatus({ kind: "chua_xac_dinh", code: r.code, at: new Date().toISOString(), reason: "mo_luot" })
             return
           }
           if (r.kind === "bo_khong_con") {
@@ -130,7 +130,7 @@ export function useRecordDecision(setId: number) {
             return
           }
           if (r.kind === "loi") {
-            setStatus({ kind: "loi_mo_luot", failure: r.loi })
+            setStatus({ kind: "loi_mo_luot", failure: r.failure })
             return
           }
           code = r.code
@@ -230,5 +230,5 @@ export function useRecordDecision(setId: number) {
     setStatus({ kind: "nhap" })
   }, [])
 
-  return { status, gui: submit, adjudicate, restore: restore, backToForm, startNewSubmissionAfterCancel }
+  return { status, submit: submit, adjudicate, restore: restore, backToForm, startNewSubmissionAfterCancel }
 }

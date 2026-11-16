@@ -229,20 +229,20 @@ def _compare_params(
 ) -> Optional[Dict[str, Any]]:
     """BS §3.2 — mọi tham số bộ ĐÃ in phải bằng giá trị trên giấy (lệch ⇒ CHẶN: tờ giấy không phải bản
     in của bộ này); trường bộ để trống nhận giá trị Admin gõ. Bộ tái dựng: số / ngày = bản ký đã khai."""
-    ts = doc_set.tham_so_quyet_dinh or {}
+    set_params = doc_set.tham_so_quyet_dinh or {}
     mismatch: List[str] = []
     if doc_set.ban_ky_so_quyet_dinh is not None and (
         doc_set.ban_ky_so_quyet_dinh != number or doc_set.ban_ky_ngay != signing_date
     ):
         mismatch.append("số / ngày của bản ký đã khai khi tái dựng")
-    if ts.get("so_quyet_dinh") is not None and ts["so_quyet_dinh"] != number:
+    if set_params.get("so_quyet_dinh") is not None and set_params["so_quyet_dinh"] != number:
         mismatch.append("số Quyết định")
-    if ts.get("ngay_quyet_dinh") is not None and ts["ngay_quyet_dinh"] != signing_date.isoformat():
+    if set_params.get("ngay_quyet_dinh") is not None and set_params["ngay_quyet_dinh"] != signing_date.isoformat():
         mismatch.append("ngày Quyết định")
     paper = {}
     for t in PAPER_PARAM_FIELDS:
         g = _json_value(paper_params.get(t))
-        if ts.get(t) is not None and g != ts.get(t):
+        if set_params.get(t) is not None and g != set_params.get(t):
             mismatch.append(t)
         if g is not None:
             paper[t] = g
@@ -670,7 +670,7 @@ async def record_adjustment_decision(
             if odd:
                 raise DataValidationError("Có trạng thái hồ sơ không xác định — không ghi nhận.")
             confirmed = _check_count_confirmation(counts, status_changed_rows, confirmation, "Có em đổi trạng thái sau khi dựng bộ")
-            dc = CouncilDecision(
+            decision = CouncilDecision(
                 loai="dieu_chinh",
                 can_bo=doc_set is not None,
                 set_id=doc_set.id if doc_set is not None else None,
@@ -684,29 +684,29 @@ async def record_adjustment_decision(
                 ghi_chu_mau=note,
                 ghi_nhan_boi_id=actor_id,
             )
-            await repo.add_objects(dc)
+            await repo.add_objects(decision)
             if removed_ids:  # BỎ trước
                 await db.execute(
                     text(
                         "UPDATE council_decision_row SET bi_bo_boi_id = :d "
                         "WHERE id = ANY(CAST(:ids AS integer[]))"
                     ),
-                    {"d": dc.id, "ids": removed_ids},
+                    {"d": decision.id, "ids": removed_ids},
                 )
             warnings: List[Dict[str, Any]] = []
             if doc_set is not None:  # THÊM sau
-                n = await repo.insert_rows_from_set(dc.id, doc_set.id)
+                n = await repo.insert_rows_from_set(decision.id, doc_set.id)
                 if n != len(added_rows):
                     raise ServiceError("Chép dòng bộ sang văn bản thiếu dòng — không ghi.")
                 # K-1 (owner 11-11): dòng THÊM chiếm chỗ (Phần B) ⇒ cảnh báo vượt như ghi nhận, KHÔNG chặn.
                 warnings = await over_quota_warnings(db, [d.id for d in added_rows])
             await repo.add_objects(
-                _scan(dc.id, b),
+                _scan(decision.id, b),
                 _event(
                     "ghi_nhan_dieu_chinh",
                     actor_id=actor_id,
-                    set_id=dc.set_id,
-                    decision_id=dc.id,
+                    set_id=decision.set_id,
+                    decision_id=decision.id,
                     figures={
                         "goc_id": root.id,
                         "so_dong_bo": len(removed_ids),
@@ -717,7 +717,7 @@ async def record_adjustment_decision(
             )
     except DBAPIError as e:
         raise _translate_db_error(db_error_codes(e), "ghi nhận văn bản điều chỉnh") from None
-    return dc, warnings
+    return decision, warnings
 
 
 # ═══════════════════════════════ huỷ hiệu lực (văn bản huỷ của trường) ═════════════════════

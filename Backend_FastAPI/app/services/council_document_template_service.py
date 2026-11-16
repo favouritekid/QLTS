@@ -57,9 +57,9 @@ class PackageLimits:
     @classmethod
     def from_settings(cls) -> "PackageLimits":
         return cls(
-            tep=settings.COUNCIL_TEMPLATE_MAX_BYTES,
-            giai_nen=settings.COUNCIL_TEMPLATE_MAX_UNCOMPRESSED_BYTES,
-            so_muc=settings.COUNCIL_TEMPLATE_MAX_ZIP_ENTRIES,
+            max_file_bytes=settings.COUNCIL_TEMPLATE_MAX_BYTES,
+            max_uncompressed_bytes=settings.COUNCIL_TEMPLATE_MAX_UNCOMPRESSED_BYTES,
+            max_entries=settings.COUNCIL_TEMPLATE_MAX_ZIP_ENTRIES,
         )
 
 
@@ -68,12 +68,12 @@ def check_template_package(
 ) -> None:
     """Chặn tệp quá cỡ / bom zip TRƯỚC python-docx. Chỉ dùng ``zipfile``; không giải nén ra
     đĩa. Thông báo chỉ có tên mẫu và số đếm."""
-    gh = limits or PackageLimits.from_settings()
+    effective_limits = limits or PackageLimits.from_settings()
     if not isinstance(content, bytes) or not content:
         raise FileValidationError("Mẫu %s: tệp rỗng hoặc không phải bytes." % name)
-    if len(content) > gh.max_file_bytes:
+    if len(content) > effective_limits.max_file_bytes:
         raise FileSizeError(
-            "Mẫu %s: tệp %d byte, vượt giới hạn %d byte." % (name, len(content), gh.max_file_bytes)
+            "Mẫu %s: tệp %d byte, vượt giới hạn %d byte." % (name, len(content), effective_limits.max_file_bytes)
         )
     try:
         z = zipfile.ZipFile(io.BytesIO(content))
@@ -83,15 +83,15 @@ def check_template_package(
         ) from None
     with z:
         item = z.infolist()
-        if len(item) > gh.max_entries:
+        if len(item) > effective_limits.max_entries:
             raise FileValidationError(
-                "Mẫu %s: gói có %d mục, vượt giới hạn %d." % (name, len(item), gh.max_entries)
+                "Mẫu %s: gói có %d mục, vượt giới hạn %d." % (name, len(item), effective_limits.max_entries)
             )
         declared_total = sum(m.file_size for m in item)
-        if declared_total > gh.max_uncompressed_bytes:
+        if declared_total > effective_limits.max_uncompressed_bytes:
             raise FileValidationError(
                 "Mẫu %s: tổng kích thước giải nén khai báo %d byte, vượt giới hạn %d."
-                % (name, declared_total, gh.max_uncompressed_bytes)
+                % (name, declared_total, effective_limits.max_uncompressed_bytes)
             )
         # Thư mục trung tâm TRƯỚC khi mở bất kỳ mục nào — cùng MỘT hàm với ``_open_docx`` của
         # bộ dựng: kiểu nén chỉ STORED / DEFLATED (F216 — LZMA / BZIP2 nở cả khúc trong RAM
@@ -113,10 +113,10 @@ def check_template_package(
                         if not chunk:
                             break
                         bytes_read += len(chunk)
-                        if bytes_read > gh.max_uncompressed_bytes:
+                        if bytes_read > effective_limits.max_uncompressed_bytes:
                             raise FileValidationError(
                                 "Mẫu %s: giải nén vượt giới hạn %d byte."
-                                % (name, gh.max_uncompressed_bytes)
+                                % (name, effective_limits.max_uncompressed_bytes)
                             )
         except (
             zipfile.BadZipFile,

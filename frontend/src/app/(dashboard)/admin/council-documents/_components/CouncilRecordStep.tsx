@@ -23,15 +23,15 @@ interface Props {
   docSet: CouncilSetDetail
   permissions: CouncilDocumentPermissions
   /** bộ điều khiển dùng CHUNG với cha (để mọi chỗ trên màn đều nói "Chưa xác định" khi lượt chưa rõ) */
-  gn: RecordController
+  recorder: RecordController
   onBack: () => void
   /** sau khi huỷ ghi nhận xong: cha làm mới dữ liệu bộ */
   onCancelled: () => void
 }
 
 /** Giá trị ô ĐÃ in trên bộ (`tham_so_quyet_dinh`) ⇒ chuỗi để khoá; chưa in ⇒ null (người dùng gõ theo giấy). */
-function printedValue(ts: Record<string, unknown> | null, k: string): string | null {
-  const v = ts?.[k]
+function printedValue(params: Record<string, unknown> | null, k: string): string | null {
+  const v = params?.[k]
   return typeof v === "string" || typeof v === "number" ? String(v) : null
 }
 
@@ -43,15 +43,15 @@ const ONE_TO_SIX_DIGITS_RE = /^[0-9]{1,6}$/
  * khoá đúng giá trị in. Gửi / mất phản hồi / phân xử đi qua `useRecordDecision` (giao thức đã có test). Khi lượt chưa
  * rõ: MỌI chỗ chỉ hiện "Chưa xác định", biểu mẫu khoá, KHÔNG có nút "Gửi lại" — chỉ "Kiểm tra trên máy chủ".
  */
-export function CouncilRecordStep({ docSet, permissions, gn, onBack, onCancelled }: Props) {
-  const t = gn.status
-  const ts = docSet.tham_so_quyet_dinh
-  const lockDecisionNumber = printedValue(ts, "so_quyet_dinh")
-  const lockDecisionDate = printedValue(ts, "ngay_quyet_dinh")
-  const lockMinutes = printedValue(ts, "so_bien_ban")
-  const lockMinutesDate = printedValue(ts, "ngay_bien_ban")
-  const lockBatchNumber = printedValue(ts, "dot_so")
-  const lockBatchMonth = printedValue(ts, "dot_thang")
+export function CouncilRecordStep({ docSet, permissions, recorder, onBack, onCancelled }: Props) {
+  const t = recorder.status
+  const decisionParams = docSet.tham_so_quyet_dinh
+  const lockDecisionNumber = printedValue(decisionParams, "so_quyet_dinh")
+  const lockDecisionDate = printedValue(decisionParams, "ngay_quyet_dinh")
+  const lockMinutes = printedValue(decisionParams, "so_bien_ban")
+  const lockMinutesDate = printedValue(decisionParams, "ngay_bien_ban")
+  const lockBatchNumber = printedValue(decisionParams, "dot_so")
+  const lockBatchMonth = printedValue(decisionParams, "dot_thang")
 
   const [kind, setKind] = useState<"trung_tuyen" | "bo_sung">("trung_tuyen")
   const [root, setRoot] = useState("")
@@ -110,7 +110,7 @@ export function CouncilRecordStep({ docSet, permissions, gn, onBack, onCancelled
 
   const submit = () => {
     if (!scan) return
-    const dl: RecordSubmissionData = {
+    const submissionData: RecordSubmissionData = {
       loai: kind,
       ...(kind === "bo_sung" && root !== "" ? { goc_id: Number(root) } : {}),
       so_quyet_dinh: value.decisionNumber.trim(),
@@ -124,14 +124,14 @@ export function CouncilRecordStep({ docSet, permissions, gn, onBack, onCancelled
       ...(confirmNeeded ? { xac_nhan_trang_thai: confirmNeeded.so_ho_so_theo_loai } : {}),
       scan,
     }
-    void gn.gui(dl)
+    void recorder.submit(submissionData)
   }
 
   // ── 1. kết quả (từ DTO máy chủ) ───────────────────────────────────────────
   if (t.kind === "da_ghi" && t.decision) {
     return (
       <div className="space-y-4" data-testid="buoc-ghi-nhan">
-        <CouncilRecordResult decision={t.decision} setId={docSet.id} permissions={permissions} onCancelled={() => { onCancelled(); gn.startNewSubmissionAfterCancel() }} />
+        <CouncilRecordResult decision={t.decision} setId={docSet.id} permissions={permissions} onCancelled={() => { onCancelled(); recorder.startNewSubmissionAfterCancel() }} />
       </div>
     )
   }
@@ -148,7 +148,7 @@ export function CouncilRecordStep({ docSet, permissions, gn, onBack, onCancelled
     return (
       <div className="space-y-4" data-testid="buoc-ghi-nhan">
         <p className="text-sm text-muted-foreground">Bước 6 — bộ #{docSet.id} đã có Quyết định đã ghi nhận.</p>
-        <CouncilRecordResult decision={existing} setId={docSet.id} permissions={permissions} onCancelled={() => { onCancelled(); gn.startNewSubmissionAfterCancel() }} />
+        <CouncilRecordResult decision={existing} setId={docSet.id} permissions={permissions} onCancelled={() => { onCancelled(); recorder.startNewSubmissionAfterCancel() }} />
       </div>
     )
   }
@@ -161,7 +161,7 @@ export function CouncilRecordStep({ docSet, permissions, gn, onBack, onCancelled
       </p>
 
       {t.kind === "chua_xac_dinh" || t.kind === "dang_phan_xu" ? (
-        <Unspecified t={t} onCheck={() => void gn.adjudicate()} />
+        <Unspecified t={t} onCheck={() => void recorder.adjudicate()} />
       ) : null}
 
       {t.kind === "chua_ghi_da_chan" ? (
@@ -170,7 +170,7 @@ export function CouncilRecordStep({ docSet, permissions, gn, onBack, onCancelled
           <p>
             Máy chủ xác nhận lượt đó chưa tạo Quyết định nào, và lượt gửi muộn sẽ bị từ chối. Nhập lại và gửi sẽ mở một lượt MỚI.
           </p>
-          <Button type="button" size="sm" variant="outline" onClick={gn.backToForm} data-testid="nhap-lai">
+          <Button type="button" size="sm" variant="outline" onClick={recorder.backToForm} data-testid="nhap-lai">
             Nhập lại
           </Button>
         </div>
@@ -299,7 +299,7 @@ export function CouncilRecordStep({ docSet, permissions, gn, onBack, onCancelled
           {t.handling === "phan_xu" ? (
             <div className="space-y-2 text-sm" data-testid="huong-phan-xu">
               <p>Lượt này đã có văn bản ghi với nội dung khác — bấm để máy chủ cho biết văn bản đó.</p>
-              <Button type="button" size="sm" variant="outline" onClick={() => void gn.adjudicate()} data-testid="kiem-tra-may-chu">
+              <Button type="button" size="sm" variant="outline" onClick={() => void recorder.adjudicate()} data-testid="kiem-tra-may-chu">
                 Kiểm tra trên máy chủ
               </Button>
             </div>

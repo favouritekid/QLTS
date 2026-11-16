@@ -135,7 +135,7 @@ function dung_hook() {
 
 async function guiXong(h: ReturnType<typeof dung_hook>, dl = du_lieu()) {
   await act(async () => {
-    await h.result.current.gui(dl)
+    await h.result.current.submit(dl)
   })
 }
 
@@ -177,8 +177,8 @@ describe("gửi ghi nhận — đường thành công", () => {
     const dem = dung({})
     const h = dung_hook()
     await act(async () => {
-      const a = h.result.current.gui(du_lieu())
-      const b = h.result.current.gui(du_lieu())
+      const a = h.result.current.submit(du_lieu())
+      const b = h.result.current.submit(du_lieu())
       await Promise.all([a, b])
     })
     expect(dem.mo).toBe(1)

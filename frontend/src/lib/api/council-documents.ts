@@ -194,16 +194,16 @@ export function filenameFromContentDisposition(
     return docSet || fallback
   }
   if (!header) return fallback
-  const sao = /filename\*\s*=\s*UTF-8''([^;]+)/i.exec(header)
-  if (sao) {
+  const extended = /filename\*\s*=\s*UTF-8''([^;]+)/i.exec(header)
+  if (extended) {
     try {
-      return copy(decodeURIComponent(sao[1].trim()))
+      return copy(decodeURIComponent(extended[1].trim()))
     } catch {
       /* mã hoá hỏng ⇒ thử bản ASCII */
     }
   }
-  const thuong = /filename\s*=\s*"([^"]*)"/i.exec(header) ?? /filename\s*=\s*([^;]+)/i.exec(header)
-  if (thuong) return copy(thuong[1].trim())
+  const plain = /filename\s*=\s*"([^"]*)"/i.exec(header) ?? /filename\s*=\s*([^;]+)/i.exec(header)
+  if (plain) return copy(plain[1].trim())
   return fallback
 }
 

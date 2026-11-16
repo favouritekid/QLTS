@@ -323,13 +323,13 @@ def normalize_codes(code: Sequence[str]) -> List[str]:
 PROFILE_CODE_MISSING = "(chưa có CCCD — hồ sơ %d)"
 
 
-def _to_dto(stt: int, row_no: dict) -> CandidateRowV1:
+def _to_dto(seq: int, row_no: dict) -> CandidateRowV1:
     value = {}
     for name in CANDIDATE_FIELDS:
         v = row_no.get(name)
         if not isinstance(v, str):
             raise DataValidationError(
-                "Dòng %d, trường %s: không đọc được dạng chữ." % (stt, name)
+                "Dòng %d, trường %s: không đọc được dạng chữ." % (seq, name)
             )
         value[name] = v
     try:
@@ -343,7 +343,7 @@ def _to_dto(stt: int, row_no: dict) -> CandidateRowV1:
         )
         raise DataValidationError(
             "Dòng %d: dữ liệu hồ sơ không hợp lệ ở trường %s."
-            % (stt, ", ".join(field))
+            % (seq, ", ".join(field))
         ) from None
 
 
@@ -379,8 +379,8 @@ async def read_profiles_by_code(
     try:
         async with read_only_transaction(engine) as (conn, transaction):
             matches = await resolve_codes(conn, codes, year)
-            unmatched = [stt for stt, number, _ in matches if number == 0]
-            multi = [stt for stt, number, _ in matches if number > 1]
+            unmatched = [seq for seq, number, _ in matches if number == 0]
+            multi = [seq for seq, number, _ in matches if number > 1]
             if unmatched or multi:
                 part = []
                 if unmatched:
@@ -393,7 +393,7 @@ async def read_profiles_by_code(
                 raise DataValidationError(
                     "Mã hồ sơ phải khớp đúng một hồ sơ: %s." % "; ".join(part)
                 )
-            if [stt for stt, _, _ in matches] != list(range(1, len(codes) + 1)):
+            if [seq for seq, _, _ in matches] != list(range(1, len(codes) + 1)):
                 raise ServiceError("Phân giải mã hồ sơ trả sai thứ tự — không đọc.")
             pids = [pid for _, _, pid in matches]
             raw = await _read_raw(conn, pids)
@@ -476,8 +476,8 @@ async def search_profiles(
     from app.services import admission_service
 
     year = check_academic_year(academic_year)
-    tk = keyword.strip() if isinstance(keyword, str) else None
-    if tk is not None and len(tk) > MAX_KEYWORD_LENGTH:
+    trimmed_keyword = keyword.strip() if isinstance(keyword, str) else None
+    if trimmed_keyword is not None and len(trimmed_keyword) > MAX_KEYWORD_LENGTH:
         raise DataValidationError(
             "Từ khoá tìm quá dài (tối đa %d ký tự)." % MAX_KEYWORD_LENGTH
         )
@@ -489,7 +489,7 @@ async def search_profiles(
         skip=(page - 1) * page_size,
         limit=page_size,
         current_user=current_user,
-        search=tk or None,
+        search=trimmed_keyword or None,
         statuses=statuses,
         major_ids=list(major_ids) if major_ids else None,
         academic_year=year,
@@ -498,14 +498,14 @@ async def search_profiles(
     row = []
     for p in profiles:
         lead = p.lead
-        ct = lead.offering.program if lead is not None and lead.offering else None
+        program = lead.offering.program if lead is not None and lead.offering else None
         row.append(
             {
                 "profile_id": p.id,
                 "ho_ten": (p.full_name or "").strip(),
                 "cccd": p.citizen_id or "",
                 "nganh_nhan": getattr(p, "program_name", None) or "",
-                "trinh_do": ((ct.degree_level or "") if ct is not None else "").strip(),
+                "trinh_do": ((program.degree_level or "") if program is not None else "").strip(),
                 "duong_xet_nhan": None,
                 "trang_thai": p.status,
                 "academic_year": p.academic_year,
@@ -561,9 +561,9 @@ async def codes_to_ids(
         try:
             async with read_only_transaction(engine) as (conn, _transaction):
                 matches = await resolve_codes(conn, [s for _, s in valid], year)
-                if [stt for stt, _, _ in matches] != list(range(1, len(valid) + 1)):
+                if [seq for seq, _, _ in matches] != list(range(1, len(valid) + 1)):
                     raise ServiceError("Phân giải mã hồ sơ trả sai thứ tự — không đọc.")
-                pv = await read_scope_by_ids(
+                scope = await read_scope_by_ids(
                     conn, [pid for _, number, pid in matches if number == 1]
                 )
         except DBAPIError:
@@ -573,8 +573,8 @@ async def codes_to_ids(
                 error_rows.append({"dong": i, "ly_do": CODE_ERROR_MULTIPLE_PROFILES})
             elif (
                 number == 0
-                or pid not in pv
-                or not (all_units or pv[pid][1] == only_unit_id)
+                or pid not in scope
+                or not (all_units or scope[pid][1] == only_unit_id)
             ):
                 error_rows.append({"dong": i, "ly_do": CODE_ERROR_NO_MATCH})
             else:
@@ -668,10 +668,10 @@ def _build_snapshot(raw, pids, transaction) -> ProfileSnapshot:
         rows_by_position.setdefault(h["stt"], []).append(h)
     if sorted(rows_by_position) != list(range(1, row_count + 1)):
         raise ServiceError("Đọc số liệu hồ sơ thiếu hàng — không dựng.")
-    duplicate_reference = {stt for stt, rows in rows_by_position.items() if len(rows) > 1}
+    duplicate_reference = {seq for seq, rows in rows_by_position.items() if len(rows) > 1}
     row_no = [
-        _merge_duplicate_rows(rows_by_position[stt]) if stt in duplicate_reference else rows_by_position[stt][0]
-        for stt in range(1, row_count + 1)
+        _merge_duplicate_rows(rows_by_position[seq]) if seq in duplicate_reference else rows_by_position[seq][0]
+        for seq in range(1, row_count + 1)
     ]
     if (
         [h["stt"] for h in check_rows] != list(range(1, row_count + 1))

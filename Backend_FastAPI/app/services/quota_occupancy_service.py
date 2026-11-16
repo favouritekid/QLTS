@@ -476,20 +476,20 @@ async def check_lock_and_count_set_rows(
             ).all()
         }
     error: List[Dict[str, Any]] = []
-    for stt, sid in sorted(row, key=lambda x: (x[0], x[1] or 0)):
+    for seq, sid in sorted(row, key=lambda x: (x[0], x[1] or 0)):
         r = source.get(sid) if sid is not None else None
         if r is None:
-            error.append({"dong": stt, "ly_do": "thieu_dong_nguon"})
+            error.append({"dong": seq, "ly_do": "thieu_dong_nguon"})
             continue
         missing = [k for k in LOCKS_COUNT_MAY_BE_MISSING if getattr(r, k) is None]
         if missing:
-            error.append({"dong": stt, "ly_do": "thieu_khoa", "khoa": missing})
+            error.append({"dong": seq, "ly_do": "thieu_khoa", "khoa": missing})
             continue
         if (
             paths.get(r.admission_path_id) != r.academic_info_id
             or academic_infos.get(r.academic_info_id) != (r.offering_id, r.academic_year)
         ):
-            error.append({"dong": stt, "ly_do": "lech_chuoi_cau_hinh"})
+            error.append({"dong": seq, "ly_do": "lech_chuoi_cau_hinh"})
     if error:
         raise ConflictError(
             "Dòng %s: dòng bộ thiếu khoá đếm chỉ tiêu hoặc lệch chuỗi cấu hình (đường xét → học vụ → "

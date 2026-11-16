@@ -973,7 +973,7 @@ async def create_council_decision_adjustment(
     scan: UploadFile = File(...),
     db: AsyncSession = Depends(database.get_db),
 ):
-    dc, warnings = await decision_service.record_adjustment_decision(
+    adjusted_decision, warnings = await decision_service.record_adjustment_decision(
         db,
         decision.id,
         decision_number=so_quyet_dinh,
@@ -990,12 +990,12 @@ async def create_council_decision_adjustment(
     await db.commit()
     log.info(
         "council_decision_adjusted",
-        decision_id=dc.id,
+        decision_id=adjusted_decision.id,
         goc_id=decision.id,
         so_dong_bo=len(bo_dong),
         actor=current_user.id,
     )
-    return _recorded_decision_out(dc, warnings=warnings)
+    return _recorded_decision_out(adjusted_decision, warnings=warnings)
 
 
 @router.post(

@@ -529,7 +529,7 @@ def _major_code(
             "Dòng %d: mã ngành khác các hồ sơ cùng ngành, cùng trình độ."
             % (min(conflicts.values()) + 1)
         )
-    missing = [ng for ng in majors if ng in missing_groups or ng not in code]
+    missing = [major for major in majors if major in missing_groups or major not in code]
     if missing:
         raise DataValidationError(
             "Thiếu mã ngành cho %d nhóm ngành — không dựng được Điều 1." % len(missing)
@@ -1133,10 +1133,10 @@ def _fit_table_insert_before(tbl, data, template_index: int) -> None:
     dòng mẫu — bảng có dòng "Tổng cộng" ở cuối thì dữ liệu nằm trên dòng tổng.
     Dòng mẫu đã qua :func:`_check_template_rows`: mỗi trường đúng một ô, không cắt bớt."""
     template = tbl.rows[template_index]._tr
-    for dl in data:
+    for values in data:
         tr = copy.deepcopy(template)
         template.addprevious(tr)
-        for cell, v in zip(_Row(tr, tbl).cells, dl, strict=True):
+        for cell, v in zip(_Row(tr, tbl).cells, values, strict=True):
             _set_cell(cell, v)
     template.getparent().remove(template)
 
@@ -1145,10 +1145,10 @@ def _fit_table_append(tbl, data, template_index: int = 3) -> None:
     """Nhân bản dòng mẫu cho từng dòng dữ liệu, NỐI vào cuối bảng rồi xoá dòng mẫu.
     Dòng mẫu đã qua :func:`_check_template_rows`: mỗi trường đúng một ô, không cắt bớt."""
     template = tbl.rows[template_index]._tr
-    for dl in data:
+    for values in data:
         tr = copy.deepcopy(template)
         tbl._tbl.append(tr)
-        for cell, v in zip(_Row(tr, tbl).cells, dl, strict=True):
+        for cell, v in zip(_Row(tr, tbl).cells, values, strict=True):
             _set_cell(cell, v)
     template.getparent().remove(template)
 
@@ -1261,10 +1261,10 @@ def _replace_in_paragraph(par, pattern: "re.Pattern[str]", repl: str) -> List[st
         mark.append(n)
         n += len(t)
 
-    def run_at(vt: int) -> int:
+    def run_at(position: int) -> int:
         """Chỉ số run (theo độ dài GỐC) chứa ký tự ở vị trí ``vt``."""
         for i, s in enumerate(mark):
-            if s <= vt < s + original_lengths[i]:
+            if s <= position < s + original_lengths[i]:
                 return i
         raise ValueError("vị trí ngoài chữ của đoạn")
 
@@ -1415,21 +1415,21 @@ def _check_minutes_template(d) -> None:
 def _build_minutes(profiles, majors, level: str, template: bytes) -> bytes:
     d = _open_docx(template, "Biên bản")
     _check_minutes_template(d)
-    b1, b2 = [], []
-    for i, ng in enumerate(majors, 1):
-        rn = [h for h in profiles if h.major_key == ng]
-        d3 = list(rn)  # theo danh sách đã chọn: mọi hồ sơ là trúng tuyển
-        th = sorted({h.dto.to_hop for h in rn})
-        c = _stats(rn)
-        b1.append([str(i), "%s - %s" % ng] + [str(x) for x in c] + [", ".join(th)])
-        c3 = _stats(d3)
+    table1_rows, table2_rows = [], []
+    for i, major in enumerate(majors, 1):
+        major_profiles = [h for h in profiles if h.major_key == major]
+        admitted = list(major_profiles)  # theo danh sách đã chọn: mọi hồ sơ là trúng tuyển
+        combinations = sorted({h.dto.to_hop for h in major_profiles})
+        c = _stats(major_profiles)
+        table1_rows.append([str(i), "%s - %s" % major] + [str(x) for x in c] + [", ".join(combinations)])
+        stats = _stats(admitted)
         # "Điểm xét trúng tuyển" = điểm THẤP NHẤT của danh sách trúng tuyển ngành.
-        score = ("%.2f" % min(h.scores.admission_total for h in d3)) if d3 else ""
-        b2.append([str(i), "%s - %s" % ng, str(len(rn)), score] + [str(x) for x in c3])
+        score = ("%.2f" % min(h.scores.admission_total for h in admitted)) if admitted else ""
+        table2_rows.append([str(i), "%s - %s" % major, str(len(major_profiles)), score] + [str(x) for x in stats])
 
-    _fit_table_insert_before(d.tables[1], b1, template_index=MINUTES_TEMPLATE_ROW)
-    _fit_table_insert_before(d.tables[2], b2, template_index=MINUTES_TEMPLATE_ROW)
-    for (i, field_count, name), table_rows in zip(_MINUTES_TABLES, (b1, b2), strict=True):
+    _fit_table_insert_before(d.tables[1], table1_rows, template_index=MINUTES_TEMPLATE_ROW)
+    _fit_table_insert_before(d.tables[2], table2_rows, template_index=MINUTES_TEMPLATE_ROW)
+    for (i, field_count, name), table_rows in zip(_MINUTES_TABLES, (table1_rows, table2_rows), strict=True):
         total_row = _total_row(d.tables[i], name)
         # Lớp PHỤ. Tầng chủ sở hữu là :func:`_check_total_row` (gọi trong
         # _check_minutes_template, TRƯỚC khi dựng tệp nào): qua nó thì mỗi cột từ
@@ -1446,9 +1446,9 @@ def _build_minutes(profiles, majors, level: str, template: bytes) -> bytes:
             else:
                 _set_cell(total_row.cells[j], "")
     # Bảng 2: cột 2 là "Số lượng xét tuyển" (cộng được), cột 3 là điểm (không cộng).
-    ht = _total_row(d.tables[2], _MINUTES_TABLES[1][2])
-    _set_cell(ht.cells[2], str(sum(int(x[2]) for x in b2)))
-    _set_cell(ht.cells[3], "")
+    minutes_total_row = _total_row(d.tables[2], _MINUTES_TABLES[1][2])
+    _set_cell(minutes_total_row.cells[2], str(sum(int(x[2]) for x in table2_rows)))
+    _set_cell(minutes_total_row.cells[3], "")
 
     # "ngành nghề …… trình độ ……" ⇒ "các ngành, nghề trình độ <trình độ>" — theo
     # :data:`_CHO_TRINH_DO_BB` (mẫu DÀI khớp trước).
@@ -1734,7 +1734,7 @@ def _reject_slots_in_unfilled_regions(document, name: str, is_slot) -> None:
 
 
 def _build_decision(
-    profiles, majors, level: str, code: Dict, template: bytes, ts: Optional[DecisionParams]
+    profiles, majors, level: str, code: Dict, template: bytes, params: Optional[DecisionParams]
 ):
     d = _open_docx(template, "Quyết định")
     _check_decision_template(d)
@@ -1762,8 +1762,8 @@ def _build_decision(
     p20 = d.paragraphs[20]._p
     tbl3 = d.tables[3]._tbl
     p21 = d.paragraphs[21]._p
-    neo = d.paragraphs[23]._p
-    for el in (d.paragraphs[22]._p, d.tables[4]._tbl, neo):  # bỏ khối mẫu thứ hai
+    anchor = d.paragraphs[23]._p
+    for el in (d.paragraphs[22]._p, d.tables[4]._tbl, anchor):  # bỏ khối mẫu thứ hai
         el.getparent().remove(el)
     # Chụp bản SẠCH trước khi đổ dữ liệu — nhân bản trong vòng lặp sẽ chép bảng
     # đã điền của ngành trước.
@@ -1781,13 +1781,13 @@ def _build_decision(
         after.addnext(e_p)
         blocks.append((e_p, e_t, e_s))
         after = e_s
-    for stt, ((e_p, e_t, e_s), ng) in enumerate(zip(blocks, majors), 1):
-        d3 = sorted(
-            [h for h in profiles if h.major_key == ng],
+    for seq, ((e_p, e_t, e_s), major) in enumerate(zip(blocks, majors), 1):
+        admitted = sorted(
+            [h for h in profiles if h.major_key == major],
             key=lambda h: decision_in_group_key(h.scores.admission_total, h.dto.ten),
         )
-        _set_paragraph(Paragraph(e_p, d), "%d.Ngành: %s - Trình độ: %s" % ((stt,) + ng))
-        _set_paragraph(Paragraph(e_s, d), "Số thí sinh: %d" % len(d3))
+        _set_paragraph(Paragraph(e_p, d), "%d.Ngành: %s - Trình độ: %s" % ((seq,) + major))
+        _set_paragraph(Paragraph(e_s, d), "Số thí sinh: %d" % len(admitted))
         _fit_table_insert_before(
             Table(e_t, d),
             [
@@ -1801,7 +1801,7 @@ def _build_decision(
                     h.dto.noi_sinh,
                     h.dto.dan_toc,
                 ]
-                for i, h in enumerate(d3, 1)
+                for i, h in enumerate(admitted, 1)
             ],
             template_index=1,
         )
@@ -1809,33 +1809,33 @@ def _build_decision(
     # Điều 1: chèn dòng "-\tNgành <tên>\tMã ngành: <mã>\t<n> thí sinh" ngay sau, theo
     # thứ tự NGƯỢC (mỗi dòng addnext ngay sau Điều 1) để giữ thứ tự ngành.
     article1 = next(p for p in d.paragraphs if p.text.strip().startswith("Điều 1."))
-    for ng in reversed(majors):
-        n = sum(1 for h in profiles if h.major_key == ng)
+    for major in reversed(majors):
+        n = sum(1 for h in profiles if h.major_key == major)
         new = copy.deepcopy(article1._p)
         article1._p.addnext(new)
         _set_major_row(
             Paragraph(new, d),
-            "-\tNgành %s\tMã ngành: %s\t%d thí sinh" % (ng[0], code[ng], n),
+            "-\tNgành %s\tMã ngành: %s\t%d thí sinh" % (major[0], code[major], n),
         )
     # "Điều 1." đậm, phần còn lại của câu không đậm.
-    d1 = Paragraph(article1._p, d)
-    for r_ in list(d1.runs[1:]):
+    article1_paragraph = Paragraph(article1._p, d)
+    for r_ in list(article1_paragraph.runs[1:]):
         if not r_.text:
             r_._r.getparent().remove(r_._r)
-    if d1.runs and d1.runs[0].text.startswith("Điều 1."):
-        r0 = d1.runs[0]
+    if article1_paragraph.runs and article1_paragraph.runs[0].text.startswith("Điều 1."):
+        r0 = article1_paragraph.runs[0]
         children = r0.text[len("Điều 1.") :]
         r0.text = "Điều 1."
         r0.bold = True
         if children:
-            r1 = d1.add_run(children)
+            r1 = article1_paragraph.add_run(children)
             r1.bold = False
             r1.font.size = r0.font.size
 
     last_part = d.paragraphs[-1]
     _set_paragraph(last_part, "Tổng số thí sinh theo danh sách:  %d thí sinh./." % total_count)
 
-    filled = _fill_decision_params(d, ts) if ts is not None else {}
+    filled = _fill_decision_params(d, params) if params is not None else {}
     # Chỗ điền ``<<…>>`` không hỗ trợ đã bị chặn ở :func:`_kiem_mau_quyet_dinh` (đầu hàm này, TRƯỚC khi đổ dữ liệu).
     return _save_docx(d), filled
 
@@ -1849,7 +1849,7 @@ _RE_MINUTES_SYMBOL = re.compile(r"(Biên bản số[ \t]*[0-9]*/BB-\S+)")
 _RE_YEAR_AFTER = re.compile(r"ngày \d{2} tháng \d{1,2} năm\s+(\d{4})")
 
 
-def _fill_decision_params(d, ts: DecisionParams) -> Dict[str, int]:
+def _fill_decision_params(d, params: DecisionParams) -> Dict[str, int]:
     """Điền số + ngày QĐ, đợt, số + ngày Biên bản vào đúng chỗ trống của mẫu đang dùng.
     Mỗi tham số CÓ GIÁ TRỊ phải khớp đúng số chỗ trống của mẫu đang dùng; lệch ⇒ DỪNG.
     """
@@ -1868,10 +1868,10 @@ def _fill_decision_params(d, ts: DecisionParams) -> Dict[str, int]:
         done[name] = len(after)
         return after
 
-    if ts.so_quyet_dinh is not None:
-        filled("so_quyet_dinh", _RE_DECISION_NUMBER, " " + ts.so_quyet_dinh, DECISION_NUMBER_PLACEHOLDER_COUNT)
-    if ts.ngay_quyet_dinh is not None:
-        day, month = _date_parts(ts.ngay_quyet_dinh)
+    if params.so_quyet_dinh is not None:
+        filled("so_quyet_dinh", _RE_DECISION_NUMBER, " " + params.so_quyet_dinh, DECISION_NUMBER_PLACEHOLDER_COUNT)
+    if params.ngay_quyet_dinh is not None:
+        day, month = _date_parts(params.ngay_quyet_dinh)
         for fill_text in filled(
             "ngay_quyet_dinh",
             _RE_DECISION_DATE,
@@ -1879,16 +1879,16 @@ def _fill_decision_params(d, ts: DecisionParams) -> Dict[str, int]:
             DECISION_DATE_PLACEHOLDER_COUNT,
         ):
             year = [m.group(1) for m in _RE_YEAR_AFTER.finditer(fill_text)]
-            if year != [str(ts.ngay_quyet_dinh.year)] * len(year) or not year:
+            if year != [str(params.ngay_quyet_dinh.year)] * len(year) or not year:
                 raise DataValidationError(
                     "Năm của ngày Quyết định khác năm in sẵn trong mẫu."
                 )
-    if ts.dot_so is not None:
-        repl = "đợt %s tháng %s " % (ts.dot_so, _month(ts.dot_thang))
+    if params.dot_so is not None:
+        repl = "đợt %s tháng %s " % (params.dot_so, _month(params.dot_thang))
         filled("dot", _RE_BATCH, repl, BATCH_PLACEHOLDER_COUNT)
-    if ts.so_bien_ban is not None:
-        filled("so_bien_ban", _RE_MINUTES_NUMBER, " " + ts.so_bien_ban, MINUTES_NUMBER_PLACEHOLDER_COUNT)
-    if ts.ngay_bien_ban is not None:
+    if params.so_bien_ban is not None:
+        filled("so_bien_ban", _RE_MINUTES_NUMBER, " " + params.so_bien_ban, MINUTES_NUMBER_PLACEHOLDER_COUNT)
+    if params.ngay_bien_ban is not None:
         for p in paragraph:
             m = _RE_MINUTES_SYMBOL.search(p.text)
             if m and p.text[m.end() :].lstrip().startswith("ngày"):
@@ -1896,11 +1896,11 @@ def _fill_decision_params(d, ts: DecisionParams) -> Dict[str, int]:
                     "Mẫu Quyết định: căn cứ Biên bản đã có chữ `ngày` — "
                     "luật điền hiện hành không áp được."
                 )
-        day, month = _date_parts(ts.ngay_bien_ban)
+        day, month = _date_parts(params.ngay_bien_ban)
         filled(
             "ngay_bien_ban",
             _RE_MINUTES_SYMBOL,
-            r"\1 ngày %s/%s/%d" % (day, month, ts.ngay_bien_ban.year),
+            r"\1 ngày %s/%s/%d" % (day, month, params.ngay_bien_ban.year),
             MINUTES_NUMBER_PLACEHOLDER_COUNT,
         )
     return done
@@ -2008,8 +2008,8 @@ def _read_grid(tbl, name: str) -> Tuple[List[int], List[float]]:
         _positive_integer(c, "w:w", name, "bề rộng cột lưới (w:gridCol)", MAX_GRIDCOL)
         for c in grid.findall(qn("w:gridCol"))
     ]
-    rk = [_char_width(tbl.rows[3].cells[j], name) for j in range(len(old))]
-    return old, rk
+    char_widths = [_char_width(tbl.rows[3].cells[j], name) for j in range(len(old))]
+    return old, char_widths
 
 
 def _set_widths(tbl, new: Sequence[int]) -> None:
@@ -2041,15 +2041,15 @@ def _compute_grid(tbl, content) -> List[int]:
     """Bề rộng mới cho từng cột, tính trên MỌI dòng dữ liệu của cả bộ (một lưới
     chung cho mọi ngành — tính riêng từng ngành thì in cạnh nhau cột lệch nhau).
     Lấy bớt từ cột thừa, đơn sang cột thiếu; TỔNG bề rộng bất biến."""
-    old, rk = _read_grid(tbl, "Danh sách xét tuyển")
+    old, char_widths = _read_grid(tbl, "Danh sách xét tuyển")
     total = sum(old)
     nc = len(old)
     lengths = [0] * nc
-    for dl in content:
+    for row_values in content:
         # Lưới = số trường (đã qua _check_template_rows) ⇒ ghép đủ cặp, không cắt bớt.
-        for j, v in zip(range(nc), dl, strict=True):
+        for j, v in zip(range(nc), row_values, strict=True):
             lengths[j] = max(lengths[j], len(str(v or "")))
-    next_row = [max(int((lengths[j] + 1) * rk[j]), MIN_COLUMN_WIDTH) for j in range(nc)]
+    next_row = [max(int((lengths[j] + 1) * char_widths[j]), MIN_COLUMN_WIDTH) for j in range(nc)]
     if sum(next_row) <= total:
         duplicates = total - sum(next_row)
         new = [next_row[j] + int(duplicates * next_row[j] / sum(next_row)) for j in range(nc)]
@@ -2106,9 +2106,9 @@ def _check_list_template(d) -> None:
 METHOD_COLUMNS = 6
 
 
-def _build_list_docx(template: bytes, ng, list1, list2, list3, method_rows, grid) -> bytes:
+def _build_list_docx(template: bytes, major, list1, list2, list3, method_rows, grid) -> bytes:
     d = _open_docx(template, "Danh sách xét tuyển")
-    title = "Ngành: %s - Trình độ: %s - Đợt xét tuyển:………….." % ng
+    title = "Ngành: %s - Trình độ: %s - Đợt xét tuyển:………….." % major
     for i in (1, 6, 12):
         _set_paragraph(d.paragraphs[i], title)
     female = sum(1 for h in list1 if h.dto.gioi_tinh == "Nữ")
@@ -2178,7 +2178,7 @@ def _write_xlsx_row(ws, row_no: int, value) -> None:
         _write_xlsx_cell(ws, row_no, col_no, v)
 
 
-def _build_list_xlsx(ng, list1, list2, list3, method_rows) -> bytes:
+def _build_list_xlsx(major, list1, list2, list3, method_rows) -> bytes:
     wb = Workbook()
     wb.remove(wb.active)
     for name, hdr, data, fn in (
@@ -2190,7 +2190,7 @@ def _build_list_xlsx(ng, list1, list2, list3, method_rows) -> bytes:
         # Dòng 1 tiêu đề · dòng 2 trống · dòng 3 tên cột · dòng 4.. dữ liệu · một dòng
         # trống · dòng TỔNG CỘNG (đúng bố cục của bộ xuất).
         _write_xlsx_row(
-            ws, 1, ["%s — Ngành: %s — Trình độ: %s" % ((name[2:].upper(),) + ng)]
+            ws, 1, ["%s — Ngành: %s — Trình độ: %s" % ((name[2:].upper(),) + major)]
         )
         _write_xlsx_row(ws, 3, hdr)
         for c in ws[3]:
@@ -2232,8 +2232,8 @@ def _build_list_xlsx(ng, list1, list2, list3, method_rows) -> bytes:
     for c in ws[1]:
         c.font = Font(bold=True, color="FFFFFF")
         c.fill = PatternFill("solid", fgColor="1F4E79")
-    for k, dl in enumerate(method_rows, 2):
-        _write_xlsx_row(ws, k, dl)
+    for k, method_row in enumerate(method_rows, 2):
+        _write_xlsx_row(ws, k, method_row)
     for j, w in enumerate([5, 10, 30, 34, 12, 20], 1):
         ws.column_dimensions[chr(64 + j)].width = w
     buf = io.BytesIO()
@@ -2256,8 +2256,8 @@ def _method_table(list2: Sequence[_Profile]) -> List[List[str]]:
         if method_name not in method_codes:
             method_codes[method_name] = "PT%d" % (len(method_codes) + 1)
     rows = []
-    for i, ((method_name, th), g) in enumerate(sorted(groups.items(), key=lambda kv: kv[0]), 1):
-        label = ("%s - %s" % (th, g["mon"])) if g["mon"] else th
+    for i, ((method_name, combination), g) in enumerate(sorted(groups.items(), key=lambda kv: kv[0]), 1):
+        label = ("%s - %s" % (combination, g["mon"])) if g["mon"] else combination
         rows.append([str(i), method_codes[method_name], method_name, label, str(g["n"]), ""])
     return rows
 
@@ -2272,24 +2272,24 @@ def _build_list(profiles, majors, template: bytes) -> List[RenderedFile]:
     }
     grid[8] = grid[4]  # bảng 8 cùng bộ cột với bảng 4
     out: List[RenderedFile] = []
-    for stt, ng in enumerate(majors, 1):
-        r_ng = [h for h in profiles if h.major_key == ng]
-        list1 = sorted(r_ng, key=lambda h: (h.dto.ten, h.dto.ho))
+    for seq, major in enumerate(majors, 1):
+        major_profiles = [h for h in profiles if h.major_key == major]
+        list1 = sorted(major_profiles, key=lambda h: (h.dto.ten, h.dto.ho))
         list2 = list(list1)
         list3 = sorted(
-            r_ng, key=lambda h: decision_in_group_key(h.scores.admission_total, h.dto.ten)
+            major_profiles, key=lambda h: decision_in_group_key(h.scores.admission_total, h.dto.ten)
         )
         method_rows = _method_table(list2)
-        level_code = "CD" if ng[1] == "Cao đẳng" else "TC"
+        level_code = "CD" if major[1] == "Cao đẳng" else "TC"
         root = "DanhSachXetTuyen/%02d-%s-%s/DanhSachXetTuyen-%s-%s" % (
-            stt,
+            seq,
             level_code,
-            _file_name(ng[0]),
+            _file_name(major[0]),
             level_code,
-            _file_name(ng[0]),
+            _file_name(major[0]),
         )
-        out.append(_file(root + ".docx", _build_list_docx(template, ng, list1, list2, list3, method_rows, grid)))
-        out.append(_file(root + ".xlsx", _build_list_xlsx(ng, list1, list2, list3, method_rows)))
+        out.append(_file(root + ".docx", _build_list_docx(template, major, list1, list2, list3, method_rows, grid)))
+        out.append(_file(root + ".xlsx", _build_list_xlsx(major, list1, list2, list3, method_rows)))
     return out
 
 
@@ -2337,7 +2337,7 @@ def check_template(kind: str, content: bytes) -> None:
 
 
 def recheck_decision_params(
-    ts: Optional[DecisionParams],
+    params: Optional[DecisionParams],
 ) -> Optional[DecisionParams]:
     """Kiểm LẠI tham số Quyết định ở điểm vào và trả bản ĐÃ kiểm (dùng bản này, không dùng
     bản truyền vào). ``model_construct`` / ``model_copy(update=…)`` bỏ qua mọi ràng buộc
@@ -2347,11 +2347,11 @@ def recheck_decision_params(
     chứa giá trị đầu vào nên không đưa ra (``from None``). Đọc giá trị bằng ``getattr``
     chứ không ``model_dump``: bộ tuần tự hoá của pydantic phát cảnh báo CÓ giá trị khi kiểu
     lệch."""
-    if ts is None:
+    if params is None:
         return None
-    if not isinstance(ts, DecisionParams):
+    if not isinstance(params, DecisionParams):
         raise DataValidationError("Tham số Quyết định không đúng kiểu.")
-    value = {k: getattr(ts, k, None) for k in DecisionParams.model_fields}
+    value = {k: getattr(params, k, None) for k in DecisionParams.model_fields}
     try:
         return DecisionParams.model_validate(value)
     except PydanticValidationError as e:
@@ -2407,12 +2407,12 @@ def render_council_documents(
         "trinh_do": level,
         "nganh": [
             {
-                "nganh": ng[0],
-                "trinh_do": ng[1],
-                "ma_nganh": code[ng],
-                "so_thi_sinh": sum(1 for h in profiles if h.major_key == ng),
+                "nganh": major[0],
+                "trinh_do": major[1],
+                "ma_nganh": code[major],
+                "so_thi_sinh": sum(1 for h in profiles if h.major_key == major),
             }
-            for ng in majors
+            for major in majors
         ],
         "tham_so_quyet_dinh": (
             decision_params.model_dump(mode="json")

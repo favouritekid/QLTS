@@ -68,8 +68,8 @@ export function CouncilCompareStep({ docSet, onBack, onNext }: Props) {
                   {`Dòng ${d.stt} — không dựng lại được để so (${d.ma.join(", ")})`}
                 </li>
               ))}
-              {result.mat_ho_so.map((stt) => (
-                <li key={`m${stt}`} data-testid={`dong-mat-ho-so-${stt}`}>{`Dòng ${stt} — hồ sơ không còn`}</li>
+              {result.mat_ho_so.map((seq) => (
+                <li key={`m${seq}`} data-testid={`dong-mat-ho-so-${seq}`}>{`Dòng ${seq} — hồ sơ không còn`}</li>
               ))}
             </ul>
             <p className="text-muted-foreground">

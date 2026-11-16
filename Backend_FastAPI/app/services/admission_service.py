@@ -2393,7 +2393,7 @@ def _compute_frontend_fields(
     """
     status = profile.status
     # Lượt I (F230): tình trạng Quyết định đã gán TRƯỚC (``attach_decision_state``); chưa gán ⇒ như chưa có.
-    _tq = _read_decision_state(profile)
+    decision_state = _read_decision_state(profile)
     user_role = current_user.role                                   
     is_admin = user_role == UserRole.ADMIN                          
     is_manager = user_role == UserRole.MANAGER                      
@@ -2467,7 +2467,7 @@ def _compute_frontend_fields(
             and status in ["submitted", "reviewing"]
             and (is_manager or is_admin)
             and not _outstanding_debt_codes
-            and not _tq.blocks_new_admission  # lượt I: QĐ hiệu lực / chờ quyết / dấu AppSheet
+            and not decision_state.blocks_new_admission  # lượt I: QĐ hiệu lực / chờ quyết / dấu AppSheet
         ),
         "request_revision": status in ["submitted", "resubmitted"] and (is_manager or is_admin),
         "resubmit": status in ["rejected", "revision_requested"] and (is_owner or is_manager or is_admin),
@@ -2505,7 +2505,7 @@ def _compute_frontend_fields(
         "send_withdraw_link": (
             status in WITHDRAWAL_LINK_STATUSES
             and (is_owner or is_manager or is_admin)
-            and not _tq.locks_status  # lượt I: em có QĐ đã ký / dấu AppSheet
+            and not decision_state.locks_status  # lượt I: em có QĐ đã ký / dấu AppSheet
         ),
         # Q9 #07 Phase E.4 commit 7 hardening (yêu cầu nghiệp vụ #10):
         # Officer KHÔNG được override KV. Chỉ admin + manager mới có quyền.
@@ -2561,7 +2561,7 @@ def _compute_frontend_fields(
         # PR-B: admin reverts a pending withdrawal back to draft when the refund
         # was rejected (so the profile is not stuck awaiting a refund).
         "cancel_withdrawal": (
-            is_admin and status == "withdrawal_pending" and not _tq.locks_status
+            is_admin and status == "withdrawal_pending" and not decision_state.locks_status
         ),
         "drop": status == "enrolled" and not _is_dropped and (is_manager or is_admin),
         "claim": _la["claim"],
@@ -2598,7 +2598,7 @@ def _compute_frontend_fields(
                 )
             )
         ),
-        "delete": status == "draft" and is_admin and not _tq.named_in_document,
+        "delete": status == "draft" and is_admin and not decision_state.named_in_document,
         # F6 fix 2026-05-16: Override = bypass normal eligibility flow,
         # admin-only per ADMISSION_STATE_MACHINE_IMPLEMENTATION_PLAN §3.4.
         # State machine allows ONLY approved → overridden (see
@@ -2614,7 +2614,7 @@ def _compute_frontend_fields(
         "admin_rollback": (
             is_admin
             and status in ("submitted", "resubmitted")
-            and not _tq.locks_status
+            and not decision_state.locks_status
         ),
         # Tentative — true only when role + status + path_id snapshot
         # exists. Async resolver _resolve_minor_correction_state flips

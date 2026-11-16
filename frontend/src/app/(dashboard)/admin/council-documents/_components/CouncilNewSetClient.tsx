@@ -46,10 +46,10 @@ export function CouncilNewSetClient() {
   const debouncedProfileId = useDebouncedValue(profileId, RECHECK_DELAY_MS)
   const pending = debouncedProfileId !== profileId
   const input = academicYear !== null && debouncedProfileId.length > 0 ? { academic_year: academicYear, profile_ids: debouncedProfileId } : null
-  const kt = useCouncilSetPreview(input, vm.state === "ready" && vm.permissions.kiem_truoc)
-  const checking = profileId.length > 0 && (pending || kt.isFetching)
-  const preview = input !== null && !pending ? kt.data : undefined
-  const checkError = !checking && kt.isError ? kt.error : undefined
+  const previewQuery = useCouncilSetPreview(input, vm.state === "ready" && vm.permissions.kiem_truoc)
+  const checking = profileId.length > 0 && (pending || previewQuery.isFetching)
+  const preview = input !== null && !pending ? previewQuery.data : undefined
+  const checkError = !checking && previewQuery.isError ? previewQuery.error : undefined
 
   // Cảnh báo khi rời / tải lại trang lúc đang có danh sách (không đọc / ghi URL).
   useEffect(() => {
@@ -139,7 +139,7 @@ export function CouncilNewSetClient() {
           checking={checking}
           error={checkError}
           submittedIds={submittedIds}
-          onRecheck={() => void kt.refetch()}
+          onRecheck={() => void previewQuery.refetch()}
           onBack={() => setStep(1)}
           onNext={() => setStep(3)}
         />
@@ -156,7 +156,7 @@ export function CouncilNewSetClient() {
             preview={preview}
             onBack={() => setStep(3)}
             onDataChange={() => {
-              void kt.refetch()
+              void previewQuery.refetch()
               setStep(2)
             }}
             onBuildingChange={setIsBuilding}

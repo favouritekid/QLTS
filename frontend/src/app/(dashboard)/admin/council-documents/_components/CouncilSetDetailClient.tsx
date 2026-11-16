@@ -89,9 +89,9 @@ export function CouncilSetDetailClient({
   const q = useCouncilSet(setId, vm.state === "ready" && vm.permissions.xem_chi_tiet_bo)
   const readyPermissions = vm.state === "ready" ? vm.permissions : NO_COUNCIL_PERMISSIONS
   // Bộ điều khiển ghi nhận dùng CHUNG: mọi chỗ trên màn nói "Chưa xác định" khi lượt chưa rõ (đặc tả 5.6.1).
-  const gn = useRecordDecision(setId)
+  const recorder = useRecordDecision(setId)
   const submissions = useCouncilSetSubmissions(setId, vm.state === "ready" && readyPermissions.xem_luot_gui)
-  const { restore: restore } = gn
+  const { restore: restore } = recorder
   useEffect(() => {
     if (submissions.data) restore(submissions.data)
   }, [submissions.data, restore])
@@ -160,7 +160,7 @@ export function CouncilSetDetailClient({
     setPickStep(b)
     router.replace(`/admin/council-documents/${setId}?buoc=${b}`, { scroll: false })
   }
-  const unclear = gn.status.kind === "chua_xac_dinh" || gn.status.kind === "dang_phan_xu"
+  const unclear = recorder.status.kind === "chua_xac_dinh" || recorder.status.kind === "dang_phan_xu"
   const canPick = (Object.keys(openStep) as StepName[]).filter((b) => openStep[b]).map((b) => STEP_COUNT[b])
 
   return (
@@ -208,7 +208,7 @@ export function CouncilSetDetailClient({
         <CouncilRecordStep
           docSet={docSet}
           permissions={permissions}
-          gn={gn}
+          recorder={recorder}
           onBack={() => selectStep(openStep["doi-chieu"] ? "doi-chieu" : "tai")}
           onCancelled={() => {
             void q.refetch()
@@ -229,8 +229,8 @@ export function CouncilSetDetailClient({
 }
 
 function SetInfo({ docSet, unclear }: { docSet: CouncilSetDetail; unclear: boolean }) {
-  const ts = docSet.tham_so_quyet_dinh ?? {}
-  const paramEntries = Object.entries(ts).filter(([, v]) => v !== null && v !== undefined)
+  const decisionParams = docSet.tham_so_quyet_dinh ?? {}
+  const paramEntries = Object.entries(decisionParams).filter(([, v]) => v !== null && v !== undefined)
   const decision = docSet.quyet_dinh
   // Khi lượt gửi chưa rõ (phía này đang chờ phân xử, hoặc máy chủ nói `chua_xac_dinh`): CHỈ "Chưa xác định".
   const unknown = unclear || docSet.tinh_trang === "chua_xac_dinh"
