@@ -964,7 +964,7 @@ async def create_council_decision_adjustment(
     decision: models.CouncilDecision = Depends(deps.get_council_decision_for_admin),
     so_quyet_dinh: str = Form(..., pattern=r"^[0-9]{1,6}$"),
     ngay_ky: date = Form(...),
-    removed_row_ids: List[int] = Form([]),
+    bo_dong: List[int] = Form([]),
     set_id: Optional[int] = Form(None, ge=1),
     xac_nhan_so_ho_so: Optional[int] = Form(None, ge=1),
     xac_nhan_khop_ban_in: bool = Form(False),
@@ -978,7 +978,7 @@ async def create_council_decision_adjustment(
         decision.id,
         decision_number=so_quyet_dinh,
         signing_date=ngay_ky,
-        removed_row_ids=removed_row_ids,
+        removed_row_ids=bo_dong,
         set_id=set_id,
         confirm_profile_count=xac_nhan_so_ho_so,
         confirm_printed_copy_match=xac_nhan_khop_ban_in,
@@ -992,7 +992,7 @@ async def create_council_decision_adjustment(
         "council_decision_adjusted",
         decision_id=dc.id,
         goc_id=decision.id,
-        so_dong_bo=len(removed_row_ids),
+        so_dong_bo=len(bo_dong),
         actor=current_user.id,
     )
     return _recorded_decision_out(dc, warnings=warnings)
