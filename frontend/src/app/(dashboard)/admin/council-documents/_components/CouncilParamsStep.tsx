@@ -26,7 +26,7 @@ export function CouncilParamsStep({ academicYear, preview, onBack, onNext }: Pro
   const setParams = useCouncilSelectionStore((s) => s.setParams)
   const t = preview?.tom_tat
 
-  const doi = (k: keyof InputParams) => (e: ChangeEvent<HTMLInputElement>) => setParams({ [k]: e.target.value })
+  const onFieldChange = (k: keyof InputParams) => (e: ChangeEvent<HTMLInputElement>) => setParams({ [k]: e.target.value })
 
   return (
     <div className="space-y-4" data-testid="buoc-tham-so">
@@ -45,27 +45,27 @@ export function CouncilParamsStep({ academicYear, preview, onBack, onNext }: Pro
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3" data-testid="tham-so-fields">
         <div className="space-y-1">
           <Label htmlFor="b3-so-qd">Số Quyết định</Label>
-          <Input id="b3-so-qd" inputMode="numeric" value={params.so_quyet_dinh} onChange={doi("so_quyet_dinh")} />
+          <Input id="b3-so-qd" inputMode="numeric" value={params.so_quyet_dinh} onChange={onFieldChange("so_quyet_dinh")} />
         </div>
         <div className="space-y-1">
           <Label htmlFor="b3-ngay-qd">Ngày Quyết định</Label>
-          <Input id="b3-ngay-qd" type="date" value={params.ngay_quyet_dinh} onChange={doi("ngay_quyet_dinh")} />
+          <Input id="b3-ngay-qd" type="date" value={params.ngay_quyet_dinh} onChange={onFieldChange("ngay_quyet_dinh")} />
         </div>
         <div className="space-y-1">
           <Label htmlFor="b3-dot-so">Đợt số</Label>
-          <Input id="b3-dot-so" inputMode="numeric" value={params.dot_so} onChange={doi("dot_so")} />
+          <Input id="b3-dot-so" inputMode="numeric" value={params.dot_so} onChange={onFieldChange("dot_so")} />
         </div>
         <div className="space-y-1">
           <Label htmlFor="b3-dot-thang">Tháng của đợt</Label>
-          <Input id="b3-dot-thang" inputMode="numeric" value={params.dot_thang} onChange={doi("dot_thang")} />
+          <Input id="b3-dot-thang" inputMode="numeric" value={params.dot_thang} onChange={onFieldChange("dot_thang")} />
         </div>
         <div className="space-y-1">
           <Label htmlFor="b3-so-bb">Số Biên bản</Label>
-          <Input id="b3-so-bb" inputMode="numeric" value={params.so_bien_ban} onChange={doi("so_bien_ban")} />
+          <Input id="b3-so-bb" inputMode="numeric" value={params.so_bien_ban} onChange={onFieldChange("so_bien_ban")} />
         </div>
         <div className="space-y-1">
           <Label htmlFor="b3-ngay-bb">Ngày Biên bản</Label>
-          <Input id="b3-ngay-bb" type="date" value={params.ngay_bien_ban} onChange={doi("ngay_bien_ban")} />
+          <Input id="b3-ngay-bb" type="date" value={params.ngay_bien_ban} onChange={onFieldChange("ngay_bien_ban")} />
         </div>
       </div>
 

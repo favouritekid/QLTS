@@ -52,7 +52,7 @@ class TransactionInfo:
 
     transaction_isolation: str
     transaction_read_only: str
-    moc_chup: datetime  # transaction_timestamp() — mốc chụp của bộ
+    snapshot_at: datetime  # transaction_timestamp() — mốc chụp của bộ
     backend_pid: int
 
 
@@ -74,7 +74,7 @@ async def read_only_transaction(
         )
         transaction = await conn.begin()
         try:
-            do = (
+            row = (
                 await conn.execute(
                     text(
                         "SELECT current_setting('transaction_isolation') AS iso, "
@@ -83,15 +83,15 @@ async def read_only_transaction(
                     )
                 )
             ).one()
-            tt = TransactionInfo(do.iso, do.ro, do.moc, do.pid)
+            info = TransactionInfo(row.iso, row.ro, row.moc, row.pid)
             if (
-                tt.transaction_isolation != ISOLATION_LEVEL
-                or tt.transaction_read_only != "on"
+                info.transaction_isolation != ISOLATION_LEVEL
+                or info.transaction_read_only != "on"
             ):
                 raise ServiceError(
                     "Giao dịch đọc hồ sơ không ở REPEATABLE READ READ ONLY — không đọc."
                 )
-            yield conn, tt
+            yield conn, info
         finally:
             await transaction.rollback()
 
@@ -400,7 +400,7 @@ ORDER BY chon.stt
 
 
 async def read_check_source(
-    conn: AsyncConnection, pids: Sequence[int], nv_in: Sequence[Optional[int]]
+    conn: AsyncConnection, pids: Sequence[int], printed_choice_ids: Sequence[Optional[int]]
 ) -> List[dict]:
     """Dữ liệu kiểm (``SQL_CHECK_SOURCE``) theo thứ tự ``pids``; ``nv_in[i]`` = nguyện vọng mà
     ``SQL_PRINT_FIGURES`` in cho ``pids[i]`` (None nếu không có)."""
@@ -408,7 +408,7 @@ async def read_check_source(
         dict(r._mapping)
         for r in (
             await conn.execute(
-                SQL_CHECK_SOURCE, {"pids": list(pids), "nv_in": list(nv_in)}
+                SQL_CHECK_SOURCE, {"pids": list(pids), "nv_in": list(printed_choice_ids)}
             )
         ).all()
     ]

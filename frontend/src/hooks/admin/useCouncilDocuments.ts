@@ -280,9 +280,9 @@ export function useCouncilSetInputCodes(setId: number, enabled: boolean) {
 export function useDownloadCouncilSetFile() {
   return useMutation({
     mutationFn: async ({ setId, order }: { setId: number; order: number }) => {
-      const tep = await downloadCouncilSetFile(setId, order)
-      downloadBlob(tep.blob, tep.filename)
-      return tep.filename
+      const file = await downloadCouncilSetFile(setId, order)
+      downloadBlob(file.blob, file.filename)
+      return file.filename
     },
     gcTime: 0,
   })
@@ -377,9 +377,9 @@ export function useDownloadCouncilSetZip() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async ({ setId }: { setId: number }) => {
-      const tep = await downloadCouncilSetZip(setId)
-      downloadBlob(tep.blob, tep.filename)
-      return tep.filename
+      const file = await downloadCouncilSetZip(setId)
+      downloadBlob(file.blob, file.filename)
+      return file.filename
     },
     gcTime: 0,
     onSettled: () => {

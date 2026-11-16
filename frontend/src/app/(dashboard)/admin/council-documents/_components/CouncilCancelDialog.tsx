@@ -29,7 +29,7 @@ interface Props {
   open: boolean
   onOpenChange: (open: boolean) => void
   decisionId: number
-  loai: string
+  kind: string
   /** SỐ QUYẾT ĐỊNH của văn bản (máy chủ trả) — người dùng gõ lại để xác nhận; máy chủ so bằng nguyên chuỗi với `so_quyet_dinh` */
   decisionNumber: string
   /** sau khi văn bản đã ở trạng thái huỷ ghi nhận (huỷ thành công, hoặc đọc lại thấy đã huỷ) */
@@ -44,16 +44,16 @@ type Reload = "khong" | "dang_doc" | "con_hieu_luc" | "loi"
  * `CouncilDecisionCancelIn` (đặc tả 5.6). Mất mạng / 5xx: KHÔNG cho bấm lại ngay — đọc lại `GET /decisions/{id}` trước (huỷ ghi nhận luỹ đẳng theo
  * trạng thái văn bản): thấy đã huỷ ⇒ xong; thấy còn hiệu lực ⇒ mới cho bấm lại; không đọc được ⇒ vẫn khoá.
  */
-export function CouncilCancelDialog({ open, onOpenChange, decisionId, loai, decisionNumber, onDone }: Props) {
-  const huy = useCancelCouncilDecisionRecord()
+export function CouncilCancelDialog({ open, onOpenChange, decisionId, kind, decisionNumber, onDone }: Props) {
+  const cancelRecord = useCancelCouncilDecisionRecord()
   const [reason, setReason] = useState("")
   const [removeAgainNumber, setRemoveAgainNumber] = useState("")
-  const [canXn, setCanXn] = useState<CouncilConfirmNeeded | null>(null)
+  const [confirmNeeded, setConfirmNeeded] = useState<CouncilConfirmNeeded | null>(null)
   const [typedConfirm, setTypedConfirm] = useState<Record<string, string>>({})
   const [reload, setReload] = useState<Reload>("khong")
 
-  const confirmMatches = canXn === null || Object.entries(canXn.so_ho_so_theo_loai).every(([k, n]) => (typedConfirm[k] ?? "").trim() === String(n))
-  const canSubmit = reason.trim() !== "" && removeAgainNumber.trim() !== "" && confirmMatches && reload !== "dang_doc" && reload !== "loi" && !huy.isPending
+  const confirmMatches = confirmNeeded === null || Object.entries(confirmNeeded.so_ho_so_theo_loai).every(([k, n]) => (typedConfirm[k] ?? "").trim() === String(n))
+  const canSubmit = reason.trim() !== "" && removeAgainNumber.trim() !== "" && confirmMatches && reload !== "dang_doc" && reload !== "loi" && !cancelRecord.isPending
 
   const finish = () => {
     onOpenChange(false)
@@ -76,9 +76,9 @@ export function CouncilCancelDialog({ open, onOpenChange, decisionId, loai, deci
     }
   }
 
-  const gui = () => {
+  const submit = () => {
     setReload("khong")
-    huy.mutate(
+    cancelRecord.mutate(
       {
         decisionId,
         payload: {
@@ -86,7 +86,7 @@ export function CouncilCancelDialog({ open, onOpenChange, decisionId, loai, deci
           // Cắt khoảng trắng đầu/cuối (dán thừa dấu cách): máy chủ so NGUYÊN chuỗi (`StrictStr`, không tự cắt), còn số Quyết định
           // lưu ở máy chủ luôn là 1–6 chữ số ASCII (`kiem_so_quyet_dinh`) nên không bao giờ có khoảng trắng đầu/cuối cần giữ.
           so_go_lai: removeAgainNumber.trim(),
-          ...(canXn ? { xac_nhan: canXn.so_ho_so_theo_loai } : {}),
+          ...(confirmNeeded ? { xac_nhan: confirmNeeded.so_ho_so_theo_loai } : {}),
         },
       },
       {
@@ -94,7 +94,7 @@ export function CouncilCancelDialog({ open, onOpenChange, decisionId, loai, deci
         onError: (error) => {
           const can = councilConfirmNeededFromError(error)
           if (can) {
-            setCanXn(can)
+            setConfirmNeeded(can)
             return
           }
           if (classifySubmissionError(error) === "chua_xac_dinh") void recheck()
@@ -104,11 +104,11 @@ export function CouncilCancelDialog({ open, onOpenChange, decisionId, loai, deci
   }
 
   return (
-    <AlertDialog open={open} onOpenChange={(o) => !huy.isPending && onOpenChange(o)}>
+    <AlertDialog open={open} onOpenChange={(o) => !cancelRecord.isPending && onOpenChange(o)}>
       <AlertDialogContent data-testid="huy-ghi-nhan-dialog">
         <AlertDialogHeader>
           <AlertDialogTitle>
-            Huỷ ghi nhận {decisionKindLabel(loai)} số {decisionNumber}?
+            Huỷ ghi nhận {decisionKindLabel(kind)} số {decisionNumber}?
           </AlertDialogTitle>
           <AlertDialogDescription>
             Dùng khi nhập SAI: văn bản coi như chưa từng ghi (giữ vết). Sau đó ghi nhận lại được.
@@ -118,7 +118,7 @@ export function CouncilCancelDialog({ open, onOpenChange, decisionId, loai, deci
         <div className="space-y-3">
           <div className="space-y-1">
             <Label htmlFor="huy-ly-do">Lý do (bắt buộc)</Label>
-            <Textarea id="huy-ly-do" data-testid="huy-ly-do" value={reason} disabled={huy.isPending} onChange={(e) => setReason(e.target.value)} />
+            <Textarea id="huy-ly-do" data-testid="huy-ly-do" value={reason} disabled={cancelRecord.isPending} onChange={(e) => setReason(e.target.value)} />
           </div>
           <div className="space-y-1">
             <Label htmlFor="huy-so-quyet-dinh">Gõ lại số Quyết định của văn bản ({decisionNumber})</Label>
@@ -129,18 +129,18 @@ export function CouncilCancelDialog({ open, onOpenChange, decisionId, loai, deci
               inputMode="numeric"
               autoComplete="off"
               value={removeAgainNumber}
-              disabled={huy.isPending}
+              disabled={cancelRecord.isPending}
               onChange={(e) => setRemoveAgainNumber(e.target.value)}
             />
           </div>
 
-          {canXn ? (
+          {confirmNeeded ? (
             <div className="space-y-2 rounded border border-warning-500/50 p-3" data-testid="huy-xac-nhan">
               <div className="text-sm font-medium">Có hồ sơ đổi trạng thái — gõ số hồ sơ để xác nhận</div>
-              {Object.entries(canXn.so_ho_so_theo_loai).map(([k, n]) => (
+              {Object.entries(confirmNeeded.so_ho_so_theo_loai).map(([k, n]) => (
                 <div key={k} className="space-y-1">
                   <Label htmlFor={`huy-xn-${k}`}>
-                    {`“${statusLabel(k)}”: ${n} hồ sơ (dòng ${(canXn.dong_theo_loai[k] ?? []).join(", ")})`}
+                    {`“${statusLabel(k)}”: ${n} hồ sơ (dòng ${(confirmNeeded.dong_theo_loai[k] ?? []).join(", ")})`}
                   </Label>
                   <Input
                     id={`huy-xn-${k}`}
@@ -177,13 +177,13 @@ export function CouncilCancelDialog({ open, onOpenChange, decisionId, loai, deci
             </div>
           ) : null}
 
-          <CouncilErrorAlert error={huy.error} testId="huy-loi" />
+          <CouncilErrorAlert error={cancelRecord.error} testId="huy-loi" />
         </div>
 
         <AlertDialogFooter>
-          <AlertDialogCancel disabled={huy.isPending}>Đóng</AlertDialogCancel>
-          <Button variant="destructive" disabled={!canSubmit} onClick={gui} data-testid="huy-xac-nhan-nut">
-            {huy.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+          <AlertDialogCancel disabled={cancelRecord.isPending}>Đóng</AlertDialogCancel>
+          <Button variant="destructive" disabled={!canSubmit} onClick={submit} data-testid="huy-xac-nhan-nut">
+            {cancelRecord.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
             Huỷ ghi nhận
           </Button>
         </AlertDialogFooter>

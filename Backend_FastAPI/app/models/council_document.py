@@ -158,8 +158,8 @@ CHECK_DECISION_STATUS = "trang_thai IN ('hieu_luc', 'het_hieu_luc', 'huy_ghi_nha
 CHECK_DECISION_K3_ROOT = "(loai IN ('bo_sung', 'dieu_chinh')) = (goc_id IS NOT NULL)"
 CHECK_DECISION_K3_CANCEL = "(loai = 'van_ban_huy') = (huy_qd_id IS NOT NULL)"
 CHECK_DECISION_K3_EXPIRED = "(trang_thai = 'het_hieu_luc') = (het_hieu_luc_boi_id IS NOT NULL)"
-CHECK_DECISION_K3_VBH = "loai <> 'van_ban_huy' OR trang_thai <> 'het_hieu_luc'"
-CHECK_DECISION_K3_HGN = (
+CHECK_DECISION_K3_CANCELLATION = "loai <> 'van_ban_huy' OR trang_thai <> 'het_hieu_luc'"
+CHECK_DECISION_K3_REVOKED = (
     "(trang_thai = 'huy_ghi_nhan') = (huy_ghi_nhan_boi_id IS NOT NULL "
     "AND huy_ghi_nhan_luc IS NOT NULL AND ly_do_huy_ghi_nhan IS NOT NULL)"
 )
@@ -204,12 +204,12 @@ CHECK_SCAN_TYPE = "kieu = 'application/pdf'"
 CHECK_HOLD_ENTRY_REASON = "ly_do_vao IN ('qd_bi_huy', 'bi_bo_boi_van_ban_bi_huy')"
 CHECK_HOLD_STATUS = "trang_thai IN ('cho_quyet', 'da_cho_xet_lai', 'vo_hieu')"
 CHECK_HOLD_H3 = "profile_id IS NOT NULL OR trang_thai = 'vo_hieu'"
-CHECK_HOLD_H4_XL = (
+CHECK_HOLD_H4_RECHECK = (
     "trang_thai <> 'da_cho_xet_lai' OR (quyet_boi_id IS NOT NULL "
     "AND quyet_luc IS NOT NULL AND ly_do_quyet IS NOT NULL)"
 )
-CHECK_HOLD_H4_CQ = "trang_thai <> 'cho_quyet' OR quyet_luc IS NULL"
-CHECK_HOLD_H4_VH = "(trang_thai = 'vo_hieu') = (vo_hieu_luc IS NOT NULL)"
+CHECK_HOLD_H4_PENDING = "trang_thai <> 'cho_quyet' OR quyet_luc IS NULL"
+CHECK_HOLD_H4_VOID = "(trang_thai = 'vo_hieu') = (vo_hieu_luc IS NOT NULL)"
 CHECK_HOLD_REASON = "ly_do_quyet IS NULL OR char_length(btrim(ly_do_quyet)) > 0"
 CONDITION_H1 = "trang_thai = 'cho_quyet'"
 
@@ -508,8 +508,8 @@ class CouncilDecision(Base):
         CheckConstraint(CHECK_DECISION_K3_ROOT, name="ck_council_decision_k3_goc"),
         CheckConstraint(CHECK_DECISION_K3_CANCEL, name="ck_council_decision_k3_huy"),
         CheckConstraint(CHECK_DECISION_K3_EXPIRED, name="ck_council_decision_k3_het"),
-        CheckConstraint(CHECK_DECISION_K3_VBH, name="ck_council_decision_k3_vbh"),
-        CheckConstraint(CHECK_DECISION_K3_HGN, name="ck_council_decision_k3_hgn"),
+        CheckConstraint(CHECK_DECISION_K3_CANCELLATION, name="ck_council_decision_k3_vbh"),
+        CheckConstraint(CHECK_DECISION_K3_REVOKED, name="ck_council_decision_k3_hgn"),
         CheckConstraint(CHECK_DECISION_K3_NUMBER, name="ck_council_decision_k3_so"),
         CheckConstraint(CHECK_DECISION_K3_SCOPE, name="ck_council_decision_k3_pham_vi"),
         CheckConstraint(CHECK_DECISION_K3_REASON, name="ck_council_decision_k3_ly_do"),
@@ -691,9 +691,9 @@ class CouncilDecisionHold(Base):
             CHECK_HOLD_STATUS, name="ck_council_decision_hold_trang_thai"
         ),
         CheckConstraint(CHECK_HOLD_H3, name="ck_council_decision_hold_h3"),
-        CheckConstraint(CHECK_HOLD_H4_XL, name="ck_council_decision_hold_h4_xl"),
-        CheckConstraint(CHECK_HOLD_H4_CQ, name="ck_council_decision_hold_h4_cq"),
-        CheckConstraint(CHECK_HOLD_H4_VH, name="ck_council_decision_hold_h4_vh"),
+        CheckConstraint(CHECK_HOLD_H4_RECHECK, name="ck_council_decision_hold_h4_xl"),
+        CheckConstraint(CHECK_HOLD_H4_PENDING, name="ck_council_decision_hold_h4_cq"),
+        CheckConstraint(CHECK_HOLD_H4_VOID, name="ck_council_decision_hold_h4_vh"),
         CheckConstraint(CHECK_HOLD_REASON, name="ck_council_decision_hold_ly_do"),
         UniqueConstraint(
             "van_ban_huy_id", "profile_id", name="uq_council_decision_hold_h2"

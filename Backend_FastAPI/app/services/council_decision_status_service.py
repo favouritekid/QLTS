@@ -8,13 +8,13 @@ máy nguyện vọng, ``admission_service``, service văn bản Hội đồng.
 
 Tình trạng của MỘT hồ sơ (đọc dữ liệu, KHÔNG suy từ trạng thái hồ sơ) — loại trừ nhau theo thứ tự:
 
-* ``HL`` — có dòng Quyết định còn hiệu lực (``EFFECTIVE_ROW_CONDITION``);
-* ``CQ`` — không HL, có mục "chờ Admin quyết" đang mở (owner C7);
-* ``XL`` — không HL / CQ, đã được Admin cho xét lại;
-* ``KO`` — còn lại.
+* ``HAS_EFFECTIVE_DECISION`` — có dòng Quyết định còn hiệu lực (``EFFECTIVE_ROW_CONDITION``);
+* ``AWAITING_ADMIN`` — không HAS_EFFECTIVE_DECISION, có mục "chờ Admin quyết" đang mở (owner C7);
+* ``RECHECK_ALLOWED`` — không HAS_EFFECTIVE_DECISION / AWAITING_ADMIN, đã được Admin cho xét lại;
+* ``NO_DECISION`` — còn lại.
 
-Độc lập: ``dau_appsheet`` (dấu "Đã trúng tuyển theo QĐ số …" — ``SQL_APPSHEET_MARK``) và
-``co_ten_van_ban`` (có tên trong văn bản chưa huỷ ghi nhận — ĐÚNG điều kiện K5a).
+Độc lập: ``appsheet_mark`` (dấu "Đã trúng tuyển theo QĐ số …" — ``SQL_APPSHEET_MARK``) và
+``named_in_document`` (có tên trong văn bản chưa huỷ ghi nhận — ĐÚNG điều kiện K5a).
 
 Luật (owner): đích ``draft`` / ``rejected`` / ``withdrawal_pending`` / ``withdrawn`` bị CHẶN khi HL
 hoặc dấu AppSheet (C4, C5, J1 dòng 12, E1) — trừ cạnh ``withdrawal_pending → withdrawn`` (chốt rút khi
@@ -35,10 +35,10 @@ from app.models.council_document import APPSHEET_MARK_PREFIX, SQL_DECISION_STATE
 from app.services.council_set_gate_service import decision_state_block_reason
 from app.utils.exceptions import ProfileLockedByDecisionError
 
-HL = "co_qd_hieu_luc"
-CQ = "cho_admin_quyet"
-XL = "da_cho_xet_lai"
-KO = "chua_co_qd"
+HAS_EFFECTIVE_DECISION = "co_qd_hieu_luc"
+AWAITING_ADMIN = "cho_admin_quyet"
+RECHECK_ALLOWED = "da_cho_xet_lai"
+NO_DECISION = "chua_co_qd"
 
 #: Đích chuyển trạng thái bị chặn khi hồ sơ có Quyết định hiệu lực / dấu AppSheet.
 LOCKED_TARGETS = frozenset({"draft", "rejected", "withdrawal_pending", "withdrawn"})
@@ -48,17 +48,17 @@ EXEMPT_TRANSITIONS = frozenset({("withdrawal_pending", "withdrawn")})
 
 @dataclass(frozen=True)
 class DecisionState:
-    ma: str
-    qd_hieu_luc_id: Optional[int] = None
-    qd_chuoi_id: Optional[int] = None
-    cho_quyet_id: Optional[int] = None
-    co_ten_van_ban: bool = False
-    dau_appsheet: bool = False
+    code: str
+    effective_decision_id: Optional[int] = None
+    chain_decision_id: Optional[int] = None
+    pending_hold_id: Optional[int] = None
+    named_in_document: bool = False
+    appsheet_mark: bool = False
 
     @property
     def locks_status(self) -> bool:
         """Rút / về Nháp / Từ chối bị chặn (C4, C5, J1 dòng 12, E1)."""
-        return self.ma == HL or self.dau_appsheet
+        return self.code == HAS_EFFECTIVE_DECISION or self.appsheet_mark
 
     @property
     def blocks_new_admission(self) -> bool:
@@ -69,36 +69,36 @@ class DecisionState:
     def payload(self) -> Dict[str, Any]:
         """Phần đi ra client — mã + id văn bản / mục chờ (không dữ liệu cá nhân)."""
         return {
-            "tinh_trang_qd": self.ma,
-            "quyet_dinh_id": self.qd_hieu_luc_id,
-            "muc_cho_id": self.cho_quyet_id,
-            "dau_appsheet": self.dau_appsheet,
+            "tinh_trang_qd": self.code,
+            "quyet_dinh_id": self.effective_decision_id,
+            "muc_cho_id": self.pending_hold_id,
+            "dau_appsheet": self.appsheet_mark,
         }
 
 
-NOT_SET = DecisionState(KO)
+NOT_SET = DecisionState(NO_DECISION)
 
 
 def from_row(h: Any) -> DecisionState:
-    """Dựng tình trạng từ một hàng có ĐỦ các cột của ``SQL_COT_TINH_TRANG_QD`` (dùng chung cho hàm hỏi
+    """Dựng tình trạng từ một hàng có ĐỦ các cột của ``SQL_DECISION_STATE_COLUMNS`` (dùng chung cho hàm hỏi
     và cổng dựng bộ — hai nơi đọc cùng chuỗi SQL)."""
-    hl = h["qd_hieu_luc_id"]
-    cq = h["cho_quyet_id"]
-    if hl is not None:
-        code = HL
-    elif cq is not None:
-        code = CQ
+    effective_id = h["qd_hieu_luc_id"]
+    pending_id = h["cho_quyet_id"]
+    if effective_id is not None:
+        code = HAS_EFFECTIVE_DECISION
+    elif pending_id is not None:
+        code = AWAITING_ADMIN
     elif h["da_cho_xet_lai"]:
-        code = XL
+        code = RECHECK_ALLOWED
     else:
-        code = KO
+        code = NO_DECISION
     return DecisionState(
-        ma=code,
-        qd_hieu_luc_id=hl,
-        qd_chuoi_id=h["qd_chuoi_id"],
-        cho_quyet_id=cq,
-        co_ten_van_ban=bool(h["co_ten_van_ban"]),
-        dau_appsheet=bool(h["dau_appsheet"]),
+        code=code,
+        effective_decision_id=effective_id,
+        chain_decision_id=h["qd_chuoi_id"],
+        pending_hold_id=pending_id,
+        named_in_document=bool(h["co_ten_van_ban"]),
+        appsheet_mark=bool(h["dau_appsheet"]),
     )
 
 
@@ -140,10 +140,10 @@ async def single_profile(db: AsyncSession, profile_id: int, *, lock: bool = Fals
     return (await decision_state(db, [profile_id], lock=lock)).get(int(profile_id), NOT_SET)
 
 
-def _block(tt: DecisionState, cau: str, operation: str) -> ProfileLockedByDecisionError:
+def _block(state: DecisionState, message: str, operation: str) -> ProfileLockedByDecisionError:
     return ProfileLockedByDecisionError(
-        cau,
-        public_payload={**tt.payload(), "thao_tac": operation},
+        message,
+        public_payload={**state.payload(), "thao_tac": operation},
     )
 
 
@@ -154,10 +154,10 @@ async def check_status_transition(
     AppSheet ⇒ :class:`DecisionLocksProfile`. Khoá hồ sơ ``FOR UPDATE`` trước khi đọc."""
     if to_status not in LOCKED_TARGETS or (from_status, to_status) in EXEMPT_TRANSITIONS:
         return
-    tt = await single_profile(db, profile_id, lock=True)
-    if tt.locks_status:
+    state = await single_profile(db, profile_id, lock=True)
+    if state.locks_status:
         raise _block(
-            tt,
+            state,
             "Hồ sơ đã có tên trong Quyết định đã ký (hoặc mang dấu đã trúng tuyển theo Quyết định "
             "cũ) — không chuyển sang '%s'. Muốn đổi, ghi nhận văn bản điều chỉnh / huỷ trước." % to_status,
             "chuyen_trang_thai",
@@ -170,10 +170,10 @@ async def early_check_status_lock(
     """Lớp kiểm SỚM (trước mọi việc khác của hàm rút / huỷ rút / trả về Nháp / tạo link rút) — cùng
     luật với :func:`check_status_transition`, báo lỗi trước khi tự lập yêu cầu hoàn / từ chối yêu cầu
     hoàn. Tầng chủ sở hữu vẫn là chốt chuyển trạng thái."""
-    tt = await single_profile(db, profile_id, lock=True)
-    if tt.locks_status:
+    state = await single_profile(db, profile_id, lock=True)
+    if state.locks_status:
         raise _block(
-            tt,
+            state,
             "Hồ sơ đã có tên trong Quyết định đã ký (hoặc mang dấu đã trúng tuyển theo Quyết định "
             "cũ) — tạm chặn thao tác này trên phần mềm. Cần hoàn tiền ngay thì kế toán lập yêu cầu "
             "hoàn bằng chức năng đang có.",
@@ -183,10 +183,10 @@ async def early_check_status_lock(
 
 async def check_new_admission(db: AsyncSession, profile_id: int, operation: str) -> None:
     """Công bố theo nguyện vọng (một lần xét) — chặn HL / CQ / dấu AppSheet (N11, C7, E1)."""
-    tt = await single_profile(db, profile_id, lock=True)
-    if tt.blocks_new_admission:
+    state = await single_profile(db, profile_id, lock=True)
+    if state.blocks_new_admission:
         raise _block(
-            tt,
+            state,
             "Hồ sơ đã có tên trong Quyết định đã ký, đang chờ Admin quyết sau khi Quyết định bị huỷ, "
             "hoặc mang dấu đã trúng tuyển theo Quyết định cũ — không công bố theo nguyện vọng.",
             operation,
@@ -197,10 +197,10 @@ async def attach_decision_state(db: AsyncSession, profiles: Sequence[Any]) -> No
     """Gán thuộc tính TẠM ``_decision_state`` cho các hồ sơ (một lần đọc gộp) — để hàm tính cờ giao
     diện (đồng bộ) đọc. Cờ là lớp phụ; tầng chủ sở hữu là service."""
     ids = [getattr(p, "id", None) for p in profiles]
-    tt = await decision_state(db, [i for i in ids if isinstance(i, int)])
+    states = await decision_state(db, [i for i in ids if isinstance(i, int)])
     for p in profiles:
         try:
-            p._decision_state = tt.get(getattr(p, "id", None), NOT_SET)
+            p._decision_state = states.get(getattr(p, "id", None), NOT_SET)
         except AttributeError:  # đối tượng không gán được thuộc tính (không xảy ra với ORM)
             pass
 
@@ -231,10 +231,10 @@ async def profile_decision_cell(
     truy vấn thứ hai cho câu hỏi "có Quyết định không"); văn bản gần nhất có tên em; ``ly_do_huy_ghi_nhan`` CHỈ khi
     ``view_cancel_reason`` (quyền do ``deps.py`` tính); dấu AppSheet tách riêng (``dau_appsheet`` + số Quyết định đọc
     được sau tiền tố). Không ghi gì."""
-    tt = await single_profile(db, profile_id)
-    vb = (await db.execute(SQL_LATEST_DOCUMENT, {"p": int(profile_id)})).mappings().first()
+    state = await single_profile(db, profile_id)
+    latest_document = (await db.execute(SQL_LATEST_DOCUMENT, {"p": int(profile_id)})).mappings().first()
     decision_number = None
-    if tt.dau_appsheet:
+    if state.appsheet_mark:
         decision_number = (
             await db.execute(
                 SQL_APPSHEET_DECISION_NUMBER,
@@ -242,28 +242,28 @@ async def profile_decision_cell(
             )
         ).scalar()
     return {
-        "tinh_trang": tt.ma,
+        "tinh_trang": state.code,
         "van_ban": (
             None
-            if vb is None
+            if latest_document is None
             else {
-                "id": vb["id"],
-                "loai": vb["loai"],
-                "so_quyet_dinh": vb["so_quyet_dinh"],
-                "ngay_ky": vb["ngay_ky"].isoformat(),
-                "trang_thai": vb["trang_thai"],
-                "set_id": vb["set_id"],
+                "id": latest_document["id"],
+                "loai": latest_document["loai"],
+                "so_quyet_dinh": latest_document["so_quyet_dinh"],
+                "ngay_ky": latest_document["ngay_ky"].isoformat(),
+                "trang_thai": latest_document["trang_thai"],
+                "set_id": latest_document["set_id"],
             }
         ),
         "ly_do_huy_ghi_nhan": (
-            vb["ly_do_huy_ghi_nhan"] if (view_cancel_reason and vb is not None) else None
+            latest_document["ly_do_huy_ghi_nhan"] if (view_cancel_reason and latest_document is not None) else None
         ),
-        "dau_appsheet": tt.dau_appsheet,
+        "dau_appsheet": state.appsheet_mark,
         "dau_appsheet_so_qd": decision_number,
     }
 
 
 def read_decision_state(profile: Any) -> DecisionState:
     """Đọc thuộc tính tạm; chưa gán ⇒ NOT_SET (như khuôn ``_outstanding_debt_codes``)."""
-    tt = getattr(profile, "_decision_state", None)
-    return tt if isinstance(tt, DecisionState) else NOT_SET
+    state = getattr(profile, "_decision_state", None)
+    return state if isinstance(state, DecisionState) else NOT_SET

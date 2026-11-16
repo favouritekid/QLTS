@@ -43,9 +43,9 @@ export function CouncilNewSetClient() {
   if (profileId.length === 0 && step !== 1) setStep(1)
 
   // Kiểm trước theo danh sách ĐÃ yên 600 ms. Trong lúc chờ / đang gọi: "đang kiểm…", không hiện số cũ như còn đúng.
-  const idTre = useDebouncedValue(profileId, RECHECK_DELAY_MS)
-  const pending = idTre !== profileId
-  const input = academicYear !== null && idTre.length > 0 ? { academic_year: academicYear, profile_ids: idTre } : null
+  const debouncedProfileId = useDebouncedValue(profileId, RECHECK_DELAY_MS)
+  const pending = debouncedProfileId !== profileId
+  const input = academicYear !== null && debouncedProfileId.length > 0 ? { academic_year: academicYear, profile_ids: debouncedProfileId } : null
   const kt = useCouncilSetPreview(input, vm.state === "ready" && vm.permissions.kiem_truoc)
   const checking = profileId.length > 0 && (pending || kt.isFetching)
   const preview = input !== null && !pending ? kt.data : undefined
@@ -54,12 +54,12 @@ export function CouncilNewSetClient() {
   // Cảnh báo khi rời / tải lại trang lúc đang có danh sách (không đọc / ghi URL).
   useEffect(() => {
     if (profileId.length === 0) return
-    const chan = (e: BeforeUnloadEvent) => {
+    const blockUnload = (e: BeforeUnloadEvent) => {
       e.preventDefault()
       e.returnValue = ""
     }
-    window.addEventListener("beforeunload", chan)
-    return () => window.removeEventListener("beforeunload", chan)
+    window.addEventListener("beforeunload", blockUnload)
+    return () => window.removeEventListener("beforeunload", blockUnload)
   }, [profileId.length])
 
   const back = (
@@ -101,7 +101,7 @@ export function CouncilNewSetClient() {
   }
 
   const allowed: number[] = isBuilding ? [] : profileId.length > 0 ? [1, 2, 3, 4].filter((b) => b <= step) : [1]
-  const submittedIds = idTre
+  const submittedIds = debouncedProfileId
 
   return (
     <div className="space-y-4" data-testid="moi-client">

@@ -187,7 +187,7 @@ async def create_council_document_set(
             db,
             database.engine,
             profile_ids=payload.profile_ids,
-            phien_ban_kiem=payload.phien_ban_kiem,
+            check_signature=payload.phien_ban_kiem,
             academic_year=payload.academic_year,
             params=payload.tham_so_quyet_dinh,
             creator_id=current_user.id,
@@ -232,23 +232,23 @@ async def preview_council_document_set(
     scope: deps.CouncilDocumentScope = Depends(deps.get_council_document_scope),
     can_confirm: bool = Depends(deps.get_council_document_confirm_right),
 ):
-    kq = await set_service.preview(
+    result = await set_service.preview(
         database.engine,
         profile_ids=payload.profile_ids,
         academic_year=payload.academic_year,
-        tat_ca=scope.tat_ca,
-        chi_don_vi=scope.unit_id,
+        all_units=scope.all_units,
+        only_unit_id=scope.unit_id,
         can_confirm=can_confirm,
     )
     # Chỉ số đếm — không id, không họ tên, không dấu.
     log.info(
         "council_document_set_previewed",
-        so_dong=len(kq["dong"]),
-        so_khong_tim_thay=len(kq["khong_tim_thay"]),
+        so_dong=len(result["dong"]),
+        so_khong_tim_thay=len(result["khong_tim_thay"]),
         actor=current_user.id,
     )
     return JSONResponse(
-        content=CouncilSetPreviewOut(**kq).model_dump(mode="json"),
+        content=CouncilSetPreviewOut(**result).model_dump(mode="json"),
         headers={"Cache-Control": "no-store"},
     )
 
@@ -266,7 +266,7 @@ async def search_council_profiles(
     _scope: deps.CouncilDocumentScope = Depends(deps.get_council_document_scope),
     db: AsyncSession = Depends(database.get_db),
 ):
-    kq = await candidate_service.search_profiles(
+    result = await candidate_service.search_profiles(
         db,
         current_user=current_user,
         academic_year=payload.academic_year,
@@ -279,13 +279,13 @@ async def search_council_profiles(
     # KHÔNG log từ khoá (có thể là CCCD / tên) — chỉ số đếm.
     log.info(
         "council_profiles_searched",
-        so_dong=len(kq["dong"]),
-        tong=kq["tong"],
+        so_dong=len(result["dong"]),
+        tong=result["tong"],
         co_tu_khoa=bool(payload.tu_khoa),
         actor=current_user.id,
     )
     return JSONResponse(
-        content=CouncilProfileSearchOut(**kq).model_dump(mode="json"),
+        content=CouncilProfileSearchOut(**result).model_dump(mode="json"),
         headers={"Cache-Control": "no-store"},
     )
 
@@ -306,8 +306,8 @@ async def resolve_council_profile_codes(
         database.engine,
         payload.ma_ho_so,
         academic_year=payload.academic_year,
-        tat_ca=scope.tat_ca,
-        chi_don_vi=scope.unit_id,
+        all_units=scope.all_units,
+        only_unit_id=scope.unit_id,
     )
     log.info(
         "council_profile_codes_resolved",
@@ -345,19 +345,19 @@ async def list_council_document_sets(
     nguoi_tao_id: Optional[int] = Query(None, ge=1),
     db: AsyncSession = Depends(database.get_db),
 ):
-    ds = await set_service.list_sets_extended(
+    rows = await set_service.list_sets_extended(
         db,
-        tat_ca=scope.tat_ca,
-        chi_don_vi=scope.unit_id,
+        all_units=scope.all_units,
+        only_unit_id=scope.unit_id,
         show_submission=await _can_record(request, current_user),
-        nam_hoc=nam_hoc,
+        academic_year=nam_hoc,
         creator_id=nguoi_tao_id,
         decision_number=so_quyet_dinh,
         state=tinh_trang,
         limit=limit,
         offset=offset,
     )
-    return [CouncilSetOut(**d) for d in ds]
+    return [CouncilSetOut(**d) for d in rows]
 
 
 @router.get(
@@ -375,7 +375,7 @@ async def list_council_document_set_creators(
     return [
         CouncilSetCreatorOut(**d)
         for d in await set_service.set_creators(
-            db, tat_ca=scope.tat_ca, chi_don_vi=scope.unit_id
+            db, all_units=scope.all_units, only_unit_id=scope.unit_id
         )
     ]
 
@@ -428,7 +428,7 @@ async def download_council_document_file(
         actor=current_user.id,
     )
     return Response(
-        content=file.noi_dung,
+        content=file.content,
         media_type=_FILE_MEDIA_TYPES.get(
             file.path.rsplit(".", 1)[-1].lower(), "application/octet-stream"
         ),
@@ -547,13 +547,13 @@ async def list_council_document_download_log(
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(database.get_db),
 ):
-    ds = await set_service.list_download_log(db, set_id=set_id, limit=limit, offset=offset)
-    name = await set_service.user_names(db, [d.nguoi_tai_id for d in ds])
+    rows = await set_service.list_download_log(db, set_id=set_id, limit=limit, offset=offset)
+    name = await set_service.user_names(db, [d.nguoi_tai_id for d in rows])
     return [
         CouncilDownloadLogOut.model_validate(d).model_copy(
             update={"nguoi_tai_ten": name.get(d.nguoi_tai_id)}
         )
-        for d in ds
+        for d in rows
     ]
 
 
@@ -571,13 +571,13 @@ async def list_council_document_set_deletions(
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(database.get_db),
 ):
-    ds = await set_service.list_deletion_traces(db, limit=limit, offset=offset)
-    name = await set_service.user_names(db, [d.nguoi_xoa_id for d in ds])
+    rows = await set_service.list_deletion_traces(db, limit=limit, offset=offset)
+    name = await set_service.user_names(db, [d.nguoi_xoa_id for d in rows])
     return [
         CouncilSetDeletionOut.model_validate(d).model_copy(
             update={"nguoi_xoa_ten": name.get(d.nguoi_xoa_id)}
         )
-        for d in ds
+        for d in rows
     ]
 
 
@@ -586,14 +586,14 @@ async def list_council_document_set_deletions(
 # (trực tiếp hoặc qua ``get_council_document_set_for_admin`` / ``get_council_decision_for_admin`` /
 # ``get_council_decision_hold_for_admin``). Route ghi khai trong ``ADMISSION_WRITE_ROUTES`` (đóng băng ⇒
 # 503). Log chỉ id + số đếm — không CCCD, không lý do. Bản scan đọc tối đa trần + 1 byte.
-def _recorded_decision_out(decision, figures=None, warnings=None, *, root=None, submission_code=None, lap_lai=False) -> CouncilDecisionWriteOut:
+def _recorded_decision_out(decision, figures=None, warnings=None, *, root=None, submission_code=None, repeated=False) -> CouncilDecisionWriteOut:
     return CouncilDecisionWriteOut(
         **CouncilDecisionOut.model_validate(decision).model_dump(),
         so_lieu=figures,
         canh_bao_vuot_chi_tieu=warnings or [],
         goc=root,
         ma_luot_gui=submission_code,
-        lap_lai=lap_lai,
+        lap_lai=repeated,
     )
 
 
@@ -649,7 +649,7 @@ async def create_council_decision(
     ma_luot_gui: str = Form(..., pattern=r"^[0-9a-fA-F-]{36}$"),
     db: AsyncSession = Depends(database.get_db),
 ):
-    decision, warnings, lap_lai = await decision_service.record_decision(
+    decision, warnings, repeated = await decision_service.record_decision(
         db,
         set_id=set_id,
         kind=loai,
@@ -671,9 +671,9 @@ async def create_council_decision(
         submission_code=ma_luot_gui,
     )
     root = await decision_service.root_summary(db, decision.goc_id)
-    out = _recorded_decision_out(decision, warnings=warnings, root=root, submission_code=ma_luot_gui, lap_lai=lap_lai)
+    out = _recorded_decision_out(decision, warnings=warnings, root=root, submission_code=ma_luot_gui, repeated=repeated)
     await db.commit()  # gửi lặp: không có gì để ghi — kết thúc giao dịch NGAY (F272)
-    if lap_lai:
+    if repeated:
         response.status_code = 200
     log.info(
         "council_decision_recorded",
@@ -682,7 +682,7 @@ async def create_council_decision(
         so_ho_so=decision.so_ho_so,
         actor=current_user.id,
         so_o_vuot_chi_tieu=len(warnings),
-        lap_lai=lap_lai,
+        lap_lai=repeated,
     )
     return out
 
@@ -752,10 +752,10 @@ async def resolve_council_decision_submission(
     except submission_service.SubmissionProcessingError:
         await db.rollback()  # giao dịch đã hỏng (55P03) — ROLLBACK trước khi trả (3.7.4)
         return CouncilSubmissionResolveOut(ket_qua=submission_service.PROCESSING)
-    quyet_dinh = None
+    resolved_decision = None
     if result == submission_service.RECORDED:
         decision = await decision_service.recorded_decision_detail(db, decision_id)
-        quyet_dinh = _recorded_decision_out(
+        resolved_decision = _recorded_decision_out(
             decision,
             warnings=await decision_service.stored_warnings(db, decision_id, "ghi_nhan"),
             root=await decision_service.root_summary(db, decision.goc_id),
@@ -763,7 +763,7 @@ async def resolve_council_decision_submission(
         )
     await db.commit()  # chỉ kết luận SAU commit
     log.info("council_submission_resolved", ket_qua=result, actor=current_user.id)
-    return CouncilSubmissionResolveOut(ket_qua=result, quyet_dinh=quyet_dinh)
+    return CouncilSubmissionResolveOut(ket_qua=result, quyet_dinh=resolved_decision)
 
 
 @router.get(
@@ -790,10 +790,10 @@ async def list_council_decisions(
 ):
     from ..repositories.council_decision_repository import CouncilDecisionRepository
 
-    ds = await CouncilDecisionRepository(db).list_decisions(
+    rows = await CouncilDecisionRepository(db).list_decisions(
         set_id=set_id, limit=limit, offset=offset, kind=loai, status=trang_thai
     )
-    return [CouncilDecisionOut.model_validate(d) for d in ds]
+    return [CouncilDecisionOut.model_validate(d) for d in rows]
 
 
 @router.get(
@@ -865,7 +865,7 @@ async def cancel_council_decision_record(
         db,
         decision.id,
         reason=payload.ly_do,
-        so_go_lai=payload.so_go_lai,
+        retyped_number=payload.so_go_lai,
         confirmation=payload.xac_nhan,
         actor_id=current_user.id,
     )
@@ -1068,7 +1068,7 @@ async def list_council_decision_holds(
 ):
     from ..repositories.council_decision_repository import CouncilDecisionRepository
 
-    ds = await CouncilDecisionRepository(db).list_holds(
+    rows = await CouncilDecisionRepository(db).list_holds(
         status=trang_thai, limit=limit, offset=offset
     )
     return [
@@ -1086,7 +1086,7 @@ async def list_council_decision_holds(
             quyet_luc=h.quyet_luc,
             vo_hieu_luc=h.vo_hieu_luc,
         )
-        for h, d in ds
+        for h, d in rows
     ]
 
 
@@ -1128,10 +1128,10 @@ async def list_council_document_events(
 ):
     from ..repositories.council_decision_repository import CouncilDecisionRepository
 
-    ds = await CouncilDecisionRepository(db).list_events(
+    rows = await CouncilDecisionRepository(db).list_events(
         set_id=set_id, decision_id=decision_id, limit=limit, offset=offset
     )
-    return [CouncilEventOut.model_validate(e) for e in ds]
+    return [CouncilEventOut.model_validate(e) for e in rows]
 
 
 # ═══════════════════ cờ quyền GIAO DIỆN (lượt F) ════════════════════════════════════════

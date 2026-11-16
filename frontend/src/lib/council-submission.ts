@@ -22,28 +22,28 @@ import type {
 // ── kết quả phân xử ──────────────────────────────────────────────────────────
 export type AdjudicationResult =
   /** máy chủ báo ĐÃ ghi, kèm DTO văn bản (khung kết quả chỉ vẽ từ DTO này) */
-  | { kieu: "da_ghi"; decision: CouncilDecisionWrite }
+  | { kind: "da_ghi"; decision: CouncilDecisionWrite }
   /** máy chủ báo ĐÃ ghi nhưng KHÔNG kèm DTO (sai hợp đồng) — vẫn là "đã ghi", không có chi tiết để vẽ */
-  | { kieu: "da_ghi_thieu_chi_tiet" }
+  | { kind: "da_ghi_thieu_chi_tiet" }
   /** lượt đã bị chặn: chắc chắn CHƯA có văn bản, và gửi muộn sẽ bị từ chối */
-  | { kieu: "chua_ghi_da_chan" }
+  | { kind: "chua_ghi_da_chan" }
   /** máy chủ chưa kết luận được (giao dịch ghi còn giữ lượt) — thử lại sau */
-  | { kieu: "dang_xu_ly" }
+  | { kind: "dang_xu_ly" }
   /** `ket_qua` lạ — không suy */
-  | { kieu: "van_chua_ro" }
+  | { kind: "van_chua_ro" }
 
 export function explainAdjudication(out: CouncilSubmissionResolve): AdjudicationResult {
   switch (out.ket_qua) {
     case "da_ghi":
       return out.quyet_dinh
-        ? { kieu: "da_ghi", decision: out.quyet_dinh }
-        : { kieu: "da_ghi_thieu_chi_tiet" }
+        ? { kind: "da_ghi", decision: out.quyet_dinh }
+        : { kind: "da_ghi_thieu_chi_tiet" }
     case "chua_ghi_da_chan":
-      return { kieu: "chua_ghi_da_chan" }
+      return { kind: "chua_ghi_da_chan" }
     case "dang_xu_ly":
-      return { kieu: "dang_xu_ly" }
+      return { kind: "dang_xu_ly" }
     default:
-      return { kieu: "van_chua_ro" }
+      return { kind: "van_chua_ro" }
   }
 }
 
@@ -86,16 +86,16 @@ export function submissionErrorHandling(error: unknown): SubmissionErrorHandling
 
 // ── trạng thái các lượt của bộ (khôi phục sau tải lại trang) ──────────────────
 /** Lượt đang chờ (kết quả chưa rõ) — `trang_thai` đúng bằng `cho_gui`. Lạ ⇒ không coi là chờ (không suy). */
-export function pendingSubmission(ds: readonly CouncilSubmission[]): CouncilSubmission | undefined {
-  return ds.find((x) => x.trang_thai === "cho_gui")
+export function pendingSubmission(submissions: readonly CouncilSubmission[]): CouncilSubmission | undefined {
+  return submissions.find((x) => x.trang_thai === "cho_gui")
 }
 
 /** Lượt đã ghi mới nhất (có `decision_id`). */
-export function recordedSubmission(ds: readonly CouncilSubmission[]): CouncilSubmission | undefined {
-  const co = ds.filter((x) => x.trang_thai === "da_ghi" && x.decision_id != null)
-  return co.length === 0
+export function recordedSubmission(submissions: readonly CouncilSubmission[]): CouncilSubmission | undefined {
+  const recorded = submissions.filter((x) => x.trang_thai === "da_ghi" && x.decision_id != null)
+  return recorded.length === 0
     ? undefined
-    : co.reduce((a, b) => (a.tao_luc >= b.tao_luc ? a : b))
+    : recorded.reduce((a, b) => (a.tao_luc >= b.tao_luc ? a : b))
 }
 
 // ── nhãn hiển thị ────────────────────────────────────────────────────────────

@@ -149,17 +149,17 @@ describe("CouncilHandoffButton", () => {
 
 describe("namChungCua — năm học chung của các dòng đang chọn", () => {
   it("không chọn dòng nào ⇒ trong", () => {
-    expect(commonYearOf([])).toEqual({ kieu: "trong" })
+    expect(commonYearOf([])).toEqual({ kind: "trong" })
   })
   it("mọi dòng cùng một năm ⇒ năm ấy (kể cả khi chọn nhiều dòng)", () => {
-    expect(commonYearOf(hs([1, 2, 3], 2025))).toEqual({ kieu: "chung", year: 2025 })
+    expect(commonYearOf(hs([1, 2, 3], 2025))).toEqual({ kind: "chung", year: 2025 })
   })
   it("nhiều năm khác nhau ⇒ nhieu_nam — KHÔNG lấy năm của dòng đầu hay dòng cuối", () => {
-    expect(commonYearOf([{ id: 1, academic_year: 2025 }, { id: 2, academic_year: 2026 }])).toEqual({ kieu: "nhieu_nam" })
-    expect(commonYearOf([{ id: 1, academic_year: 2026 }, { id: 2, academic_year: 2025 }])).toEqual({ kieu: "nhieu_nam" })
+    expect(commonYearOf([{ id: 1, academic_year: 2025 }, { id: 2, academic_year: 2026 }])).toEqual({ kind: "nhieu_nam" })
+    expect(commonYearOf([{ id: 1, academic_year: 2026 }, { id: 2, academic_year: 2025 }])).toEqual({ kind: "nhieu_nam" })
   })
   it("có dòng null / vắng năm ⇒ chua_ro — kể cả khi các dòng còn lại cùng một năm", () => {
-    expect(commonYearOf([{ id: 1, academic_year: 2026 }, { id: 2, academic_year: null }])).toEqual({ kieu: "chua_ro" })
-    expect(commonYearOf([{ id: 1 }, { id: 2, academic_year: 2026 }])).toEqual({ kieu: "chua_ro" })
+    expect(commonYearOf([{ id: 1, academic_year: 2026 }, { id: 2, academic_year: null }])).toEqual({ kind: "chua_ro" })
+    expect(commonYearOf([{ id: 1 }, { id: 2, academic_year: 2026 }])).toEqual({ kind: "chua_ro" })
   })
 })

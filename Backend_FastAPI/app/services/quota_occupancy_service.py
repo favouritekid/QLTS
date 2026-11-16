@@ -134,8 +134,8 @@ def _part_b(group_column, *conditions, exclude_profile_id: Optional[int] = None)
     return q
 
 
-async def _scalar(db: AsyncSession, cau) -> int:
-    return int((await db.execute(cau)).scalar_one() or 0)
+async def _scalar(db: AsyncSession, stmt) -> int:
+    return int((await db.execute(stmt)).scalar_one() or 0)
 
 
 async def _sum(db: AsyncSession, *part) -> int:
@@ -286,7 +286,7 @@ async def count_admitted_by_path(
         return out
     ap = models.AdmissionProfile
     c = models.AdmissionProfileChoice
-    ds = list(out)
+    rows = list(out)
     # Khoá nhóm của ba nhánh ở DẠNG CHỮ (M2 so ``applied_rules`` dạng chữ, không ép kiểu — như cũ) để hợp
     # được trong MỘT câu ``UNION ALL`` (F260: một ảnh chụp cho A và B).
     m1 = (
@@ -296,7 +296,7 @@ async def count_admitted_by_path(
         )
         .join(ap, ap.id == c.admission_profile_id)
         .where(
-            c.admission_path_id.in_(ds),
+            c.admission_path_id.in_(rows),
             c.decision == "admitted",
             ap.status.in_(OCCUPYING_STATUSES),
             no_effective_row(ap.id),
@@ -308,7 +308,7 @@ async def count_admitted_by_path(
         select(fill_text, func.count(ap.id))
         .where(
             ap.uses_choice_engine.is_(False),
-            fill_text.in_([str(p) for p in ds]),
+            fill_text.in_([str(p) for p in rows]),
             ap.status.in_(OCCUPYING_STATUSES),
             no_effective_row(ap.id),
         )
@@ -316,7 +316,7 @@ async def count_admitted_by_path(
     )
     b = _part_b(
         cast(CouncilDocumentSetRow.admission_path_id, String),
-        CouncilDocumentSetRow.admission_path_id.in_(ds),
+        CouncilDocumentSetRow.admission_path_id.in_(rows),
     )
     for owner_id, n in (await db.execute(union_all(m1, m2, b))).all():
         try:

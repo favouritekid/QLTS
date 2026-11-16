@@ -66,18 +66,18 @@ def _filter_span(span: Any) -> Any:
 
 def _exception_chain(exc: Any) -> List[BaseException]:
     """Ngoại lệ gốc + chuỗi ``__cause__`` / ``__context__`` (cùng cách SDK đi chuỗi)."""
-    ra: List[BaseException] = []
+    chain: List[BaseException] = []
     done = set()
     while isinstance(exc, BaseException) and id(exc) not in done:
         done.add(id(exc))
-        ra.append(exc)
+        chain.append(exc)
         if exc.__cause__ is not None:
             exc = exc.__cause__
         elif exc.__suppress_context__:
             exc = None
         else:
             exc = exc.__context__
-    return ra
+    return chain
 
 
 def filter_event(event: Any, hint: Any) -> Optional[Any]:

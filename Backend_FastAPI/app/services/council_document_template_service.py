@@ -50,9 +50,9 @@ _CHUNK = 64 * 1024
 class PackageLimits:
     """Trần kỹ thuật cho một gói mẫu (mặc định đọc từ cấu hình)."""
 
-    tep: int
-    giai_nen: int
-    so_muc: int
+    max_file_bytes: int
+    max_uncompressed_bytes: int
+    max_entries: int
 
     @classmethod
     def from_settings(cls) -> "PackageLimits":
@@ -71,9 +71,9 @@ def check_template_package(
     gh = limits or PackageLimits.from_settings()
     if not isinstance(content, bytes) or not content:
         raise FileValidationError("Mẫu %s: tệp rỗng hoặc không phải bytes." % name)
-    if len(content) > gh.tep:
+    if len(content) > gh.max_file_bytes:
         raise FileSizeError(
-            "Mẫu %s: tệp %d byte, vượt giới hạn %d byte." % (name, len(content), gh.tep)
+            "Mẫu %s: tệp %d byte, vượt giới hạn %d byte." % (name, len(content), gh.max_file_bytes)
         )
     try:
         z = zipfile.ZipFile(io.BytesIO(content))
@@ -83,15 +83,15 @@ def check_template_package(
         ) from None
     with z:
         item = z.infolist()
-        if len(item) > gh.so_muc:
+        if len(item) > gh.max_entries:
             raise FileValidationError(
-                "Mẫu %s: gói có %d mục, vượt giới hạn %d." % (name, len(item), gh.so_muc)
+                "Mẫu %s: gói có %d mục, vượt giới hạn %d." % (name, len(item), gh.max_entries)
             )
-        khai = sum(m.file_size for m in item)
-        if khai > gh.giai_nen:
+        declared_total = sum(m.file_size for m in item)
+        if declared_total > gh.max_uncompressed_bytes:
             raise FileValidationError(
                 "Mẫu %s: tổng kích thước giải nén khai báo %d byte, vượt giới hạn %d."
-                % (name, khai, gh.giai_nen)
+                % (name, declared_total, gh.max_uncompressed_bytes)
             )
         # Thư mục trung tâm TRƯỚC khi mở bất kỳ mục nào — cùng MỘT hàm với ``_open_docx`` của
         # bộ dựng: kiểu nén chỉ STORED / DEFLATED (F216 — LZMA / BZIP2 nở cả khúc trong RAM
@@ -113,10 +113,10 @@ def check_template_package(
                         if not chunk:
                             break
                         bytes_read += len(chunk)
-                        if bytes_read > gh.giai_nen:
+                        if bytes_read > gh.max_uncompressed_bytes:
                             raise FileValidationError(
                                 "Mẫu %s: giải nén vượt giới hạn %d byte."
-                                % (name, gh.giai_nen)
+                                % (name, gh.max_uncompressed_bytes)
                             )
         except (
             zipfile.BadZipFile,

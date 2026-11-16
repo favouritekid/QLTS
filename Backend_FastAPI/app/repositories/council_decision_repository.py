@@ -233,12 +233,12 @@ class CouncilDecisionRepository:
         ).scalars()
         return {d.profile_id: d for d in r}
 
-    async def holds_of_cancelled_decision(self, van_ban_huy_id: int) -> List[CouncilDecisionHold]:
+    async def holds_of_cancelled_decision(self, cancellation_id: int) -> List[CouncilDecisionHold]:
         return list(
             (
                 await self.db.execute(
                     select(CouncilDecisionHold)
-                    .where(CouncilDecisionHold.van_ban_huy_id == van_ban_huy_id)
+                    .where(CouncilDecisionHold.van_ban_huy_id == cancellation_id)
                     .order_by(CouncilDecisionHold.id)
                     .with_for_update()
                     .execution_options(populate_existing=True)
@@ -281,10 +281,10 @@ class CouncilDecisionRepository:
     ) -> Optional[CouncilDecisionScan]:
         """``noi_dung`` là cột HOÃN (deferred) — chỉ nạp khi ``with_content`` (tải bản scan); đọc thuộc
         tính hoãn ngoài ``await`` ⇒ ``MissingGreenlet``."""
-        cau = select(CouncilDecisionScan).where(CouncilDecisionScan.decision_id == decision_id)
+        query = select(CouncilDecisionScan).where(CouncilDecisionScan.decision_id == decision_id)
         if with_content:
-            cau = cau.options(undefer(CouncilDecisionScan.noi_dung))
-        return (await self.db.execute(cau)).scalar_one_or_none()
+            query = query.options(undefer(CouncilDecisionScan.noi_dung))
+        return (await self.db.execute(query)).scalar_one_or_none()
 
     async def list_decisions(
         self,
@@ -342,7 +342,7 @@ class CouncilDecisionRepository:
         await self.db.flush()
 
     async def insert_rows_from_set(
-        self, decision_id: int, set_id: int, trang_thai_cha: str = "hieu_luc"
+        self, decision_id: int, set_id: int, parent_status: str = "hieu_luc"
     ) -> int:
         """Chép MỌI dòng của bộ ``set_id`` thành dòng của văn bản ``decision_id`` trong MỘT câu
         (``INSERT … SELECT``) — dòng QĐ = đúng dòng bộ nguồn (``fk_council_decision_row_dong_bo``
@@ -353,6 +353,6 @@ class CouncilDecisionRepository:
                 "set_row_id, profile_id, stt) SELECT :d, :t, r.set_id, r.id, r.profile_id, "
                 "r.stt FROM council_document_set_row r WHERE r.set_id = :s ORDER BY r.stt"
             ),
-            {"d": decision_id, "t": trang_thai_cha, "s": set_id},
+            {"d": decision_id, "t": parent_status, "s": set_id},
         )
         return int(r.rowcount or 0)

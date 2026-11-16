@@ -188,8 +188,8 @@ export function filenameFromContentDisposition(
   header: string | undefined,
   fallback: string,
 ): string {
-  const copy = (ten: string) => {
-    const last = ten.split(/[\\/]/).pop() ?? ""
+  const copy = (fileName: string) => {
+    const last = fileName.split(/[\\/]/).pop() ?? ""
     const docSet = last.replace(/[\u0000-\u001f\u007f]/g, "").trim()
     return docSet || fallback
   }
@@ -448,7 +448,7 @@ export async function resolveCouncilSubmission(code: string): Promise<CouncilSub
 export interface CouncilApiErrorCode {
   errorCode?: string
   /** `ma` lượt gửi kèm lỗi (409 `luot_dang_cho`; có thể `null`) */
-  ma?: string | null
+  submissionCode?: string | null
   createdAt?: string
 }
 
@@ -457,7 +457,7 @@ export function councilErrorCode(error: unknown): CouncilApiErrorCode {
   if (!d) return {}
   const asString = (v: unknown) => (typeof v === "string" && v.length > 0 ? v : undefined)
   const code = d.ma === null ? null : asString(d.ma)
-  return { errorCode: asString(d.ma_loi), ma: code, createdAt: asString(d.tao_luc) }
+  return { errorCode: asString(d.ma_loi), submissionCode: code, createdAt: asString(d.tao_luc) }
 }
 
 export interface CouncilErrorMessage {
@@ -524,14 +524,14 @@ export function describeCouncilDocumentError(error: unknown): CouncilErrorMessag
         errorCode: councilErrorCode(error).errorCode,
       }
     case 422: {
-      const dong = e.validation.map((x) => {
+      const messages = e.validation.map((x) => {
         const loc = x.loc.slice(1)
         return loc.length ? `${loc.join(".")}: ${x.msg}` : x.msg
       })
       return {
         status,
         title: "Dữ liệu gửi lên sai dạng.",
-        detail: dong.length ? Array.from(new Set(dong)).join("\n") : undefined,
+        detail: messages.length ? Array.from(new Set(messages)).join("\n") : undefined,
       }
     }
     case 429:

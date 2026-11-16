@@ -158,7 +158,7 @@ async def create_document_set_by_ids(
     engine: AsyncEngine,
     *,
     profile_ids: Sequence[int],
-    phien_ban_kiem: str,
+    check_signature: str,
     academic_year: Optional[int],
     params: Optional[render_service.DecisionParams],
     creator_id: Optional[int],
@@ -170,7 +170,7 @@ async def create_document_set_by_ids(
     đặc tả 3.3 + bản 2/3 mục 3.1.1). ĐỦ mọi cổng như :func:`tao_bo_van_ban`, KHÔNG nhận tham số nào nới
     cổng (test AST khoá cả hàm này). Thêm: thứ tự gửi phải là thứ tự chuẩn và dấu phải khớp ⇒ không thì
     409 ``du_lieu_doi_tu_luc_kiem``."""
-    if not isinstance(phien_ban_kiem, str) or not phien_ban_kiem:
+    if not isinstance(check_signature, str) or not check_signature:
         raise DataValidationError("Thiếu dấu kiểm trước (phien_ban_kiem).")
     return await _build_and_write_set(
         db,
@@ -183,9 +183,9 @@ async def create_document_set_by_ids(
         confirm_status=confirm_status,
         can_confirm=can_confirm,
         allowed_decision_chain=None,
-        theo_id=RequestById(
+        by_id_request=RequestById(
             profile_ids=tuple(check_id_list(profile_ids)),
-            phien_ban_kiem=phien_ban_kiem,
+            check_signature=check_signature,
         ),
     )
 
@@ -208,26 +208,26 @@ class RequestById:
     """``POST /sets`` dạng id: danh sách id ĐÃ kiểm (thứ tự gửi) + dấu kiểm trước nhận lại nguyên văn."""
 
     profile_ids: Tuple[int, ...]
-    phien_ban_kiem: str
+    check_signature: str
 
 
 @dataclass(frozen=True)
 class NormalizedRow:
-    """MỘT dòng sau phép chuẩn hoá (đặc tả bản 3 mục 3.1.1 bước 1–2). Mọi trường trừ ``vi_tri`` vào dấu;
-    ``vi_tri`` (chỉ số đầu vào, từ 0) KHÔNG băm — chỉ để biết dòng nào. Không có ``stt`` nguồn nào."""
+    """MỘT dòng sau phép chuẩn hoá (đặc tả bản 3 mục 3.1.1 bước 1–2). Mọi trường trừ ``input_index`` vào dấu;
+    ``input_index`` (chỉ số đầu vào, từ 0) KHÔNG băm — chỉ để biết dòng nào. Không có ``stt`` nguồn nào."""
 
-    vi_tri: int
+    input_index: int
     pid: int
-    don_vi: Optional[int]
+    unit_id: Optional[int]
     row: render_service.CandidateRowV1  # ảnh chụp NGUYÊN (chưa thay điểm KV / ĐT)
-    kiem: set_gate.CheckData
-    muc: str
-    ma_ly_do: Tuple[str, ...]  # đã sắp, không trùng
-    diem_kv: Optional[str]  # điểm KV IN (cổng)
-    luat_ut: Optional[str]
-    diem_ut: Optional[str]  # điểm đối tượng IN (cổng)
-    tong_xt: float  # tổng điểm xét tuyển tính từ điểm IN — chỉ để sắp / hiển thị
-    khoa: Tuple[Any, ...]  # khoá sắp chuẩn: nhóm → trong nhóm → id hồ sơ
+    check_data: set_gate.CheckData
+    item: str
+    reason_codes: Tuple[str, ...]  # đã sắp, không trùng
+    area_score: Optional[str]  # điểm KV IN (cổng)
+    priority_rule: Optional[str]
+    priority_score: Optional[str]  # điểm đối tượng IN (cổng)
+    admission_total: float  # tổng điểm xét tuyển tính từ điểm IN — chỉ để sắp / hiển thị
+    sort_key: Tuple[Any, ...]  # khoá sắp chuẩn: nhóm → trong nhóm → id hồ sơ
 
 
 def check_id_list(profile_ids: object) -> List[int]:
@@ -266,21 +266,21 @@ def normalize_rows(snapshot: "_candidate_service.ProfileSnapshot", gate_result: 
        hoà cuối bằng id hồ sơ."""
     n = len(snapshot.rows)
     if not (
-        len(snapshot.kiem) == len(snapshot.pids) == len(snapshot.don_vi) == n
-        and len(gate_result.diem_kv) == len(gate_result.luat_ut) == n
+        len(snapshot.check_data) == len(snapshot.pids) == len(snapshot.unit_ids) == n
+        and len(gate_result.area_scores) == len(gate_result.priority_rules) == n
     ):
         raise ServiceError("Ảnh chụp / kết quả cổng không đủ dòng — không kiểm.")
     codes_by_seq: Dict[int, set] = {}
-    for code, _tt, row in gate_result.chan:
+    for code, _status, row in gate_result.blocks:
         for s in row:
             codes_by_seq.setdefault(s, set()).add(code)
-    warnings = {s for d in gate_result.canh_bao.values() for s in d}
+    warnings = {s for d in gate_result.warnings.values() for s in d}
     # Review max PR #724 (R10): lỗi DỮ LIỆU mà bước dựng sẽ dừng (một nguồn: ``bo_dung.row_data_error`` /
     # ``group_data_errors``) ⇒ dòng BỊ CHẶN ngay ở bản xem trước, cùng mã ở hai phía (dấu kiểm trước khớp).
     group_errors = render_service.group_data_errors(snapshot.rows)
     out: List[NormalizedRow] = []
     for i in range(n):
-        k, r, pid = snapshot.kiem[i], snapshot.rows[i], snapshot.pids[i]
+        k, r, pid = snapshot.check_data[i], snapshot.rows[i], snapshot.pids[i]
         data_codes = set()
         row_error = render_service.row_data_error(r)
         if row_error is not None:
@@ -293,32 +293,32 @@ def normalize_rows(snapshot: "_candidate_service.ProfileSnapshot", gate_result: 
             if code
             else (ITEM_NEEDS_CONFIRMATION if k.stt in warnings else ITEM_BUILDABLE)
         )
-        kv = gate_result.diem_kv[i]
-        lu = gate_result.luat_ut[i]
-        ut = set_gate.printed_priority_score(lu, r.diem_ut)
+        area = gate_result.area_scores[i]
+        lu = gate_result.priority_rules[i]
+        priority = set_gate.printed_priority_score(lu, r.diem_ut)
         # Điểm IN chưa có (dòng bị chặn) ⇒ ô rỗng ⇒ ``so`` đọc 0: vẫn sắp được, như nhau ở hai phía.
-        total = render_service.compute_printed_scores(r.tong_diem, kv or "", ut or "").tong_xt
+        total = render_service.compute_printed_scores(r.tong_diem, area or "", priority or "").admission_total
         out.append(
             NormalizedRow(
-                vi_tri=i,
+                input_index=i,
                 pid=pid,
-                don_vi=snapshot.don_vi[i],
+                unit_id=snapshot.unit_ids[i],
                 row=r,
-                kiem=k,
-                muc=item,
-                ma_ly_do=code,
-                diem_kv=kv,
-                luat_ut=lu,
-                diem_ut=ut,
-                tong_xt=total,
-                khoa=(
+                check_data=k,
+                item=item,
+                reason_codes=code,
+                area_score=area,
+                priority_rule=lu,
+                priority_score=priority,
+                admission_total=total,
+                sort_key=(
                     render_service.decision_group_key(r),
                     render_service.decision_in_group_key(total, r.ten),
                     pid,
                 ),
             )
         )
-    out.sort(key=lambda d: d.khoa)
+    out.sort(key=lambda d: d.sort_key)
     return out
 
 
@@ -343,14 +343,14 @@ def preview_signature(row: Sequence[NormalizedRow], academic_year: int) -> str:
             {
                 "stt_chuan": stt,
                 "row": d.row.model_dump(mode="json"),
-                "kiem": {k: v for k, v in asdict(d.kiem).items() if k != "stt"},
+                "kiem": {k: v for k, v in asdict(d.check_data).items() if k != "stt"},
                 "pid": d.pid,
-                "don_vi": d.don_vi,
-                "muc": d.muc,
-                "ma_ly_do": list(d.ma_ly_do),
-                "diem_kv": d.diem_kv,
-                "luat_ut": d.luat_ut,
-                "diem_ut": d.diem_ut,
+                "don_vi": d.unit_id,
+                "muc": d.item,
+                "ma_ly_do": list(d.reason_codes),
+                "diem_kv": d.area_score,
+                "luat_ut": d.priority_rule,
+                "diem_ut": d.priority_score,
             }
             for stt, d in enumerate(row, 1)
         ],
@@ -374,7 +374,7 @@ def compare_with_preview(
     in_order = [d.pid for d in dc] == list(by_id_request.profile_ids)
     signature_matches = hmac.compare_digest(
         preview_signature(dc, academic_year).encode("ascii"),
-        by_id_request.phien_ban_kiem.encode("utf-8"),
+        by_id_request.check_signature.encode("utf-8"),
     )
     if not (in_order and signature_matches):
         raise ConflictError(
@@ -387,27 +387,27 @@ async def preview(
     *,
     profile_ids: Sequence[int],
     academic_year: Optional[int],
-    tat_ca: bool,
-    chi_don_vi: Optional[int],
+    all_units: bool,
+    only_unit_id: Optional[int],
     can_confirm: bool,
 ) -> Dict[str, Any]:
     """``POST /sets/kiem-truoc`` (đặc tả 3.1 + bản 2/3 mục 3.1.1): đọc (cùng đường đọc của bộ dựng, lọc phạm
     vi), cổng (``cong.evaluate`` — không luật thứ hai), chuẩn hoá + dấu. KHÔNG ghi gì, KHÔNG lấy khoá tư vấn
     dựng. Mọi chữ hiển thị (họ tên, ngành, đường xét, điểm in) lấy từ CÙNG ảnh chụp / kết quả cổng đã băm."""
     year = _candidate_service.check_academic_year(academic_year)
-    ds = check_id_list(profile_ids)
+    ids = check_id_list(profile_ids)
     snapshot, not_found = await _candidate_service.read_profiles_for_preview(
-        engine, ds, academic_year=year, tat_ca=tat_ca, chi_don_vi=chi_don_vi
+        engine, ids, academic_year=year, all_units=all_units, only_unit_id=only_unit_id
     )
     if snapshot is None:
         dc: List[NormalizedRow] = []
-        kiem_luc = datetime.now(timezone.utc)
+        checked_at = datetime.now(timezone.utc)
         warning_count: Dict[str, int] = {}
     else:
-        kq = set_gate.evaluate(snapshot.kiem)
-        dc = normalize_rows(snapshot, kq)
-        kiem_luc = snapshot.giao_dich.moc_chup
-        warning_count = kq.warning_count()
+        result = set_gate.evaluate(snapshot.check_data)
+        dc = normalize_rows(snapshot, result)
+        checked_at = snapshot.transaction.snapshot_at
+        warning_count = result.warning_count()
     rows_out: List[Dict[str, Any]] = []
     group: Dict[Tuple[str, str], int] = {}
     for stt, d in enumerate(dc, 1):
@@ -419,28 +419,28 @@ async def preview(
                 "stt_qd": group[ng],
                 "profile_id": d.pid,
                 "ho_ten": ("%s %s" % (d.row.ho.strip(), d.row.ten.strip())).strip(),
-                "trang_thai": d.kiem.status if isinstance(d.kiem.status, str) else "",
+                "trang_thai": d.check_data.status if isinstance(d.check_data.status, str) else "",
                 "nganh_nhan": ng[0],
                 "trinh_do": ng[1],
                 "duong_xet_nhan": d.row.phuong_thuc.strip() or None,
                 "diem_in": (
-                    "%.2f" % d.tong_xt
-                    if d.diem_kv is not None and d.diem_ut is not None
+                    "%.2f" % d.admission_total
+                    if d.area_score is not None and d.priority_score is not None
                     else None
                 ),
-                "muc": d.muc,
+                "muc": d.item,
                 "ly_do": [
                     {"ma": m, "cau": set_gate.BLOCK_REASONS.get(m) or render_service.ROW_DATA_ERROR_REASONS.get(m, m)}
-                    for m in d.ma_ly_do
+                    for m in d.reason_codes
                 ],
             }
         )
     item_counts = {
-        m: sum(1 for d in dc if d.muc == m)
+        m: sum(1 for d in dc if d.item == m)
         for m in (ITEM_BUILDABLE, ITEM_NEEDS_CONFIRMATION, ITEM_BLOCKED)
     }
     return {
-        "kiem_luc": kiem_luc,
+        "kiem_luc": checked_at,
         "phien_ban_kiem": preview_signature(dc, year),
         "dong": rows_out,
         "khong_tim_thay": not_found,
@@ -473,10 +473,10 @@ async def _build_and_write_set(
     confirm_status: Optional[Dict[str, int]],
     can_confirm: bool,
     allowed_decision_chain: Optional[int],
-    theo_id: Optional["RequestById"] = None,
+    by_id_request: Optional["RequestById"] = None,
 ) -> Tuple[CouncilDocumentSet, None]:
     """Đọc → cổng dựng bộ → chọn mẫu → dựng → ghi. Trả ``(bộ đã flush, None)``; router commit.
-    ``theo_id`` (vòng giao diện — ``POST /sets`` dạng id): đọc theo id thay cho mã, rồi so thứ tự + dấu kiểm
+    ``by_id_request`` (vòng giao diện — ``POST /sets`` dạng id): đọc theo id thay cho mã, rồi so thứ tự + dấu kiểm
     trước (:func:`so_voi_kiem_truoc`) TRƯỚC cổng chặn / xác nhận; ``ma_ho_so`` khi ấy bỏ qua.
     ``allowed_decision_chain`` (CHỈ bộ dữ liệu cho văn bản điều chỉnh — :func:`tao_bo_dieu_chinh`) nới đúng
     MỘT phép: hồ sơ có dòng hiệu lực trong chính chuỗi Quyết định ấy; bộ ghi
@@ -510,40 +510,40 @@ async def _build_and_write_set(
     # (i) đọc — giao dịch riêng, chỉ đọc, đã KẾT THÚC khi hàm này trả về. Dạng id (vòng giao diện,
     # đặc tả bản 2 mục 3.1.1 bước 1): đọc ĐÚNG MỘT lần; từ đây tới khi ghi không đọc hồ sơ lần nào nữa
     # — mọi thứ (so thứ tự, dấu, cổng, hàng in, dòng bộ) lấy từ CÙNG ``anh``.
-    if theo_id is None:
+    if by_id_request is None:
         snapshot = await read_profiles_by_code(engine, profile_codes, academic_year=academic_year)
     else:
         snapshot = await _candidate_service.read_profiles_by_id(
-            engine, theo_id.profile_ids, academic_year=academic_year
+            engine, by_id_request.profile_ids, academic_year=academic_year
         )
 
     # (i-b) cổng dựng bộ (lượt G): chặn / cảnh báo + xác nhận. Không qua ⇒ lỗi miền, KHÔNG ghi.
-    if len(snapshot.kiem) != len(snapshot.rows):
+    if len(snapshot.check_data) != len(snapshot.rows):
         raise ServiceError("Thiếu dữ liệu kiểm hồ sơ — không dựng.")
     if len(snapshot.pids) != len(snapshot.rows):
         raise ServiceError("Thiếu id hồ sơ của dòng — không dựng.")
-    gate_result = set_gate.evaluate(snapshot.kiem, allowed_decision_chain=allowed_decision_chain)
-    if theo_id is not None:
+    gate_result = set_gate.evaluate(snapshot.check_data, allowed_decision_chain=allowed_decision_chain)
+    if by_id_request is not None:
         # Đặc tả bản 2 mục 3.1.1 bước 2 + 4: thứ tự gửi = thứ tự chuẩn của CHÍNH ảnh chụp này, và dấu tính
         # lại = dấu đã kiểm ⇒ mới đi tiếp tới cổng chặn / xác nhận. Lệch ⇒ 409, không tự sắp lại.
-        compare_with_preview(snapshot, gate_result, academic_year, theo_id)
+        compare_with_preview(snapshot, gate_result, academic_year, by_id_request)
     confirmation_done = set_gate.check_and_confirm(
         gate_result, confirmation=confirmation, can_confirm=can_confirm
     )
     # F231: điểm KV in = mức theo NĂM HỌC (cổng đã chặn mọi dòng không có mức); câu 22: đường
     # xét tắt / không có luật cộng KV ⇒ 0 (cổng tính — ``printed_area_score``).
-    if any(m is None for m in gate_result.diem_kv):
+    if any(m is None for m in gate_result.area_scores):
         raise ServiceError("Thiếu mức điểm khu vực sau cổng — không dựng.")
     # Lượt H2 (owner 06-11): điểm đối tượng in theo công tắc của đường xét — bật thì GIỮ điểm luật v1
     # của DTO, tắt / không có luật thì 0 (cổng tính — ``printed_priority_score``).
-    diem_ut = tuple(
-        set_gate.printed_priority_score(lu, r.diem_ut) for lu, r in zip(gate_result.luat_ut, snapshot.rows)
+    priority_scores = tuple(
+        set_gate.printed_priority_score(lu, r.diem_ut) for lu, r in zip(gate_result.priority_rules, snapshot.rows)
     )
-    if len(diem_ut) != len(snapshot.rows) or any(u is None for u in diem_ut):
+    if len(priority_scores) != len(snapshot.rows) or any(u is None for u in priority_scores):
         raise ServiceError("Thiếu luật cộng điểm đối tượng sau cổng — không dựng.")
     print_rows = tuple(
         r.model_copy(update={"diem_kv": m, "diem_ut": u})
-        for r, m, u in zip(snapshot.rows, gate_result.diem_kv, diem_ut)
+        for r, m, u in zip(snapshot.rows, gate_result.area_scores, priority_scores)
     )
 
     # Tối đa MỘT lần DỰNG cùng lúc trên toàn hệ (mọi worker / container cùng CSDL): khoá tư
@@ -564,22 +564,22 @@ async def _build_and_write_set(
         check_template_package(getattr(template, kind), KIND_NAMES[kind])
 
     # (iii) dựng — CPU vài giây, ngoài event loop
-    kq = await asyncio.to_thread(
+    rendered = await asyncio.to_thread(
         render_service.render_council_documents, list(print_rows), template, params
     )
 
-    total = sum(len(f.content) for f in kq.files)
+    total = sum(len(f.content) for f in rendered.files)
     if total > settings.COUNCIL_SET_MAX_TOTAL_BYTES:
         raise DataValidationError(
             "Bộ văn bản %d byte, vượt giới hạn kỹ thuật %d byte — không lưu."
             % (total, settings.COUNCIL_SET_MAX_TOTAL_BYTES)
         )
-    for f in kq.files:  # bộ dựng tự tính sha; khẳng định lại trước khi lưu
+    for f in rendered.files:  # bộ dựng tự tính sha; khẳng định lại trước khi lưu
         if hashlib.sha256(f.content).hexdigest() != f.sha256:
             raise ServiceError("sha256 của tệp sinh lệch nội dung — không lưu.")
 
     # (iv) ghi — phiên của request, SAVEPOINT: hỏng giữa chừng thì không còn hàng nào.
-    md = dict(kq.metadata)
+    md = dict(rendered.metadata)
     md.pop("ma_ho_so_dau_vao", None)  # đã có cột riêng (PII) — không chép hai nơi
     md.pop("tham_so_quyet_dinh", None)  # đã có cột riêng
     md["mau_da_dung"] = used_templates
@@ -587,8 +587,8 @@ async def _build_and_write_set(
     md["nam_hoc"] = academic_year
     md["phien_ban_ma"] = dict(CODE_VERSIONS)
     md["giao_dich_doc"] = {
-        "transaction_isolation": snapshot.giao_dich.transaction_isolation,
-        "transaction_read_only": snapshot.giao_dich.transaction_read_only,
+        "transaction_isolation": snapshot.transaction.transaction_isolation,
+        "transaction_read_only": snapshot.transaction.transaction_read_only,
     }
     # Lượt G — vết đọc được về sau (không dữ liệu cá nhân): số hồ sơ theo trạng thái lúc chụp;
     # lần xác nhận cảnh báo (owner 05-11: ai, lúc nào, bao nhiêu hồ sơ ở mỗi trạng thái).
@@ -600,7 +600,7 @@ async def _build_and_write_set(
             "nguoi_xac_nhan_id": creator_id,
             "luc": created_at.isoformat(),
             "so_ho_so_theo_trang_thai": dict(confirmation_done),
-            "dong_theo_trang_thai": {s: list(d) for s, d in gate_result.canh_bao.items()},
+            "dong_theo_trang_thai": {s: list(d) for s, d in gate_result.warnings.items()},
         }
     )
     md["nguon_diem_kv"] = "muc_theo_nam_hoc_cua_ho_so"  # F231 (owner 05-11)
@@ -623,13 +623,13 @@ async def _build_and_write_set(
     doc_set = CouncilDocumentSet(
         nguoi_tao_id=creator_id,
         tao_luc=created_at,
-        moc_chup=snapshot.giao_dich.moc_chup,
-        unit_id=set_unit(snapshot.don_vi),
-        trinh_do=kq.metadata["trinh_do"],
+        moc_chup=snapshot.transaction.snapshot_at,
+        unit_id=set_unit(snapshot.unit_ids),
+        trinh_do=rendered.metadata["trinh_do"],
         so_ho_so=len(print_rows),
-        so_tep=len(kq.files),
+        so_tep=len(rendered.files),
         kich_thuoc_tong=total,
-        tham_so_quyet_dinh=kq.metadata["tham_so_quyet_dinh"],
+        tham_so_quyet_dinh=rendered.metadata["tham_so_quyet_dinh"],
         ma_ho_so_dau_vao=[r.ma_ho_so for r in print_rows],
         snapshot_dto=[r.model_dump() for r in print_rows],
         thong_tin_dung=md,
@@ -643,11 +643,11 @@ async def _build_and_write_set(
             kich_thuoc=len(f.content),
             noi_dung=f.content,
         )
-        for i, f in enumerate(kq.files, 1)
+        for i, f in enumerate(rendered.files, 1)
     ]
     row = [
         _set_row_from_check(k, pid, academic_year)
-        for k, pid in zip(snapshot.kiem, snapshot.pids)
+        for k, pid in zip(snapshot.check_data, snapshot.pids)
     ]
     event = {
         "so_ho_so": len(print_rows),
@@ -728,7 +728,7 @@ async def _write_set_and_rows(
 class StoredFile:
     path: str
     sha256: str
-    noi_dung: bytes
+    content: bytes
 
 
 async def read_stored_file(db: AsyncSession, set_id: int, order_no: int) -> StoredFile:
@@ -741,31 +741,31 @@ async def read_stored_file(db: AsyncSession, set_id: int, order_no: int) -> Stor
     b = bytes(t.noi_dung)
     if hashlib.sha256(b).hexdigest() != t.sha256:
         raise ServiceError("Tệp đã lưu lệch sha256 — không trả.")
-    return StoredFile(path=t.path, sha256=t.sha256, noi_dung=b)
+    return StoredFile(path=t.path, sha256=t.sha256, content=b)
 
 
 async def list_sets(
     db: AsyncSession,
     *,
-    tat_ca: bool,
-    chi_don_vi: Optional[int],
+    all_units: bool,
+    only_unit_id: Optional[int],
     limit: int,
     offset: int,
 ) -> List[CouncilDocumentSet]:
-    """Danh sách bộ (không nạp cột dữ liệu cá nhân). ``tat_ca`` = phạm vi admin; không thì
-    CHỈ bộ của đơn vị ``chi_don_vi`` (bộ ``unit_id`` NULL không bao giờ vào). Phạm vi do
+    """Danh sách bộ (không nạp cột dữ liệu cá nhân). ``all_units`` = phạm vi admin; không thì
+    CHỈ bộ của đơn vị ``only_unit_id`` (bộ ``unit_id`` NULL không bao giờ vào). Phạm vi do
     ``deps.py`` quyết; tổ hợp "không tất cả mà không có đơn vị" ⇒ ``ServiceError``
     (fail-closed — không bao giờ hiểu "không có đơn vị" thành "mọi đơn vị")."""
-    if not tat_ca and chi_don_vi is None:
+    if not all_units and only_unit_id is None:
         raise ServiceError("Phạm vi xem bộ văn bản không xác định — không liệt kê.")
     return await CouncilDocumentRepository(db).list_sets(
-        chi_don_vi=chi_don_vi, tat_ca=tat_ca, limit=limit, offset=offset
+        only_unit_id=only_unit_id, all_units=all_units, limit=limit, offset=offset
     )
 
 
 async def set_file(db: AsyncSession, set_id: int) -> List[CouncilDocumentSetFile]:
     """Metadata các tệp của một bộ (không bytes), theo thứ tự bộ dựng trả."""
-    return await CouncilDocumentRepository(db).danh_sach_tep(set_id)
+    return await CouncilDocumentRepository(db).list_set_files(set_id)
 
 
 # ═══════════════ danh sách / chi tiết bộ mở rộng + tải cả bộ (vòng giao diện — đặc tả 3.4–3.6) ═══════════════
@@ -819,10 +819,10 @@ def _extended_set_out(r: Dict[str, Any], *, show_submission: bool) -> Dict[str, 
 async def list_sets_extended(
     db: AsyncSession,
     *,
-    tat_ca: bool,
-    chi_don_vi: Optional[int],
+    all_units: bool,
+    only_unit_id: Optional[int],
     show_submission: bool,
-    nam_hoc: Optional[int] = None,
+    academic_year: Optional[int] = None,
     creator_id: Optional[int] = None,
     decision_number: Optional[str] = None,
     state: Optional[str] = None,
@@ -831,19 +831,19 @@ async def list_sets_extended(
 ) -> List[Dict[str, Any]]:
     """``GET /sets`` (đặc tả 3.4) — MỘT câu (``SQL_SET_EXTENDED``). Phạm vi do ``deps.py`` quyết; "không tất cả mà không có
     đơn vị" ⇒ ``ServiceError`` (fail-closed). ``luot_gui_cho`` chỉ khi ``show_submission`` (cờ ``ghi_nhan_qd`` — router)."""
-    if not tat_ca and chi_don_vi is None:
+    if not all_units and only_unit_id is None:
         raise ServiceError("Phạm vi xem bộ văn bản không xác định — không liệt kê.")
-    ds = await CouncilDocumentRepository(db).list_sets_extended(
-        tat_ca=tat_ca,
-        chi_don_vi=chi_don_vi,
-        nam_hoc=nam_hoc,
+    rows = await CouncilDocumentRepository(db).list_sets_extended(
+        all_units=all_units,
+        only_unit_id=only_unit_id,
+        academic_year=academic_year,
         creator_id=creator_id,
         decision_number=decision_number,
         state=state,
         limit=limit,
         offset=offset,
     )
-    return [_extended_set_out(r, show_submission=show_submission) for r in ds]
+    return [_extended_set_out(r, show_submission=show_submission) for r in rows]
 
 
 async def extended_set_detail(
@@ -851,22 +851,22 @@ async def extended_set_detail(
 ) -> Dict[str, Any]:
     """``GET /sets/{id}`` (đặc tả 3.5) — CÙNG câu với danh sách (một nguồn cho tình trạng / Quyết định). Bộ đã qua kiểm
     phạm vi ở ``deps.py`` ⇒ đọc theo id không lọc đơn vị."""
-    ds = await CouncilDocumentRepository(db).list_sets_extended(
-        tat_ca=True, chi_don_vi=None, set_id=set_id, limit=1, offset=0
+    rows = await CouncilDocumentRepository(db).list_sets_extended(
+        all_units=True, only_unit_id=None, set_id=set_id, limit=1, offset=0
     )
-    if not ds:
+    if not rows:
         raise ResourceNotFoundError("Không có bộ văn bản này.")
-    return _extended_set_out(ds[0], show_submission=show_submission)
+    return _extended_set_out(rows[0], show_submission=show_submission)
 
 
 async def set_creators(
-    db: AsyncSession, *, tat_ca: bool, chi_don_vi: Optional[int]
+    db: AsyncSession, *, all_units: bool, only_unit_id: Optional[int]
 ) -> List[Dict[str, Any]]:
     """Người tạo PHÂN BIỆT của các bộ trong phạm vi người gọi (bộ lọc "Người tạo")."""
-    if not tat_ca and chi_don_vi is None:
+    if not all_units and only_unit_id is None:
         raise ServiceError("Phạm vi xem bộ văn bản không xác định — không liệt kê.")
     return await CouncilDocumentRepository(db).set_creators(
-        tat_ca=tat_ca, chi_don_vi=chi_don_vi
+        all_units=all_units, only_unit_id=only_unit_id
     )
 
 
@@ -879,19 +879,19 @@ async def read_whole_set(db: AsyncSession, set_id: int) -> List[Tuple[int, Store
     """``GET /sets/{id}/tai-ca-bo`` (đặc tả 3.6) bước 1–2: đọc MỌI tệp đã lưu (bytes NGUYÊN, không dựng lại), tính lại
     sha256 TỪNG tệp so cột ``sha256`` — lệch ⇒ ``ServiceError`` "tệp đã lưu hỏng", không trả gì; kiểm lại trần tổng
     ``COUNCIL_SET_MAX_TOTAL_BYTES``. Trả ``[(thu_tu, tệp)]`` theo thứ tự. Kiểm quyền / IDOR ở ``deps.py``."""
-    ds = await CouncilDocumentRepository(db).set_files_with_content(set_id)
-    if not ds:
+    files = await CouncilDocumentRepository(db).set_files_with_content(set_id)
+    if not files:
         raise ResourceNotFoundError("Bộ văn bản không có tệp nào.")
     out: List[Tuple[int, StoredFile]] = []
     total = 0
-    for t in ds:
+    for t in files:
         b = bytes(t.noi_dung)
         if hashlib.sha256(b).hexdigest() != t.sha256:
             raise ServiceError(
                 "Tệp đã lưu hỏng (thứ tự %d lệch sha256) — không trả bộ." % t.thu_tu
             )
         total += len(b)
-        out.append((t.thu_tu, StoredFile(path=t.path, sha256=t.sha256, noi_dung=b)))
+        out.append((t.thu_tu, StoredFile(path=t.path, sha256=t.sha256, content=b)))
     if total > settings.COUNCIL_SET_MAX_TOTAL_BYTES:
         raise ServiceError(
             "Bộ văn bản %d byte, vượt giới hạn kỹ thuật %d byte — không trả."
@@ -915,7 +915,7 @@ def zip_whole_set(file: Sequence[StoredFile], timestamp: datetime) -> bytes:
             info = zipfile.ZipInfo(t.path, date_time=max(time_tuple, (1980, 1, 1, 0, 0, 0)))
             info.compress_type = zipfile.ZIP_DEFLATED
             info.external_attr = 0o644 << 16
-            z.writestr(info, t.noi_dung)
+            z.writestr(info, t.content)
     return b.getvalue()
 
 
@@ -986,7 +986,7 @@ async def delete_document_set(
             "Bộ đang có lượt gửi ghi nhận chưa rõ kết quả — phân xử (Kiểm tra trên máy chủ) trước khi xoá.",
             public_payload={"ma_loi": "bo_co_luot_gui_chua_ro", "ma": str(location.ma)},
         )
-    file = await repo.danh_sach_tep(doc_set.id)  # metadata, KHÔNG nạp bytes
+    file = await repo.list_set_files(doc_set.id)  # metadata, KHÔNG nạp bytes
     trace = CouncilDocumentSetDeletion(
         set_id=doc_set.id,
         so_ho_so=doc_set.so_ho_so,
@@ -1024,7 +1024,7 @@ async def delete_document_set(
                     so_lieu={"so_ho_so": doc_set.so_ho_so, "so_tep": len(file)},
                 )
             )
-            if await repo.xoa_bo(set_id) != 1:
+            if await repo.delete_set(set_id) != 1:
                 raise ServiceError("Bộ văn bản không còn để xoá — không xoá gì.")
     except DBAPIError as e:
         sqlstate, constraint = db_error_codes(e)
@@ -1053,12 +1053,12 @@ async def list_deletion_traces(
 async def input_profile_codes(db: AsyncSession, set_id: int) -> List[str]:
     """Mã hồ sơ đầu vào ĐÚNG THỨ TỰ của bộ ``set_id`` (DỮ LIỆU CÁ NHÂN — J1 dòng 30: chỉ
     Admin; quyền ở ``deps.py``). Không có ⇒ ``ResourceNotFoundError``."""
-    ds = await CouncilDocumentRepository(db).input_profile_codes(set_id)
-    if ds is None:
+    codes = await CouncilDocumentRepository(db).input_profile_codes(set_id)
+    if codes is None:
         raise ResourceNotFoundError("Không có bộ văn bản này.")
-    if not isinstance(ds, list) or not all(isinstance(m, str) for m in ds):
+    if not isinstance(codes, list) or not all(isinstance(m, str) for m in codes):
         raise ServiceError("Danh sách mã đầu vào đã lưu sai dạng — không trả.")
-    return ds
+    return codes
 
 
 # ═══════════════════════════════ nhật ký tải ═══════════════════════════════════════════
@@ -1137,14 +1137,14 @@ async def _stored_snapshot(db: AsyncSession, set_id: int) -> List[dict]:
     """Ảnh chụp DTO đã lưu của bộ (cột deferred — đọc tường minh)."""
     from sqlalchemy import select
 
-    ds = (
+    rows = (
         await db.execute(
             select(CouncilDocumentSet.snapshot_dto).where(CouncilDocumentSet.id == set_id)
         )
     ).scalar_one()
-    if not isinstance(ds, list):
+    if not isinstance(rows, list):
         raise ServiceError("Ảnh chụp đã lưu sai dạng — không dùng.")
-    return ds
+    return rows
 
 
 async def _templates_by_id(db: AsyncSession, used_templates: Dict[str, Dict[str, object]]):
@@ -1264,12 +1264,12 @@ async def create_signed_copy_rebuild_set(
             "Dòng %s: hồ sơ của dòng bộ không còn — không tái dựng." % _rows_text(missing)
         )
     year = (s0.thong_tin_dung or {}).get("nam_hoc")
-    theo_stt = {d.stt: d for d in set0_rows}
+    by_seq = {d.stt: d for d in set0_rows}
     snapshot = await read_profiles_by_id(
-        engine, [theo_stt[s].profile_id for s in edit], academic_year=year
+        engine, [by_seq[s].profile_id for s in edit], academic_year=year
     )
-    gate_result = set_gate.evaluate_rebuild(snapshot.kiem)
-    if gate_result.chan:
+    gate_result = set_gate.evaluate_rebuild(snapshot.check_data)
+    if gate_result.blocks:
         raise DataValidationError(
             "Dòng sửa tay không dựng lại được từ dữ liệu hiện tại của hồ sơ — xem danh sách.",
             public_payload={
@@ -1277,15 +1277,15 @@ async def create_signed_copy_rebuild_set(
                     {
                         "ma": code,
                         "mo_ta": set_gate.BLOCK_REASONS[code],
-                        "trang_thai": tt_,
+                        "trang_thai": status_,
                         "dong": [edit[i - 1] for i in row],
                     }
-                    for code, tt_, row in gate_result.chan
+                    for code, status_, row in gate_result.blocks
                 ]
             },
         )
-    tt = await decision_state(db, [d.profile_id for d in set0_rows])
-    block_by_decision = decision_service._block_by_state(set0_rows, tt)
+    states = await decision_state(db, [d.profile_id for d in set0_rows])
+    block_by_decision = decision_service._block_by_state(set0_rows, states)
     if block_by_decision:
         raise ConflictError(
             "%d hồ sơ đã có Quyết định hiệu lực / đang chờ Admin quyết / mang dấu trúng tuyển "
@@ -1300,8 +1300,8 @@ async def create_signed_copy_rebuild_set(
         r = snapshot.rows[i]
         live_by_seq[s] = r.model_copy(
             update={
-                "diem_kv": gate_result.diem_kv[i],
-                "diem_ut": set_gate.printed_priority_score(gate_result.luat_ut[i], r.diem_ut),
+                "diem_kv": gate_result.area_scores[i],
+                "diem_ut": set_gate.printed_priority_score(gate_result.priority_rules[i], r.diem_ut),
             }
         )
         if live_by_seq[s].diem_kv is None or live_by_seq[s].diem_ut is None:
@@ -1332,14 +1332,14 @@ async def create_signed_copy_rebuild_set(
     )
     if not await CouncilDocumentRepository(db).try_build_lock():
         raise ConflictError("Đang dựng một bộ văn bản khác — chờ bộ ấy xong rồi thử lại.")
-    kq = await asyncio.to_thread(render_service.render_council_documents, print_rows, template, params)
-    total = sum(len(f.content) for f in kq.files)
+    rendered = await asyncio.to_thread(render_service.render_council_documents, print_rows, template, params)
+    total = sum(len(f.content) for f in rendered.files)
     if total > settings.COUNCIL_SET_MAX_TOTAL_BYTES:
         raise DataValidationError("Bộ văn bản vượt giới hạn kỹ thuật — không lưu.")
-    for f in kq.files:
+    for f in rendered.files:
         if hashlib.sha256(f.content).hexdigest() != f.sha256:
             raise ServiceError("sha256 của tệp sinh lệch nội dung — không lưu.")
-    md = dict(kq.metadata)
+    md = dict(rendered.metadata)
     md.pop("ma_ho_so_dau_vao", None)
     md.pop("tham_so_quyet_dinh", None)
     md["mau_da_dung"] = mdd
@@ -1347,8 +1347,8 @@ async def create_signed_copy_rebuild_set(
     md["nam_hoc"] = year
     md["phien_ban_ma"] = dict(CODE_VERSIONS)
     md["giao_dich_doc"] = {
-        "transaction_isolation": snapshot.giao_dich.transaction_isolation,
-        "transaction_read_only": snapshot.giao_dich.transaction_read_only,
+        "transaction_isolation": snapshot.transaction.transaction_isolation,
+        "transaction_read_only": snapshot.transaction.transaction_read_only,
     }
     md["dung_lai_ban_ky"] = {
         "tu_set_id": s0.id,
@@ -1361,13 +1361,13 @@ async def create_signed_copy_rebuild_set(
     doc_set = CouncilDocumentSet(
         nguoi_tao_id=creator_id,
         tao_luc=created_at,
-        moc_chup=snapshot.giao_dich.moc_chup,
+        moc_chup=snapshot.transaction.snapshot_at,
         unit_id=s0.unit_id,
-        trinh_do=kq.metadata["trinh_do"],
+        trinh_do=rendered.metadata["trinh_do"],
         so_ho_so=len(print_rows),
-        so_tep=len(kq.files),
+        so_tep=len(rendered.files),
         kich_thuoc_tong=total,
-        tham_so_quyet_dinh=kq.metadata["tham_so_quyet_dinh"],
+        tham_so_quyet_dinh=rendered.metadata["tham_so_quyet_dinh"],
         ma_ho_so_dau_vao=[r.ma_ho_so for r in print_rows],
         snapshot_dto=[r.model_dump() for r in print_rows],
         thong_tin_dung=md,
@@ -1379,13 +1379,13 @@ async def create_signed_copy_rebuild_set(
         CouncilDocumentSetFile(
             thu_tu=i, path=f.path, sha256=f.sha256, kich_thuoc=len(f.content), noi_dung=f.content
         )
-        for i, f in enumerate(kq.files, 1)
+        for i, f in enumerate(rendered.files, 1)
     ]
-    vi_tri = {s: i for i, s in enumerate(edit)}
+    position_of = {s: i for i, s in enumerate(edit)}
     row = []
     for d in set0_rows:
-        if d.stt in vi_tri:
-            r = _set_row_from_check(snapshot.kiem[vi_tri[d.stt]], d.profile_id, year)
+        if d.stt in position_of:
+            r = _set_row_from_check(snapshot.check_data[position_of[d.stt]], d.profile_id, year)
             r.stt = d.stt
         else:
             r = CouncilDocumentSetRow(
@@ -1413,9 +1413,9 @@ async def create_signed_copy_rebuild_set(
     return doc_set, None
 
 
-def _rows_text(ds: Sequence[int]) -> str:
-    return ", ".join(str(x) for x in list(ds)[:20]) + (
-        " … (+%d)" % (len(ds) - 20) if len(ds) > 20 else ""
+def _rows_text(numbers: Sequence[int]) -> str:
+    return ", ".join(str(x) for x in list(numbers)[:20]) + (
+        " … (+%d)" % (len(numbers) - 20) if len(numbers) > 20 else ""
     )
 
 
@@ -1442,16 +1442,16 @@ async def compare_with_current(
             [d.profile_id for d in present],
             academic_year=(doc_set.thong_tin_dung or {}).get("nam_hoc"),
         )
-        kq = set_gate.evaluate_rebuild(snapshot.kiem)
+        result = set_gate.evaluate_rebuild(snapshot.check_data)
         for i, d in enumerate(present):
-            checked_reason = set_gate.row_block_reason(snapshot.kiem[i])
+            checked_reason = set_gate.row_block_reason(snapshot.check_data[i])
             if checked_reason:
                 unmatched.append({"stt": d.stt, "ma": checked_reason})
                 continue
             r = snapshot.rows[i].model_copy(
                 update={
-                    "diem_kv": kq.diem_kv[i],
-                    "diem_ut": set_gate.printed_priority_score(kq.luat_ut[i], snapshot.rows[i].diem_ut),
+                    "diem_kv": result.area_scores[i],
+                    "diem_ut": set_gate.printed_priority_score(result.priority_rules[i], snapshot.rows[i].diem_ut),
                 }
             )
             field = _differing_fields(r.model_dump(), dto[d.stt - 1])

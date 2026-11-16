@@ -13,7 +13,7 @@ import { useCouncilSelectionStore } from "@/lib/stores/council-selection.store"
 import type { CouncilSetDetail, CouncilSetPreview } from "@/lib/zod/council-documents"
 
 import { CouncilErrorAlert } from "./CouncilErrorAlert"
-import { statusLabel, ngay } from "./display"
+import { statusLabel, formatDate } from "./display"
 
 interface Props {
   academicYear: number
@@ -33,11 +33,11 @@ function paramsQueryString(t: ReturnType<typeof submitParams>): string {
   if (!t) return "không có số / ngày nào (chỗ ấy để trống trên văn bản)"
   const p: string[] = []
   if (t.so_quyet_dinh) p.push(`Số QĐ ${t.so_quyet_dinh}`)
-  if (t.ngay_quyet_dinh) p.push(`ngày QĐ ${ngay(t.ngay_quyet_dinh)}`)
+  if (t.ngay_quyet_dinh) p.push(`ngày QĐ ${formatDate(t.ngay_quyet_dinh)}`)
   if (t.dot_so) p.push(`đợt ${t.dot_so}`)
   if (t.dot_thang) p.push(`tháng ${t.dot_thang}`)
   if (t.so_bien_ban) p.push(`Số BB ${t.so_bien_ban}`)
-  if (t.ngay_bien_ban) p.push(`ngày BB ${ngay(t.ngay_bien_ban)}`)
+  if (t.ngay_bien_ban) p.push(`ngày BB ${formatDate(t.ngay_bien_ban)}`)
   return p.join(" · ")
 }
 
@@ -55,7 +55,7 @@ export function CouncilBuildStep({ academicYear, preview, onBack, onBuildDone, o
 
   const needsConfirmation = useMemo(() => Object.entries(t.can_xac_nhan_theo_trang_thai), [t.can_xac_nhan_theo_trang_thai])
   const [typed, setTyped] = useState<Record<string, string>>({})
-  const matches = needsConfirmation.every(([tt, n]) => (typed[tt] ?? "").trim() === String(n))
+  const matches = needsConfirmation.every(([status, n]) => (typed[status] ?? "").trim() === String(n))
   // Máy chủ nói tài khoản này KHÔNG xác nhận được (cổng quyền xác nhận; `nguoi_goi_duoc_xac_nhan` luôn có) ⇒ khoá.
   // Giao diện không tự xét vai.
   const cannotConfirm = needsConfirmation.length > 0 && !t.nguoi_goi_duoc_xac_nhan
@@ -74,7 +74,7 @@ export function CouncilBuildStep({ academicYear, preview, onBack, onBuildDone, o
   }, [isBuilding, onBuildingChange])
   useEffect(() => () => onBuildingChange?.(false), [onBuildingChange])
 
-  const dung = () => {
+  const build = () => {
     create.mutate(
       {
         // ĐÚNG thứ tự máy chủ trả — khác thứ tự ⇒ 409 `du_lieu_doi_tu_luc_kiem`, không tự sắp lại
@@ -121,22 +121,22 @@ export function CouncilBuildStep({ academicYear, preview, onBack, onBuildDone, o
               Cần Admin xác nhận — tài khoản của bạn không xác nhận được.
             </p>
           ) : null}
-          {needsConfirmation.map(([tt, n]) => (
-            <div key={tt} className="space-y-1">
-              <Label htmlFor={`xn-${tt}`}>
-                {`“${statusLabel(tt)}”: ${n} hồ sơ${
-                  rowsByStatus[tt] ? ` (dòng ${rowsByStatus[tt].join(", ")})` : ""
+          {needsConfirmation.map(([status, n]) => (
+            <div key={status} className="space-y-1">
+              <Label htmlFor={`xn-${status}`}>
+                {`“${statusLabel(status)}”: ${n} hồ sơ${
+                  rowsByStatus[status] ? ` (dòng ${rowsByStatus[status].join(", ")})` : ""
                 } — gõ số hồ sơ để xác nhận`}
               </Label>
               <Input
-                id={`xn-${tt}`}
-                data-testid={`xac-nhan-${tt}`}
+                id={`xn-${status}`}
+                data-testid={`xac-nhan-${status}`}
                 className="max-w-[8rem]"
                 inputMode="numeric"
                 autoComplete="off"
-                value={typed[tt] ?? ""}
+                value={typed[status] ?? ""}
                 disabled={create.isPending || cannotConfirm}
-                onChange={(e) => setTyped((g) => ({ ...g, [tt]: e.target.value }))}
+                onChange={(e) => setTyped((g) => ({ ...g, [status]: e.target.value }))}
               />
             </div>
           ))}
@@ -158,7 +158,7 @@ export function CouncilBuildStep({ academicYear, preview, onBack, onBuildDone, o
         <Button type="button" variant="outline" onClick={onBack} disabled={create.isPending} data-testid="dung-quay-lai">
           ← Quay lại
         </Button>
-        <Button type="button" onClick={dung} disabled={create.isPending || !matches || cannotConfirm} data-testid="dung-bo">
+        <Button type="button" onClick={build} disabled={create.isPending || !matches || cannotConfirm} data-testid="dung-bo">
           {create.isPending ? (
             <>
               <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Đang dựng bộ văn bản…

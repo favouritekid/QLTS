@@ -51,7 +51,7 @@ export function CreateCouncilSetForm({ canOpenDetail }: { canOpenDetail: boolean
   const hasCode = list.some((d) => d.trim() !== "")
   const submittable = hasCode && academicYearNumber !== null && !create.isPending
 
-  const gui = (confirm?: Record<string, number>) => {
+  const submit = (confirm?: Record<string, number>) => {
     if (!submittable || academicYearNumber === null) return
     const ts = submitParams(params)
     create.mutate(
@@ -87,7 +87,7 @@ export function CreateCouncilSetForm({ canOpenDetail }: { canOpenDetail: boolean
       autoComplete="off"
       onSubmit={(e) => {
         e.preventDefault()
-        gui()
+        submit()
       }}
     >
       <div className="space-y-1">
@@ -219,7 +219,7 @@ export function CreateCouncilSetForm({ canOpenDetail }: { canOpenDetail: boolean
               onClick={() => {
                 const count = awaitingConfirm?.canh_bao.so_ho_so_theo_trang_thai
                 setAwaitingConfirm(null)
-                if (count) gui(count)
+                if (count) submit(count)
               }}
             >
               Xác nhận và dựng bộ

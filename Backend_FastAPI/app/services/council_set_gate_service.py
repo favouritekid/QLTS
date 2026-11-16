@@ -268,12 +268,12 @@ class CheckData:
     duplicate_reference: bool = False
 
 
-def printed_priority_score(luat_ut: Optional[str], priority_score_v1: str) -> Optional[str]:
+def printed_priority_score(priority_rule: Optional[str], priority_score_v1: str) -> Optional[str]:
     """Lượt H2 — điểm ĐỐI TƯỢNG in: luật cộng ⇒ GIỮ ``priority_score_v1`` (luật v1 của bộ xuất); tắt / không có
     luật ⇒ ``PRIORITY_SCORE_NOT_ADDED``; không xác định ⇒ ``None`` (dòng ấy đã bị chặn)."""
-    if luat_ut == AREA_RULE_ADD:
+    if priority_rule == AREA_RULE_ADD:
         return priority_score_v1
-    if luat_ut in (AREA_RULE_OFF, AREA_RULE_NONE):
+    if priority_rule in (AREA_RULE_OFF, AREA_RULE_NONE):
         return PRIORITY_SCORE_NOT_ADDED
     return None
 
@@ -378,14 +378,14 @@ def decision_state_block_reason(
 class GateResult:
     """Kết quả cổng cho cả danh sách (thứ tự dòng = thứ tự đầu vào, đếm từ 1)."""
 
-    trang_thai: Tuple[Optional[str], ...]
-    chan: Tuple[
+    statuses: Tuple[Optional[str], ...]
+    blocks: Tuple[
         Tuple[str, Optional[str], Tuple[int, ...]], ...
     ]  # (mã, trạng thái?, dòng)
-    canh_bao: Dict[str, Tuple[int, ...]]  # trạng thái cảnh báo -> dòng
-    diem_kv: Tuple[Optional[str], ...]  # điểm KV IN (câu 22: theo luật của đường xét)
-    luat_kv: Tuple[Optional[str], ...] = ()
-    luat_ut: Tuple[Optional[str], ...] = ()  # lượt H2 — công tắc đối tượng từng dòng
+    warnings: Dict[str, Tuple[int, ...]]  # trạng thái cảnh báo -> dòng
+    area_scores: Tuple[Optional[str], ...]  # điểm KV IN (câu 22: theo luật của đường xét)
+    area_rules: Tuple[Optional[str], ...] = ()
+    priority_rules: Tuple[Optional[str], ...] = ()  # lượt H2 — công tắc đối tượng từng dòng
 
     @staticmethod
     def _count(value: Tuple[Optional[str], ...]) -> Dict[str, int]:
@@ -396,17 +396,17 @@ class GateResult:
         return dict(sorted(counts.items()))
 
     def count_by_area_rule(self) -> Dict[str, int]:
-        return self._count(self.luat_kv)
+        return self._count(self.area_rules)
 
     def count_by_priority_rule(self) -> Dict[str, int]:
-        return self._count(self.luat_ut)
+        return self._count(self.priority_rules)
 
     def warning_count(self) -> Dict[str, int]:
-        return {s: len(d) for s, d in sorted(self.canh_bao.items())}
+        return {s: len(d) for s, d in sorted(self.warnings.items())}
 
     def count_by_status(self) -> Dict[str, int]:
         counts: Dict[str, int] = {}
-        for s in self.trang_thai:
+        for s in self.statuses:
             name = s if isinstance(s, str) else "(không rõ)"
             counts[name] = counts.get(name, 0) + 1
         return dict(sorted(counts.items()))
@@ -458,41 +458,41 @@ def evaluate_rebuild(check: Sequence[CheckData]) -> GateResult:
 def _result(check, blocked, warnings) -> GateResult:
     order_no = list(BLOCK_REASONS)
     return GateResult(
-        trang_thai=tuple(k.status for k in check),
-        chan=tuple(
-            (code, tt, tuple(sorted(row)))
-            for (code, tt), row in sorted(
+        statuses=tuple(k.status for k in check),
+        blocks=tuple(
+            (code, status, tuple(sorted(row)))
+            for (code, status), row in sorted(
                 blocked.items(), key=lambda x: (order_no.index(x[0][0]), x[0][1] or "")
             )
         ),
-        canh_bao={s: tuple(sorted(d)) for s, d in sorted(warnings.items())},
-        diem_kv=tuple(printed_area_score(k) for k in check),
-        luat_kv=tuple(k.luat_kv for k in check),
-        luat_ut=tuple(k.luat_ut for k in check),
+        warnings={s: tuple(sorted(d)) for s, d in sorted(warnings.items())},
+        area_scores=tuple(printed_area_score(k) for k in check),
+        area_rules=tuple(k.luat_kv for k in check),
+        priority_rules=tuple(k.luat_ut for k in check),
     )
 
 
-def _check_content(kq: GateResult, item: str, can_confirm: bool) -> Dict[str, Any]:
+def _check_content(result: GateResult, item: str, can_confirm: bool) -> Dict[str, Any]:
     """Phần ``public_payload`` (JSON thuần — chỉ số dòng, mã lý do, trạng thái, số đếm)."""
     return {
         "kiem_tra_dung_bo": {
             "muc": item,
-            "so_dong": len(kq.trang_thai),
+            "so_dong": len(result.statuses),
             "chan": [
                 {
                     "ma": code,
                     "mo_ta": BLOCK_REASONS[code],
-                    "trang_thai": tt,
+                    "trang_thai": status,
                     "so_ho_so": len(row),
                     "dong": list(row),
                 }
-                for code, tt, row in kq.chan
+                for code, status, row in result.blocks
             ],
             "canh_bao": {
-                "so_ho_so_theo_trang_thai": kq.warning_count(),
-                "dong_theo_trang_thai": {s: list(d) for s, d in kq.canh_bao.items()},
+                "so_ho_so_theo_trang_thai": result.warning_count(),
+                "dong_theo_trang_thai": {s: list(d) for s, d in result.warnings.items()},
             },
-            "can_admin_xac_nhan": bool(kq.canh_bao),
+            "can_admin_xac_nhan": bool(result.warnings),
             "nguoi_goi_duoc_xac_nhan": bool(can_confirm),
         }
     }
@@ -532,7 +532,7 @@ def check_confirm_permission(
 
 
 def check_and_confirm(
-    kq: GateResult,
+    result: GateResult,
     *,
     confirmation: Optional[Dict[str, int]],
     can_confirm: bool,
@@ -542,23 +542,23 @@ def check_and_confirm(
     đếm theo trạng thái + số dòng). Trả số đếm ĐÃ xác nhận (để ghi vết) hoặc ``None``.
     """
     check_confirm_permission(confirmation, can_confirm)
-    if kq.chan:
-        row_count = len({d for _, _, row in kq.chan for d in row})
+    if result.blocks:
+        row_count = len({d for _, _, row in result.blocks for d in row})
         raise DataValidationError(
             "Không dựng bộ văn bản: %d hồ sơ không đưa được vào văn bản (%d lý do) — xem "
-            "danh sách từng dòng." % (row_count, len(kq.chan)),
-            public_payload=_check_content(kq, LEVEL_BLOCK, can_confirm),
+            "danh sách từng dòng." % (row_count, len(result.blocks)),
+            public_payload=_check_content(result, LEVEL_BLOCK, can_confirm),
         )
-    counts = kq.warning_count()
+    counts = result.warning_count()
     if not counts:
         if confirmation is not None:
             raise ConflictError(
                 "Không còn hồ sơ nào cần xác nhận trạng thái — gửi lại không kèm xác nhận.",
-                public_payload=_check_content(kq, "xac_nhan_lech", can_confirm),
+                public_payload=_check_content(result, "xac_nhan_lech", can_confirm),
             )
         return None
     if confirmation is None:
-        cau = (
+        message = (
             "Có %d hồ sơ ở trạng thái cần cảnh báo — admin phải xác nhận số hồ sơ theo "
             "từng trạng thái rồi gửi lại." % sum(counts.values())
             if can_confirm
@@ -566,11 +566,11 @@ def check_and_confirm(
             % sum(counts.values())
         )
         raise ConflictError(
-            cau, public_payload=_check_content(kq, "can_xac_nhan", can_confirm)
+            message, public_payload=_check_content(result, "can_xac_nhan", can_confirm)
         )
     if confirmation != counts:
         raise ConflictError(
             "Số hồ sơ theo trạng thái đã khác lúc xác nhận — xem lại rồi xác nhận lại.",
-            public_payload=_check_content(kq, "xac_nhan_lech", can_confirm),
+            public_payload=_check_content(result, "xac_nhan_lech", can_confirm),
         )
     return counts

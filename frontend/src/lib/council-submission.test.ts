@@ -70,20 +70,20 @@ describe("giaiNghiaPhanXu — bốn kết quả + lạ", () => {
     pham_vi_so: 2026, so_ho_so: 1, ghi_nhan_boi_id: 1, ghi_nhan_luc: "x", canh_bao_vuot_chi_tieu: [], lap_lai: false,
   }
   it("da_ghi + DTO", () => {
-    expect(explainAdjudication({ ket_qua: "da_ghi", quyet_dinh: dto })).toEqual({ kieu: "da_ghi", decision: dto })
+    expect(explainAdjudication({ ket_qua: "da_ghi", quyet_dinh: dto })).toEqual({ kind: "da_ghi", decision: dto })
   })
   it("da_ghi thiếu DTO ⇒ da_ghi_thieu_chi_tiet (vẫn 'đã ghi')", () => {
-    expect(explainAdjudication({ ket_qua: "da_ghi" })).toEqual({ kieu: "da_ghi_thieu_chi_tiet" })
-    expect(explainAdjudication({ ket_qua: "da_ghi", quyet_dinh: null })).toEqual({ kieu: "da_ghi_thieu_chi_tiet" })
+    expect(explainAdjudication({ ket_qua: "da_ghi" })).toEqual({ kind: "da_ghi_thieu_chi_tiet" })
+    expect(explainAdjudication({ ket_qua: "da_ghi", quyet_dinh: null })).toEqual({ kind: "da_ghi_thieu_chi_tiet" })
   })
   it("chua_ghi_da_chan", () => {
-    expect(explainAdjudication({ ket_qua: "chua_ghi_da_chan" })).toEqual({ kieu: "chua_ghi_da_chan" })
+    expect(explainAdjudication({ ket_qua: "chua_ghi_da_chan" })).toEqual({ kind: "chua_ghi_da_chan" })
   })
   it("dang_xu_ly", () => {
-    expect(explainAdjudication({ ket_qua: "dang_xu_ly" })).toEqual({ kieu: "dang_xu_ly" })
+    expect(explainAdjudication({ ket_qua: "dang_xu_ly" })).toEqual({ kind: "dang_xu_ly" })
   })
   it.each(["", "chua_ghi", "DA_GHI", "da_ghi ", "khac"])("ket_qua lạ %j ⇒ van_chua_ro (đặc biệt 'chua_ghi' KHÔNG được hiểu là chưa ghi)", (k) => {
-    expect(explainAdjudication({ ket_qua: k })).toEqual({ kieu: "van_chua_ro" })
+    expect(explainAdjudication({ ket_qua: k })).toEqual({ kind: "van_chua_ro" })
   })
 })
 

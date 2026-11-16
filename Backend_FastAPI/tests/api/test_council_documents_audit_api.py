@@ -170,7 +170,7 @@ async def test_xoa_bo_loi_o_cau_xoa_thi_khong_xoa_khong_vet(
 ):
     # Vết đã flush, câu XOÁ hỏng ⇒ SAVEPOINT hoàn tác cả vết: không xoá gì, không vết mồ côi.
     h = await tk("admin")
-    monkeypatch.setattr(CouncilDocumentRepository, "xoa_bo", _loi_csdl_gia_async)
+    monkeypatch.setattr(CouncilDocumentRepository, "delete_set", _loi_csdl_gia_async)
     r = await _xoa(client, ba_bo["u1"][0], h)
     assert r.status_code == 500, r.text
     assert "GIA loi csdl" not in r.text

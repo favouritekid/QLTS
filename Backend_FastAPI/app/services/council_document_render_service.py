@@ -263,7 +263,7 @@ class CouncilDocumentSet:
 
 
 # ═══════════════════════════════ điểm in — MỘT nguồn ═════════════════════════
-def so(v, m: float = 0.0) -> float:
+def to_number(v, m: float = 0.0) -> float:
     """Đọc một số từ ô chữ; trả ``m`` khi rỗng hoặc không phải số (như bộ xuất)."""
     try:
         return float(str(v).strip())
@@ -273,20 +273,20 @@ def so(v, m: float = 0.0) -> float:
 
 @dataclass(frozen=True)
 class PrintedScores:
-    kv: float  # điểm khu vực, chưa trần — cột "ƯT Khu vực"
-    ut: float  # điểm đối tượng, chưa trần — cột "ƯT Đối tượng"
-    ut_tong: float  # min(kv + ut, PRIORITY_CAP_V1)
-    tong_mon: float  # tổng điểm các môn
-    tong_xt: float  # round(tong_mon + ut_tong, 2) — "Tổng điểm xét tuyển"
+    area: float  # điểm khu vực, chưa trần — cột "ƯT Khu vực"
+    priority: float  # điểm đối tượng, chưa trần — cột "ƯT Đối tượng"
+    priority_total: float  # min(kv + ut, PRIORITY_CAP_V1)
+    subject_total: float  # tổng điểm các môn
+    admission_total: float  # round(tong_mon + ut_tong, 2) — "Tổng điểm xét tuyển"
 
 
-def compute_printed_scores(tong_diem: str, diem_kv: str, diem_ut: str) -> PrintedScores:
+def compute_printed_scores(total_text: str, area_text: str, priority_text: str) -> PrintedScores:
     """Nguồn chuẩn DUY NHẤT của điểm in trên mọi văn bản Hội đồng v1."""
-    kv = so(diem_kv)
-    ut = so(diem_ut)
-    ut_tong = min(kv + ut, PRIORITY_CAP_V1)
-    tong_mon = so(tong_diem)
-    return PrintedScores(kv, ut, ut_tong, tong_mon, round(tong_mon + ut_tong, 2))
+    area = to_number(area_text)
+    priority = to_number(priority_text)
+    priority_total = min(area + priority, PRIORITY_CAP_V1)
+    subject_total = to_number(total_text)
+    return PrintedScores(area, priority, priority_total, subject_total, round(subject_total + priority_total, 2))
 
 
 # ═══════════════════════════════ chuẩn hoá chữ in ════════════════════════════
@@ -368,19 +368,19 @@ def decision_group_key(dto: CandidateRowV1) -> Tuple[str, str]:
     return (dto.nganh, dto.trinh_do.strip())
 
 
-def decision_in_group_key(tong_xt: float, name: str) -> Tuple[float, str]:
+def decision_in_group_key(admission_total: float, name: str) -> Tuple[float, str]:
     """Khoá sắp TRONG một nhóm của Quyết định (và bảng điểm của Danh sách): điểm xét tuyển giảm dần,
     rồi tên."""
-    return (-tong_xt, name)
+    return (-admission_total, name)
 
 
 # ═══════════════════════════════ hồ sơ đã chuẩn bị ═══════════════════════════
 @dataclass(frozen=True)
 class _Profile:
     dto: CandidateRowV1
-    diem: PrintedScores
-    dia_chi: str  # địa chỉ đã chuẩn hoá để in
-    td: str  # trình độ (đã cắt khoảng trắng)
+    scores: PrintedScores
+    address: str  # địa chỉ đã chuẩn hoá để in
+    level: str  # trình độ (đã cắt khoảng trắng)
 
     @property
     def major_key(self) -> Tuple[str, str]:
@@ -505,25 +505,25 @@ def _prepare(rows: Sequence[CandidateRowV1]) -> List[_Profile]:
         first_seen[r.ma_ho_so] = i
         if error is not None:
             raise DataValidationError(_row_error_message(i, error))
-        td = r.trinh_do.strip()
+        level = r.trinh_do.strip()
         out.append(
             _Profile(
                 r,
                 compute_printed_scores(r.tong_diem, r.diem_kv, r.diem_ut),
                 normalize_address(r.dia_chi),
-                td,
+                level,
             )
         )
     return out
 
 
 def _major_code(
-    hs: Sequence[_Profile], majors: Sequence[Tuple[str, str]]
+    profiles: Sequence[_Profile], majors: Sequence[Tuple[str, str]]
 ) -> Dict[Tuple[str, str], str]:
     """Mã ngành theo (ngành, trình độ): lấy từ hồ sơ ĐẦU của nhóm (như bộ xuất);
     thiếu hoặc các hồ sơ cùng nhóm ghi mã khác nhau ⇒ DỪNG. Quyết định ở :func:`_major_code_groups` (một nguồn với
     bản xem trước — Codex 42 F335); ở đây chỉ trình bày câu NGUYÊN như trước."""
-    code, conflicts, missing_groups = _major_code_groups([h.dto for h in hs])
+    code, conflicts, missing_groups = _major_code_groups([h.dto for h in profiles])
     if conflicts:
         raise DataValidationError(
             "Dòng %d: mã ngành khác các hồ sơ cùng ngành, cùng trình độ."
@@ -717,16 +717,16 @@ def _field_commands(root) -> List[str]:
     (``w:fldChar`` begin → các ``w:instrText`` / ``w:delInstrText`` → separate / end, lồng nhau
     được) — GHÉP mọi mảnh của CÙNG một trường (Word hay tách câu lệnh ra nhiều run); trường lồng
     là MỘT câu lệnh riêng (trường ngoài không nuốt câu lệnh của trường trong)."""
-    ra: List[str] = []
+    out: List[str] = []
     stack: List[Optional[List[str]]] = []  # None = trường đã qua "separate"
     for e in root.iter(_W_FLDSIMPLE, _W_FLDCHAR, _W_INSTRTEXT, _W_DELINSTRTEXT):
         if e.tag == _W_FLDSIMPLE:
-            ra.append(e.get(qn("w:instr")) or "")
+            out.append(e.get(qn("w:instr")) or "")
         elif e.tag in (_W_INSTRTEXT, _W_DELINSTRTEXT):
             if stack and stack[-1] is not None:
                 stack[-1].append(e.text or "")
             else:  # mảnh câu lệnh ngoài trường nào: xét riêng
-                ra.append(e.text or "")
+                out.append(e.text or "")
         else:
             kind = e.get(qn("w:fldCharType"))
             if kind == "begin":
@@ -734,11 +734,11 @@ def _field_commands(root) -> List[str]:
             elif stack and kind in ("separate", "end"):
                 top = stack.pop() if kind == "end" else stack[-1]
                 if top is not None:
-                    ra.append("".join(top))
+                    out.append("".join(top))
                 if kind == "separate":
                     stack[-1] = None
-    ra.extend("".join(x) for x in stack if x is not None)
-    return ra
+    out.extend("".join(x) for x in stack if x is not None)
+    return out
 
 
 def check_word_package_parts(z: zipfile.ZipFile, name: str) -> None:
@@ -1187,11 +1187,11 @@ def _check_total_row(tbl, field_count: int, boundary: int, name: str, template_i
     văn với run trực tiếp (bộ dựng ghi số tổng vào đó). Độ rộng đọc qua
     :func:`_cell_width`. Thông báo chỉ có tên mẫu và số đếm, không có dữ liệu."""
     tr = _total_row(tbl, name)._tr
-    vi_tri = next(i for i, x in enumerate(tbl._tbl.findall(qn("w:tr"))) if x is tr)
-    if vi_tri <= template_index:
+    row_index = next(i for i, x in enumerate(tbl._tbl.findall(qn("w:tr"))) if x is tr)
+    if row_index <= template_index:
         raise FileValidationError(
             "Mẫu %s: dòng `Tổng cộng` phải nằm SAU dòng mẫu dữ liệu (dòng tổng là dòng "
-            "%d, dòng mẫu là dòng %d)." % (name, vi_tri + 1, template_index + 1)
+            "%d, dòng mẫu là dòng %d)." % (name, row_index + 1, template_index + 1)
         )
     grid = tbl._tbl.find(qn("w:tblGrid"))
     grid_total = len(grid.findall(qn("w:gridCol"))) if grid is not None else 0
@@ -1298,19 +1298,19 @@ def _stats(rs: Sequence[_Profile]):
     Văn hoá: mỗi em đúng MỘT cột (``CULTURE_BY_COLUMN``); tổng ba cột = cộng, lệch ⇒
     DỪNG. Chuyên môn đếm THÊM (một em có thể ở một cột văn hoá + một cột chuyên môn),
     không theo loại hình. Đại học = 0 (CSDL không có mức này)."""
-    van_hoa = [
+    culture = [
         sum(1 for h in rs if h.dto.van_hoa in label) for _, label in CULTURE_BY_COLUMN
     ]
-    if sum(van_hoa) != len(rs):
+    if sum(culture) != len(rs):
         raise DataValidationError(
             "Thống kê Biên bản: tổng cột văn hoá %d ≠ Cộng %d — không dựng văn bản."
-            % (sum(van_hoa), len(rs))
+            % (sum(culture), len(rs))
         )
     vocational_count = sum(1 for h in rs if h.dto.chuyen_mon == "trung_cap")
     college_count = sum(1 for h in rs if h.dto.chuyen_mon == "cao_dang")
     return (
         len(rs),
-        *van_hoa,
+        *culture,
         vocational_count,
         college_count,
         0,  # Đại học
@@ -1319,8 +1319,8 @@ def _stats(rs: Sequence[_Profile]):
     )
 
 
-def _common_level(hs: Sequence[_Profile]) -> str:
-    levels = sorted({h.td for h in hs})
+def _common_level(profiles: Sequence[_Profile]) -> str:
+    levels = sorted({h.level for h in profiles})
     return levels[0] if len(levels) == 1 else " và ".join(levels)
 
 
@@ -1357,23 +1357,23 @@ _NESTED_LEVEL_SLOT = (
 )
 #: Câu DUY NHẤT khi mẫu Biên bản không có chỗ điền trình độ — phép kiểm mẫu (lúc tải lên + đầu bước dựng; Codex 42 F333)
 #: và lớp thứ hai sau vòng điền dùng chung.
-BB_MISSING_LEVEL_SLOT_MESSAGE = "Mẫu Biên bản: không có chỗ điền `trình độ` — mẫu đã đổi?"
+MINUTES_MISSING_LEVEL_SLOT_MESSAGE = "Mẫu Biên bản: không có chỗ điền `trình độ` — mẫu đã đổi?"
 
 
-def _is_bb_level_slot(text: str) -> bool:
+def _is_minutes_level_slot(text: str) -> bool:
     return any(old in text for old, _ in _MINUTES_LEVEL_PLACEHOLDERS)
 
 
-def _count_bb_level_slots(text: str) -> int:
+def _count_minutes_level_slots(text: str) -> int:
     return sum(text.count(old) for old, _ in _MINUTES_LEVEL_PLACEHOLDERS)
 
 
-def _is_qd_slot(text: str) -> bool:
+def _is_decision_slot(text: str) -> bool:
     """Chữ có chỗ điền của mẫu Quyết định: ``<<…>>`` bất kỳ, hoặc tên ``trinh_do`` (điều kiện của vòng điền)."""
     return bool(_PLACEHOLDER_PATTERN.search(text)) or "trinh_do" in text
 
 
-def _count_qd_slots(text: str) -> Tuple[int, int]:
+def _count_decision_slots(text: str) -> Tuple[int, int]:
     return len(_PLACEHOLDER_PATTERN.findall(text)), text.count("trinh_do")
 
 
@@ -1399,48 +1399,48 @@ def _check_minutes_template(d) -> None:
     # cho mọi đoạn ấy (ô bảng, đầu / chân trang, khung chữ, ô nội dung), không chỉ đoạn cấp cao nhất.
     found = False
     for p in _all_paragraphs(d):
-        if _is_bb_level_slot(p.text):
+        if _is_minutes_level_slot(p.text):
             found = True
             _check_paragraph_runs_only(p._p, "Biên bản", _NESTED_LEVEL_SLOT)
     # Codex 42 F333: mẫu THIẾU chỗ điền trình độ trước đây qua được lúc tải lên, chỉ hỏng lúc dựng ⇒ chặn ngay ở đây.
     if not found:
-        raise FileValidationError(BB_MISSING_LEVEL_SLOT_MESSAGE)
+        raise FileValidationError(MINUTES_MISSING_LEVEL_SLOT_MESSAGE)
     # Codex 42 F333: chỗ điền ở chú thích cuối trang / cuối văn bản không được điền ⇒ từ chối.
-    _reject_slots_in_unfilled_regions(d, "Biên bản", _is_bb_level_slot)
+    _reject_slots_in_unfilled_regions(d, "Biên bản", _is_minutes_level_slot)
     # Codex 43 F338: chỗ điền trong cấu trúc INLINE mà ``Paragraph.text`` không đọc, và trong nhãn đánh số ⇒ từ chối.
-    _reject_slots_hidden_in_paragraphs(d, "Biên bản", _count_bb_level_slots)
-    _reject_slots_in_numbering_labels(d, "Biên bản", _is_bb_level_slot)
+    _reject_slots_hidden_in_paragraphs(d, "Biên bản", _count_minutes_level_slots)
+    _reject_slots_in_numbering_labels(d, "Biên bản", _is_minutes_level_slot)
 
 
-def _build_minutes(hs, majors, level: str, template: bytes) -> bytes:
+def _build_minutes(profiles, majors, level: str, template: bytes) -> bytes:
     d = _open_docx(template, "Biên bản")
     _check_minutes_template(d)
     b1, b2 = [], []
     for i, ng in enumerate(majors, 1):
-        rn = [h for h in hs if h.major_key == ng]
+        rn = [h for h in profiles if h.major_key == ng]
         d3 = list(rn)  # theo danh sách đã chọn: mọi hồ sơ là trúng tuyển
         th = sorted({h.dto.to_hop for h in rn})
         c = _stats(rn)
         b1.append([str(i), "%s - %s" % ng] + [str(x) for x in c] + [", ".join(th)])
         c3 = _stats(d3)
         # "Điểm xét trúng tuyển" = điểm THẤP NHẤT của danh sách trúng tuyển ngành.
-        score = ("%.2f" % min(h.diem.tong_xt for h in d3)) if d3 else ""
+        score = ("%.2f" % min(h.scores.admission_total for h in d3)) if d3 else ""
         b2.append([str(i), "%s - %s" % ng, str(len(rn)), score] + [str(x) for x in c3])
 
     _fit_table_insert_before(d.tables[1], b1, template_index=MINUTES_TEMPLATE_ROW)
     _fit_table_insert_before(d.tables[2], b2, template_index=MINUTES_TEMPLATE_ROW)
-    for (i, field_count, name), ds in zip(_MINUTES_TABLES, (b1, b2), strict=True):
+    for (i, field_count, name), table_rows in zip(_MINUTES_TABLES, (b1, b2), strict=True):
         total_row = _total_row(d.tables[i], name)
         # Lớp PHỤ. Tầng chủ sở hữu là :func:`_check_total_row` (gọi trong
         # _check_minutes_template, TRƯỚC khi dựng tệp nào): qua nó thì mỗi cột từ
         # MINUTES_TOTAL_LABEL_COLUMNS là đúng một ô riêng của dòng tổng ⇒ ở đây chỉ khẳng định.
-        if len(total_row.cells) != field_count or len(ds[0]) != field_count:
+        if len(total_row.cells) != field_count or len(table_rows[0]) != field_count:
             raise FileValidationError(
                 "Mẫu %s: dòng `Tổng cộng` có %d cột, bảng có %d trường."
                 % (name, len(total_row.cells), field_count)
             )
         for j in range(MINUTES_TOTAL_LABEL_COLUMNS, field_count):
-            column_values = [x[j] for x in ds]
+            column_values = [x[j] for x in table_rows]
             if all(re.fullmatch(r"\d+", x or "") for x in column_values):
                 _set_cell(total_row.cells[j], str(sum(int(x) for x in column_values)))
             else:
@@ -1469,7 +1469,7 @@ def _build_minutes(hs, majors, level: str, template: bytes) -> bytes:
             _set_paragraph(p, t)
             filled += 1
     if filled == 0:  # lớp thứ hai — tầng chủ sở hữu là :func:`_kiem_mau_bien_ban` (chạy đầu hàm này)
-        raise FileValidationError(BB_MISSING_LEVEL_SLOT_MESSAGE)
+        raise FileValidationError(MINUTES_MISSING_LEVEL_SLOT_MESSAGE)
     return _save_docx(d)
 
 
@@ -1560,10 +1560,10 @@ def _check_decision_template(d) -> None:
         )
     # Codex 42 F333: chú thích cuối trang / cuối văn bản (phần ĐƯỢC PHÉP của gói) không được điền ⇒ có chỗ điền ở đó
     # (``<<…>>`` bất kỳ, kể cả ``trinh_do``) ⇒ từ chối.
-    _reject_slots_in_unfilled_regions(d, "Quyết định", _is_qd_slot)
+    _reject_slots_in_unfilled_regions(d, "Quyết định", _is_decision_slot)
     # Codex 43 F338: chỗ điền trong cấu trúc INLINE mà ``Paragraph.text`` không đọc, và trong nhãn đánh số ⇒ từ chối.
-    _reject_slots_hidden_in_paragraphs(d, "Quyết định", _count_qd_slots)
-    _reject_slots_in_numbering_labels(d, "Quyết định", _is_qd_slot)
+    _reject_slots_hidden_in_paragraphs(d, "Quyết định", _count_decision_slots)
+    _reject_slots_in_numbering_labels(d, "Quyết định", _is_decision_slot)
 
 
 # TT · số CCCD · họ · tên · giới tính · ngày sinh · nơi sinh · dân tộc
@@ -1734,11 +1734,11 @@ def _reject_slots_in_unfilled_regions(document, name: str, is_slot) -> None:
 
 
 def _build_decision(
-    hs, majors, level: str, code: Dict, template: bytes, ts: Optional[DecisionParams]
+    profiles, majors, level: str, code: Dict, template: bytes, ts: Optional[DecisionParams]
 ):
     d = _open_docx(template, "Quyết định")
     _check_decision_template(d)
-    total_count = len(hs)
+    total_count = len(profiles)
 
     # Điều 1 — số thí sinh
     _set_paragraph(
@@ -1783,8 +1783,8 @@ def _build_decision(
         after = e_s
     for stt, ((e_p, e_t, e_s), ng) in enumerate(zip(blocks, majors), 1):
         d3 = sorted(
-            [h for h in hs if h.major_key == ng],
-            key=lambda h: decision_in_group_key(h.diem.tong_xt, h.dto.ten),
+            [h for h in profiles if h.major_key == ng],
+            key=lambda h: decision_in_group_key(h.scores.admission_total, h.dto.ten),
         )
         _set_paragraph(Paragraph(e_p, d), "%d.Ngành: %s - Trình độ: %s" % ((stt,) + ng))
         _set_paragraph(Paragraph(e_s, d), "Số thí sinh: %d" % len(d3))
@@ -1810,7 +1810,7 @@ def _build_decision(
     # thứ tự NGƯỢC (mỗi dòng addnext ngay sau Điều 1) để giữ thứ tự ngành.
     article1 = next(p for p in d.paragraphs if p.text.strip().startswith("Điều 1."))
     for ng in reversed(majors):
-        n = sum(1 for h in hs if h.major_key == ng)
+        n = sum(1 for h in profiles if h.major_key == ng)
         new = copy.deepcopy(article1._p)
         article1._p.addnext(new)
         _set_major_row(
@@ -1920,7 +1920,7 @@ def _yes_no(status: str) -> str:
 def _list1_row(i: int, h: _Profile) -> List[str]:
     r = h.dto
     return [
-        str(i), r.ma_ho_so, r.ho, r.ten, r.gioi_tinh, r.ngay_sinh, r.noi_sinh, r.dan_toc, h.dia_chi, r.van_hoa,
+        str(i), r.ma_ho_so, r.ho, r.ten, r.gioi_tinh, r.ngay_sinh, r.noi_sinh, r.dan_toc, h.address, r.van_hoa,
         _yes_no(r.s_phieu), _yes_no(r.s_soyeu),
         _symbol(r.s_hocba, r.f_hocba),
         "",  # Xác nhận KQHT — QLTS không có loại giấy này
@@ -1935,20 +1935,20 @@ def _list1_row(i: int, h: _Profile) -> List[str]:
 
 
 def _score_row(i: int, h: _Profile) -> List[str]:
-    r, dm = h.dto, h.diem
+    r, dm = h.dto, h.scores
     return [
         str(i), r.ma_ho_so, r.ho, r.ten, r.gioi_tinh, r.ngay_sinh, r.noi_sinh, r.dan_toc,
         r.ut_ma, r.kv, r.to_hop, r.m1, r.m2, r.m3,
-        ("%.2f" % so(r.diem_tb)) if r.diem_tb else "",
+        ("%.2f" % to_number(r.diem_tb)) if r.diem_tb else "",
         r.tong_diem,
-        ("%.2f" % dm.ut) if dm.ut else "",
-        ("%.2f" % dm.kv) if dm.kv else "",
-        "%.2f" % dm.tong_xt,
+        ("%.2f" % dm.priority) if dm.priority else "",
+        ("%.2f" % dm.area) if dm.area else "",
+        "%.2f" % dm.admission_total,
         "",
     ]  # fmt: skip
 
 
-HDR_DS1 = ["TT", "Mã hồ sơ", "Họ", "Tên", "Giới tính", "Ngày sinh", "Nơi sinh", "Dân tộc",
+LIST1_HEADERS = ["TT", "Mã hồ sơ", "Họ", "Tên", "Giới tính", "Ngày sinh", "Nơi sinh", "Dân tộc",
            "Địa chỉ thường trú", "Trình độ văn hóa", "Phiếu đăng ký", "Sơ yếu lý lịch",
            "Học bạ trung học", "Xác nhận KQHT", "Bằng tốt nghiệp trung học",
            "Chứng nhận tốt nghiệp", "CN hoàn thành văn hóa", "Giấy khai sinh",
@@ -2084,7 +2084,7 @@ def _check_list_template(d) -> None:
             "bảng phương thức)."
         )
     for i, column_count, name in (
-        (1, len(HDR_DS1), "hồ sơ đăng ký"),
+        (1, len(LIST1_HEADERS), "hồ sơ đăng ký"),
         (4, len(SCORE_HEADERS), "xét tuyển"),
         (8, len(SCORE_HEADERS), "trúng tuyển"),
     ):
@@ -2106,28 +2106,28 @@ def _check_list_template(d) -> None:
 METHOD_COLUMNS = 6
 
 
-def _build_list_docx(template: bytes, ng, ds1, ds2, ds3, pt_rows, grid) -> bytes:
+def _build_list_docx(template: bytes, ng, list1, list2, list3, method_rows, grid) -> bytes:
     d = _open_docx(template, "Danh sách xét tuyển")
     title = "Ngành: %s - Trình độ: %s - Đợt xét tuyển:………….." % ng
     for i in (1, 6, 12):
         _set_paragraph(d.paragraphs[i], title)
-    female = sum(1 for h in ds1 if h.dto.gioi_tinh == "Nữ")
-    ethnic_minority = sum(1 for h in ds1 if h.dto.dan_toc not in ("Kinh", ""))
+    female = sum(1 for h in list1 if h.dto.gioi_tinh == "Nữ")
+    ethnic_minority = sum(1 for h in list1 if h.dto.dan_toc not in ("Kinh", ""))
     _set_paragraph(
         d.paragraphs[3],
         "Tổng số hồ sơ thí sinh theo danh sách: %d thí sinh. Trong đó, Nữ: %d thí sinh; "
-        "Dân tộc thiểu số/ít người: %d thí sinh./." % (len(ds1), female, ethnic_minority),
+        "Dân tộc thiểu số/ít người: %d thí sinh./." % (len(list1), female, ethnic_minority),
     )
     _set_paragraph(
-        d.paragraphs[8], "Tổng số thí sinh theo danh sách: %d thí sinh." % len(ds2)
+        d.paragraphs[8], "Tổng số thí sinh theo danh sách: %d thí sinh." % len(list2)
     )
     _set_paragraph(
-        d.paragraphs[13], "Tổng số thí sinh theo danh sách: %d thí sinh." % len(ds3)
+        d.paragraphs[13], "Tổng số thí sinh theo danh sách: %d thí sinh." % len(list3)
     )
-    _fit_table_append(d.tables[1], [_list1_row(i, h) for i, h in enumerate(ds1, 1)])
-    _fit_table_append(d.tables[4], [_score_row(i, h) for i, h in enumerate(ds2, 1)])
-    _fit_table_append(d.tables[8], [_score_row(i, h) for i, h in enumerate(ds3, 1)])
-    _fit_table_append(d.tables[5], pt_rows, template_index=1)
+    _fit_table_append(d.tables[1], [_list1_row(i, h) for i, h in enumerate(list1, 1)])
+    _fit_table_append(d.tables[4], [_score_row(i, h) for i, h in enumerate(list2, 1)])
+    _fit_table_append(d.tables[8], [_score_row(i, h) for i, h in enumerate(list3, 1)])
+    _fit_table_append(d.tables[5], method_rows, template_index=1)
     for table_index in (1, 4, 8):
         if grid and table_index in grid:
             _set_widths(d.tables[table_index], grid[table_index])
@@ -2178,13 +2178,13 @@ def _write_xlsx_row(ws, row_no: int, value) -> None:
         _write_xlsx_cell(ws, row_no, col_no, v)
 
 
-def _build_list_xlsx(ng, ds1, ds2, ds3, pt_rows) -> bytes:
+def _build_list_xlsx(ng, list1, list2, list3, method_rows) -> bytes:
     wb = Workbook()
     wb.remove(wb.active)
     for name, hdr, data, fn in (
-        ("1-Hồ sơ đăng ký", HDR_DS1, ds1, _list1_row),
-        ("2-Xét tuyển", SCORE_HEADERS, ds2, _score_row),
-        ("3-Trúng tuyển", SCORE_HEADERS, ds3, _score_row),
+        ("1-Hồ sơ đăng ký", LIST1_HEADERS, list1, _list1_row),
+        ("2-Xét tuyển", SCORE_HEADERS, list2, _score_row),
+        ("3-Trúng tuyển", SCORE_HEADERS, list3, _score_row),
     ):
         ws = wb.create_sheet(name)
         # Dòng 1 tiêu đề · dòng 2 trống · dòng 3 tên cột · dòng 4.. dữ liệu · một dòng
@@ -2232,7 +2232,7 @@ def _build_list_xlsx(ng, ds1, ds2, ds3, pt_rows) -> bytes:
     for c in ws[1]:
         c.font = Font(bold=True, color="FFFFFF")
         c.fill = PatternFill("solid", fgColor="1F4E79")
-    for k, dl in enumerate(pt_rows, 2):
+    for k, dl in enumerate(method_rows, 2):
         _write_xlsx_row(ws, k, dl)
     for j, w in enumerate([5, 10, 30, 34, 12, 20], 1):
         ws.column_dimensions[chr(64 + j)].width = w
@@ -2241,12 +2241,12 @@ def _build_list_xlsx(ng, ds1, ds2, ds3, pt_rows) -> bytes:
     return buf.getvalue()
 
 
-def _method_table(ds2: Sequence[_Profile]) -> List[List[str]]:
+def _method_table(list2: Sequence[_Profile]) -> List[List[str]]:
     """Bảng "Phương thức sử dụng xét tuyển": MỖI TỔ HỢP một dòng + số thí sinh riêng;
     mã PT gán theo phương thức (nhiều tổ hợp cùng phương thức cùng mã)."""
     method_codes: Dict[str, str] = {}
     groups: Dict[Tuple[str, str], Dict[str, object]] = {}
-    for h in ds2:
+    for h in list2:
         k = (h.dto.phuong_thuc, h.dto.to_hop)
         g = groups.setdefault(k, {"n": 0, "mon": ""})
         g["n"] += 1
@@ -2255,31 +2255,31 @@ def _method_table(ds2: Sequence[_Profile]) -> List[List[str]]:
     for method_name, _ in sorted(groups):
         if method_name not in method_codes:
             method_codes[method_name] = "PT%d" % (len(method_codes) + 1)
-    pt = []
+    rows = []
     for i, ((method_name, th), g) in enumerate(sorted(groups.items(), key=lambda kv: kv[0]), 1):
         label = ("%s - %s" % (th, g["mon"])) if g["mon"] else th
-        pt.append([str(i), method_codes[method_name], method_name, label, str(g["n"]), ""])
-    return pt
+        rows.append([str(i), method_codes[method_name], method_name, label, str(g["n"]), ""])
+    return rows
 
 
-def _build_list(hs, majors, template: bytes) -> List[RenderedFile]:
+def _build_list(profiles, majors, template: bytes) -> List[RenderedFile]:
     m = _open_docx(template, "Danh sách xét tuyển")
     _check_list_template(m)
     # Lưới cột CHUNG cho mọi ngành — tính MỘT LẦN trên toàn bộ danh sách đầu vào.
     grid = {
-        1: _compute_grid(m.tables[1], [_list1_row(i, h) for i, h in enumerate(hs, 1)]),
-        4: _compute_grid(m.tables[4], [_score_row(i, h) for i, h in enumerate(hs, 1)]),
+        1: _compute_grid(m.tables[1], [_list1_row(i, h) for i, h in enumerate(profiles, 1)]),
+        4: _compute_grid(m.tables[4], [_score_row(i, h) for i, h in enumerate(profiles, 1)]),
     }
     grid[8] = grid[4]  # bảng 8 cùng bộ cột với bảng 4
     out: List[RenderedFile] = []
     for stt, ng in enumerate(majors, 1):
-        r_ng = [h for h in hs if h.major_key == ng]
-        ds1 = sorted(r_ng, key=lambda h: (h.dto.ten, h.dto.ho))
-        ds2 = list(ds1)
-        ds3 = sorted(
-            r_ng, key=lambda h: decision_in_group_key(h.diem.tong_xt, h.dto.ten)
+        r_ng = [h for h in profiles if h.major_key == ng]
+        list1 = sorted(r_ng, key=lambda h: (h.dto.ten, h.dto.ho))
+        list2 = list(list1)
+        list3 = sorted(
+            r_ng, key=lambda h: decision_in_group_key(h.scores.admission_total, h.dto.ten)
         )
-        pt = _method_table(ds2)
+        method_rows = _method_table(list2)
         level_code = "CD" if ng[1] == "Cao đẳng" else "TC"
         root = "DanhSachXetTuyen/%02d-%s-%s/DanhSachXetTuyen-%s-%s" % (
             stt,
@@ -2288,8 +2288,8 @@ def _build_list(hs, majors, template: bytes) -> List[RenderedFile]:
             level_code,
             _file_name(ng[0]),
         )
-        out.append(_file(root + ".docx", _build_list_docx(template, ng, ds1, ds2, ds3, pt, grid)))
-        out.append(_file(root + ".xlsx", _build_list_xlsx(ng, ds1, ds2, ds3, pt)))
+        out.append(_file(root + ".docx", _build_list_docx(template, ng, list1, list2, list3, method_rows, grid)))
+        out.append(_file(root + ".xlsx", _build_list_xlsx(ng, list1, list2, list3, method_rows)))
     return out
 
 
@@ -2375,23 +2375,23 @@ def render_council_documents(
     truyền vào. Không lọc, không đọc CSDL, không ghi đĩa. Kiểm ĐỦ đầu vào (hồ sơ + tham
     số Quyết định) và CẢ BA mẫu trước khi dựng tệp nào — lỗi ở bất kỳ đâu ⇒ không trả tệp
     nào."""
-    hs = _prepare(list(rows))
+    profiles = _prepare(list(rows))
     decision_params = recheck_decision_params(decision_params)
     for kind in TEMPLATE_KINDS:
         check_template(kind, getattr(templates, kind))
-    majors = sorted({h.major_key for h in hs})
-    code = _major_code(hs, majors)
-    level = _common_level(hs)
+    majors = sorted({h.major_key for h in profiles})
+    code = _major_code(profiles, majors)
+    level = _common_level(profiles)
     suffix = strip_accents(level).replace(" ", "-")
 
-    bb = _build_minutes(hs, majors, level, templates.bien_ban)
+    minutes = _build_minutes(profiles, majors, level, templates.bien_ban)
     decision, filled = _build_decision(
-        hs, majors, level, code, templates.quyet_dinh, decision_params
+        profiles, majors, level, code, templates.quyet_dinh, decision_params
     )
     files = [
-        _file("HoiDong/BienBanXetTuyen-%s.docx" % suffix, bb),
+        _file("HoiDong/BienBanXetTuyen-%s.docx" % suffix, minutes),
         _file("HoiDong/QuyetDinhTrungTuyen-%s.docx" % suffix, decision),
-    ] + _build_list(hs, majors, templates.danh_sach)
+    ] + _build_list(profiles, majors, templates.danh_sach)
 
     metadata: Dict[str, object] = {
         "luat_render": RENDER_RULE,
@@ -2402,15 +2402,15 @@ def render_council_documents(
             "danh_sach": _sha(templates.danh_sach),
         },
         # Danh sách mã đầu vào ĐÚNG THỨ TỰ — là đầu vào của bộ, lưu cùng bộ (có PII).
-        "ma_ho_so_dau_vao": [h.dto.ma_ho_so for h in hs],
-        "so_ho_so": len(hs),
+        "ma_ho_so_dau_vao": [h.dto.ma_ho_so for h in profiles],
+        "so_ho_so": len(profiles),
         "trinh_do": level,
         "nganh": [
             {
                 "nganh": ng[0],
                 "trinh_do": ng[1],
                 "ma_nganh": code[ng],
-                "so_thi_sinh": sum(1 for h in hs if h.major_key == ng),
+                "so_thi_sinh": sum(1 for h in profiles if h.major_key == ng),
             }
             for ng in majors
         ],

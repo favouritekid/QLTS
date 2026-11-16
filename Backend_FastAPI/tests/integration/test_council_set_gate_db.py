@@ -190,7 +190,7 @@ async def _diem_ho_so(hs, pid, bang):
 
 async def _cong(ma, nam=2026):
     anh = await doc.read_profiles_by_code(csdl.engine, ma, academic_year=nam)
-    return cong.evaluate(anh.kiem), anh
+    return cong.evaluate(anh.check_data), anh
 
 
 def _mot_ly_do(ma):
@@ -201,8 +201,8 @@ def _mot_ly_do(ma):
 async def test_ho_so_sach_qua_cong_va_diem_kv_theo_nam(hs):
     cccd, _ = await _mot(hs)
     kq, anh = await _cong([cccd])
-    assert kq.chan == () and kq.canh_bao == {}
-    assert kq.diem_kv == ("0.75",) and anh.rows[0].diem_kv == "0.75"
+    assert kq.blocks == () and kq.warnings == {}
+    assert kq.area_scores == ("0.75",) and anh.rows[0].diem_kv == "0.75"
 
 
 # ═══════════════════════════════ F228 — 15 trạng thái qua tao_bo_van_ban ══════════════════
@@ -333,7 +333,7 @@ async def test_trang_thai_la_khi_check_noi_ra_thi_chan(hs):
             p=pid,
         )
         kq, _ = await _cong([cccd])
-    assert kq.chan == (("trang_thai_la", "trang_thai_moi", (1,)),)
+    assert kq.blocks == (("trang_thai_la", "trang_thai_moi", (1,)),)
 
 
 async def test_check_trang_thai_con_nguyen_o_ca_ngay_sau_ca_go(hs):
@@ -430,7 +430,7 @@ async def test_nv1_theo_display_order_khong_theo_id(hs):
         diem={0: {"van": "9.00", "toan": "9.00", "ly": "9.00"}, 1: DIEM_SACH[0]},
     )
     kq, _ = await _cong([cccd])
-    assert kq.chan == ()
+    assert kq.blocks == ()
 
 
 async def test_nv2_trung_cung_nganh_khac_to_hop(hs):
@@ -441,7 +441,7 @@ async def test_nv2_trung_cung_nganh_khac_to_hop(hs):
     )
     await _quyet_dinh(pid, 2)
     kq, _ = await _cong([cccd])
-    assert kq.chan == _mot_ly_do("trung_nv_khac")
+    assert kq.blocks == _mot_ly_do("trung_nv_khac")
 
 
 async def test_nv2_trung_cung_nganh_khac_phuong_thuc(hs):
@@ -468,7 +468,7 @@ async def test_nv2_trung_cung_nganh_khac_phuong_thuc(hs):
                 max_score_snapshot="10",
             )
     kq, _ = await _cong([cccd])
-    assert kq.chan == _mot_ly_do("trung_nv_khac")
+    assert kq.blocks == _mot_ly_do("trung_nv_khac")
 
 
 async def test_nv2_trung_khac_nganh_hoc_phi_theo_nv2(hs):
@@ -480,13 +480,13 @@ async def test_nv2_trung_khac_nganh_hoc_phi_theo_nv2(hs):
     )
     await _quyet_dinh(pid, 2)
     kq, _ = await _cong([cccd])
-    assert {m for m, _, _ in kq.chan} == {"trung_nv_khac", "hoc_phi_khac_nganh_nv"}
+    assert {m for m, _, _ in kq.blocks} == {"trung_nv_khac", "hoc_phi_khac_nganh_nv"}
 
 
 async def test_hoc_phi_khac_nganh_nv1_chua_cong_bo(hs):
     cccd, _ = await _mot(hs, hoc_phi=[dict(HP_CD, resolved_major="duoc_cd")])
     kq, _ = await _cong([cccd])
-    assert kq.chan == _mot_ly_do("hoc_phi_khac_nganh_nv")
+    assert kq.blocks == _mot_ly_do("hoc_phi_khac_nganh_nv")
 
 
 @pytest.mark.parametrize(
@@ -502,7 +502,7 @@ async def test_hoc_phi_khac_nganh_nv1_chua_cong_bo(hs):
 async def test_hoc_phi_hk1(hs, hoc_phi, ma):
     cccd, _ = await _mot(hs, hoc_phi=hoc_phi)
     kq, _ = await _cong([cccd])
-    assert kq.chan == _mot_ly_do(ma)
+    assert kq.blocks == _mot_ly_do(ma)
 
 
 async def test_hai_nv_cung_trung(hs):
@@ -512,7 +512,7 @@ async def test_hai_nv_cung_trung(hs):
     await _quyet_dinh(pid, 1)
     await _quyet_dinh(pid, 2)
     kq, _ = await _cong([cccd])
-    assert kq.chan == _mot_ly_do("nhieu_nv_trung")
+    assert kq.blocks == _mot_ly_do("nhieu_nv_trung")
 
 
 async def test_nv1_trung_thi_qua(hs):
@@ -522,27 +522,27 @@ async def test_nv1_trung_thi_qua(hs):
     await _quyet_dinh(pid, 1)
     await _quyet_dinh(pid, 2, "skip")
     kq, _ = await _cong([cccd])
-    assert kq.chan == ()
+    assert kq.blocks == ()
 
 
 async def test_bo_may_nguyen_vong_khong_co_nv(hs):
     cccd, _ = await _mot(hs, nv=[], diem={}, uses_choice_engine=True)
     kq, _ = await _cong([cccd])
-    assert kq.chan == _mot_ly_do("nhieu_nv_khong_co_nv")
+    assert kq.blocks == _mot_ly_do("nhieu_nv_khong_co_nv")
 
 
 async def test_bo_may_nguyen_vong_diem_hai_nguon_khac(hs):
     cccd, pid = await _mot(hs)
     await _diem_ho_so(hs, pid, {"toan": "7.00"})  # NV1: 7.25
     kq, _ = await _cong([cccd])
-    assert kq.chan == _mot_ly_do("diem_hai_nguon_khac")
+    assert kq.blocks == _mot_ly_do("diem_hai_nguon_khac")
 
 
 async def test_bo_may_nguyen_vong_diem_hai_nguon_bang_nhau_thi_qua(hs):
     cccd, pid = await _mot(hs)
     await _diem_ho_so(hs, pid, {"toan": "7.25", "van": "1.00"})  # van ngoài tổ hợp in
     kq, _ = await _cong([cccd])
-    assert kq.chan == ()
+    assert kq.blocks == ()
 
 
 # ═══════════════════════════════ F229 — hồ sơ một nguyện vọng kiểu cũ ═════════════════════
@@ -572,7 +572,7 @@ async def _mot_nv_cu(hs, *, ar=None, sg="g1", nv=NV_SACH, diem_hs=None, **kw):
 async def test_mot_nv_backfill_khop_thi_qua(hs):
     cccd, _ = await _mot_nv_cu(hs)
     kq, _ = await _cong([cccd])
-    assert kq.chan == ()
+    assert kq.blocks == ()
 
 
 async def test_mot_nv_diem_ho_so_doi_sau_backfill_thi_chan(hs):
@@ -586,26 +586,26 @@ async def test_mot_nv_diem_ho_so_doi_sau_backfill_thi_chan(hs):
         s=d["mon"]["ly"],
     )
     kq, _ = await _cong([cccd])
-    assert kq.chan == _mot_ly_do("mot_nv_diem_lech")
+    assert kq.blocks == _mot_ly_do("mot_nv_diem_lech")
 
 
 async def test_mot_nv_bang_diem_ho_so_thieu_mon_cua_to_hop(hs):
     cccd, _ = await _mot_nv_cu(hs, diem_hs={"toan": "7.25", "ly": "6.50"})
     kq, _ = await _cong([cccd])
-    assert kq.chan == _mot_ly_do("mot_nv_diem_lech")
+    assert kq.blocks == _mot_ly_do("mot_nv_diem_lech")
 
 
 async def test_mot_nv_dong_nguyen_vong_thieu_mon_bang_diem_ho_so_co(hs):
     # Dòng nguyện vọng (backfill) thiếu điểm một môn mà bảng điểm hồ sơ có ⇒ văn bản in thiếu môn.
     cccd, _ = await _mot_nv_cu(hs, diem={0: {"toan": "7.25", "ly": "6.50"}})
     kq, _ = await _cong([cccd])
-    assert kq.chan == _mot_ly_do("mot_nv_diem_lech")
+    assert kq.blocks == _mot_ly_do("mot_nv_diem_lech")
 
 
 async def test_mot_nv_khac_to_hop(hs):
     cccd, _ = await _mot_nv_cu(hs, sg="g2")
     kq, _ = await _cong([cccd])
-    assert kq.chan == _mot_ly_do("mot_nv_khac_to_hop")
+    assert kq.blocks == _mot_ly_do("mot_nv_khac_to_hop")
 
 
 async def test_mot_nv_khac_duong_xet(hs):
@@ -613,14 +613,14 @@ async def test_mot_nv_khac_duong_xet(hs):
     ap2, _ = d["psg_pt2_g1"]  # cùng ngành, phương thức khác
     cccd, _ = await _mot_nv_cu(hs, ar={"admission_path_id": ap2})
     kq, _ = await _cong([cccd])
-    assert kq.chan == _mot_ly_do("mot_nv_khac_duong_xet")
+    assert kq.blocks == _mot_ly_do("mot_nv_khac_duong_xet")
 
 
 async def test_mot_nv_khac_nganh(hs):
     d = hs["_danh_muc"]
     cccd, _ = await _mot_nv_cu(hs, ar={"academic_info_id": d["oai_duoc_cq"]})
     kq, _ = await _cong([cccd])
-    assert kq.chan == _mot_ly_do("mot_nv_khac_nganh")
+    assert kq.blocks == _mot_ly_do("mot_nv_khac_nganh")
 
 
 async def test_mot_nv_cau_hinh_ho_so_truoc_applied_rules(hs):
@@ -649,13 +649,13 @@ async def test_mot_nv_cau_hinh_ho_so_truoc_applied_rules(hs):
         )
     cccd, _ = await _mot_nv_cu(hs, offering_admission_config_id=oac)
     kq, _ = await _cong([cccd])
-    assert kq.chan == _mot_ly_do("mot_nv_khac_nganh")
+    assert kq.blocks == _mot_ly_do("mot_nv_khac_nganh")
 
 
 async def test_mot_nv_khong_co_dong_nguyen_vong(hs):
     cccd, _ = await _mot_nv_cu(hs, nv=[], diem={})
     kq, _ = await _cong([cccd])
-    assert kq.chan == _mot_ly_do("mot_nv_khong_co_dong_nguyen_vong")
+    assert kq.blocks == _mot_ly_do("mot_nv_khong_co_dong_nguyen_vong")
 
 
 @pytest.mark.parametrize(
@@ -671,13 +671,13 @@ async def test_mot_nv_khong_co_dong_nguyen_vong(hs):
 async def test_mot_nv_cau_hinh_ho_so_thieu(hs, ar, sg, ma):
     cccd, _ = await _mot_nv_cu(hs, ar=ar, sg=sg)
     kq, _ = await _cong([cccd])
-    assert kq.chan == _mot_ly_do(ma)
+    assert kq.blocks == _mot_ly_do(ma)
 
 
 # ═══════════════════════════════ F231 — khu vực ưu tiên ═══════════════════════════════════
 async def test_thieu_khu_vuc(hs):
     kq, anh = await _cong([hs["khong_khu_vuc"][0]])
-    assert kq.chan == _mot_ly_do("thieu_khu_vuc") and kq.diem_kv == (None,)
+    assert kq.blocks == _mot_ly_do("thieu_khu_vuc") and kq.area_scores == (None,)
     assert anh.rows[0].diem_kv == "0"  # bộ xuất in 0 — bộ văn bản KHÔNG in
 
 
@@ -690,7 +690,7 @@ async def test_khu_vuc_chua_phan_giai_thi_chan(hs):
         },
     )
     kq, anh = await _cong([cccd])
-    assert kq.chan == _mot_ly_do("thieu_khu_vuc")
+    assert kq.blocks == _mot_ly_do("thieu_khu_vuc")
     assert anh.rows[0].kv == "KV1"  # bộ xuất vẫn in KV1
 
 
@@ -712,7 +712,7 @@ async def test_khac_nam_lay_muc_nam_hoc_cua_ho_so(hs):
         await db.commit()
     cccd, _ = await _mot(hs)
     kq, anh = await _cong([cccd])
-    assert anh.rows[0].diem_kv == "1.00" and kq.diem_kv == ("0.75",)
+    assert anh.rows[0].diem_kv == "1.00" and kq.area_scores == ("0.75",)
     sid = await _tao([cccd])
     async with AsyncSessionLocal() as db:
         dto = (
@@ -728,7 +728,7 @@ async def test_khac_nam_lay_muc_nam_hoc_cua_ho_so(hs):
 async def test_chua_co_muc_cho_nam_hoc(hs):
     cccd, _ = await _mot(hs, nam=2027)
     kq, _ = await _cong([cccd], nam=2027)
-    assert kq.chan == _mot_ly_do("chua_co_muc_khu_vuc")
+    assert kq.blocks == _mot_ly_do("chua_co_muc_khu_vuc")
 
 
 async def test_hai_muc_dang_mo_cung_nam(hs):
@@ -744,7 +744,7 @@ async def test_hai_muc_dang_mo_cung_nam(hs):
         )
     cccd, _ = await _mot(hs)
     kq, _ = await _cong([cccd])
-    assert kq.chan == _mot_ly_do("muc_khu_vuc_khong_nhat_quan")
+    assert kq.blocks == _mot_ly_do("muc_khu_vuc_khong_nhat_quan")
 
 
 async def _an_dinh_thu_cong(hs, *, so_audit=True):
@@ -782,7 +782,7 @@ async def _an_dinh_thu_cong(hs, *, so_audit=True):
 async def test_an_dinh_thu_cong_khong_co_so_thi_chan(hs):
     cccd, _ = await _an_dinh_thu_cong(hs, so_audit=False)
     kq, _ = await _cong([cccd])
-    assert kq.chan == _mot_ly_do("khu_vuc_thu_cong_khong_hieu_luc")
+    assert kq.blocks == _mot_ly_do("khu_vuc_thu_cong_khong_hieu_luc")
 
 
 async def test_ho_so_khai_an_dinh_thu_cong_ma_anh_chup_thuong_van_phai_xac_minh(hs):
@@ -795,13 +795,13 @@ async def test_ho_so_khai_an_dinh_thu_cong_ma_anh_chup_thuong_van_phai_xac_minh(
         priority_resolution_snapshot=kv("KV1"),
     )
     kq, _ = await _cong([cccd])
-    assert kq.chan == _mot_ly_do("khu_vuc_thu_cong_khong_hieu_luc")
+    assert kq.blocks == _mot_ly_do("khu_vuc_thu_cong_khong_hieu_luc")
 
 
 async def test_an_dinh_thu_cong_hop_le_thi_qua(hs):
     cccd, _ = await _an_dinh_thu_cong(hs)
     kq, _ = await _cong([cccd])
-    assert kq.chan == () and kq.diem_kv == ("0.75",)
+    assert kq.blocks == () and kq.area_scores == ("0.75",)
 
 
 async def test_an_dinh_thu_cong_du_lieu_doi_sau_khi_duyet_thi_chan(hs):
@@ -811,7 +811,7 @@ async def test_an_dinh_thu_cong_du_lieu_doi_sau_khi_duyet_thi_chan(hs):
         p=pid,
     )
     kq, _ = await _cong([cccd])
-    assert kq.chan == _mot_ly_do("khu_vuc_thu_cong_khong_hieu_luc")
+    assert kq.blocks == _mot_ly_do("khu_vuc_thu_cong_khong_hieu_luc")
 
 
 # ═══════════════ Câu 21 (owner 06-11) — tính lại KV chỉ đọc, lệch ⇒ chặn và liệt kê ══════════
@@ -828,7 +828,7 @@ async def test_kv_tinh_lai_khac_anh_chup_thi_chan(hs):
     cccd, pid = await _mot(hs)  # ảnh chụp KV1, đang học trường KV1
     await _doi_lich_su(hs, pid, "KV2")
     kq, anh = await _cong([cccd])
-    assert kq.chan == _mot_ly_do("khu_vuc_doi_sau_anh_chup") and kq.diem_kv == (None,)
+    assert kq.blocks == _mot_ly_do("khu_vuc_doi_sau_anh_chup") and kq.area_scores == (None,)
     assert anh.rows[0].kv == "KV1"  # bộ xuất vẫn in KV cũ của ảnh chụp
 
 
@@ -842,13 +842,13 @@ async def test_kv_tinh_lai_theo_thuong_tru_khac_anh_chup_thi_chan(hs):
         priority_resolution_snapshot=kv("KV2-NT"),
         academic_history=[],
     )
-    assert (await _cong([cccd]))[0].chan == ()  # phép đo hợp lệ: trước khi đổi thì qua
+    assert (await _cong([cccd]))[0].blocks == ()  # phép đo hợp lệ: trước khi đổi thì qua
     await _sql(
         "UPDATE admission_profile SET permanent_commune_code = 'GX1' WHERE id = :p",
         p=pid,
     )
     kq, _ = await _cong([cccd])
-    assert kq.chan == _mot_ly_do("khu_vuc_doi_sau_anh_chup")
+    assert kq.blocks == _mot_ly_do("khu_vuc_doi_sau_anh_chup")
 
 
 async def test_du_lieu_doi_ma_kv_tinh_lai_khong_doi_thi_qua(hs):
@@ -860,7 +860,7 @@ async def test_du_lieu_doi_ma_kv_tinh_lai_khong_doi_thi_qua(hs):
         p=pid,
     )
     kq, _ = await _cong([cccd])
-    assert kq.chan == () and kq.diem_kv == ("0.75",)
+    assert kq.blocks == () and kq.area_scores == ("0.75",)
 
 
 async def test_kv_tinh_lai_dung_ngu_canh_trinh_do_cua_anh_chup(hs):
@@ -880,7 +880,7 @@ async def test_kv_tinh_lai_dung_ngu_canh_trinh_do_cua_anh_chup(hs):
         },
     )
     kq, _ = await _cong([cccd])
-    assert kq.chan == () and kq.diem_kv == ("0.75",)
+    assert kq.blocks == () and kq.area_scores == ("0.75",)
 
 
 async def test_kv_tinh_lai_khong_phan_giai_duoc_thi_chan(hs):
@@ -892,7 +892,7 @@ async def test_kv_tinh_lai_khong_phan_giai_duoc_thi_chan(hs):
         p=pid,
     )
     kq, _ = await _cong([cccd])
-    assert kq.chan == _mot_ly_do("khu_vuc_doi_sau_anh_chup")
+    assert kq.blocks == _mot_ly_do("khu_vuc_doi_sau_anh_chup")
 
 
 async def test_resolver_nem_loi_thi_chan(hs, monkeypatch):
@@ -904,7 +904,7 @@ async def test_resolver_nem_loi_thi_chan(hs, monkeypatch):
     cccd, _ = await _mot(hs)
     monkeypatch.setattr(priority_service, "resolve_kv_for_profile", hong)
     kq, _ = await _cong([cccd])
-    assert kq.chan == _mot_ly_do("khu_vuc_khong_tinh_lai_duoc")
+    assert kq.blocks == _mot_ly_do("khu_vuc_khong_tinh_lai_duoc")
 
 
 async def test_tinh_lai_kv_khong_ghi_gi_vao_ho_so(hs):
@@ -917,8 +917,8 @@ async def test_tinh_lai_kv_khong_ghi_gi_vao_ho_so(hs):
     truoc = (await _sql(q, p=pid)).one()
     anh = await doc.read_profiles_by_code(csdl.engine, [cccd], academic_year=2026)
     # Phép đo hợp lệ: đã tính lại (và thấy lệch).
-    assert anh.kiem[0].kv_ly_do == "khu_vuc_doi_sau_anh_chup"
-    assert anh.giao_dich.transaction_read_only == "on"
+    assert anh.check_data[0].kv_ly_do == "khu_vuc_doi_sau_anh_chup"
+    assert anh.transaction.transaction_read_only == "on"
     assert (await _sql(q, p=pid)).one() == truoc
 
 
@@ -961,7 +961,7 @@ async def test_override_json_null_thi_theo_phuong_thuc(hs):
     )
     assert tuple(loai.one()) == (False, "null")
     kq, _ = await _cong([cccd])
-    assert kq.luat_kv == ("cong",) and kq.diem_kv == ("0.75",)
+    assert kq.area_rules == ("cong",) and kq.area_scores == ("0.75",)
 
 
 async def test_override_sql_null_thi_theo_phuong_thuc(hs):
@@ -972,14 +972,14 @@ async def test_override_sql_null_thi_theo_phuong_thuc(hs):
     )
     assert loai.scalar_one() is True  # phép đo hợp lệ: SQL NULL
     kq, _ = await _cong([cccd])
-    assert kq.luat_kv == ("cong",) and kq.diem_kv == ("0.75",)
+    assert kq.area_rules == ("cong",) and kq.area_scores == ("0.75",)
 
 
 async def test_override_that_tat_kv_thi_in_0(hs):
     cccd, pid = await _mot(hs)
     await _dat_luat(pid, override=TAT_KV)
     kq, anh = await _cong([cccd])
-    assert kq.chan == () and kq.luat_kv == ("tat",) and kq.diem_kv == ("0.00",)
+    assert kq.blocks == () and kq.area_rules == ("tat",) and kq.area_scores == ("0.00",)
     # Bộ xuất (luật v1) vẫn cộng KV — khác CÓ CHỦ Ý.
     assert anh.rows[0].diem_kv == "0.75"
 
@@ -988,14 +988,14 @@ async def test_override_bat_kv_thang_phuong_thuc_tat(hs):
     cccd, pid = await _mot(hs)
     await _dat_luat(pid, override=BAT_KV, mac_dinh=TAT_KV)
     kq, _ = await _cong([cccd])
-    assert kq.luat_kv == ("cong",) and kq.diem_kv == ("0.75",)
+    assert kq.area_rules == ("cong",) and kq.area_scores == ("0.75",)
 
 
 async def test_phuong_thuc_tat_kv_khong_override_thi_in_0(hs):
     cccd, pid = await _mot(hs)
     await _dat_luat(pid, override="NULL", mac_dinh=TAT_KV)
     kq, _ = await _cong([cccd])
-    assert kq.luat_kv == ("tat",) and kq.diem_kv == ("0.00",)
+    assert kq.area_rules == ("tat",) and kq.area_scores == ("0.00",)
 
 
 @pytest.mark.parametrize(
@@ -1007,8 +1007,8 @@ async def test_khong_co_luat_nao_thi_in_0_nhu_t6(hs, override, mac_dinh):
     cccd, pid = await _mot(hs)
     await _dat_luat(pid, override=override, mac_dinh=mac_dinh)
     kq, _ = await _cong([cccd])
-    assert kq.chan == () and kq.luat_kv == ("khong_co_luat",)
-    assert kq.diem_kv == ("0.00",)
+    assert kq.blocks == () and kq.area_rules == ("khong_co_luat",)
+    assert kq.area_scores == ("0.00",)
 
 
 async def test_luat_khong_phai_dict_thi_chan(hs):
@@ -1018,11 +1018,11 @@ async def test_luat_khong_phai_dict_thi_chan(hs):
     await _dat_luat(pid, override="""'"khong-phai-luat"'::jsonb""")
     kq, _ = await _cong([cccd])
     # Lượt H2: cùng luật quyết cả công tắc đối tượng ⇒ hai mã (đổi CÓ CHỦ Ý từ một mã).
-    assert kq.chan == (
+    assert kq.blocks == (
         ("khong_xac_dinh_luat_cong_diem_kv", None, (1,)),
         ("khong_xac_dinh_luat_cong_diem_ut", None, (1,)),
     )
-    assert kq.diem_kv == (None,)
+    assert kq.area_scores == (None,)
 
 
 async def test_dung_bo_ghi_diem_kv_theo_luat_va_vet(hs):
@@ -1097,5 +1097,5 @@ async def test_giao_dich_doc_van_chi_doc_khi_tra_an_dinh_thu_cong(hs):
     # Phiên ORM tra sổ ấn định chạy TRÊN kết nối chỉ đọc: không mở giao dịch ghi nào.
     cccd, _ = await _an_dinh_thu_cong(hs)
     anh = await doc.read_profiles_by_code(csdl.engine, [cccd], academic_year=2026)
-    assert anh.giao_dich.transaction_read_only == "on"
-    assert anh.kiem[0].kv_ly_do is None
+    assert anh.transaction.transaction_read_only == "on"
+    assert anh.check_data[0].kv_ly_do is None

@@ -340,7 +340,7 @@ async def _lock_before_batch_approval(db: AsyncSession, profile_ids: List[int]) 
     ids = sorted({int(x) for x in profile_ids})
     if not ids:
         return {}
-    ho_so = (
+    locked_profiles = (
         (
             await db.execute(
                 select(models.AdmissionProfile)
@@ -357,7 +357,7 @@ async def _lock_before_batch_approval(db: AsyncSession, profile_ids: List[int]) 
         .all()
     )
     probed: Dict[int, Optional[int]] = {}
-    for p in ho_so:
+    for p in locked_profiles:
         ai, _ = await _resolve_quota_context(db, p, lock=False)
         probed[p.id] = ai.id if ai is not None else None
     await _qos.lock_quota_cells(db, [a for a in probed.values() if a is not None], [])
@@ -2598,7 +2598,7 @@ def _compute_frontend_fields(
                 )
             )
         ),
-        "delete": status == "draft" and is_admin and not _tq.co_ten_van_ban,
+        "delete": status == "draft" and is_admin and not _tq.named_in_document,
         # F6 fix 2026-05-16: Override = bypass normal eligibility flow,
         # admin-only per ADMISSION_STATE_MACHINE_IMPLEMENTATION_PLAN §3.4.
         # State machine allows ONLY approved → overridden (see
@@ -12351,7 +12351,7 @@ async def delete_profile(
     # (K5a, ``ck_council_decision_row_k5a``); báo trước bằng ĐÚNG điều kiện ấy.
     from .council_decision_status_service import single_profile
 
-    if (await single_profile(db, profile.id)).co_ten_van_ban:
+    if (await single_profile(db, profile.id)).named_in_document:
         from app.utils.exceptions import ProfileLockedByDecisionError
 
         raise ProfileLockedByDecisionError(

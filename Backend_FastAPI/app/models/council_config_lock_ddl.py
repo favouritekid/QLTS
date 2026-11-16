@@ -139,8 +139,8 @@ STATEMENTS = (SQL_FN_ACADEMIC_INFO, SQL_FN_ADMISSION_PATH, *SQL_TRIGGERS)
 
 def _register():
     """Gắn vào ``after_create`` của METADATA (mọi bảng đã có mặt) — như ``duplicate_guard_ddl``."""
-    for cau in STATEMENTS:
-        event.listen(Base.metadata, "after_create", DDL(cau).execute_if(dialect="postgresql"))
+    for statement in STATEMENTS:
+        event.listen(Base.metadata, "after_create", DDL(statement).execute_if(dialect="postgresql"))
 
 
 _register()

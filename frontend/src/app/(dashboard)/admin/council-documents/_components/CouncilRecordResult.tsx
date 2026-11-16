@@ -14,15 +14,15 @@ import type {
 } from "@/lib/zod/council-documents"
 
 import { CouncilCancelDialog } from "./CouncilCancelDialog"
-import { ngay, decisionKindLabel, decisionStatusLabel, formatTime } from "./display"
+import { formatDate, decisionKindLabel, decisionStatusLabel, formatTime } from "./display"
 
 /**
  * Số chính của một ô chỉ tiêu ngành: MỨC LỚN NHẤT trong hai cách đếm, ghi đúng chữ ấy — KHÔNG gọi là "tổng"
  * (đặc tả 3.8, Codex G.4 K-4). Chỉ chọn số lớn hơn trong hai số máy chủ trả; thiếu cả hai ⇒ null.
  */
 export function maxOfTwoCounts(w: Pick<CouncilQuotaWarning, "da_dung_cong_bo" | "da_dung_phe_duyet_cu">): number | null {
-  const co = [w.da_dung_cong_bo, w.da_dung_phe_duyet_cu].filter((x): x is number => typeof x === "number")
-  return co.length === 0 ? null : Math.max(...co)
+  const used = [w.da_dung_cong_bo, w.da_dung_phe_duyet_cu].filter((x): x is number => typeof x === "number")
+  return used.length === 0 ? null : Math.max(...used)
 }
 
 /** Tên hiển thị của ô vượt: `nhan` do máy chủ trả; thiếu ⇒ mã + id (đặc tả 3.8). */
@@ -79,7 +79,7 @@ function isRecordDto(q: CouncilDecisionWrite | CouncilDecision): q is CouncilDec
  */
 export function CouncilRecordResult({ decision, setId, permissions, onCancelled }: Props) {
   const [cancelOpen, setCancelOpen] = useState(false)
-  const ghi = isRecordDto(decision) ? decision : null
+  const recorded = isRecordDto(decision) ? decision : null
   const cancelled = decision.trang_thai === "huy_ghi_nhan"
 
   return (
@@ -90,16 +90,16 @@ export function CouncilRecordResult({ decision, setId, permissions, onCancelled 
           {cancelled ? "Văn bản đã huỷ ghi nhận" : "Đã ghi nhận Quyết định"}
         </div>
         <p className="text-sm" data-testid="ket-qua-dong">
-          Máy chủ trả: {decisionKindLabel(decision.loai)} số {decision.so_quyet_dinh} · ngày ký {ngay(decision.ngay_ky)} ·{" "}
+          Máy chủ trả: {decisionKindLabel(decision.loai)} số {decision.so_quyet_dinh} · ngày ký {formatDate(decision.ngay_ky)} ·{" "}
           {decision.so_ho_so} hồ sơ · bộ #{decision.set_id ?? setId} · ghi lúc {formatTime(decision.ghi_nhan_luc)} ·{" "}
           {decisionStatusLabel(decision.trang_thai)}
         </p>
-        {ghi?.goc ? (
+        {recorded?.goc ? (
           <p className="text-sm" data-testid="ket-qua-goc">
-            Bổ sung cho Quyết định số {ghi.goc.so_quyet_dinh} ngày {ngay(ghi.goc.ngay_ky)}
+            Bổ sung cho Quyết định số {recorded.goc.so_quyet_dinh} ngày {formatDate(recorded.goc.ngay_ky)}
           </p>
         ) : null}
-        {ghi?.lap_lai ? (
+        {recorded?.lap_lai ? (
           <p className="text-sm text-muted-foreground" data-testid="ket-qua-lap-lai">
             Lượt này đã ghi trước đó — hiển thị văn bản cũ, không ghi lần hai.
           </p>
@@ -110,7 +110,7 @@ export function CouncilRecordResult({ decision, setId, permissions, onCancelled 
         </p>
       </div>
 
-      {ghi ? <CouncilQuotaWarnings warning={ghi.canh_bao_vuot_chi_tieu} /> : null}
+      {recorded ? <CouncilQuotaWarnings warning={recorded.canh_bao_vuot_chi_tieu} /> : null}
 
       <div className="flex flex-wrap gap-2">
         <Button asChild variant="outline" size="sm">
@@ -136,7 +136,7 @@ export function CouncilRecordResult({ decision, setId, permissions, onCancelled 
         open={cancelOpen}
         onOpenChange={setCancelOpen}
         decisionId={decision.id}
-        loai={decision.loai}
+        kind={decision.loai}
         decisionNumber={decision.so_quyet_dinh}
         onDone={onCancelled}
       />

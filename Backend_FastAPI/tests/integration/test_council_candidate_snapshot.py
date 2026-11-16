@@ -148,7 +148,7 @@ async def test_ca_lo_dung_thu_tu_dau_vao_va_bang_bo_xuat(hs):
         n: [] for n in nhan
     }
     d = hs["_danh_muc"]
-    assert anh.don_vi == tuple(d["u2"] if n == "don_vi_khac" else d["u1"] for n in nhan)
+    assert anh.unit_ids == tuple(d["u2"] if n == "don_vi_khac" else d["u1"] for n in nhan)
 
 
 async def test_du_lieu_gia_phu_dung_nhanh_kho(hs):
@@ -273,10 +273,10 @@ async def test_giao_dich_doc_repeatable_read_read_only_do_tu_trong(hs):
     anh = await doc.read_profiles_by_code(
         csdl.engine, [hs["dia_chi_rong"][0]], academic_year=2026
     )
-    assert anh.giao_dich.transaction_isolation == "repeatable read"
-    assert anh.giao_dich.transaction_read_only == "on"
+    assert anh.transaction.transaction_isolation == "repeatable read"
+    assert anh.transaction.transaction_read_only == "on"
     assert (
-        isinstance(anh.giao_dich.moc_chup, datetime) and anh.giao_dich.moc_chup.tzinfo
+        isinstance(anh.transaction.snapshot_at, datetime) and anh.transaction.snapshot_at.tzinfo
     )
     # Đo lại bằng lệnh RIÊNG (SHOW) trong chính khối giao dịch mà hàm đọc dùng.
     async with kho_doc.read_only_transaction(csdl.engine) as (conn, _):
@@ -336,7 +336,7 @@ async def test_ket_noi_tra_pool_khong_mang_che_do_chi_doc(hs):
                     "INSERT INTO organization_unit (name, type) VALUES ('GIA-sau', 'x')"
                 )
             )
-        assert pid == anh.giao_dich.backend_pid
+        assert pid == anh.transaction.backend_pid
         assert (iso, ro) == ("read committed", "off")
     finally:
         await eng.dispose()
@@ -558,11 +558,11 @@ async def test_bang_tham_chieu_trung_hang_chan_dong_ay_khong_tu_chon(hs):
     assert len(n) == 2  # bộ xuất: hai hàng cho một hồ sơ
     anh = await doc.read_profiles_by_code(csdl.engine, [hs["dia_chi_rong"][0], cccd], academic_year=2026)
     assert [r.ma_ho_so for r in anh.rows] == [hs["dia_chi_rong"][0], cccd]
-    assert [k.duplicate_reference for k in anh.kiem] == [False, True]
+    assert [k.duplicate_reference for k in anh.check_data] == [False, True]
     assert anh.rows[1].dia_chi == ""  # hai hàng khác địa chỉ ⇒ không chọn hàng nào
     assert anh.rows[1].ho == "Họ Giả"  # trường giống nhau giữ nguyên
-    assert "tham_chieu_trung" in cong.row_block_reason(anh.kiem[1])
-    assert "tham_chieu_trung" not in cong.row_block_reason(anh.kiem[0])
+    assert "tham_chieu_trung" in cong.row_block_reason(anh.check_data[1])
+    assert "tham_chieu_trung" not in cong.row_block_reason(anh.check_data[0])
 
 
 async def test_loi_csdl_khong_mang_cau_sql_hay_tham_so(hs, monkeypatch):

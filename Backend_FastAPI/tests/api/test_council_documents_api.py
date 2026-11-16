@@ -875,7 +875,7 @@ async def test_qua_api_doc_o_giao_dich_rieng_da_dong_truoc_khi_dung(
 
     async def gian_doc(*a, **k):
         anh = await goc_doc(*a, **k)
-        bat["doc"] = anh.giao_dich
+        bat["doc"] = anh.transaction
         return anh
 
     async def _giao_dich_cua(pid):
@@ -926,9 +926,9 @@ async def test_qua_api_doc_o_giao_dich_rieng_da_dong_truoc_khi_dung(
     )
     assert ghi.ro == "off"
     # (1) giao dịch đọc ≠ giao dịch ghi
-    assert (doc.backend_pid, doc.moc_chup) != (ghi.pid, ghi.ts)
+    assert (doc.backend_pid, doc.snapshot_at) != (ghi.pid, ghi.ts)
     # (2) lúc bộ dựng chạy, tiến trình của giao dịch đọc KHÔNG còn ở giao dịch ấy
-    assert bat["xact_doc_luc_dung"] != doc.moc_chup
+    assert bat["xact_doc_luc_dung"] != doc.snapshot_at
     # (3) câu ghi chạy SAU khi bộ dựng bắt đầu
     assert ghi.st > bat["luc_dung"]
 

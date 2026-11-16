@@ -116,14 +116,14 @@ def _declared_names_of_type(annotation_type, out: set, seen: set) -> None:
         return
     seen.add(id(annotation_type))
     if isinstance(annotation_type, type) and issubclass(annotation_type, BaseModel):
-        for ten, f in annotation_type.model_fields.items():
-            out.add(ten)
+        for field_name, f in annotation_type.model_fields.items():
+            out.add(field_name)
             if isinstance(f.alias, str):
                 out.add(f.alias)
             _declared_names_of_type(f.annotation, out, seen)
         return
-    for con in typing.get_args(annotation_type):
-        _declared_names_of_type(con, out, seen)
+    for arg in typing.get_args(annotation_type):
+        _declared_names_of_type(arg, out, seen)
 
 
 def _declared_names_of_route(route) -> frozenset:
@@ -132,10 +132,10 @@ def _declared_names_of_route(route) -> frozenset:
     của ``loc`` thành nhãn cố định)."""
     out: set = set()
     try:
-        con = [getattr(route, "dependant")]
+        stack = [getattr(route, "dependant")]
         seen: set = set()
-        while con:
-            d = con.pop()
+        while stack:
+            d = stack.pop()
             for group in (
                 "path_params",
                 "query_params",
@@ -144,15 +144,15 @@ def _declared_names_of_route(route) -> frozenset:
                 "body_params",
             ):
                 for f in getattr(d, group, None) or ():
-                    for ten in (getattr(f, "name", None), getattr(f, "alias", None)):
-                        if isinstance(ten, str):
-                            out.add(ten)
+                    for name in (getattr(f, "name", None), getattr(f, "alias", None)):
+                        if isinstance(name, str):
+                            out.add(name)
                     _declared_names_of_type(
                         getattr(getattr(f, "field_info", None), "annotation", None),
                         out,
                         seen,
                     )
-            con.extend(getattr(d, "dependencies", None) or ())
+            stack.extend(getattr(d, "dependencies", None) or ())
     except Exception:  # noqa: BLE001 — bộ chuẩn hoá log không được làm hỏng request
         return frozenset()
     return frozenset(out)
@@ -169,7 +169,7 @@ def _safe_422_error_for_log(errors: list, route) -> list:
       :data:`UNDECLARED_LOC_LABEL` (khoá JSON thừa có thể chính là một CCCD).
 
     Bỏ hẳn ``input``, ``msg``, ``ctx``, ``url`` (``msg`` / ``ctx`` có thể nội suy giá trị)."""
-    ten_khai = _declared_names_of_route(route) if route is not None else frozenset()
+    declared_names = _declared_names_of_route(route) if route is not None else frozenset()
     out = []
     for e in errors:
         loc = []
@@ -177,7 +177,7 @@ def _safe_422_error_for_log(errors: list, route) -> list:
             if isinstance(p, int) and not isinstance(p, bool):
                 loc.append(p)
             elif isinstance(p, str) and (
-                (i == 0 and p in _JOIN_PARAMS_422) or (i > 0 and p in ten_khai)
+                (i == 0 and p in _JOIN_PARAMS_422) or (i > 0 and p in declared_names)
             ):
                 loc.append(p)
             else:

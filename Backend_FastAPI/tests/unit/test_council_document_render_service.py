@@ -358,13 +358,13 @@ def _cot(rows, j, tu=0):
 def test_diem_in_tran_uu_tien_va_mot_nguon():
     assert PRIORITY_CAP_V1 == 2.75
     d = compute_printed_scores("15.5", "0.75", "2.00")  # đúng trần
-    assert (d.ut_tong, d.tong_xt) == (2.75, 18.25)
+    assert (d.priority_total, d.admission_total) == (2.75, 18.25)
     d = compute_printed_scores("15.5", "1.00", "2.00")  # vượt trần ⇒ cắt
-    assert (d.kv, d.ut, d.ut_tong, d.tong_xt) == (1.0, 2.0, 2.75, 18.25)
+    assert (d.area, d.priority, d.priority_total, d.admission_total) == (1.0, 2.0, 2.75, 18.25)
     d = compute_printed_scores("15.5", "0.50", "2.00")  # dưới trần ⇒ giữ
-    assert (d.ut_tong, d.tong_xt) == (2.5, 18.0)
+    assert (d.priority_total, d.admission_total) == (2.5, 18.0)
     d = compute_printed_scores("", "", "")
-    assert (d.tong_mon, d.ut_tong, d.tong_xt) == (0.0, 0.0, 0.0)
+    assert (d.subject_total, d.priority_total, d.admission_total) == (0.0, 0.0, 0.0)
 
 
 def test_diem_in_tren_danh_sach_va_bien_ban(mau):

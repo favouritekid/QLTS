@@ -84,15 +84,15 @@ def _anh(dong):
     """``dong`` = [(pid, hàng, dữ liệu kiểm KHÔNG có stt)] theo thứ tự ĐẦU VÀO — ``stt`` = vị trí (1…)."""
     return ProfileSnapshot(
         rows=tuple(h for _, h, _ in dong),
-        don_vi=tuple(1 for _ in dong),
-        giao_dich=GD,
-        kiem=tuple(dataclasses.replace(k, stt=i) for i, (_, _, k) in enumerate(dong, 1)),
+        unit_ids=tuple(1 for _ in dong),
+        transaction=GD,
+        check_data=tuple(dataclasses.replace(k, stt=i) for i, (_, _, k) in enumerate(dong, 1)),
         pids=tuple(p for p, _, _ in dong),
     )
 
 
 def _dau(anh, nam=2026):
-    return bo_vb.preview_signature(bo_vb.normalize_rows(anh, cong.evaluate(anh.kiem)), nam)
+    return bo_vb.preview_signature(bo_vb.normalize_rows(anh, cong.evaluate(anh.check_data)), nam)
 
 
 A = (101, _hang(ten="An", tong_diem="18.00"), _kiem(0))
@@ -109,7 +109,7 @@ def test_dau_bat_bien_thu_tu_dau_vao():
     ds = [_anh(x) for x in ([A, B, C], [C, B, A], [B, C, A])]
     assert len({_dau(a) for a in ds}) == 1
     thu_tu = {
-        tuple(d.pid for d in bo_vb.normalize_rows(a, cong.evaluate(a.kiem))) for a in ds
+        tuple(d.pid for d in bo_vb.normalize_rows(a, cong.evaluate(a.check_data))) for a in ds
     }
     # Nhóm "Công nghệ ô tô" < "Điện" (chữ); trong nhóm điểm giảm: Bình 20 trước An 18.
     assert thu_tu == {(102, 101, 103)}
@@ -125,7 +125,7 @@ def test_dau_nhay_voi_khoa_dem_ngoai_anh_in():
     # pbk_doi_khoa_dem (mức hàm): đổi khoá đếm của NV in (không có trong ảnh in, không đổi cổng) ⇒ dấu đổi.
     doi = (A[0], A[1], dataclasses.replace(A[2], nv_in_offering_id=99))
     a1, a2 = _anh([A, B]), _anh([doi, B])
-    assert cong.evaluate(a1.kiem).chan == cong.evaluate(a2.kiem).chan == ()
+    assert cong.evaluate(a1.check_data).blocks == cong.evaluate(a2.check_data).blocks == ()
     assert _dau(a1) != _dau(a2)
 
 
@@ -135,8 +135,8 @@ def test_dau_nhay_voi_muc_cong():
     cung_muc = (A[0], A[1], dataclasses.replace(A[2], status="admitted"))
     assert _dau(_anh([A, B])) != _dau(_anh([cung_muc, B]))
     canh_bao = (A[0], A[1], dataclasses.replace(A[2], status="submitted"))
-    dc = bo_vb.normalize_rows(_anh([canh_bao, B]), cong.evaluate(_anh([canh_bao, B]).kiem))
-    assert {d.pid: d.muc for d in dc}[101] == bo_vb.ITEM_NEEDS_CONFIRMATION
+    dc = bo_vb.normalize_rows(_anh([canh_bao, B]), cong.evaluate(_anh([canh_bao, B]).check_data))
+    assert {d.pid: d.item for d in dc}[101] == bo_vb.ITEM_NEEDS_CONFIRMATION
 
 
 def test_dau_nhay_voi_nam_va_khoa_hmac(monkeypatch):
@@ -153,15 +153,15 @@ def test_thu_tu_pha_hoa_bang_id_ho_so():
     y = (204, _hang(ma_ho_so="000000000004", ten="An", tong_diem="18.00"), _kiem(0))
     for dong in ([x, y], [y, x]):
         a = _anh(dong)
-        assert [d.pid for d in bo_vb.normalize_rows(a, cong.evaluate(a.kiem))] == [204, 205]
+        assert [d.pid for d in bo_vb.normalize_rows(a, cong.evaluate(a.check_data))] == [204, 205]
 
 
 def test_dong_bi_chan_van_sap_duoc_va_mang_ma_ly_do():
     chan = (106, _hang(ma_ho_so="000000000006", ten="Dũng"), _kiem(0, hp_co=False))
     a = _anh([A, chan])
-    dc = {d.pid: d for d in bo_vb.normalize_rows(a, cong.evaluate(a.kiem))}
-    assert dc[106].muc == bo_vb.ITEM_BLOCKED and "thieu_hoc_phi_hk1" in dc[106].ma_ly_do
-    assert dc[101].muc == bo_vb.ITEM_BUILDABLE and dc[101].ma_ly_do == ()
+    dc = {d.pid: d for d in bo_vb.normalize_rows(a, cong.evaluate(a.check_data))}
+    assert dc[106].item == bo_vb.ITEM_BLOCKED and "thieu_hoc_phi_hk1" in dc[106].reason_codes
+    assert dc[101].item == bo_vb.ITEM_BUILDABLE and dc[101].reason_codes == ()
 
 
 def test_bo_dung_dung_mot_nguon_khoa_sap():

@@ -245,15 +245,15 @@ async def test_tinh_trang_qd_cong_dung_bo_bang_ham_hoi_mot_nguon(client, hs, ad)
     async with AsyncSessionLocal() as db:
         tt = await tq.decision_state(db, pids)
     anh = await read_profiles_by_id(csdl.engine, pids, academic_year=2026)
-    for k, p in zip(anh.kiem, pids):
+    for k, p in zip(anh.check_data, pids):
         assert (k.qd_hieu_luc_id, k.qd_chuoi_id, k.cho_quyet_id, k.dau_appsheet) == (
-            tt[p].qd_hieu_luc_id,
-            tt[p].qd_chuoi_id,
-            tt[p].cho_quyet_id,
-            tt[p].dau_appsheet,
+            tt[p].effective_decision_id,
+            tt[p].chain_decision_id,
+            tt[p].pending_hold_id,
+            tt[p].appsheet_mark,
         ), p
-    assert [tt[p].ma for p in pids] == [tq.CQ, tq.XL, tq.HL, tq.KO, tq.KO]
-    assert [tt[p].dau_appsheet for p in pids] == [False, False, False, True, False]
+    assert [tt[p].code for p in pids] == [tq.AWAITING_ADMIN, tq.RECHECK_ALLOWED, tq.HAS_EFFECTIVE_DECISION, tq.NO_DECISION, tq.NO_DECISION]
+    assert [tt[p].appsheet_mark for p in pids] == [False, False, False, True, False]
 
 
 # ═══════════════════════════════ C3 — ghi nhận ═════════════════════════════════════════════

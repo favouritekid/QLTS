@@ -250,7 +250,7 @@ def _noi_doi_kich_thuoc(b, ten_muc, kich_thuoc=100, crc=None):
     return bytes(out)
 
 
-GIOI_HAN_NHO = kho_mau.PackageLimits(tep=1024 * 1024, giai_nen=1024 * 1024, so_muc=40)
+GIOI_HAN_NHO = kho_mau.PackageLimits(max_file_bytes=1024 * 1024, max_uncompressed_bytes=1024 * 1024, max_entries=40)
 
 
 @pytest.mark.parametrize(
@@ -268,7 +268,7 @@ GIOI_HAN_NHO = kho_mau.PackageLimits(tep=1024 * 1024, giai_nen=1024 * 1024, so_m
 async def test_goi_zip_xau_bi_chan_truoc_python_docx(hs, monkeypatch, ca):
     b = MAU_GIA["bien_ban"]
     if ca == "tep_qua_co":
-        b, loi = b + b"\x00" * (GIOI_HAN_NHO.tep + 1 - len(b)), FileSizeError
+        b, loi = b + b"\x00" * (GIOI_HAN_NHO.max_file_bytes + 1 - len(b)), FileSizeError
     elif ca == "qua_nhieu_muc":
         b, loi = (
             _goi(b, [("gia/%d.xml" % i, b"<x/>", True) for i in range(40)]),
@@ -370,7 +370,7 @@ async def test_kieu_nen_ngoai_danh_sach_bi_chan_luc_tai_len_truoc_khi_giai_nen(
 
 def test_gioi_han_mac_dinh_doc_tu_cau_hinh_va_mau_gia_qua_duoc():
     gh = kho_mau.PackageLimits.from_settings()
-    assert (gh.tep, gh.giai_nen, gh.so_muc) == (
+    assert (gh.max_file_bytes, gh.max_uncompressed_bytes, gh.max_entries) == (
         settings.COUNCIL_TEMPLATE_MAX_BYTES,
         settings.COUNCIL_TEMPLATE_MAX_UNCOMPRESSED_BYTES,
         settings.COUNCIL_TEMPLATE_MAX_ZIP_ENTRIES,
@@ -382,7 +382,7 @@ def test_gioi_han_mac_dinh_doc_tu_cau_hinh_va_mau_gia_qua_duoc():
 
 
 # ═══════════════════════════════ K4 — biên giải nén (thuần, không CSDL) ═════════════
-GH_BIEN = kho_mau.PackageLimits(tep=4 * 1024 * 1024, giai_nen=200_000, so_muc=40)
+GH_BIEN = kho_mau.PackageLimits(max_file_bytes=4 * 1024 * 1024, max_uncompressed_bytes=200_000, max_entries=40)
 
 
 @pytest.fixture
@@ -415,16 +415,16 @@ def _tong_khai(b):
 
 
 def test_bien_giai_nen_dung_bang_gioi_han_thi_nhan(bo_qua_phan_goi_word):
-    b = _goi_tong(GH_BIEN.giai_nen)
-    assert _tong_khai(b) == GH_BIEN.giai_nen
+    b = _goi_tong(GH_BIEN.max_uncompressed_bytes)
+    assert _tong_khai(b) == GH_BIEN.max_uncompressed_bytes
     kho_mau.check_template_package(b, "Biên bản", GH_BIEN)  # đúng bằng giới hạn ⇒ NHẬN
     assert bo_qua_phan_goi_word == ["Biên bản"]
 
 
 def test_bien_giai_nen_vuot_mot_byte_thi_tu_choi():
-    b = _goi_tong(GH_BIEN.giai_nen + 1)
+    b = _goi_tong(GH_BIEN.max_uncompressed_bytes + 1)
     with pytest.raises(
-        FileValidationError, match="khai báo %d byte" % (GH_BIEN.giai_nen + 1)
+        FileValidationError, match="khai báo %d byte" % (GH_BIEN.max_uncompressed_bytes + 1)
     ):
         kho_mau.check_template_package(b, "Biên bản", GH_BIEN)
 
@@ -433,9 +433,9 @@ def test_tieu_de_noi_doi_noi_dung_that_vuot_mot_byte_thi_tu_choi():
     # Một mục: dữ liệu THẬT = giới hạn + 1, tiêu đề KHAI đúng giới hạn (tổng khai qua được phép
     # kiểm khai báo), CRC là CRC của dữ liệu thật ⇒ zipfile cắt ở số khai, CRC lệch ⇒ từ chối.
     b = _noi_doi_kich_thuoc(
-        _goi_tong(GH_BIEN.giai_nen + 1, 1), "gia/0.bin", GH_BIEN.giai_nen
+        _goi_tong(GH_BIEN.max_uncompressed_bytes + 1, 1), "gia/0.bin", GH_BIEN.max_uncompressed_bytes
     )
-    assert _tong_khai(b) == GH_BIEN.giai_nen
+    assert _tong_khai(b) == GH_BIEN.max_uncompressed_bytes
     with pytest.raises(FileValidationError, match="gói zip hỏng"):
         kho_mau.check_template_package(b, "Biên bản", GH_BIEN)
 
@@ -462,7 +462,7 @@ def test_dem_giai_nen_that_doc_lap_voi_kich_thuoc_khai(
     # Trần đếm byte THẬT là lớp PHỤ (zipfile đã cắt theo số khai — ca trên). Giả lập một bộ
     # đọc KHÔNG cắt: tiêu đề khai 2 × 10 byte, dữ liệu thật = giới hạn + ``du``.
     b = _goi_tong(20)
-    that = iter([GH_BIEN.giai_nen // 2, GH_BIEN.giai_nen - GH_BIEN.giai_nen // 2 + du])
+    that = iter([GH_BIEN.max_uncompressed_bytes // 2, GH_BIEN.max_uncompressed_bytes - GH_BIEN.max_uncompressed_bytes // 2 + du])
     monkeypatch.setattr(
         zipfile.ZipFile, "open", lambda self, m, *a, **k: io.BytesIO(b"0" * next(that))
     )
@@ -617,7 +617,7 @@ async def test_tao_bo_ghi_metadata_va_bytes_nguyen_tung_tep(hs, monkeypatch):
         assert all("noi_dung" in inspect(t).unloaded for t in tep)
         for t, f in zip(tep, kq.files):
             luu = await bo_vb.read_stored_file(db, b.id, t.thu_tu)
-            assert luu.noi_dung == f.content  # bytes NGUYÊN
+            assert luu.content == f.content  # bytes NGUYÊN
             assert luu.sha256 == f.sha256 == t.sha256 and luu.path == t.path == f.path
     # Tải lại KHÔNG dựng lại.
     monkeypatch.setattr(
@@ -714,7 +714,7 @@ async def test_ghi_bo_o_giao_dich_khac_giao_dich_doc(hs, monkeypatch):
         trang_thai = (
             await db.execute(
                 text("SELECT state FROM pg_stat_activity WHERE pid = :p"),
-                {"p": bat["anh"].giao_dich.backend_pid},
+                {"p": bat["anh"].transaction.backend_pid},
             )
         ).scalar_one_or_none()
         # Hàng của bộ nằm trong giao dịch CÒN MỞ của request: phiên khác chưa thấy ⇒ chỉ
@@ -724,13 +724,13 @@ async def test_ghi_bo_o_giao_dich_khac_giao_dich_doc(hs, monkeypatch):
     assert await _dem() == (1, bo.so_tep)
     anh = bat["anh"]
     assert do.ro == "off"  # giao dịch ghi là giao dịch đọc-ghi thường của request
-    assert anh.giao_dich.transaction_read_only == "on"  # giao dịch đọc chỉ đọc
-    assert bo.moc_chup == anh.giao_dich.moc_chup  # mốc chụp = mốc của giao dịch ĐỌC
+    assert anh.transaction.transaction_read_only == "on"  # giao dịch đọc chỉ đọc
+    assert bo.moc_chup == anh.transaction.snapshot_at  # mốc chụp = mốc của giao dịch ĐỌC
     # Hai giao dịch KHÁC nhau: (tiến trình máy chủ, lúc bắt đầu giao dịch) khác.
-    assert (do.pid, do.ts) != (anh.giao_dich.backend_pid, anh.giao_dich.moc_chup)
+    assert (do.pid, do.ts) != (anh.transaction.backend_pid, anh.transaction.snapshot_at)
     # Giao dịch đọc đã kết thúc trước khi ghi: kết nối của nó rảnh (hoặc đã đóng), hoặc chính
     # là kết nối phiên request đang dùng cho một giao dịch KHÁC (đã khẳng định ở trên).
-    assert trang_thai in (None, "idle") or do.pid == anh.giao_dich.backend_pid
+    assert trang_thai in (None, "idle") or do.pid == anh.transaction.backend_pid
 
 
 async def _dung_loi_buoc(buoc, hs, db, monkeypatch):

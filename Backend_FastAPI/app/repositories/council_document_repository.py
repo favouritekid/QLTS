@@ -216,13 +216,13 @@ class CouncilDocumentRepository:
         ).scalar_one_or_none()
 
     async def list_sets(
-        self, *, chi_don_vi: Optional[int], tat_ca: bool, limit: int, offset: int
+        self, *, only_unit_id: Optional[int], all_units: bool, limit: int, offset: int
     ) -> List[CouncilDocumentSet]:
-        """Bộ mới trước. ``tat_ca`` ⇒ mọi bộ; không thì CHỈ bộ có ``unit_id == chi_don_vi``
+        """Bộ mới trước. ``all_units`` ⇒ mọi bộ; không thì CHỈ bộ có ``unit_id == only_unit_id``
         (bộ ``unit_id`` NULL không bao giờ khớp). Người gọi (service) chặn tổ hợp lạ."""
         q = select(CouncilDocumentSet)
-        if not tat_ca:
-            q = q.where(CouncilDocumentSet.unit_id == chi_don_vi)
+        if not all_units:
+            q = q.where(CouncilDocumentSet.unit_id == only_unit_id)
         q = (
             q.order_by(CouncilDocumentSet.tao_luc.desc(), CouncilDocumentSet.id.desc())
             .limit(limit)
@@ -233,10 +233,10 @@ class CouncilDocumentRepository:
     async def list_sets_extended(
         self,
         *,
-        tat_ca: bool,
-        chi_don_vi: Optional[int],
+        all_units: bool,
+        only_unit_id: Optional[int],
         set_id: Optional[int] = None,
-        nam_hoc: Optional[int] = None,
+        academic_year: Optional[int] = None,
         creator_id: Optional[int] = None,
         decision_number: Optional[str] = None,
         state: Optional[str] = None,
@@ -247,10 +247,10 @@ class CouncilDocumentRepository:
         rows = await self.db.execute(
             SQL_SET_EXTENDED,
             {
-                "tat_ca": tat_ca,
-                "don_vi": chi_don_vi,
+                "tat_ca": all_units,
+                "don_vi": only_unit_id,
                 "set_id": set_id,
-                "nam": None if nam_hoc is None else str(nam_hoc),
+                "nam": None if academic_year is None else str(academic_year),
                 "nguoi": creator_id,
                 "so": decision_number,
                 "tt": state,
@@ -261,20 +261,20 @@ class CouncilDocumentRepository:
         return [dict(r._mapping) for r in rows.all()]
 
     async def set_creators(
-        self, *, tat_ca: bool, chi_don_vi: Optional[int]
+        self, *, all_units: bool, only_unit_id: Optional[int]
     ) -> List[Dict[str, Any]]:
         rows = await self.db.execute(
-            SQL_SET_CREATORS, {"tat_ca": tat_ca, "don_vi": chi_don_vi}
+            SQL_SET_CREATORS, {"tat_ca": all_units, "don_vi": only_unit_id}
         )
         return [dict(r._mapping) for r in rows.all()]
 
     async def user_names(self, ids: Sequence[int]) -> Dict[int, str]:
-        ds = sorted({int(i) for i in ids if i is not None})
-        if not ds:
+        ids_sorted = sorted({int(i) for i in ids if i is not None})
+        if not ids_sorted:
             return {}
         return {
             r[0]: r[1]
-            for r in (await self.db.execute(SQL_NAME_BY_ID, {"ids": ds})).all()
+            for r in (await self.db.execute(SQL_NAME_BY_ID, {"ids": ids_sorted})).all()
         }
 
     async def set_files_with_content(self, set_id: int) -> List[CouncilDocumentSetFile]:
@@ -292,7 +292,7 @@ class CouncilDocumentRepository:
             .all()
         )
 
-    async def danh_sach_tep(self, set_id: int) -> List[CouncilDocumentSetFile]:
+    async def list_set_files(self, set_id: int) -> List[CouncilDocumentSetFile]:
         """Các tệp của một bộ theo ``thu_tu`` — KHÔNG nạp bytes."""
         return list(
             (
@@ -325,13 +325,13 @@ class CouncilDocumentRepository:
         await self.db.flush()
         return trace
 
-    async def xoa_bo(self, set_id: int) -> int:
+    async def delete_set(self, set_id: int) -> int:
         """Xoá MỘT bộ (tệp theo ``ON DELETE CASCADE`` của CSDL); trả số bộ đã xoá. Flush,
         không commit — người gọi giữ vết xoá trong CÙNG giao dịch."""
-        kq = await self.db.execute(
+        result = await self.db.execute(
             delete(CouncilDocumentSet).where(CouncilDocumentSet.id == set_id)
         )
-        return kq.rowcount
+        return result.rowcount
 
     async def list_deletion_traces(
         self, *, limit: int, offset: int

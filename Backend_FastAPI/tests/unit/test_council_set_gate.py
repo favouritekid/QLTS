@@ -223,14 +223,14 @@ def test_danh_gia_gom_theo_ly_do_va_trang_thai_so_dong_tang_dan():
     kq = cong.evaluate(
         _ds("approved", "draft", "submitted", "withdrawn", "submitted", "draft", "lạ")
     )
-    assert kq.chan == (
+    assert kq.blocks == (
         ("trang_thai_chan", "draft", (2, 6)),
         ("trang_thai_chan", "withdrawn", (4,)),
         ("trang_thai_la", "lạ", (7,)),
     )
-    assert kq.canh_bao == {"submitted": (3, 5)}
+    assert kq.warnings == {"submitted": (3, 5)}
     assert kq.warning_count() == {"submitted": 2}
-    assert kq.diem_kv == tuple("0.%d0" % i for i in range(1, 8))
+    assert kq.area_scores == tuple("0.%d0" % i for i in range(1, 8))
     assert kq.count_by_status() == {
         "approved": 1,
         "draft": 2,
@@ -366,20 +366,20 @@ def test_payload_chi_so_dong_ma_ly_do_trang_thai():
 
 # ═══════════════ Câu 22 (owner 06-11) — điểm KV in theo luật cộng điểm của đường xét ═══════════
 def test_luat_cong_kv_thi_in_muc_theo_nam_hoc():
-    assert cong.evaluate([_sach()]).diem_kv == ("0.75",)
+    assert cong.evaluate([_sach()]).area_scores == ("0.75",)
 
 
 @pytest.mark.parametrize("luat", [cong.AREA_RULE_OFF, cong.AREA_RULE_NONE])
 def test_luat_tat_hoac_khong_co_luat_thi_in_0(luat):
     kq = cong.evaluate([_sach(luat_kv=luat)])
-    assert kq.chan == () and kq.diem_kv == (cong.AREA_SCORE_NOT_ADDED,)
+    assert kq.blocks == () and kq.area_scores == (cong.AREA_SCORE_NOT_ADDED,)
 
 
 @pytest.mark.parametrize("luat", [None, "la", True])
 def test_luat_khong_xac_dinh_thi_chan(luat):
     k = _sach(luat_kv=luat)
     assert cong.row_block_reason(k) == ["khong_xac_dinh_luat_cong_diem_kv"]
-    assert cong.evaluate([k]).diem_kv == (None,)
+    assert cong.evaluate([k]).area_scores == (None,)
 
 
 def test_dem_so_ho_so_theo_luat_kv():
@@ -438,8 +438,8 @@ def test_hai_cong_tac_doc_lap():
             _sach(stt=2, luat_kv=cong.AREA_RULE_OFF),
         ]
     )
-    assert kq.diem_kv == ("0.75", cong.AREA_SCORE_NOT_ADDED)
-    assert kq.luat_ut == (cong.AREA_RULE_OFF, cong.AREA_RULE_ADD)
+    assert kq.area_scores == ("0.75", cong.AREA_SCORE_NOT_ADDED)
+    assert kq.priority_rules == (cong.AREA_RULE_OFF, cong.AREA_RULE_ADD)
 
 
 def test_dem_so_ho_so_theo_luat_doi_tuong():

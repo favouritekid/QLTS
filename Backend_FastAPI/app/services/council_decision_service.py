@@ -258,12 +258,12 @@ def _compare_params(
 async def _check_templates_by_signing_date(db: AsyncSession, doc_set: CouncilDocumentSet, signing_date: date) -> None:
     """BS §3.2 (G10): ba mẫu đúng theo NGÀY KÝ (cùng hàm chọn ``effective_template`` của kho mẫu) phải trùng
     id + sha ba mẫu bộ đã dùng — "căn cứ trên văn bản theo ngày ký" (J1 dòng 7)."""
-    da_dung = (doc_set.thong_tin_dung or {}).get("mau_da_dung") or {}
+    used_templates = (doc_set.thong_tin_dung or {}).get("mau_da_dung") or {}
     repo = CouncilDocumentRepository(db)
     mismatch = []
     for kind in render_service.TEMPLATE_KINDS:
         m = await repo.effective_template(kind, signing_date)
-        d = da_dung.get(kind) or {}
+        d = used_templates.get(kind) or {}
         if m is None or d.get("id") != m.id or d.get("sha256") != m.sha256:
             mismatch.append(kind)
     if mismatch:
@@ -291,18 +291,18 @@ def _count_status_changes(set_rows, current: Dict[int, str]):
     return counts, row, odd
 
 
-def _block_by_state(set_rows, tt, allowed_chain: Optional[int] = None):
+def _block_by_state(set_rows, states, allowed_chain: Optional[int] = None):
     """Dòng bị chặn vì tình trạng Quyết định (HL ở văn bản khác / chờ quyết / dấu AppSheet) — luật là
     ĐÚNG hàm của cổng dựng bộ (:func:`decision_state_block_reason`, CLAUDE.md §7), đọc trên tình trạng của hàm hỏi."""
     out = []
     for d in set_rows:
-        t = tt.get(d.profile_id)
+        t = states.get(d.profile_id)
         if t is None:
             continue
         code = decision_state_block_reason(t, allowed_chain)
         if code:
             out.append(
-                {"dong": d.stt, "ly_do": code[0], "ma": code, "quyet_dinh_id": t.qd_hieu_luc_id}
+                {"dong": d.stt, "ly_do": code[0], "ma": code, "quyet_dinh_id": t.effective_decision_id}
             )
     return out
 
@@ -351,7 +351,7 @@ async def _number_not_in_use(repo, number: str, scope: int) -> None:
 async def _decision_file_sha(db: AsyncSession, set_id: int) -> str:
     file = [
         t
-        for t in await CouncilDocumentRepository(db).danh_sach_tep(set_id)
+        for t in await CouncilDocumentRepository(db).list_set_files(set_id)
         if t.path.startswith(DECISION_FILE)
     ]
     if len(file) != 1:
@@ -444,7 +444,7 @@ async def record_decision(
                 or confirm_profile_count != doc_set.so_ho_so
             ):
                 raise DataValidationError("Số hồ sơ gõ lại không khớp số hồ sơ của bộ.")
-            tham_so_ban_ky = _compare_params(doc_set, number, date_value, paper_params or {})
+            signed_copy_params = _compare_params(doc_set, number, date_value, paper_params or {})
             await _check_templates_by_signing_date(db, doc_set, date_value)
             if doc_set.ban_ky_so_quyet_dinh is None and date_value < vn_calendar_date(doc_set.tao_luc):
                 raise DataValidationError(
@@ -483,7 +483,7 @@ async def record_decision(
                 ngay_ky=date_value,
                 pham_vi_so=date_value.year,
                 trang_thai="hieu_luc",
-                tham_so_ban_ky=tham_so_ban_ky,
+                tham_so_ban_ky=signed_copy_params,
                 so_ho_so=len(row),
                 sha_tep_quyet_dinh=await _decision_file_sha(db, doc_set.id),
                 xac_nhan={
@@ -624,18 +624,18 @@ async def record_adjustment_decision(
             removed_rows = await repo.rows_by_id(removed_ids)
             if len(removed_rows) != len(removed_ids):
                 raise DataValidationError("Có dòng bỏ không tồn tại.")
-            sai = [
+            wrong_rows = [
                 d.id
                 for d in removed_rows
                 if d.decision_id not in chain
                 or d.trang_thai_cha != "hieu_luc"
                 or d.bi_bo_boi_id is not None
             ]
-            if sai:
+            if wrong_rows:
                 raise ConflictError(
                     "Dòng %s không phải dòng đang hiệu lực của chuỗi Quyết định này."
-                    % ", ".join(map(str, sai)),
-                    public_payload={"dong_khong_hop_le": sai},
+                    % ", ".join(map(str, wrong_rows)),
+                    public_payload={"dong_khong_hop_le": wrong_rows},
                 )
             await _number_not_in_use(repo, number, date_value.year)
             added_pids = [d.profile_id for d in added_rows]
@@ -646,19 +646,19 @@ async def record_adjustment_decision(
             await lock_quota_of_set_rows(db, [d.id for d in added_rows])
             # Q-J1: dòng THÊM phải đủ khoá đếm + khớp chuỗi (dưới khoá, trước ghi).
             await check_lock_and_count_set_rows(db, [(d.stt, d.id) for d in added_rows])
-            tt = await decision_state(db, added_pids)
-            blocked = _block_by_state(added_rows, tt, allowed_chain=root.id)
+            states = await decision_state(db, added_pids)
+            blocked = _block_by_state(added_rows, states, allowed_chain=root.id)
             removed_id_set = set(removed_ids)
             for d in added_rows:  # em có dòng trong chuỗi thì dòng ấy PHẢI nằm trong danh sách bỏ
-                t = tt.get(d.profile_id)
-                if t is not None and t.qd_hieu_luc_id is not None and t.qd_chuoi_id == root.id:
+                t = states.get(d.profile_id)
+                if t is not None and t.effective_decision_id is not None and t.chain_decision_id == root.id:
                     old = await repo.effective_rows_of_profiles([d.profile_id])
                     if old.get(d.profile_id) is None or old[d.profile_id].id not in removed_id_set:
                         blocked.append(
                             {
                                 "dong": d.stt,
                                 "ly_do": "chua_bo_dong_cu",
-                                "quyet_dinh_id": t.qd_hieu_luc_id,
+                                "quyet_dinh_id": t.effective_decision_id,
                             }
                         )
             if blocked:
@@ -787,7 +787,7 @@ async def cancel_effect(
             await db.flush()
             new: Dict[int, CouncilDecisionHold] = {}
             already_in_group = 0
-            for d, ly_do_vao in [(d, "qd_bi_huy") for d in effective_rows] + [
+            for d, entry_reason in [(d, "qd_bi_huy") for d in effective_rows] + [
                 (d, "bi_bo_boi_van_ban_bi_huy") for d in dropped_rows
             ]:
                 p = d.profile_id
@@ -796,13 +796,13 @@ async def cancel_effect(
                 if p in open_holds:
                     already_in_group += 1
                     continue
-                if ly_do_vao == "bi_bo_boi_van_ban_bi_huy" and p in other_effective:
+                if entry_reason == "bi_bo_boi_van_ban_bi_huy" and p in other_effective:
                     continue  # em đang có Quyết định hiệu lực khác — không cần chờ
                 new[p] = CouncilDecisionHold(
                     profile_id=p,
                     decision_row_id=d.id,
                     van_ban_huy_id=h.id,
-                    ly_do_vao=ly_do_vao,
+                    ly_do_vao=entry_reason,
                     trang_thai="cho_quyet",
                 )
             figures = {
@@ -833,7 +833,7 @@ async def revoke_record(
     decision_id: int,
     *,
     reason: object,
-    so_go_lai: object,
+    retyped_number: object,
     confirmation: object,
     actor_id: int,
 ) -> Tuple[CouncilDecision, Dict[str, int], List[Dict[str, Any]]]:
@@ -841,7 +841,7 @@ async def revoke_record(
     Chỉ gỡ được văn bản MỚI NHẤT còn sống của chuỗi. Văn bản huỷ: văn bản đích có hiệu lực lại (CSDL lan
     + U3 chặn nếu em đã ở Quyết định khác); mọi mục chờ nó sinh ⇒ ``vo_hieu`` — trong CÙNG giao dịch."""
     reason = check_reason(reason, "huỷ ghi nhận")
-    xn = check_status_confirmation(confirmation)
+    confirmed = check_status_confirmation(confirmation)
     repo = CouncilDecisionRepository(db)
     figures: Dict[str, int] = {}
     try:
@@ -849,7 +849,7 @@ async def revoke_record(
             x = await repo.lock_decision(decision_id)
             if x is None:
                 raise ResourceNotFoundError("Không có văn bản này.")
-            if so_go_lai != x.so_quyet_dinh:
+            if retyped_number != x.so_quyet_dinh:
                 raise DataValidationError("Số văn bản gõ lại không khớp.")
             if x.trang_thai == "huy_ghi_nhan":
                 raise ConflictError("Văn bản đã được huỷ ghi nhận.")
@@ -896,16 +896,16 @@ async def revoke_record(
             if target is not None:
                 counts: Dict[str, int] = {}
                 row: Dict[str, List[int]] = {}
-                n_xl = [m for m in item if m.trang_thai == "da_cho_xet_lai"]
-                if n_xl:
-                    counts["da_cho_xet_lai"] = len(n_xl)
+                recheck_items = [m for m in item if m.trang_thai == "da_cho_xet_lai"]
+                if recheck_items:
+                    counts["da_cho_xet_lai"] = len(recheck_items)
                 for d in reactivated:
                     s = current.get(d.profile_id)
                     if s is not None and s not in NON_WARNING_STATUSES:
                         counts[s] = counts.get(s, 0) + 1
                         row.setdefault(s, []).append(d.stt)
-                _check_count_confirmation(counts, row, xn, "Huỷ ghi nhận văn bản huỷ")
-            elif xn is not None:
+                _check_count_confirmation(counts, row, confirmed, "Huỷ ghi nhận văn bản huỷ")
+            elif confirmed is not None:
                 raise ConflictError("Không còn gì cần xác nhận — gửi lại không kèm xác nhận.")
             time = datetime.now(timezone.utc)
             x.trang_thai = "huy_ghi_nhan"

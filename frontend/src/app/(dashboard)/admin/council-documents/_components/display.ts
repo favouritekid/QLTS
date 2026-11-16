@@ -5,8 +5,8 @@ import { getStatusConfig } from "@/lib/status-config"
 
 /** Nhãn trạng thái hồ sơ (chỉ để đọc) + mã gốc của máy chủ — mức chặn / cảnh báo do MÁY CHỦ quyết. */
 export function statusLabel(s: string): string {
-  const nhan = getStatusConfig(s).label
-  return nhan && nhan !== s ? `${nhan} (${s})` : s
+  const labelText = getStatusConfig(s).label
+  return labelText && labelText !== s ? `${labelText} (${s})` : s
 }
 
 /** Nhãn loại mẫu — trùng `TEN_LOAI` của `council_document_template_service.py`. Loại lạ ⇒ in nguyên. */
@@ -16,8 +16,8 @@ const TEMPLATE_KIND_LABELS: Record<string, string> = {
   danh_sach: "Danh sách xét tuyển",
 }
 
-export function templateKindLabel(loai: string): string {
-  return TEMPLATE_KIND_LABELS[loai] ?? loai
+export function templateKindLabel(kind: string): string {
+  return TEMPLATE_KIND_LABELS[kind] ?? kind
 }
 
 /** sha256 rút gọn để nhìn (12 ký tự đầu) — bản đầy đủ ở thuộc tính `title`. */
@@ -47,18 +47,18 @@ export function formatTime(iso: string): string {
 }
 
 /** Ngày YYYY-MM-DD ⇒ dd/MM/yyyy (không qua múi giờ). */
-export function ngay(iso: string): string {
+export function formatDate(iso: string): string {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso)
   return m ? `${m[3]}/${m[2]}/${m[1]}` : iso
 }
 
-export function nguoi(id: number | null): string {
+export function userIdLabel(id: number | null): string {
   return id === null ? "—" : `Tài khoản #${id}`
 }
 
 /** Tên người máy chủ trả (`nguoi_tao_ten` / `nguoi_tai_ten` / `nguoi_xoa_ten`: họ tên, không có thì tên đăng nhập); `null` (tài khoản không còn) ⇒ "Tài khoản #n". */
-export function userLabel(ten: string | null | undefined, id: number | null): string {
-  return ten ? ten : nguoi(id)
+export function userLabel(name: string | null | undefined, id: number | null): string {
+  return name ? name : userIdLabel(id)
 }
 
 // ── mức kiểm trước (bước 1–2) ────────────────────────────────────────────────
@@ -68,8 +68,8 @@ const CHECK_ITEM_LABELS: Record<string, string> = {
   bi_chan: "Bị chặn",
 }
 /** Nhãn mức do MÁY CHỦ quyết; mã lạ ⇒ in nguyên (không suy mức). */
-export function checkItemLabel(muc: string): string {
-  return CHECK_ITEM_LABELS[muc] ?? muc
+export function checkItemLabel(item: string): string {
+  return CHECK_ITEM_LABELS[item] ?? item
 }
 
 // ── tình trạng bộ / văn bản (danh sách bộ, bước 6) ───────────────────────────
@@ -90,8 +90,8 @@ const DECISION_KIND_LABELS: Record<string, string> = {
   trung_tuyen: "Quyết định trúng tuyển",
   bo_sung: "Quyết định bổ sung",
 }
-export function decisionKindLabel(loai: string): string {
-  return DECISION_KIND_LABELS[loai] ?? loai
+export function decisionKindLabel(kind: string): string {
+  return DECISION_KIND_LABELS[kind] ?? kind
 }
 
 const DECISION_STATUS_LABELS: Record<string, string> = {
@@ -113,18 +113,18 @@ const PASTE_CODE_REASON_LABELS: Record<string, string> = {
   khong_khop: "không khớp hồ sơ nào của năm học đã chọn (hoặc hồ sơ ngoài phạm vi của bạn)",
   nhieu_ho_so: "mã khớp nhiều hơn một hồ sơ",
 }
-export function pasteCodeReasonLabel(ly_do: string): string {
-  return PASTE_CODE_REASON_LABELS[ly_do] ?? ly_do
+export function pasteCodeReasonLabel(reason: string): string {
+  return PASTE_CODE_REASON_LABELS[reason] ?? reason
 }
 
 /** Ngành trên hồ sơ để hiện: hồ sơ không có ngành (máy chủ trả chuỗi rỗng) ⇒ "—", như màn Hồ sơ tuyển sinh. */
-export function majorLabel(nganh: string): string {
-  return nganh.trim() === "" ? "—" : nganh
+export function majorLabel(major: string): string {
+  return major.trim() === "" ? "—" : major
 }
 
 /** "Ngành · trình độ" của một dòng kiểm trước. */
-export function majorWithLevel(nganh: string, level: string): string {
-  const n = majorLabel(nganh)
+export function majorWithLevel(major: string, level: string): string {
+  const n = majorLabel(major)
   return level ? `${n} · ${level}` : n
 }
 
@@ -155,6 +155,6 @@ const COMPARE_FIELD_LABELS: Record<string, string> = {
   ut_ma: "Đối tượng ưu tiên",
   diem_ut: "Điểm ưu tiên",
 }
-export function compareFieldLabel(khoa: string): string {
-  return COMPARE_FIELD_LABELS[khoa] ?? khoa
+export function compareFieldLabel(key: string): string {
+  return COMPARE_FIELD_LABELS[key] ?? key
 }

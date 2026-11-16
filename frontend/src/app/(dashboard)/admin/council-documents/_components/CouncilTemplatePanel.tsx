@@ -33,7 +33,7 @@ import {
 } from "@/lib/zod/council-documents"
 
 import { CouncilErrorAlert } from "./CouncilErrorAlert"
-import { formatSize, ngay, nguoi, templateKindLabel, shortSha, formatTime } from "./display"
+import { formatSize, formatDate, userIdLabel, templateKindLabel, shortSha, formatTime } from "./display"
 
 /** Kho mẫu: danh sách (cờ `xem_mau`) + tải mẫu mới (cờ `tai_mau_len`). */
 export function CouncilTemplatePanel({ canUpload }: { canUpload: boolean }) {
@@ -68,12 +68,12 @@ export function CouncilTemplatePanel({ canUpload }: { canUpload: boolean }) {
             {q.data.map((m) => (
               <TableRow key={m.id} data-testid={`template-row-${m.id}`}>
                 <TableCell>{templateKindLabel(m.loai)}</TableCell>
-                <TableCell>{ngay(m.hieu_luc_tu)}</TableCell>
+                <TableCell>{formatDate(m.hieu_luc_tu)}</TableCell>
                 <TableCell className="font-mono text-xs" title={m.sha256}>
                   {shortSha(m.sha256)}
                 </TableCell>
                 <TableCell className="text-right">{formatSize(m.kich_thuoc)}</TableCell>
-                <TableCell>{nguoi(m.nguoi_tai_id)}</TableCell>
+                <TableCell>{userIdLabel(m.nguoi_tai_id)}</TableCell>
                 <TableCell>{formatTime(m.tai_luc)}</TableCell>
                 <TableCell className="max-w-xs whitespace-pre-line">{m.ghi_chu ?? ""}</TableCell>
               </TableRow>
@@ -86,13 +86,13 @@ export function CouncilTemplatePanel({ canUpload }: { canUpload: boolean }) {
 }
 
 function UploadTemplateForm() {
-  const tai = useUploadCouncilTemplate()
-  const [loai, setKind] = useState<CouncilTemplateKind | "">("")
+  const upload = useUploadCouncilTemplate()
+  const [kind, setKind] = useState<CouncilTemplateKind | "">("")
   const [effective, setEffective] = useState("")
   const [note, setNote] = useState("")
-  const [tep, setFile] = useState<File | null>(null)
+  const [selectedFile, setFile] = useState<File | null>(null)
   const fileCell = useRef<HTMLInputElement>(null)
-  const submittable = loai !== "" && effective !== "" && tep !== null && !tai.isPending
+  const submittable = kind !== "" && effective !== "" && selectedFile !== null && !upload.isPending
 
   return (
     <form
@@ -100,12 +100,12 @@ function UploadTemplateForm() {
       data-testid="upload-template-form"
       onSubmit={(e) => {
         e.preventDefault()
-        if (loai === "" || effective === "" || tep === null || tai.isPending) return
-        tai.mutate(
-          { loai, hieu_luc_tu: effective, ghi_chu: note.trim() || undefined, file: tep },
+        if (kind === "" || effective === "" || selectedFile === null || upload.isPending) return
+        upload.mutate(
+          { loai: kind, hieu_luc_tu: effective, ghi_chu: note.trim() || undefined, file: selectedFile },
           {
             onSuccess: (m) => {
-              toast.success(`Đã tải mẫu ${templateKindLabel(m.loai)}, áp cho văn bản ký từ ${ngay(m.hieu_luc_tu)}.`)
+              toast.success(`Đã tải mẫu ${templateKindLabel(m.loai)}, áp cho văn bản ký từ ${formatDate(m.hieu_luc_tu)}.`)
               setFile(null)
               setNote("")
               if (fileCell.current) fileCell.current.value = ""
@@ -118,7 +118,7 @@ function UploadTemplateForm() {
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <div className="space-y-1">
           <Label htmlFor="mau-loai">Loại mẫu</Label>
-          <Select value={loai} onValueChange={(v) => setKind(v as CouncilTemplateKind)}>
+          <Select value={kind} onValueChange={(v) => setKind(v as CouncilTemplateKind)}>
             <SelectTrigger id="mau-loai" data-testid="upload-loai">
               <SelectValue placeholder="Chọn loại" />
             </SelectTrigger>
@@ -162,9 +162,9 @@ function UploadTemplateForm() {
           onChange={(e) => setNote(e.target.value)}
         />
       </div>
-      <CouncilErrorAlert error={tai.error} testId="upload-template-error" />
+      <CouncilErrorAlert error={upload.error} testId="upload-template-error" />
       <Button type="submit" disabled={!submittable} data-testid="upload-template-submit">
-        {tai.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+        {upload.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
         Tải mẫu lên
       </Button>
     </form>

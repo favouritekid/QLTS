@@ -185,22 +185,25 @@ def _nguon() -> dict:
 #: 15-11-2026 — đợt ĐỔI TÊN định danh mã ứng dụng sang tiếng Anh (refactor thuần, không đổi luật): băm HAM đổi vì tên định danh trong
 #: mã nguồn; băm HANG / GIA_TRI GIỮ NGUYÊN (giá trị hằng không đổi một byte). Cấu trúc AST từng tệp đã so với bản trước đợt đổi tên:
 #: giống hệt, chỉ khác định danh / docstring. MSW không phải sửa vì luật không đổi.
+#: 16-11-2026 — F339 (Codex 46): đổi nốt tên NỘI BỘ tiếng Việt (tham số / biến / trường lớp nội bộ) — refactor thuần, không đổi
+#: luật: 17 băm HAM đổi vì tên trong mã nguồn; HANG / GIA_TRI giữ nguyên; AST từng tệp so với ``a30a69c6`` chỉ khác định danh
+#: (137 cặp, đúng bảng ``kiem-thu-phien-a/ma/f339/bang-nguon.txt``) + docstring. MSW không phải sửa.
 GHIM = {
     "bo.CAU_DOI_TU_LUC_KIEM": "236fff0ad0195cf0",
     "bo.MA_LOI_DOI_TU_LUC_KIEM": "111c5b69b272ed2c",
-    "bo._dung_va_ghi_bo": "d9c3088d9a52984b",
+    "bo._dung_va_ghi_bo": "91e56cc88da8bd9e",
     "bo.kiem_danh_sach_id": "858d08fb92cca75a",  # review max PR #724: cận trên int4 — MSW chép cùng lượt
     "bo.kiem_ly_do": "fc6a62b3da5c6187",
     "bo.kiem_ly_do_xoa": "82d807e7fcf70d19",
-    "bo.so_voi_kiem_truoc": "ef089c77a7d56795",
+    "bo.so_voi_kiem_truoc": "a671e64a5618ffdf",
     "bo.tao_bo_van_ban": "590f755b6bd25e9f",
-    "bo.tao_bo_van_ban_theo_id": "5079197c8fe0bfeb",
+    "bo.tao_bo_van_ban_theo_id": "f1895ec7745d819e",
     "cau_hinh.COUNCIL_DECISION_SCAN_MAX_BYTES": "cb01a688cfdfae4b",  # review max PR #724 R1: 9 MiB — MSW chép cùng lượt
     "cau_hinh.COUNCIL_SET_MAX_PROFILES": "b09d7b699cf5ffdf",
     "dung.DecisionParams": "6e651ef48bffd4b4",  # review max PR #724 R7: số in sẵn không 0 đầu; Codex 42 F337 "0" nhận — MSW chép cùng lượt
     "luot.kiem_ma_luot": "069114521e4618bd",
     "mau.TEN_LOAI": "ff27ce4a7da9b1c2",
-    "mau.kiem_goi_mau": "6c5b54edfd761661",
+    "mau.kiem_goi_mau": "26fe78bd367aa519",
     "mau.tai_mau_len": "8b73bdb7e073f6e7",
     "model.LY_DO_XOA_TOI_DA": "40510175845988f1",
     "qd.TRUONG_THAM_SO_GIAY": "742204c74c586740",
@@ -209,8 +212,8 @@ GHIM = {
     "qd._gia_tri_json": "2e6e814855b117b3",
     "qd._so_chua_dung": "2b64bc35e8577a50",
     "qd._so_tham_so": "f86a51932da886f6",
-    "qd.ghi_nhan_quyet_dinh": "1fb9f6b2a9a84c7b",
-    "qd.huy_ghi_nhan": "2e623b1a543aca5f",
+    "qd.ghi_nhan_quyet_dinh": "ad8d9ea16ca62c50",
+    "qd.huy_ghi_nhan": "9feb998b06a85fd5",
     "qd.kiem_ngay": "ff50f4a05fb99172",  # review max PR #724 R7: ngày ký không sau hôm nay (giờ VN), câu = hằng nguyên văn — MSW chép cùng lượt
     "qd.kiem_scan": "a51c3ba6959c9bf3",
     "qd.kiem_so_quyet_dinh": "2d53d20a2e55808d",  # R7 cấm 0 đầu; Codex 42 F337: "0" một chữ số nhận — MSW chép cùng lượt
@@ -218,20 +221,20 @@ GHIM = {
     "qd.kiem_xac_nhan_trang_thai": "0ae641a688355679",
     "route._doc_scan": "6a2e887efa3934ea",
     "route._json_xac_nhan": "2ed2c129558bd715",  # + RecursionError; Codex 42: vượt trần ký tự ⇒ "không đọc được" — MSW chép cùng lượt
-    "route.cancel_council_decision_record": "29cf5683136d9159",
-    "route.create_council_decision": "88d1e6b4a73ce80e",
-    "route.create_council_document_set": "17e0f109f8901c23",
+    "route.cancel_council_decision_record": "2f4e6435ca09fb40",
+    "route.create_council_decision": "0985d0fdb9ba8dd4",
+    "route.create_council_document_set": "a71b21f2cb41d259",
     "route.delete_council_document_set": "dd8794d86af3f7ea",
     "route.open_council_decision_submission": "1fe073f4ee8bbe9e",
-    "route.preview_council_document_set": "56055899428cbdcb",
-    "route.resolve_council_decision_submission": "da2bdf33f67363bd",
-    "route.resolve_council_profile_codes": "f0c9acb165e23f2f",
-    "route.search_council_profiles": "da54c7d5e1226284",
+    "route.preview_council_document_set": "85a4b293da58ea6d",
+    "route.resolve_council_decision_submission": "88efefe2acaa82e0",
+    "route.resolve_council_profile_codes": "da6cbd3b1314e1ef",
+    "route.search_council_profiles": "47f304fbff76d954",
     "route.upload_council_template": "c1bd7d3b3b9e08e3",
     "schema.CouncilCodesIn": "b565161d8df6fba8",
     "schema.CouncilDecisionCancelIn": "fa53cae74ae5567c",
     "schema.CouncilProfileSearchIn": "5edfaebdfdaccde2",
-    "schema.CouncilSetCreate": "1e68f824d4d373ec",
+    "schema.CouncilSetCreate": "16378f57bcd118c4",
     "schema.CouncilSetDelete": "65ce52ad7d2280a9",
     "schema.CouncilSetPreviewIn": "9db8be743827b424",
     "ung_vien.DAI_MA_TOI_DA": "e29c9c180c6279b0",
@@ -249,11 +252,11 @@ GHIM = {
     "ung_vien._neu_dong": "a8c0f83035fd75c8",
     "ung_vien._trang_thai_hop_le()": "0b3ef3f1a00a8bbd",
     "ung_vien.chuan_hoa_ma": "f20a365687bcbe74",
-    "ung_vien.doc_ho_so_theo_ma": "51123e4e5708dbbb",
-    "ung_vien.doi_ma_thanh_id": "289116fe5a318c05",
+    "ung_vien.doc_ho_so_theo_ma": "28950f69441d50f4",
+    "ung_vien.doi_ma_thanh_id": "ea5d41f5ed209af4",
     "ung_vien.kiem_nam_hoc": "c5f3d0d4eac8c0a3",
     "ung_vien.loi_mot_ma": "519e68a62d3347c2",
-    "ung_vien.tim_ho_so": "3ffb0aa1327e22fc",
+    "ung_vien.tim_ho_so": "3866ec2cb1f985fa",
 }
 
 

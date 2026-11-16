@@ -5,7 +5,7 @@ import Link from "next/link"
 
 import { Badge } from "@/components/ui/badge"
 import {
-  ngay,
+  formatDate,
   decisionKindLabel,
   decisionStatusLabel,
 } from "@/app/(dashboard)/admin/council-documents/_components/display"
@@ -35,15 +35,15 @@ const DECISION_BADGE_VARIANT: Record<string, "success" | "warning" | "error"> = 
  */
 function SetCode({ setId }: { setId: number }) {
   const vm = useCouncilDocumentPermissions()
-  const nhan = `bộ #${setId}`
+  const label = `bộ #${setId}`
   if (vm.state === "ready" && vm.permissions.xem_chi_tiet_bo) {
     return (
       <Link href={`/admin/council-documents/${setId}`} className="underline-offset-2 hover:underline" data-testid="qd-bo-link">
-        {nhan}
+        {label}
       </Link>
     )
   }
-  return <span data-testid="qd-bo-ma">{nhan}</span>
+  return <span data-testid="qd-bo-ma">{label}</span>
 }
 
 /**
@@ -58,32 +58,32 @@ export function CouncilDecisionCard({ value }: { value: unknown }) {
   const r = councilProfileDecisionSchema.safeParse(value)
   if (!r.success) return null
   const d = r.data
-  const vb = d.van_ban
+  const document = d.van_ban
   // Review max PR #724 (R13): văn bản còn hiệu lực nhưng hồ sơ KHÔNG còn tên hiệu lực trong đó (tình trạng do máy chủ tính
   // ≠ `co_qd_hieu_luc` — vd dòng đã bị văn bản điều chỉnh bỏ) ⇒ nhãn trung tính "Văn bản còn hiệu lực", không để
   // "Còn hiệu lực" xanh đứng cạnh "Chưa có Quyết định".
-  const activeDocumentWithoutProfile = vb?.trang_thai === "hieu_luc" && d.tinh_trang !== "co_qd_hieu_luc"
+  const activeDocumentWithoutProfile = document?.trang_thai === "hieu_luc" && d.tinh_trang !== "co_qd_hieu_luc"
   const badgeVariant = activeDocumentWithoutProfile
     ? "secondary"
-    : (vb && DECISION_BADGE_VARIANT[vb.trang_thai]) || "secondary"
-  const badgeLabel = vb
+    : (document && DECISION_BADGE_VARIANT[document.trang_thai]) || "secondary"
+  const badgeLabel = document
     ? activeDocumentWithoutProfile
       ? "Văn bản còn hiệu lực"
-      : decisionStatusLabel(vb.trang_thai)
+      : decisionStatusLabel(document.trang_thai)
     : ""
 
   return (
     <section className="mb-4 rounded-lg border bg-card p-4 text-sm" data-testid="the-quyet-dinh-trung-tuyen" aria-label="Quyết định trúng tuyển">
       <h3 className="mb-2 font-semibold">Quyết định trúng tuyển</h3>
 
-      {vb ? (
+      {document ? (
         <div className="space-y-1" data-testid="qd-co-van-ban">
           <div>
-            {decisionKindLabel(vb.loai)} số {vb.so_quyet_dinh} ngày {ngay(vb.ngay_ky)}
-            {vb.set_id !== null ? (
+            {decisionKindLabel(document.loai)} số {document.so_quyet_dinh} ngày {formatDate(document.ngay_ky)}
+            {document.set_id !== null ? (
               <>
                 {" · "}
-                <SetCode setId={vb.set_id} />
+                <SetCode setId={document.set_id} />
               </>
             ) : null}
           </div>
@@ -119,7 +119,7 @@ export function CouncilDecisionCard({ value }: { value: unknown }) {
             Dữ liệu nhập từ AppSheet ghi: Quyết định{d.dau_appsheet_so_qd ? ` số ${d.dau_appsheet_so_qd}` : ""}
           </div>
           <Badge variant="warning">Chỉ có dấu AppSheet — chưa đối chiếu</Badge>
-          {!vb ? (
+          {!document ? (
             <div className="text-xs text-muted-foreground">Vì có dấu này, hồ sơ bị chặn khi đưa vào bộ mới (xem bước 2).</div>
           ) : null}
         </div>

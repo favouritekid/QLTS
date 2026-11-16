@@ -50,7 +50,7 @@ import { CouncilStepper } from "./CouncilStepper"
 import {
   NOT_RECORDED_NOTE,
   formatSize,
-  ngay,
+  formatDate,
   userLabel,
   decisionKindLabel,
   setStateLabel,
@@ -90,11 +90,11 @@ export function CouncilSetDetailClient({
   const readyPermissions = vm.state === "ready" ? vm.permissions : NO_COUNCIL_PERMISSIONS
   // Bộ điều khiển ghi nhận dùng CHUNG: mọi chỗ trên màn nói "Chưa xác định" khi lượt chưa rõ (đặc tả 5.6.1).
   const gn = useRecordDecision(setId)
-  const ds = useCouncilSetSubmissions(setId, vm.state === "ready" && readyPermissions.xem_luot_gui)
+  const submissions = useCouncilSetSubmissions(setId, vm.state === "ready" && readyPermissions.xem_luot_gui)
   const { restore: restore } = gn
   useEffect(() => {
-    if (ds.data) restore(ds.data)
-  }, [ds.data, restore])
+    if (submissions.data) restore(submissions.data)
+  }, [submissions.data, restore])
   // BƯỚC ĐANG XEM tách khỏi BƯỚC MẶC ĐỊNH (F281, Codex lần 19+20):
   //   • `pickStep` — người dùng chọn (bấm thanh bước) hoặc `?buoc=` lúc vào: là bước đang xem khi nó mở được.
   //   • `buocVao` — bước mặc định, suy từ dữ liệu ĐÚNG MỘT LẦN, lúc vào trang (khi quyền và danh sách lượt đã có kết quả), rồi CHỐT.
@@ -103,10 +103,10 @@ export function CouncilSetDetailClient({
   //     lượt hết `cho_gui` ⇒ trang tự về bước 4, mất khung kết quả / cảnh báo vượt chỉ tiêu / khung "đã chặn".
   const [pickStep, setPickStep] = useState<StepName | null>(initialStep)
   const [entryStep, setEntryStep] = useState<StepName | null>(null)
-  const hasInputData = vm.state === "ready" && (!readyPermissions.xem_luot_gui || ds.isSuccess || ds.isError)
+  const hasInputData = vm.state === "ready" && (!readyPermissions.xem_luot_gui || submissions.isSuccess || submissions.isError)
   if (entryStep === null && hasInputData) {
     // chỉ chạy MỘT lần (điều kiện `buocVao === null`); cập nhật trạng thái trong lúc vẽ theo đúng cách React cho phép
-    const hasPendingSubmission = ds.data !== undefined && pendingSubmission(ds.data) !== undefined
+    const hasPendingSubmission = submissions.data !== undefined && pendingSubmission(submissions.data) !== undefined
     setEntryStep(hasPendingSubmission && readyPermissions.ghi_nhan_qd && readyPermissions.mo_luot_gui ? "ghi-nhan" : "tai")
   }
 
@@ -160,7 +160,7 @@ export function CouncilSetDetailClient({
     setPickStep(b)
     router.replace(`/admin/council-documents/${setId}?buoc=${b}`, { scroll: false })
   }
-  const unclear = gn.status.kieu === "chua_xac_dinh" || gn.status.kieu === "dang_phan_xu"
+  const unclear = gn.status.kind === "chua_xac_dinh" || gn.status.kind === "dang_phan_xu"
   const canPick = (Object.keys(openStep) as StepName[]).filter((b) => openStep[b]).map((b) => STEP_COUNT[b])
 
   return (
@@ -212,7 +212,7 @@ export function CouncilSetDetailClient({
           onBack={() => selectStep(openStep["doi-chieu"] ? "doi-chieu" : "tai")}
           onCancelled={() => {
             void q.refetch()
-            void ds.refetch()
+            void submissions.refetch()
           }}
         />
       ) : null}
@@ -230,7 +230,7 @@ export function CouncilSetDetailClient({
 
 function SetInfo({ docSet, unclear }: { docSet: CouncilSetDetail; unclear: boolean }) {
   const ts = docSet.tham_so_quyet_dinh ?? {}
-  const dongTs = Object.entries(ts).filter(([, v]) => v !== null && v !== undefined)
+  const paramEntries = Object.entries(ts).filter(([, v]) => v !== null && v !== undefined)
   const decision = docSet.quyet_dinh
   // Khi lượt gửi chưa rõ (phía này đang chờ phân xử, hoặc máy chủ nói `chua_xac_dinh`): CHỈ "Chưa xác định".
   const unknown = unclear || docSet.tinh_trang === "chua_xac_dinh"
@@ -261,17 +261,17 @@ function SetInfo({ docSet, unclear }: { docSet: CouncilSetDetail; unclear: boole
       {decision ? (
         <div className="text-sm" data-testid="qd-cua-bo">
           <span className="text-muted-foreground">Quyết định đã ghi: </span>
-          {[decisionKindLabel(decision.loai), `số ${decision.so_quyet_dinh}`, `ngày ${ngay(decision.ngay_ky)}`, `${decision.so_ho_so} hồ sơ`].join(" · ")}
+          {[decisionKindLabel(decision.loai), `số ${decision.so_quyet_dinh}`, `ngày ${formatDate(decision.ngay_ky)}`, `${decision.so_ho_so} hồ sơ`].join(" · ")}
         </div>
       ) : null}
       <div className="text-sm">
         <span className="text-muted-foreground">Tham số Quyết định: </span>
-        {dongTs.length === 0 ? (
+        {paramEntries.length === 0 ? (
           "không (chỗ trống trên văn bản để người ký điền)"
         ) : (
           <span>
-            {dongTs
-              .map(([k, v]) => `${PARAM_LABELS[k] ?? k}: ${typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) ? ngay(v) : String(v)}`)
+            {paramEntries
+              .map(([k, v]) => `${PARAM_LABELS[k] ?? k}: ${typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) ? formatDate(v) : String(v)}`)
               .join(" · ")}
           </span>
         )}
@@ -287,7 +287,7 @@ function SetInfo({ docSet, unclear }: { docSet: CouncilSetDetail; unclear: boole
 }
 
 function FileList({ docSet, canDownload, canZip }: { docSet: CouncilSetDetail; canDownload: boolean; canZip: boolean }) {
-  const tai = useDownloadCouncilSetFile()
+  const download = useDownloadCouncilSetFile()
   const downloadZip = useDownloadCouncilSetZip()
   const [loading, setLoading] = useState<number | null>(null)
   return (
@@ -329,11 +329,11 @@ function FileList({ docSet, canDownload, canZip }: { docSet: CouncilSetDetail; c
                   <Button
                     size="sm"
                     variant="outline"
-                    disabled={tai.isPending}
+                    disabled={download.isPending}
                     data-testid={`download-file-${t.thu_tu}`}
                     onClick={() => {
                       setLoading(t.thu_tu)
-                      tai.mutate(
+                      download.mutate(
                         { setId: docSet.id, order: t.thu_tu },
                         { onSettled: () => setLoading(null) },
                       )
@@ -348,7 +348,7 @@ function FileList({ docSet, canDownload, canZip }: { docSet: CouncilSetDetail; c
           ))}
         </TableBody>
       </Table>
-      <CouncilErrorAlert error={tai.error} testId="download-file-error" />
+      <CouncilErrorAlert error={download.error} testId="download-file-error" />
       <CouncilErrorAlert error={downloadZip.error} testId="download-zip-error" />
     </section>
   )
@@ -359,7 +359,7 @@ function FileList({ docSet, canDownload, canZip }: { docSet: CouncilSetDetail; c
  * "Ẩn" (hoặc rời trang) ⇒ component con unmount ⇒ dữ liệu gỡ khỏi cache.
  */
 function InputProfileCodes({ setId, profileCount }: { setId: number; profileCount: number }) {
-  const [hien, setShow] = useState(false)
+  const [show, setShow] = useState(false)
   return (
     <section className="space-y-2" data-testid="input-codes-section">
       <div className="flex items-center gap-3">
@@ -370,13 +370,13 @@ function InputProfileCodes({ setId, profileCount }: { setId: number; profileCoun
           onClick={() => setShow((h) => !h)}
           data-testid="input-codes-toggle"
         >
-          {hien ? "Ẩn" : "Hiện"}
+          {show ? "Ẩn" : "Hiện"}
         </Button>
       </div>
       <p className="text-xs text-muted-foreground">
         Dữ liệu cá nhân (số CCCD) — chỉ Admin xem được; không lưu trên trình duyệt, ẩn đi là xoá khỏi bộ nhớ trang.
       </p>
-      {hien ? <ProfileCodeTable setId={setId} /> : null}
+      {show ? <ProfileCodeTable setId={setId} /> : null}
     </section>
   )
 }
@@ -402,10 +402,10 @@ function ProfileCodeTable({ setId }: { setId: number }) {
 
 function DeleteSet({ docSet }: { docSet: CouncilSetDetail }) {
   const router = useRouter()
-  const xoa = useDeleteCouncilSet()
+  const deleteSet = useDeleteCouncilSet()
   const [isOpen, setIsOpen] = useState(false)
   const [reason, setReason] = useState("")
-  const confirmed = reason.trim() !== "" && !xoa.isPending
+  const confirmed = reason.trim() !== "" && !deleteSet.isPending
   return (
     <section className="space-y-2 rounded-md border border-destructive/40 p-4">
       <h2 className="text-lg font-semibold text-destructive">Xoá bộ văn bản</h2>
@@ -415,14 +415,14 @@ function DeleteSet({ docSet }: { docSet: CouncilSetDetail }) {
       <Button
         variant="destructive"
         onClick={() => {
-          xoa.reset()
+          deleteSet.reset()
           setIsOpen(true)
         }}
         data-testid="delete-set-open"
       >
         Xoá bộ #{docSet.id}
       </Button>
-      <AlertDialog open={isOpen} onOpenChange={(o) => !xoa.isPending && setIsOpen(o)}>
+      <AlertDialog open={isOpen} onOpenChange={(o) => !deleteSet.isPending && setIsOpen(o)}>
         <AlertDialogContent data-testid="delete-set-dialog">
           <AlertDialogHeader>
             <AlertDialogTitle>Xoá bộ văn bản #{docSet.id}?</AlertDialogTitle>
@@ -436,19 +436,19 @@ function DeleteSet({ docSet }: { docSet: CouncilSetDetail }) {
               id="ly-do-xoa"
               data-testid="delete-set-reason"
               value={reason}
-              disabled={xoa.isPending}
+              disabled={deleteSet.isPending}
               onChange={(e) => setReason(e.target.value)}
             />
           </div>
-          <CouncilErrorAlert error={xoa.error} testId="delete-set-error" />
+          <CouncilErrorAlert error={deleteSet.error} testId="delete-set-error" />
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={xoa.isPending}>Huỷ</AlertDialogCancel>
+            <AlertDialogCancel disabled={deleteSet.isPending}>Huỷ</AlertDialogCancel>
             <Button
               variant="destructive"
               disabled={!confirmed}
               data-testid="delete-set-confirm"
               onClick={() =>
-                xoa.mutate(
+                deleteSet.mutate(
                   { setId: docSet.id, reason },
                   {
                     onSuccess: (trace) => {
@@ -460,7 +460,7 @@ function DeleteSet({ docSet }: { docSet: CouncilSetDetail }) {
                 )
               }
             >
-              {xoa.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              {deleteSet.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
               Xoá
             </Button>
           </AlertDialogFooter>

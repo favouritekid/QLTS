@@ -52,38 +52,38 @@ export type UnclearReason =
   | "van_chua_ro" // phân xử trả `ket_qua` lạ
 
 export type RecordStatus =
-  | { kieu: "nhap" }
-  | { kieu: "dang_gui" }
+  | { kind: "nhap" }
+  | { kind: "dang_gui" }
   /** máy chủ TỪ CHỐI dứt khoát; `huong` cho biết bước tiếp theo hợp lệ */
-  | { kieu: "bi_tu_choi"; loi: unknown; huong: SubmissionErrorHandling }
+  | { kind: "bi_tu_choi"; failure: unknown; handling: SubmissionErrorHandling }
   /** không mở được lượt — CHƯA gửi gì, thử lại an toàn */
-  | { kieu: "loi_mo_luot"; loi: unknown }
+  | { kind: "loi_mo_luot"; failure: unknown }
   /** bộ không còn (404 khi mở lượt) */
-  | { kieu: "bo_khong_con" }
-  | { kieu: "chua_xac_dinh"; ma: string; luc: string; reason: UnclearReason }
-  | { kieu: "dang_phan_xu"; ma: string; luc: string }
+  | { kind: "bo_khong_con" }
+  | { kind: "chua_xac_dinh"; code: string; at: string; reason: UnclearReason }
+  | { kind: "dang_phan_xu"; code: string; at: string }
   /** `decision` null = máy chủ báo ĐÃ ghi mà không kèm chi tiết */
-  | { kieu: "da_ghi"; decision: CouncilDecisionWrite | null }
+  | { kind: "da_ghi"; decision: CouncilDecisionWrite | null }
   /** lượt đã bị chặn: chắc chắn CHƯA có văn bản */
-  | { kieu: "chua_ghi_da_chan" }
+  | { kind: "chua_ghi_da_chan" }
 
 export type RecordSubmissionData = Omit<CreateCouncilDecisionInput, "set_id" | "ma_luot_gui">
 
 /** Giờ của lượt gửi đang mang trong trạng thái chưa rõ / đang phân xử; không có thì giờ hiện tại. */
 function submissionTime(t: RecordStatus): string {
-  return t.kieu === "chua_xac_dinh" || t.kieu === "dang_phan_xu" ? t.luc : new Date().toISOString()
+  return t.kind === "chua_xac_dinh" || t.kind === "dang_phan_xu" ? t.at : new Date().toISOString()
 }
 
 type OpenSubmissionResult =
-  | { kieu: "ok"; ma: string }
-  | { kieu: "chua_xac_dinh"; ma: string }
-  | { kieu: "bo_khong_con" }
-  | { kieu: "loi"; loi: unknown }
+  | { kind: "ok"; code: string }
+  | { kind: "chua_xac_dinh"; ma: string }
+  | { kind: "bo_khong_con" }
+  | { kind: "loi"; loi: unknown }
 
 export function useRecordDecision(setId: number) {
   const qc = useQueryClient()
-  const [status, setStatus] = useState<RecordStatus>({ kieu: "nhap" })
-  const maRef = useRef<string | null>(null)
+  const [status, setStatus] = useState<RecordStatus>({ kind: "nhap" })
+  const codeRef = useRef<string | null>(null)
   const running = useRef(false)
 
   const refreshAfterRecord = useCallback(() => {
@@ -94,59 +94,59 @@ export function useRecordDecision(setId: number) {
   const openSubmission = useCallback(async (): Promise<OpenSubmissionResult> => {
     try {
       const r = await openCouncilSubmission(setId)
-      return { kieu: "ok", ma: r.ma }
+      return { kind: "ok", code: r.ma }
     } catch (error) {
       const c = councilErrorCode(error)
       const status = readApiError(error).status
-      if (status === 409 && c.errorCode === "luot_dang_cho" && c.ma) return { kieu: "chua_xac_dinh", ma: c.ma }
-      if (status === 404) return { kieu: "bo_khong_con" }
+      if (status === 409 && c.errorCode === "luot_dang_cho" && c.submissionCode) return { kind: "chua_xac_dinh", ma: c.submissionCode }
+      if (status === 404) return { kind: "bo_khong_con" }
       // `luot_dang_thay_doi` hoặc mất phản hồi / 5xx lúc mở: lượt có thể ĐÃ được tạo mà ta chưa biết mã ⇒ đọc lại.
       try {
-        const cho = pendingSubmission(await listCouncilSubmissions(setId))
-        if (cho) return { kieu: "chua_xac_dinh", ma: cho.ma }
+        const pending = pendingSubmission(await listCouncilSubmissions(setId))
+        if (pending) return { kind: "chua_xac_dinh", ma: pending.ma }
       } catch {
         /* không đọc lại được: CHƯA gửi gì, báo lỗi mở lượt (thử lại an toàn) */
       }
-      return { kieu: "loi", loi: error }
+      return { kind: "loi", loi: error }
     }
   }, [setId])
 
-  const gui = useCallback(
-    async (du_lieu: RecordSubmissionData) => {
+  const submit = useCallback(
+    async (data: RecordSubmissionData) => {
       if (running.current) return
       running.current = true
-      setStatus({ kieu: "dang_gui" })
+      setStatus({ kind: "dang_gui" })
       try {
-        let ma = maRef.current
-        if (ma === null) {
+        let code = codeRef.current
+        if (code === null) {
           const r = await openSubmission()
-          if (r.kieu === "chua_xac_dinh") {
-            maRef.current = r.ma
-            setStatus({ kieu: "chua_xac_dinh", ma: r.ma, luc: new Date().toISOString(), reason: "mo_luot" })
+          if (r.kind === "chua_xac_dinh") {
+            codeRef.current = r.ma
+            setStatus({ kind: "chua_xac_dinh", code: r.ma, at: new Date().toISOString(), reason: "mo_luot" })
             return
           }
-          if (r.kieu === "bo_khong_con") {
-            setStatus({ kieu: "bo_khong_con" })
+          if (r.kind === "bo_khong_con") {
+            setStatus({ kind: "bo_khong_con" })
             return
           }
-          if (r.kieu === "loi") {
-            setStatus({ kieu: "loi_mo_luot", loi: r.loi })
+          if (r.kind === "loi") {
+            setStatus({ kind: "loi_mo_luot", failure: r.loi })
             return
           }
-          ma = r.ma
-          maRef.current = ma
+          code = r.code
+          codeRef.current = code
         }
         try {
-          const qd = await createCouncilDecision({ ...du_lieu, set_id: setId, ma_luot_gui: ma })
-          setStatus({ kieu: "da_ghi", decision: qd })
+          const recordedDecision = await createCouncilDecision({ ...data, set_id: setId, ma_luot_gui: code })
+          setStatus({ kind: "da_ghi", decision: recordedDecision })
           refreshAfterRecord()
         } catch (error) {
           if (classifySubmissionError(error) === "bi_tu_choi") {
-            const huong = submissionErrorHandling(error)
-            if (huong === "mo_luot_moi") maRef.current = null
-            setStatus({ kieu: "bi_tu_choi", loi: error, huong })
+            const handling = submissionErrorHandling(error)
+            if (handling === "mo_luot_moi") codeRef.current = null
+            setStatus({ kind: "bi_tu_choi", failure: error, handling })
           } else {
-            setStatus({ kieu: "chua_xac_dinh", ma, luc: new Date().toISOString(), reason: "gui" })
+            setStatus({ kind: "chua_xac_dinh", code, at: new Date().toISOString(), reason: "gui" })
           }
         }
       } finally {
@@ -157,27 +157,27 @@ export function useRecordDecision(setId: number) {
   )
 
   const adjudicate = useCallback(async () => {
-    const ma = maRef.current
-    if (ma === null || running.current) return
+    const code = codeRef.current
+    if (code === null || running.current) return
     running.current = true
     // `luc` = GIỜ CỦA LƯỢT GỬI (khung "Chưa xác định" ghi "Lượt gửi lúc …"), KHÔNG phải giờ bấm kiểm: lấy từ trạng thái đang
     // đứng (chưa rõ / đang kiểm) và giữ nguyên qua mọi lần phân xử không kết luận. Chỉ khi trạng thái hiện tại không mang giờ
     // (không xảy ra qua giao diện) mới lấy giờ hiện tại. Đọc qua hàm cập nhật để không phụ thuộc bản chụp cũ của trạng thái.
-    setStatus((cu) => ({ kieu: "dang_phan_xu", ma, luc: submissionTime(cu) }))
+    setStatus((prev) => ({ kind: "dang_phan_xu", code, at: submissionTime(prev) }))
     try {
-      const kq = explainAdjudication(await resolveCouncilSubmission(ma))
-      switch (kq.kieu) {
+      const result = explainAdjudication(await resolveCouncilSubmission(code))
+      switch (result.kind) {
         case "da_ghi":
-          setStatus({ kieu: "da_ghi", decision: kq.decision })
+          setStatus({ kind: "da_ghi", decision: result.decision })
           refreshAfterRecord()
           break
         case "da_ghi_thieu_chi_tiet":
-          setStatus({ kieu: "da_ghi", decision: null })
+          setStatus({ kind: "da_ghi", decision: null })
           refreshAfterRecord()
           break
         case "chua_ghi_da_chan":
-          maRef.current = null
-          setStatus({ kieu: "chua_ghi_da_chan" })
+          codeRef.current = null
+          setStatus({ kind: "chua_ghi_da_chan" })
           // Máy chủ vừa đổi tình trạng của bộ (từ `chua_xac_dinh` sang `chua_ghi_nhan`) và đóng lượt (`da_chan`): làm mới bộ + danh
           // sách lượt, nếu không dòng "Tình trạng" đầu trang còn nguyên bản đã tải lúc lượt chưa rõ (Đ2-2) và bản lưu của danh sách
           // lượt còn `cho_gui` cũ (khôi phục nhầm "Chưa xác định" khi vào lại trang). Làm mới cả danh sách lượt AN TOÀN vì bước đang
@@ -185,29 +185,29 @@ export function useRecordDecision(setId: number) {
           refreshAfterRecord()
           break
         case "dang_xu_ly":
-          setStatus((cu) => ({ kieu: "chua_xac_dinh", ma, luc: submissionTime(cu), reason: "dang_xu_ly" }))
+          setStatus((prev) => ({ kind: "chua_xac_dinh", code, at: submissionTime(prev), reason: "dang_xu_ly" }))
           break
         default:
-          setStatus((cu) => ({ kieu: "chua_xac_dinh", ma, luc: submissionTime(cu), reason: "van_chua_ro" }))
+          setStatus((prev) => ({ kind: "chua_xac_dinh", code, at: submissionTime(prev), reason: "van_chua_ro" }))
       }
     } catch (error) {
       // mất mạng / hết giờ / 404 / 5xx / phản hồi không đọc được: KHÔNG kết luận gì. Đóng băng tuyển sinh (503 ADMISSION_FROZEN)
       // chặn CẢ việc phân xử: máy chủ vẫn trả lời nên không phải "mất mạng" — nói riêng để người dùng biết đợi hết đóng băng.
       const reason: UnclearReason = readApiError(error).frozen ? "dong_bang" : "phan_xu_loi"
-      setStatus((cu) => ({ kieu: "chua_xac_dinh", ma, luc: submissionTime(cu), reason }))
+      setStatus((prev) => ({ kind: "chua_xac_dinh", code, at: submissionTime(prev), reason }))
     } finally {
       running.current = false
     }
   }, [refreshAfterRecord])
 
   /** Tải lại trang: thấy lượt `cho_gui` ⇒ vào thẳng "Chưa xác định" (chỉ khi đang ở `nhap`). */
-  const restore = useCallback((ds: readonly CouncilSubmission[]) => {
-    const cho = pendingSubmission(ds)
-    if (!cho) return
-    setStatus((cu) => {
-      if (cu.kieu !== "nhap") return cu
-      maRef.current = cho.ma
-      return { kieu: "chua_xac_dinh", ma: cho.ma, luc: cho.tao_luc, reason: "tai_lai_trang" }
+  const restore = useCallback((submissions: readonly CouncilSubmission[]) => {
+    const pending = pendingSubmission(submissions)
+    if (!pending) return
+    setStatus((prev) => {
+      if (prev.kind !== "nhap") return prev
+      codeRef.current = pending.ma
+      return { kind: "chua_xac_dinh", code: pending.ma, at: pending.tao_luc, reason: "tai_lai_trang" }
     })
   }, [])
 
@@ -215,7 +215,7 @@ export function useRecordDecision(setId: number) {
    * Về biểu mẫu sau khi lượt đã bị CHẶN (`chua_ghi_da_chan`, mã đã bỏ lúc phân xử). CHỈ đổi trạng thái: KHÔNG đụng mã, nên
    * KHÔNG dùng sau khi huỷ ghi nhận (xem `startNewSubmissionAfterCancel`).
    */
-  const backToForm = useCallback(() => setStatus({ kieu: "nhap" }), [])
+  const backToForm = useCallback(() => setStatus({ kind: "nhap" }), [])
 
   /**
    * Gọi CHỈ SAU KHI máy chủ đã xác nhận huỷ ghi nhận văn bản của lượt này (`CouncilCancelDialog.onXong`: huỷ thành công, hoặc
@@ -226,9 +226,9 @@ export function useRecordDecision(setId: number) {
    * chưa được xác nhận, và KHÔNG gọi ở nhánh lỗi nghiệp vụ khi gửi (lượt vẫn `cho_gui`, gửi lại CÙNG mã).
    */
   const startNewSubmissionAfterCancel = useCallback(() => {
-    maRef.current = null
-    setStatus({ kieu: "nhap" })
+    codeRef.current = null
+    setStatus({ kind: "nhap" })
   }, [])
 
-  return { status, gui, adjudicate, restore: restore, backToForm, startNewSubmissionAfterCancel }
+  return { status, gui: submit, adjudicate, restore: restore, backToForm, startNewSubmissionAfterCancel }
 }

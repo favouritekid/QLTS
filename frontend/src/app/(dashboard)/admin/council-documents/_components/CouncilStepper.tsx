@@ -6,12 +6,12 @@ import { cn } from "@/lib/utils"
 
 /** Sáu bước của luồng (đặc tả 1.2): tên đúng bản mẫu. */
 export const STEP_FLOW = [
-  { so: 1, ten: "Chọn hồ sơ" },
-  { so: 2, ten: "Kiểm tra & chốt" },
-  { so: 3, ten: "Tham số" },
-  { so: 4, ten: "Dựng & tải" },
-  { so: 5, ten: "Đối chiếu bản ký" },
-  { so: 6, ten: "Ghi nhận" },
+  { step: 1, name: "Chọn hồ sơ" },
+  { step: 2, name: "Kiểm tra & chốt" },
+  { step: 3, name: "Tham số" },
+  { step: 4, name: "Dựng & tải" },
+  { step: 5, name: "Đối chiếu bản ký" },
+  { step: 6, name: "Ghi nhận" },
 ] as const
 
 interface Props {
@@ -28,17 +28,17 @@ export function CouncilStepper({ current, canPick, onPick }: Props) {
     <nav aria-label="Các bước dựng văn bản Hội đồng">
       <ol className="flex flex-wrap items-center gap-2" data-testid="council-stepper">
         {STEP_FLOW.map((b) => {
-          const opening = b.so === current
-          const passed = b.so < current
-          const pressed = canPick.includes(b.so) && !opening
+          const opening = b.step === current
+          const passed = b.step < current
+          const pressed = canPick.includes(b.step) && !opening
           return (
-            <li key={b.so}>
+            <li key={b.step}>
               <button
                 type="button"
                 disabled={!pressed}
                 aria-current={opening ? "step" : undefined}
-                data-testid={`buoc-${b.so}`}
-                onClick={() => onPick(b.so)}
+                data-testid={`buoc-${b.step}`}
+                onClick={() => onPick(b.step)}
                 className={cn(
                   "inline-flex items-center gap-2 rounded-full border px-3 py-1 text-sm transition-colors",
                   opening && "border-primary bg-primary text-primary-foreground",
@@ -55,9 +55,9 @@ export function CouncilStepper({ current, canPick, onPick }: Props) {
                     opening ? "bg-primary-foreground text-primary" : "bg-muted text-muted-foreground",
                   )}
                 >
-                  {passed ? <Check className="h-3 w-3" /> : b.so}
+                  {passed ? <Check className="h-3 w-3" /> : b.step}
                 </span>
-                {b.ten}
+                {b.name}
               </button>
             </li>
           )

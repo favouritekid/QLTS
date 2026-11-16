@@ -63,12 +63,12 @@ class CouncilSetCreate(BaseModel):
     @model_validator(mode="after")
     def _exactly_one_form(self) -> "CouncilSetCreate":
         by_code = self.ma_ho_so is not None
-        theo_id = self.profile_ids is not None or self.phien_ban_kiem is not None
-        if by_code == theo_id:
+        by_id = self.profile_ids is not None or self.phien_ban_kiem is not None
+        if by_code == by_id:
             raise ValueError(
                 "Gửi đúng MỘT dạng: ma_ho_so, hoặc profile_ids kèm phien_ban_kiem."
             )
-        if theo_id and (self.profile_ids is None or self.phien_ban_kiem is None):
+        if by_id and (self.profile_ids is None or self.phien_ban_kiem is None):
             raise ValueError("Dạng id cần cả profile_ids và phien_ban_kiem.")
         return self
 

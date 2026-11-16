@@ -38,20 +38,20 @@ interface Props {
  * biết năm, hoặc nhiều năm khác nhau ⇒ KHÔNG dựng (không đoán, không lấy năm của dòng đầu).
  */
 export type CommonYear =
-  | { kieu: "trong" }
-  | { kieu: "chua_ro" }
-  | { kieu: "nhieu_nam" }
-  | { kieu: "chung"; year: number }
+  | { kind: "trong" }
+  | { kind: "chua_ro" }
+  | { kind: "nhieu_nam" }
+  | { kind: "chung"; year: number }
 
 export function commonYearOf(profile: readonly SelectedProfile[]): CommonYear {
-  if (profile.length === 0) return { kieu: "trong" }
+  if (profile.length === 0) return { kind: "trong" }
   const year = new Set<number>()
   for (const h of profile) {
-    if (typeof h.academic_year !== "number") return { kieu: "chua_ro" }
+    if (typeof h.academic_year !== "number") return { kind: "chua_ro" }
     year.add(h.academic_year)
   }
-  if (year.size > 1) return { kieu: "nhieu_nam" }
-  return { kieu: "chung", year: [...year][0] }
+  if (year.size > 1) return { kind: "nhieu_nam" }
+  return { kind: "chung", year: [...year][0] }
 }
 
 const LOCK_REASONS: Record<"chua_ro" | "nhieu_nam", string> = {
@@ -74,15 +74,15 @@ export function CouncilHandoffButton({ profile, disabled = false }: Props) {
   const router = useRouter()
   const vm = useCouncilDocumentPermissions()
   const replace = useCouncilSelectionStore((s) => s.replace)
-  const [hoi, setAsking] = useState(false)
+  const [asking, setAsking] = useState(false)
 
   if (vm.state !== "ready" || !canBuildFromList(vm.permissions)) return null
 
   const common = commonYearOf(profile)
-  const academicYear = common.kieu === "chung" ? common.year : undefined
+  const academicYear = common.kind === "chung" ? common.year : undefined
   const profileId = profile.map((h) => h.id)
-  const khoa = disabled || academicYear === undefined
-  const lockReason = common.kieu === "chua_ro" || common.kieu === "nhieu_nam" ? LOCK_REASONS[common.kieu] : undefined
+  const locked = disabled || academicYear === undefined
+  const lockReason = common.kind === "chua_ro" || common.kind === "nhieu_nam" ? LOCK_REASONS[common.kind] : undefined
 
   const day = () => {
     if (academicYear === undefined) return
@@ -108,7 +108,7 @@ export function CouncilHandoffButton({ profile, disabled = false }: Props) {
         variant="ghost"
         size="sm"
         onClick={pressed}
-        disabled={khoa}
+        disabled={locked}
         aria-label="Dựng văn bản Hội đồng"
         title={lockReason}
         className="h-10 touch-manipulation gap-1.5 md:h-8"
@@ -117,7 +117,7 @@ export function CouncilHandoffButton({ profile, disabled = false }: Props) {
         <FileText className="h-4 w-4" aria-hidden="true" />
         <span className="hidden sm:inline">Dựng văn bản Hội đồng →</span>
       </Button>
-      <AlertDialog open={hoi} onOpenChange={setAsking}>
+      <AlertDialog open={asking} onOpenChange={setAsking}>
         <AlertDialogContent data-testid="thay-danh-sach-dialog">
           <AlertDialogHeader>
             <AlertDialogTitle>Thay danh sách đang chọn?</AlertDialogTitle>

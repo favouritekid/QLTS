@@ -15,20 +15,20 @@ import { CouncilSetList } from "./CouncilSetList"
 import { CouncilTemplatePanel } from "./CouncilTemplatePanel"
 import { CreateCouncilSetForm } from "./CreateCouncilSetForm"
 
-type The = "bo" | "tao" | "mau" | "nhat-ky-tai" | "nhat-ky-xoa"
+type Tab = "bo" | "tao" | "mau" | "nhat-ky-tai" | "nhat-ky-xoa"
 
 /** Thẻ ↔ cờ của máy chủ: thẻ chỉ hiện khi cờ bật (không xét vai). */
-const THE: { gia_tri: The; nhan: string; co: CouncilDocumentPermissionKey }[] = [
-  { gia_tri: "bo", nhan: "Bộ văn bản", co: "xem_danh_sach_bo" },
-  { gia_tri: "tao", nhan: "Tạo bộ", co: "tao_bo" },
-  { gia_tri: "mau", nhan: "Kho mẫu", co: "xem_mau" },
-  { gia_tri: "nhat-ky-tai", nhan: "Nhật ký tải", co: "xem_nhat_ky_tai" },
-  { gia_tri: "nhat-ky-xoa", nhan: "Nhật ký xoá", co: "xem_nhat_ky_xoa" },
+const TABS: { tabId: Tab; label: string; permission: CouncilDocumentPermissionKey }[] = [
+  { tabId: "bo", label: "Bộ văn bản", permission: "xem_danh_sach_bo" },
+  { tabId: "tao", label: "Tạo bộ", permission: "tao_bo" },
+  { tabId: "mau", label: "Kho mẫu", permission: "xem_mau" },
+  { tabId: "nhat-ky-tai", label: "Nhật ký tải", permission: "xem_nhat_ky_tai" },
+  { tabId: "nhat-ky-xoa", label: "Nhật ký xoá", permission: "xem_nhat_ky_xoa" },
 ]
 
 export function CouncilDocumentsClient() {
   const vm = useCouncilDocumentPermissions()
-  const [the, setThe] = useState<The | null>(null)
+  const [tab, setTab] = useState<Tab | null>(null)
 
   if (vm.state === "loading") {
     return (
@@ -47,22 +47,22 @@ export function CouncilDocumentsClient() {
   if (vm.state === "error") return <CouncilErrorAlert error={vm.error} testId="council-permission-error" />
 
   const q = vm.permissions
-  const hien = THE.filter((t) => q[t.co])
-  if (hien.length === 0) {
+  const visibleTabs = TABS.filter((t) => q[t.permission])
+  if (visibleTabs.length === 0) {
     return (
       <p className="text-muted-foreground" data-testid="council-forbidden">
         Bạn không có quyền xem văn bản Hội đồng tuyển sinh.
       </p>
     )
   }
-  const selecting = the !== null && hien.some((t) => t.gia_tri === the) ? the : hien[0].gia_tri
+  const selecting = tab !== null && visibleTabs.some((t) => t.tabId === tab) ? tab : visibleTabs[0].tabId
 
   return (
-    <Tabs value={selecting} onValueChange={(v) => setThe(v as The)}>
+    <Tabs value={selecting} onValueChange={(v) => setTab(v as Tab)}>
       <TabsList>
-        {hien.map((t) => (
-          <TabsTrigger key={t.gia_tri} value={t.gia_tri} data-testid={`tab-${t.gia_tri}`}>
-            {t.nhan}
+        {visibleTabs.map((t) => (
+          <TabsTrigger key={t.tabId} value={t.tabId} data-testid={`tab-${t.tabId}`}>
+            {t.label}
           </TabsTrigger>
         ))}
       </TabsList>

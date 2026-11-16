@@ -13,7 +13,7 @@ Vào: danh sách MÃ HỒ SƠ (số CCCD — J1 dòng 8) đúng thứ tự admin
 * Mỗi trường DTO tính như cột cùng tên của truy vấn bộ xuất (luật v1) — SQL ở repository.
 * KHÔNG lọc trạng thái, KHÔNG lọc trình độ ở tầng đọc: ảnh chụp giữ đúng bộ xuất; trình độ lạ
   do bộ dựng chặn. Cổng dựng bộ (lượt G — F228 trạng thái, F229 nguồn ngành / nguyện vọng /
-  điểm, F231 khu vực) nằm ở ``council_set_gate_service``, chạy trên ``ProfileSnapshot.kiem`` —
+  điểm, F231 khu vực) nằm ở ``council_set_gate_service``, chạy trên ``ProfileSnapshot.check_data`` —
   dữ liệu kiểm đọc trong CÙNG giao dịch chỉ đọc này.
 * Lỗi đầu vào (mã rỗng, trùng, không khớp ĐÚNG MỘT hồ sơ) ⇒ ``DataValidationError`` nêu SỐ
   THỨ TỰ dòng, KHÔNG nêu giá trị. Lỗi CSDL ⇒ ``ServiceError`` không mang câu SQL / tham số
@@ -71,10 +71,10 @@ class ProfileSnapshot:
     rows: Tuple[
         CandidateRowV1, ...
     ]  # = cột cùng tên của bộ xuất (``diem_kv`` theo luật cũ)
-    don_vi: Tuple[Optional[int], ...]  # ``lead.unit_id`` từng hồ sơ, cùng thứ tự
-    giao_dich: TransactionInfo
+    unit_ids: Tuple[Optional[int], ...]  # ``lead.unit_id`` từng hồ sơ, cùng thứ tự
+    transaction: TransactionInfo
     # Dữ liệu cho cổng dựng bộ (lượt G) — cùng giao dịch, cùng thứ tự; KHÔNG ghi gì.
-    kiem: Tuple[CheckData, ...] = ()
+    check_data: Tuple[CheckData, ...] = ()
     # Lượt I (F230): id hồ sơ từng dòng (cột ``pid`` của chính truy vấn đọc), cùng thứ tự — ghi
     # vào dòng bộ để ghi nhận Quyết định nối được về hồ sơ (CCCD sửa được).
     pids: Tuple[int, ...] = ()
@@ -172,14 +172,14 @@ async def _resolve_area(
             year = priority_academic_year(
                 SimpleNamespace(academic_year=h.get("academic_year"), id=h.get("pid"))
             )
-            kv = snap["kv_resolved"]
-            lock = (year, kv)
+            area = snap["kv_resolved"]
+            lock = (year, area)
             if lock not in looked_up_levels:
                 try:
                     item = await select_open_priority_rates(
-                        conn, table=RATE_TABLE_AREA, academic_year=year, codes=[kv]
+                        conn, table=RATE_TABLE_AREA, academic_year=year, codes=[area]
                     )
-                    looked_up_levels[lock] = (None, str(item[kv]))
+                    looked_up_levels[lock] = (None, str(item[area]))
                 except PriorityRateNotConfigured:
                     looked_up_levels[lock] = ("chua_co_muc_khu_vuc", None)
                 except RuntimeError:  # hơn một hàng ĐANG MỞ cùng mã, cùng năm
@@ -236,12 +236,12 @@ async def _score_add_rules(
     session = AsyncSession(bind=conn)
     try:
         if ids:
-            kq = await session.execute(
+            result = await session.execute(
                 select(AdmissionPath)
                 .where(AdmissionPath.id.in_(ids))
                 .options(selectinload(AdmissionPath.admission_method))
             )
-            paths = {p.id: p for p in kq.scalars()}
+            paths = {p.id: p for p in result.scalars()}
         out: List[Tuple[Optional[str], Optional[str]]] = []
         for pid in path_ids:
             p = paths.get(pid) if isinstance(pid, int) else None
@@ -369,16 +369,16 @@ async def read_profiles_by_code(
     """Đọc DTO của các hồ sơ có mã ``ma_ho_so`` (đúng thứ tự) THUỘC năm học
     ``academic_year`` trong MỘT giao dịch chỉ đọc."""
     year = check_academic_year(academic_year)
-    ds = normalize_codes(profile_codes)
+    codes = normalize_codes(profile_codes)
     limits = settings.COUNCIL_SET_MAX_PROFILES if max_count is None else max_count
-    if len(ds) > limits:
+    if len(codes) > limits:
         raise DataValidationError(
             "Danh sách có %d mã, vượt giới hạn kỹ thuật %d hồ sơ cho một bộ văn bản."
-            % (len(ds), limits)
+            % (len(codes), limits)
         )
     try:
-        async with read_only_transaction(engine) as (conn, tt):
-            matches = await resolve_codes(conn, ds, year)
+        async with read_only_transaction(engine) as (conn, transaction):
+            matches = await resolve_codes(conn, codes, year)
             unmatched = [stt for stt, number, _ in matches if number == 0]
             multi = [stt for stt, number, _ in matches if number > 1]
             if unmatched or multi:
@@ -393,14 +393,14 @@ async def read_profiles_by_code(
                 raise DataValidationError(
                     "Mã hồ sơ phải khớp đúng một hồ sơ: %s." % "; ".join(part)
                 )
-            if [stt for stt, _, _ in matches] != list(range(1, len(ds) + 1)):
+            if [stt for stt, _, _ in matches] != list(range(1, len(codes) + 1)):
                 raise ServiceError("Phân giải mã hồ sơ trả sai thứ tự — không đọc.")
             pids = [pid for _, _, pid in matches]
             raw = await _read_raw(conn, pids)
     except DBAPIError:
         # Thông báo của trình điều khiển có câu SQL + tham số (danh sách mã) ⇒ không giữ.
         raise ServiceError("Lỗi CSDL khi đọc hồ sơ cho bộ văn bản.") from None
-    return _build_snapshot(raw, pids, tt)
+    return _build_snapshot(raw, pids, transaction)
 
 
 async def read_profiles_by_id(
@@ -414,11 +414,11 @@ async def read_profiles_by_id(
     cùng giao dịch ``REPEATABLE READ READ ONLY`` của :func:`doc_ho_so_theo_ma`. Hồ sơ phải tồn tại và
     thuộc năm học ``academic_year``; dòng ``stt`` của kết quả = vị trí trong ``pids`` (1…)."""
     year = check_academic_year(academic_year)
-    ds = [int(p) for p in pids]
-    if not ds or len(set(ds)) != len(ds):
+    ids = [int(p) for p in pids]
+    if not ids or len(set(ids)) != len(ids):
         raise ServiceError("Danh sách id hồ sơ rỗng hoặc trùng — không đọc.")
     try:
-        async with read_only_transaction(engine) as (conn, tt):
+        async with read_only_transaction(engine) as (conn, transaction):
             present = {
                 r[0]: r[1]
                 for r in (
@@ -427,20 +427,20 @@ async def read_profiles_by_id(
                             "SELECT id, academic_year FROM admission_profile "
                             "WHERE id = ANY(CAST(:ids AS integer[]))"
                         ),
-                        {"ids": ds},
+                        {"ids": ids},
                     )
                 ).all()
             }
-            sai = [i for i, p in enumerate(ds, 1) if present.get(p) != year]
-            if sai:
+            wrong_year_rows = [i for i, p in enumerate(ids, 1) if present.get(p) != year]
+            if wrong_year_rows:
                 raise DataValidationError(
                     "Dòng %s: hồ sơ không còn hoặc không thuộc năm học của bộ — không đọc."
-                    % _cite_rows(sai)
+                    % _cite_rows(wrong_year_rows)
                 )
-            raw = await _read_raw(conn, ds)
+            raw = await _read_raw(conn, ids)
     except DBAPIError:
         raise ServiceError("Lỗi CSDL khi đọc hồ sơ cho bộ văn bản.") from None
-    return _build_snapshot(raw, ds, tt)
+    return _build_snapshot(raw, ids, transaction)
 
 
 #: Trần ký tự của từ khoá tìm hồ sơ (đặc tả 3.11).
@@ -481,8 +481,8 @@ async def search_profiles(
         raise DataValidationError(
             "Từ khoá tìm quá dài (tối đa %d ký tự)." % MAX_KEYWORD_LENGTH
         )
-    tt = list(status) if status else None
-    if tt is not None and not set(tt) <= _valid_statuses():
+    statuses = list(status) if status else None
+    if statuses is not None and not set(statuses) <= _valid_statuses():
         raise DataValidationError("Bộ lọc trạng thái có giá trị không hợp lệ.")
     profiles, total = await admission_service.get_profiles(
         db=db,
@@ -490,7 +490,7 @@ async def search_profiles(
         limit=page_size,
         current_user=current_user,
         search=tk or None,
-        statuses=tt,
+        statuses=statuses,
         major_ids=list(major_ids) if major_ids else None,
         academic_year=year,
         lean=True,
@@ -525,8 +525,8 @@ async def codes_to_ids(
     profile_codes: Sequence[str],
     *,
     academic_year: Optional[int],
-    tat_ca: bool,
-    chi_don_vi: Optional[int],
+    all_units: bool,
+    only_unit_id: Optional[int],
 ) -> Tuple[List[int], List[Dict[str, object]]]:
     """Vòng giao diện (đặc tả 3.2 — ``POST /sets/doi-ma``, cách phụ "dán mã"): đổi danh sách mã (CCCD) thành
     id hồ sơ. KHÔNG dừng ở dòng lỗi đầu tiên: trả ``(id theo thứ tự các dòng khớp, [{dong, ly_do}])`` —
@@ -535,7 +535,7 @@ async def codes_to_ids(
     dịch chỉ đọc; hồ sơ ngoài phạm vi đơn vị của người gọi ⇒ ``khong_khop`` (như không có — không lộ tồn
     tại). Không ghi gì."""
     year = check_academic_year(academic_year)
-    if not tat_ca and chi_don_vi is None:
+    if not all_units and only_unit_id is None:
         raise ServiceError("Phạm vi đọc hồ sơ không xác định — không đọc.")
     if not isinstance(profile_codes, (list, tuple)) or not profile_codes:
         raise DataValidationError("Danh sách mã hồ sơ rỗng.")
@@ -559,7 +559,7 @@ async def codes_to_ids(
     pids: List[int] = []
     if valid:
         try:
-            async with read_only_transaction(engine) as (conn, _tt):
+            async with read_only_transaction(engine) as (conn, _transaction):
                 matches = await resolve_codes(conn, [s for _, s in valid], year)
                 if [stt for stt, _, _ in matches] != list(range(1, len(valid) + 1)):
                     raise ServiceError("Phân giải mã hồ sơ trả sai thứ tự — không đọc.")
@@ -574,7 +574,7 @@ async def codes_to_ids(
             elif (
                 number == 0
                 or pid not in pv
-                or not (tat_ca or pv[pid][1] == chi_don_vi)
+                or not (all_units or pv[pid][1] == only_unit_id)
             ):
                 error_rows.append({"dong": i, "ly_do": CODE_ERROR_NO_MATCH})
             else:
@@ -587,8 +587,8 @@ async def read_profiles_for_preview(
     pids: Sequence[int],
     *,
     academic_year: Optional[int],
-    tat_ca: bool,
-    chi_don_vi: Optional[int],
+    all_units: bool,
+    only_unit_id: Optional[int],
 ) -> Tuple[Optional[ProfileSnapshot], List[int]]:
     """Vòng giao diện (đặc tả 3.1 — ``POST /sets/kiem-truoc``): CÙNG giao dịch ``REPEATABLE READ READ
     ONLY`` + cùng phần đọc (:func:`_read_raw` / :func:`_build_snapshot`) với :func:`read_profiles_by_id`, thêm
@@ -598,29 +598,29 @@ async def read_profiles_for_preview(
     không còn id nào, vị trí bị loại)``. Phạm vi do ``deps.py`` quyết; "không tất cả mà không có đơn vị" ⇒
     ``ServiceError`` (fail-closed)."""
     year = check_academic_year(academic_year)
-    if not tat_ca and chi_don_vi is None:
+    if not all_units and only_unit_id is None:
         raise ServiceError("Phạm vi đọc hồ sơ không xác định — không đọc.")
-    ds = [int(p) for p in pids]
-    if not ds or len(set(ds)) != len(ds):
+    ids = [int(p) for p in pids]
+    if not ids or len(set(ids)) != len(ids):
         raise ServiceError("Danh sách id hồ sơ rỗng hoặc trùng — không đọc.")
     try:
-        async with read_only_transaction(engine) as (conn, tt):
-            present = await read_scope_by_ids(conn, ds)
+        async with read_only_transaction(engine) as (conn, transaction):
+            present = await read_scope_by_ids(conn, ids)
             kind = [
                 i
-                for i, p in enumerate(ds, 1)
+                for i, p in enumerate(ids, 1)
                 if p not in present
                 or present[p][0] != year
-                or not (tat_ca or present[p][1] == chi_don_vi)
+                or not (all_units or present[p][1] == only_unit_id)
             ]
             excluded = set(kind)
-            kept = [p for i, p in enumerate(ds, 1) if i not in excluded]
+            kept = [p for i, p in enumerate(ids, 1) if i not in excluded]
             if not kept:
                 return None, kind
             raw = await _read_raw(conn, kept)
     except DBAPIError:
         raise ServiceError("Lỗi CSDL khi đọc hồ sơ cho bộ văn bản.") from None
-    return _build_snapshot(raw, kept, tt), kind
+    return _build_snapshot(raw, kept, transaction), kind
 
 
 async def _read_raw(conn: AsyncConnection, pids: Sequence[int]):
@@ -629,9 +629,9 @@ async def _read_raw(conn: AsyncConnection, pids: Sequence[int]):
     row_no = await read_print_figures(conn, pids)
     # Cổng dựng bộ (lượt G): dữ liệu kiểm đọc trong CÙNG giao dịch chỉ đọc, theo đúng
     # nguyện vọng mà truy vấn số liệu in (cột phụ ``nv_in_id``).
-    nv_in = {h["stt"]: h.get("nv_in_id") for h in row_no}
+    printed_choice_by_seq = {h["stt"]: h.get("nv_in_id") for h in row_no}
     check_rows = await read_check_source(
-        conn, pids, [nv_in.get(i) for i in range(1, len(pids) + 1)]
+        conn, pids, [printed_choice_by_seq.get(i) for i in range(1, len(pids) + 1)]
     )
     area = await _resolve_area(conn, check_rows)
     # Câu 22 + lượt H2: luật cộng điểm (KV, đối tượng) của đường xét của nguyện vọng in —
@@ -654,7 +654,7 @@ def _merge_duplicate_rows(rows: List[dict]) -> dict:
     return merged
 
 
-def _build_snapshot(raw, pids, tt) -> ProfileSnapshot:
+def _build_snapshot(raw, pids, transaction) -> ProfileSnapshot:
     row_no, check_rows, area, rule = raw
     row_count = len(pids)
     # Mỗi hồ sơ đúng MỘT hàng: bảng tham chiếu (địa giới, khu vực, dân tộc) khớp nhiều hàng hiện hành thì bộ xuất
@@ -714,21 +714,21 @@ def _build_snapshot(raw, pids, tt) -> ProfileSnapshot:
             diem_ca_hai_khac=k["diem_ca_hai_khac"],
             diem_chi_nv=k["diem_chi_nv"],
             diem_chi_hs=k["diem_chi_hs"],
-            kv_ly_do=kv[0],
-            kv_muc=kv[1],
-            luat_kv=lk[0],
-            luat_ut=lk[1],
+            kv_ly_do=area_value[0],
+            kv_muc=area_value[1],
+            luat_kv=rule_value[0],
+            luat_ut=rule_value[1],
             # Lượt I (F230): khoá đếm của NV in + tình trạng Quyết định (biểu thức một nguồn).
             nv_in_ai_id=k["nv_in_ai_id"],
             nv_in_offering_id=k["nv_in_offering_id"],
-            qd_hieu_luc_id=tq.qd_hieu_luc_id,
-            qd_chuoi_id=tq.qd_chuoi_id,
-            cho_quyet_id=tq.cho_quyet_id,
-            dau_appsheet=tq.dau_appsheet,
+            qd_hieu_luc_id=state.effective_decision_id,
+            qd_chuoi_id=state.chain_decision_id,
+            cho_quyet_id=state.pending_hold_id,
+            dau_appsheet=state.appsheet_mark,
             thieu_ma_ho_so=k["stt"] in missing_code,
             duplicate_reference=k["stt"] in duplicate_reference,
         )
-        for k, kv, lk, tq in zip(
+        for k, area_value, rule_value, state in zip(
             check_rows, area, rule, (from_row(k) for k in check_rows)
         )
     )
@@ -740,8 +740,8 @@ def _build_snapshot(raw, pids, tt) -> ProfileSnapshot:
             )
             for h in row_no
         ),
-        don_vi=tuple(h["unit_id"] for h in row_no),
-        giao_dich=tt,
-        kiem=check,
+        unit_ids=tuple(h["unit_id"] for h in row_no),
+        transaction=transaction,
+        check_data=check,
         pids=tuple(h["pid"] for h in row_no),
     )

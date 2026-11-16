@@ -23,9 +23,9 @@ interface Props {
  */
 export function CouncilCompareStep({ docSet, onBack, onNext }: Props) {
   const number = useCompareCouncilSet()
-  const [luc, setTime] = useState<string | null>(null)
-  const kq = number.data
-  const rowCount = kq ? kq.dong_khac.length + kq.khong_dung_lai_duoc.length + kq.mat_ho_so.length : 0
+  const [time, setTime] = useState<string | null>(null)
+  const result = number.data
+  const rowCount = result ? result.dong_khac.length + result.khong_dung_lai_duoc.length + result.mat_ho_so.length : 0
 
   return (
     <div className="space-y-4" data-testid="buoc-doi-chieu">
@@ -49,26 +49,26 @@ export function CouncilCompareStep({ docSet, onBack, onNext }: Props) {
 
       <CouncilErrorAlert error={number.error} testId="so-sanh-loi" />
 
-      {kq ? (
+      {result ? (
         rowCount === 0 ? (
           <p className="text-sm" data-testid="khong-doi">
-            Không dòng nào đổi so với lúc dựng{luc ? ` (kiểm lúc ${formatTime(luc)})` : ""}.
+            Không dòng nào đổi so với lúc dựng{time ? ` (kiểm lúc ${formatTime(time)})` : ""}.
           </p>
         ) : (
           <div className="space-y-2 text-sm" data-testid="co-doi">
             <p className="font-medium">
-              {rowCount} dòng đã đổi so với lúc dựng{luc ? ` (kiểm lúc ${formatTime(luc)})` : ""}
+              {rowCount} dòng đã đổi so với lúc dựng{time ? ` (kiểm lúc ${formatTime(time)})` : ""}
             </p>
             <ul className="list-disc space-y-1 pl-5">
-              {kq.dong_khac.map((d) => (
+              {result.dong_khac.map((d) => (
                 <li key={`k${d.stt}`} data-testid={`dong-doi-${d.stt}`}>{`Dòng ${d.stt} — đổi: ${d.truong.map(compareFieldLabel).join(", ")}`}</li>
               ))}
-              {kq.khong_dung_lai_duoc.map((d) => (
+              {result.khong_dung_lai_duoc.map((d) => (
                 <li key={`x${d.stt}`} data-testid={`dong-khong-dung-lai-${d.stt}`}>
                   {`Dòng ${d.stt} — không dựng lại được để so (${d.ma.join(", ")})`}
                 </li>
               ))}
-              {kq.mat_ho_so.map((stt) => (
+              {result.mat_ho_so.map((stt) => (
                 <li key={`m${stt}`} data-testid={`dong-mat-ho-so-${stt}`}>{`Dòng ${stt} — hồ sơ không còn`}</li>
               ))}
             </ul>

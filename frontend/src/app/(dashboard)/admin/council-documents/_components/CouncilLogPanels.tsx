@@ -27,13 +27,13 @@ function Pagination({
   setOffset,
   day,
   loading,
-  ten,
+  name,
 }: {
   offset: number
   setOffset: (f: (o: number) => number) => void
   day: boolean
   loading: boolean
-  ten: string
+  name: string
 }) {
   return (
     <div className="flex items-center gap-2">
@@ -42,7 +42,7 @@ function Pagination({
         size="sm"
         disabled={offset === 0 || loading}
         onClick={() => setOffset((o) => Math.max(0, o - PAGE_SIZE))}
-        data-testid={`${ten}-prev`}
+        data-testid={`${name}-prev`}
       >
         Trang trước
       </Button>
@@ -52,7 +52,7 @@ function Pagination({
         size="sm"
         disabled={!day || loading}
         onClick={() => setOffset((o) => o + PAGE_SIZE)}
-        data-testid={`${ten}-next`}
+        data-testid={`${name}-next`}
       >
         Trang sau
       </Button>
@@ -117,7 +117,7 @@ export function CouncilDownloadLogPanel({ setId }: { setId?: number }) {
         setOffset={setOffset}
         day={q.data.length === PAGE_SIZE}
         loading={q.isFetching}
-        ten="download-log"
+        name="download-log"
       />
     </div>
   )
@@ -184,7 +184,7 @@ export function CouncilDeletionLogPanel() {
         setOffset={setOffset}
         day={q.data.length === PAGE_SIZE}
         loading={q.isFetching}
-        ten="deletion-log"
+        name="deletion-log"
       />
     </div>
   )

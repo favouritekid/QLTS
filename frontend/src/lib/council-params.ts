@@ -29,10 +29,10 @@ export const EMPTY_PARAMS: InputParams = {
  * lỗi theo SỐ DÒNG, đếm từ 1). Chỉ bỏ các dòng trống ở CUỐI (không làm lệch số dòng nào). Không tự sửa / lọc mã —
  * máy chủ kiểm định dạng, trùng, khớp hồ sơ.
  */
-export function parseRowsToList(van_ban: string): string[] {
-  const dong = van_ban.split(/\r?\n/)
-  while (dong.length > 0 && dong[dong.length - 1].trim() === "") dong.pop()
-  return dong
+export function parseRowsToList(text: string): string[] {
+  const lines = text.split(/\r?\n/)
+  while (lines.length > 0 && lines[lines.length - 1].trim() === "") lines.pop()
+  return lines
 }
 
 /** Chỉ gửi ô đã điền; không điền ô nào ⇒ không gửi tham số (chỗ ấy để trống trên văn bản). */

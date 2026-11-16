@@ -1323,19 +1323,19 @@ async def publish_result(
 
     # SQLSTATE đọc bằng ``db_error_codes`` (thuộc tính, không đọc chữ ngoại lệ — guard che log §6).
     try:
-        kq = await evaluate_cascade(db, profile, actor=actor)
+        result = await evaluate_cascade(db, profile, actor=actor)
     except DBAPIError as e:
         if db_error_codes(e)[0] == _qos.SQLSTATE_DEADLOCK:
             raise ConflictError(_qos.CONFLICT_MESSAGE) from None
         raise
     transaction = db.sync_session.get_transaction()
     if transaction is not None and not transaction.is_active:
-        goc = _qos.transaction_root_error(transaction)  # D.2: một chỗ đọc thuộc tính riêng của SQLAlchemy
-        if db_error_codes(goc)[0] == _qos.SQLSTATE_DEADLOCK:
+        root_error = _qos.transaction_root_error(transaction)  # D.2: một chỗ đọc thuộc tính riêng của SQLAlchemy
+        if db_error_codes(root_error)[0] == _qos.SQLSTATE_DEADLOCK:
             raise ConflictError(_qos.CONFLICT_MESSAGE)
-        if goc is not None:
-            raise goc
-    return kq
+        if root_error is not None:
+            raise root_error
+    return result
 
 
 # ============================================================================

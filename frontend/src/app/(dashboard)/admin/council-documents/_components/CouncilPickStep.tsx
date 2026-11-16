@@ -55,22 +55,22 @@ export function CouncilPickStep({ preview, checking, hasCodeChange }: Props) {
   const docSet = useCouncilSelectionStore((s) => s.docSet)
 
   const { data: year } = useAcademicYears()
-  const { data: nganh } = useAdmissionPrograms()
+  const { data: programs } = useAdmissionPrograms()
   const [keyword, setKeyword] = useState("")
   const deferredKeyword = useDebouncedValue(keyword.trim(), 400)
   const [majorFilter, setMajorFilter] = useState("")
   const [statusFilter, setStatusFilter] = useState("")
-  const [trang, setPage] = useState(1)
+  const [currentPage, setPage] = useState(1)
   /** yêu cầu đổi năm đang chờ xác nhận (có danh sách chọn); `null` = không có yêu cầu. `nam` null = bỏ chọn năm. */
   const [pendingYearChange, setPendingYearChange] = useState<{ year: number | null } | null>(null)
 
-  const tim = useCouncilProfileSearch(
+  const search = useCouncilProfileSearch(
     {
       academic_year: academicYear ?? 0,
       tu_khoa: deferredKeyword === "" ? null : deferredKeyword.slice(0, 100),
       major_ids: majorFilter === "" ? null : [Number(majorFilter)],
       trang_thai: statusFilter === "" ? null : [statusFilter],
-      page: trang,
+      page: currentPage,
       page_size: PAGE_SIZE,
     },
     academicYear !== null,
@@ -83,12 +83,12 @@ export function CouncilPickStep({ preview, checking, hasCodeChange }: Props) {
   }, [preview])
 
   const picked = useMemo(() => new Set(pickedId), [pickedId])
-  const pageRows = tim.data?.dong ?? []
+  const pageRows = search.data?.dong ?? []
   const pickedInPageCount = pageRows.filter((d) => picked.has(d.profile_id)).length
   const allPages = pageRows.length > 0 && pickedInPageCount === pageRows.length
   const one = pickedInPageCount > 0 && !allPages
-  const tong = tim.data?.tong ?? 0
-  const pageNumber = Math.max(1, Math.ceil(tong / PAGE_SIZE))
+  const total = search.data?.tong ?? 0
+  const pageNumber = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
   const changeAcademicYear = (n: number | null) => {
     if (pickedId.length > 0 && n !== academicYear) setPendingYearChange({ year: n })
@@ -100,11 +100,11 @@ export function CouncilPickStep({ preview, checking, hasCodeChange }: Props) {
 
   const yearList = useMemo(() => {
     // Máy chủ chưa trả danh sách năm ⇒ dự phòng như màn "Hồ sơ tuyển sinh" (năm nay ± 1), để ô chọn năm không trống.
-    const ds =
+    const rows =
       year && year.length > 0
         ? year
         : [CURRENT_ADMISSIONS_YEAR + 1, CURRENT_ADMISSIONS_YEAR, CURRENT_ADMISSIONS_YEAR - 1]
-    return academicYear !== null && !ds.includes(academicYear) ? [...ds, academicYear].sort((a, b) => b - a) : ds
+    return academicYear !== null && !rows.includes(academicYear) ? [...rows, academicYear].sort((a, b) => b - a) : rows
   }, [year, academicYear])
 
   return (
@@ -158,7 +158,7 @@ export function CouncilPickStep({ preview, checking, hasCodeChange }: Props) {
             }}
           >
             <option value="">Tất cả ngành</option>
-            {(nganh ?? []).map((p) => (
+            {(programs ?? []).map((p) => (
               <option key={p.id} value={String(p.id)}>
                 {p.name}
               </option>
@@ -220,7 +220,7 @@ export function CouncilPickStep({ preview, checking, hasCodeChange }: Props) {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {tim.isPending ? (
+                {search.isPending ? (
                   <TableRow>
                     <TableCell colSpan={9} className="text-muted-foreground">
                       <Loader2 className="mr-2 inline h-4 w-4 animate-spin" /> Đang tìm hồ sơ…
@@ -257,7 +257,7 @@ export function CouncilPickStep({ preview, checking, hasCodeChange }: Props) {
                     </TableRow>
                   )
                 })}
-                {!tim.isPending && pageRows.length === 0 && !tim.isError ? (
+                {!search.isPending && pageRows.length === 0 && !search.isError ? (
                   <TableRow>
                     <TableCell colSpan={9} className="text-muted-foreground" data-testid="khong-co-ho-so">
                       Không có hồ sơ nào khớp bộ lọc.
@@ -267,21 +267,21 @@ export function CouncilPickStep({ preview, checking, hasCodeChange }: Props) {
               </TableBody>
             </Table>
           </div>
-          <CouncilErrorAlert error={tim.error} testId="tim-ho-so-loi" />
+          <CouncilErrorAlert error={search.error} testId="tim-ho-so-loi" />
           <p className="text-xs text-muted-foreground" data-testid="chu-thich-nganh-ho-so">
             “Ngành trên hồ sơ” là ngành ghi trên hồ sơ lúc tìm. Ngành xét và đường xét chính xác chỉ có sau khi kiểm trước (hồ sơ đã
             chọn) — xem cột Đường xét, Điểm và Kiểm trước.
           </p>
           <div className="flex items-center justify-between text-sm">
             <span data-testid="phan-trang-nhan">
-              {tim.data ? `${tong} hồ sơ · trang ${tim.data.page}/${pageNumber}` : ""}
+              {search.data ? `${total} hồ sơ · trang ${search.data.page}/${pageNumber}` : ""}
             </span>
             <div className="flex gap-2">
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
-                disabled={trang <= 1}
+                disabled={currentPage <= 1}
                 onClick={() => setPage((t) => Math.max(1, t - 1))}
               >
                 ‹ Trang trước
@@ -290,7 +290,7 @@ export function CouncilPickStep({ preview, checking, hasCodeChange }: Props) {
                 type="button"
                 variant="outline"
                 size="sm"
-                disabled={trang >= pageNumber}
+                disabled={currentPage >= pageNumber}
                 onClick={() => setPage((t) => t + 1)}
               >
                 Trang sau ›
@@ -333,9 +333,9 @@ export function CouncilPickStep({ preview, checking, hasCodeChange }: Props) {
 /** Cách phụ: dán danh sách mã hồ sơ ⇒ máy chủ đổi sang id và báo SỐ DÒNG không khớp (không báo giá trị). */
 function PasteCodes({ academicYear }: { academicYear: number }) {
   const add = useCouncilSelectionStore((s) => s.add)
-  const doi = useResolveCouncilCodes()
+  const resolveCodes = useResolveCouncilCodes()
   const [document, setDocument] = useState("")
-  const [kq, setKq] = useState<CouncilCodesOut | null>(null)
+  const [result, setResult] = useState<CouncilCodesOut | null>(null)
   const list = parseRowsToList(document)
   const hasCode = list.some((d) => d.trim() !== "")
 
@@ -356,37 +356,37 @@ function PasteCodes({ academicYear }: { academicYear: number }) {
           autoCapitalize="off"
           aria-label="Danh sách mã hồ sơ"
           value={document}
-          disabled={doi.isPending}
+          disabled={resolveCodes.isPending}
           onChange={(e) => setDocument(e.target.value)}
         />
         <Button
           type="button"
           size="sm"
-          disabled={!hasCode || doi.isPending}
+          disabled={!hasCode || resolveCodes.isPending}
           data-testid="dan-ma-them"
           onClick={() =>
-            doi.mutate(
+            resolveCodes.mutate(
               { academic_year: academicYear, ma_ho_so: list },
               {
                 onSuccess: (r) => {
                   add(r.profile_ids)
-                  setKq(r)
+                  setResult(r)
                   if (r.dong_loi.length === 0) setDocument("")
                 },
               },
             )
           }
         >
-          {doi.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+          {resolveCodes.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
           Thêm vào danh sách đang chọn
         </Button>
-        <CouncilErrorAlert error={doi.error} testId="dan-ma-loi" />
-        {kq ? (
+        <CouncilErrorAlert error={resolveCodes.error} testId="dan-ma-loi" />
+        {result ? (
           <div className="text-sm" data-testid="dan-ma-ket-qua">
-            <p>Đã thêm {kq.profile_ids.length} hồ sơ.</p>
-            {kq.dong_loi.length > 0 ? (
+            <p>Đã thêm {result.profile_ids.length} hồ sơ.</p>
+            {result.dong_loi.length > 0 ? (
               <ul className="list-disc pl-5 text-destructive" data-testid="dan-ma-dong-loi">
-                {kq.dong_loi.map((l) => (
+                {result.dong_loi.map((l) => (
                   <li key={l.dong}>{`Dòng ${l.dong}: ${pasteCodeReasonLabel(l.ly_do)}`}</li>
                 ))}
               </ul>

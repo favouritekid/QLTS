@@ -157,8 +157,8 @@ describe("gửi ghi nhận — đường thành công", () => {
     expect(dem.gui).toBe(1)
     expect(dem.maTrongForm).toEqual([MA])
     const t = h.result.current.status
-    expect(t.kieu).toBe("da_ghi")
-    if (t.kieu === "da_ghi") {
+    expect(t.kind).toBe("da_ghi")
+    if (t.kind === "da_ghi") {
       expect(t.decision?.id).toBe(7)
       expect(t.decision?.lap_lai).toBe(false)
     }
@@ -169,8 +169,8 @@ describe("gửi ghi nhận — đường thành công", () => {
     const h = dung_hook()
     await guiXong(h)
     const t = h.result.current.status
-    expect(t.kieu).toBe("da_ghi")
-    if (t.kieu === "da_ghi") expect(t.decision?.lap_lai).toBe(true)
+    expect(t.kind).toBe("da_ghi")
+    if (t.kind === "da_ghi") expect(t.decision?.lap_lai).toBe(true)
   })
 
   it("chống bấm đúp: hai lần gui đồng thời ⇒ chỉ MỘT lần mở lượt và MỘT lần gửi", async () => {
@@ -199,11 +199,11 @@ describe("gửi ghi nhận — máy chủ TỪ CHỐI dứt khoát", () => {
     })
     const h = dung_hook()
     await guiXong(h)
-    expect(h.result.current.status).toMatchObject({ kieu: "bi_tu_choi", huong: "sua_va_gui_lai" })
+    expect(h.result.current.status).toMatchObject({ kind: "bi_tu_choi", handling: "sua_va_gui_lai" })
     await guiXong(h)
     expect(dem.mo).toBe(1) // không mở lượt thứ hai
     expect(dem.maTrongForm).toEqual([MA, MA]) // cùng mã
-    expect(h.result.current.status.kieu).toBe("da_ghi")
+    expect(h.result.current.status.kind).toBe("da_ghi")
   })
 
   it("409 luot_da_chan ⇒ mo_luot_moi; lần gửi sau mở lượt MỚI", async () => {
@@ -220,7 +220,7 @@ describe("gửi ghi nhận — máy chủ TỪ CHỐI dứt khoát", () => {
     })
     const h = dung_hook()
     await guiXong(h)
-    expect(h.result.current.status).toMatchObject({ kieu: "bi_tu_choi", huong: "mo_luot_moi" })
+    expect(h.result.current.status).toMatchObject({ kind: "bi_tu_choi", handling: "mo_luot_moi" })
     await guiXong(h)
     expect(dem.mo).toBe(2)
     expect(dem.maTrongForm).toEqual([MA, MA_2])
@@ -237,11 +237,11 @@ describe("gửi ghi nhận — máy chủ TỪ CHỐI dứt khoát", () => {
     })
     const h = dung_hook()
     await guiXong(h)
-    expect(h.result.current.status).toMatchObject({ kieu: "bi_tu_choi", huong: "phan_xu" })
+    expect(h.result.current.status).toMatchObject({ kind: "bi_tu_choi", handling: "phan_xu" })
     await act(async () => {
       await h.result.current.adjudicate()
     })
-    expect(h.result.current.status.kieu).toBe("da_ghi")
+    expect(h.result.current.status.kind).toBe("da_ghi")
   })
 })
 
@@ -250,7 +250,7 @@ describe("gửi ghi nhận — KHÔNG RÕ ⇒ luôn 'chưa xác định', không
     dung({ gui: () => HttpResponse.error() })
     const h = dung_hook()
     await guiXong(h)
-    expect(h.result.current.status).toMatchObject({ kieu: "chua_xac_dinh", ma: MA, reason: "gui" })
+    expect(h.result.current.status).toMatchObject({ kind: "chua_xac_dinh", code: MA, reason: "gui" })
   })
 
   it.each([
@@ -264,14 +264,14 @@ describe("gửi ghi nhận — KHÔNG RÕ ⇒ luôn 'chưa xác định', không
     dung({ gui: tra })
     const h = dung_hook()
     await guiXong(h)
-    expect(h.result.current.status).toMatchObject({ kieu: "chua_xac_dinh", ma: MA })
+    expect(h.result.current.status).toMatchObject({ kind: "chua_xac_dinh", code: MA })
   })
 
   it("2xx nhưng thân sai dạng (Zod nổ) ⇒ chua_xac_dinh: máy chủ ĐÃ trả 2xx nên có thể đã ghi", async () => {
     dung({ gui: () => HttpResponse.json({ khong: "dung dang" }, { status: 201 }) })
     const h = dung_hook()
     await guiXong(h)
-    expect(h.result.current.status.kieu).toBe("chua_xac_dinh")
+    expect(h.result.current.status.kind).toBe("chua_xac_dinh")
   })
 
   it("không có đường 'gửi lại' sau chua_xac_dinh: phanXu dùng mã cũ, không mở lượt mới", async () => {
@@ -291,7 +291,7 @@ describe("phân xử — bốn kết quả", () => {
     const dem = dung({ gui: () => HttpResponse.error(), chan: tra })
     const h = dung_hook()
     await guiXong(h)
-    expect(h.result.current.status.kieu).toBe("chua_xac_dinh")
+    expect(h.result.current.status.kind).toBe("chua_xac_dinh")
     await act(async () => {
       await h.result.current.adjudicate()
     })
@@ -301,18 +301,18 @@ describe("phân xử — bốn kết quả", () => {
   it("da_ghi + quyet_dinh ⇒ da_ghi kèm DTO", async () => {
     const { h } = await denChuaXacDinh(() => HttpResponse.json({ ket_qua: "da_ghi", quyet_dinh: qd() }))
     const t = h.result.current.status
-    expect(t.kieu).toBe("da_ghi")
-    if (t.kieu === "da_ghi") expect(t.decision?.so_quyet_dinh).toBe("501")
+    expect(t.kind).toBe("da_ghi")
+    if (t.kind === "da_ghi") expect(t.decision?.so_quyet_dinh).toBe("501")
   })
 
   it("da_ghi KHÔNG kèm quyet_dinh ⇒ vẫn da_ghi (chi tiết null), không rơi về 'chưa ghi'", async () => {
     const { h } = await denChuaXacDinh(() => HttpResponse.json({ ket_qua: "da_ghi" }))
-    expect(h.result.current.status).toEqual({ kieu: "da_ghi", decision: null })
+    expect(h.result.current.status).toEqual({ kind: "da_ghi", decision: null })
   })
 
   it("chua_ghi_da_chan ⇒ chua_ghi_da_chan (trạng thái DUY NHẤT nói 'chưa ghi'); lần gửi sau mở lượt MỚI", async () => {
     const { h, dem } = await denChuaXacDinh(() => HttpResponse.json({ ket_qua: "chua_ghi_da_chan" }))
-    expect(h.result.current.status.kieu).toBe("chua_ghi_da_chan")
+    expect(h.result.current.status.kind).toBe("chua_ghi_da_chan")
     server.use(http.post(`${API}${P}/decisions`, () => HttpResponse.json(qd(), { status: 201 })))
     await guiXong(h)
     expect(dem.mo).toBe(2)
@@ -320,12 +320,12 @@ describe("phân xử — bốn kết quả", () => {
 
   it("dang_xu_ly ⇒ vẫn chua_xac_dinh (lyDo dang_xu_ly)", async () => {
     const { h } = await denChuaXacDinh(() => HttpResponse.json({ ket_qua: "dang_xu_ly" }))
-    expect(h.result.current.status).toMatchObject({ kieu: "chua_xac_dinh", reason: "dang_xu_ly" })
+    expect(h.result.current.status).toMatchObject({ kind: "chua_xac_dinh", reason: "dang_xu_ly" })
   })
 
   it("ket_qua LẠ ⇒ chua_xac_dinh (không suy)", async () => {
     const { h } = await denChuaXacDinh(() => HttpResponse.json({ ket_qua: "gia_tri_moi_cua_may_chu" }))
-    expect(h.result.current.status).toMatchObject({ kieu: "chua_xac_dinh", reason: "van_chua_ro" })
+    expect(h.result.current.status).toMatchObject({ kind: "chua_xac_dinh", reason: "van_chua_ro" })
   })
 
   it.each([
@@ -335,7 +335,7 @@ describe("phân xử — bốn kết quả", () => {
     ["200 sai dạng", () => HttpResponse.json({ linh_tinh: 1 })],
   ])("phân xử %s ⇒ chua_xac_dinh (phan_xu_loi), KHÔNG chưa ghi", async (_t, tra) => {
     const { h } = await denChuaXacDinh(tra)
-    expect(h.result.current.status).toMatchObject({ kieu: "chua_xac_dinh", reason: "phan_xu_loi" })
+    expect(h.result.current.status).toMatchObject({ kind: "chua_xac_dinh", reason: "phan_xu_loi" })
   })
 
   it("phân xử lặp khi vẫn chưa rõ: gọi lại được (luỹ đẳng)", async () => {
@@ -366,7 +366,7 @@ describe("phân xử — giờ của lượt được giữ; 'đã chặn' làm 
       await act(async () => {
         await h.result.current.adjudicate()
       })
-      expect(h.result.current.status).toEqual({ kieu: "chua_xac_dinh", ma: MA, luc: GIO_LUOT, reason: lyDo })
+      expect(h.result.current.status).toEqual({ kind: "chua_xac_dinh", code: MA, at: GIO_LUOT, reason: lyDo })
     }
   })
 
@@ -377,12 +377,12 @@ describe("phân xử — giờ của lượt được giữ; 'đã chặn' làm 
       dung({ gui: () => HttpResponse.error(), chan: () => HttpResponse.json({ ket_qua: "dang_xu_ly" }) })
       const h = dung_hook()
       await guiXong(h)
-      expect(h.result.current.status).toMatchObject({ kieu: "chua_xac_dinh", luc: "2026-03-01T10:00:00.000Z", reason: "gui" })
+      expect(h.result.current.status).toMatchObject({ kind: "chua_xac_dinh", at: "2026-03-01T10:00:00.000Z", reason: "gui" })
       vi.setSystemTime(new Date("2026-03-01T11:30:00.000Z")) // người dùng bấm kiểm sau 90 phút
       await act(async () => {
         await h.result.current.adjudicate()
       })
-      expect(h.result.current.status).toMatchObject({ kieu: "chua_xac_dinh", luc: "2026-03-01T10:00:00.000Z", reason: "dang_xu_ly" })
+      expect(h.result.current.status).toMatchObject({ kind: "chua_xac_dinh", at: "2026-03-01T10:00:00.000Z", reason: "dang_xu_ly" })
     } finally {
       vi.useRealTimers()
     }
@@ -405,13 +405,13 @@ describe("phân xử — giờ của lượt được giữ; 'đã chặn' làm 
     act(() => {
       xong = h.result.current.adjudicate()
     })
-    await waitFor(() => expect(h.result.current.status.kieu).toBe("dang_phan_xu"))
-    expect(h.result.current.status).toEqual({ kieu: "dang_phan_xu", ma: MA, luc: GIO_LUOT })
+    await waitFor(() => expect(h.result.current.status.kind).toBe("dang_phan_xu"))
+    expect(h.result.current.status).toEqual({ kind: "dang_phan_xu", code: MA, at: GIO_LUOT })
     tha()
     await act(async () => {
       await xong
     })
-    expect(h.result.current.status).toMatchObject({ kieu: "chua_xac_dinh", luc: GIO_LUOT })
+    expect(h.result.current.status).toMatchObject({ kind: "chua_xac_dinh", at: GIO_LUOT })
   })
 
   it("Đ2-2: chua_ghi_da_chan ⇒ làm mới truy vấn của BỘ và DANH SÁCH LƯỢT (đánh dấu cũ để tải lại theo máy chủ)", async () => {
@@ -429,7 +429,7 @@ describe("phân xử — giờ của lượt được giữ; 'đã chặn' làm 
     await act(async () => {
       await h.result.current.adjudicate()
     })
-    expect(h.result.current.status.kieu).toBe("chua_ghi_da_chan")
+    expect(h.result.current.status.kind).toBe("chua_ghi_da_chan")
     expect(h.qc.getQueryState(councilDocumentKeys.set(SET))?.isInvalidated).toBe(true)
     expect(h.qc.getQueryState(councilDocumentKeys.submissions(SET))?.isInvalidated).toBe(true)
   })
@@ -441,7 +441,7 @@ describe("mở lượt", () => {
     const dem = dung({ mo: () => dap(luatMoLuot({ ma: MA_2, tao_luc: "2026-11-11T01:00:00Z" })) ?? HttpResponse.error() })
     const h = dung_hook()
     await guiXong(h)
-    expect(h.result.current.status).toMatchObject({ kieu: "chua_xac_dinh", ma: MA_2, reason: "mo_luot" })
+    expect(h.result.current.status).toMatchObject({ kind: "chua_xac_dinh", code: MA_2, reason: "mo_luot" })
     expect(dem.gui).toBe(0)
   })
 
@@ -449,7 +449,7 @@ describe("mở lượt", () => {
     const dem = dung({ mo: () => HttpResponse.error(), ds: () => HttpResponse.json([luot(MA_2, "cho_gui")]) })
     const h = dung_hook()
     await guiXong(h)
-    expect(h.result.current.status).toMatchObject({ kieu: "chua_xac_dinh", ma: MA_2 })
+    expect(h.result.current.status).toMatchObject({ kind: "chua_xac_dinh", code: MA_2 })
     expect(dem.gui).toBe(0)
   })
 
@@ -457,7 +457,7 @@ describe("mở lượt", () => {
     const dem = dung({ mo: () => HttpResponse.error(), ds: () => HttpResponse.json([luot(MA_2, "da_chan")]) })
     const h = dung_hook()
     await guiXong(h)
-    expect(h.result.current.status.kieu).toBe("loi_mo_luot")
+    expect(h.result.current.status.kind).toBe("loi_mo_luot")
     expect(dem.gui).toBe(0)
   })
 
@@ -467,7 +467,7 @@ describe("mở lượt", () => {
     })
     const h = dung_hook()
     await guiXong(h)
-    expect(h.result.current.status.kieu).toBe("loi_mo_luot")
+    expect(h.result.current.status.kind).toBe("loi_mo_luot")
     expect(dem.mo).toBe(1)
     expect(dem.gui).toBe(0)
   })
@@ -476,7 +476,7 @@ describe("mở lượt", () => {
     dung({ mo: () => HttpResponse.json({ detail: "Không có bộ." }, { status: 404 }) })
     const h = dung_hook()
     await guiXong(h)
-    expect(h.result.current.status.kieu).toBe("bo_khong_con")
+    expect(h.result.current.status.kind).toBe("bo_khong_con")
   })
 })
 
@@ -486,9 +486,9 @@ describe("khôi phục sau tải lại trang", () => {
     const h = dung_hook()
     act(() => h.result.current.restore([luot(MA, "cho_gui", { tao_luc: "2026-11-11T02:00:00Z" })]))
     expect(h.result.current.status).toEqual({
-      kieu: "chua_xac_dinh",
-      ma: MA,
-      luc: "2026-11-11T02:00:00Z",
+      kind: "chua_xac_dinh",
+      code: MA,
+      at: "2026-11-11T02:00:00Z",
       reason: "tai_lai_trang",
     })
     // nút phân xử dùng đúng mã vừa khôi phục
@@ -496,7 +496,7 @@ describe("khôi phục sau tải lại trang", () => {
     await act(async () => {
       await h.result.current.adjudicate()
     })
-    expect(h.result.current.status.kieu).toBe("chua_ghi_da_chan")
+    expect(h.result.current.status.kind).toBe("chua_ghi_da_chan")
     expect(dem.mo).toBe(0)
     expect(JSON.stringify({ l: { ...localStorage }, s: { ...sessionStorage } }).includes(MA)).toBe(false)
   })
@@ -505,23 +505,23 @@ describe("khôi phục sau tải lại trang", () => {
     dung({})
     const h = dung_hook()
     act(() => h.result.current.restore([luot(MA, "da_chan"), luot(MA_2, "da_ghi")]))
-    expect(h.result.current.status.kieu).toBe("nhap")
+    expect(h.result.current.status.kind).toBe("nhap")
   })
 
   it("trạng thái lạ của lượt KHÔNG bị coi là đang chờ", () => {
     dung({})
     const h = dung_hook()
     act(() => h.result.current.restore([luot(MA, "trang_thai_moi")]))
-    expect(h.result.current.status.kieu).toBe("nhap")
+    expect(h.result.current.status.kind).toBe("nhap")
   })
 
   it("không ghi đè khi đang ở trạng thái khác nhap (đã da_ghi)", async () => {
     dung({})
     const h = dung_hook()
     await guiXong(h)
-    expect(h.result.current.status.kieu).toBe("da_ghi")
+    expect(h.result.current.status.kind).toBe("da_ghi")
     act(() => h.result.current.restore([luot(MA_2, "cho_gui")]))
-    expect(h.result.current.status.kieu).toBe("da_ghi")
+    expect(h.result.current.status.kind).toBe("da_ghi")
   })
 })
 
@@ -540,9 +540,9 @@ describe("batDauLuotMoiSauHuy — mã lượt cũ bị bỏ SAU huỷ ghi nhận
     const dem = dung({ mo: moHaiLan() })
     const h = dung_hook()
     await guiXong(h)
-    expect(h.result.current.status.kieu).toBe("da_ghi")
+    expect(h.result.current.status.kind).toBe("da_ghi")
     act(() => h.result.current.startNewSubmissionAfterCancel())
-    expect(h.result.current.status).toEqual({ kieu: "nhap" })
+    expect(h.result.current.status).toEqual({ kind: "nhap" })
     await guiXong(h)
     expect(dem.mo).toBe(2)
     expect(dem.maTrongForm).toEqual([MA, MA_2])
@@ -552,9 +552,9 @@ describe("batDauLuotMoiSauHuy — mã lượt cũ bị bỏ SAU huỷ ghi nhận
     const dem = dung({ mo: moHaiLan() })
     const h = dung_hook()
     await guiXong(h)
-    expect(h.result.current.status.kieu).toBe("da_ghi")
+    expect(h.result.current.status.kind).toBe("da_ghi")
     act(() => h.result.current.backToForm())
-    expect(h.result.current.status).toEqual({ kieu: "nhap" })
+    expect(h.result.current.status).toEqual({ kind: "nhap" })
     await guiXong(h)
     expect(dem.mo).toBe(1)
     expect(dem.maTrongForm).toEqual([MA, MA])

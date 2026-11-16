@@ -15,7 +15,7 @@ import type { CouncilDecision, CouncilDocumentPermissions, CouncilSetDetail } fr
 
 import { CouncilErrorAlert } from "./CouncilErrorAlert"
 import { CouncilRecordResult } from "./CouncilRecordResult"
-import { ngay, decisionKindLabel, statusLabel, formatTime } from "./display"
+import { formatDate, decisionKindLabel, statusLabel, formatTime } from "./display"
 
 export type RecordController = ReturnType<typeof useRecordDecision>
 
@@ -53,8 +53,8 @@ export function CouncilRecordStep({ docSet, permissions, gn, onBack, onCancelled
   const lockBatchNumber = printedValue(ts, "dot_so")
   const lockBatchMonth = printedValue(ts, "dot_thang")
 
-  const [loai, setKind] = useState<"trung_tuyen" | "bo_sung">("trung_tuyen")
-  const [goc, setRoot] = useState("")
+  const [kind, setKind] = useState<"trung_tuyen" | "bo_sung">("trung_tuyen")
+  const [root, setRoot] = useState("")
   const [decisionNumber, setDecisionNumber] = useState("")
   const [signingDate, setSigningDate] = useState("")
   const [minutesNumber, setMinutesNumber] = useState("")
@@ -67,12 +67,12 @@ export function CouncilRecordStep({ docSet, permissions, gn, onBack, onCancelled
   const [typedConfirm, setTypedConfirm] = useState<Record<string, string>>({})
 
   // Danh sách Quyết định đã ghi của bộ (hiện kết quả khi tải lại trang) và danh sách gốc cho Quyết định bổ sung.
-  const cua_bo = useCouncilDecisions({ set_id: docSet.id, limit: 50, offset: 0 }, permissions.xem_danh_sach_qd)
+  const setDecisions = useCouncilDecisions({ set_id: docSet.id, limit: 50, offset: 0 }, permissions.xem_danh_sach_qd)
   // Máy chủ `083a428d` LỌC `loai` + `trang_thai` (giá trị lạ ⇒ 422): chỉ Quyết định trúng tuyển còn hiệu lực làm "gốc" cho
   // Quyết định bổ sung. Giao diện KHÔNG lọc lại (máy chủ kiểm lại khi ghi).
   const all = useCouncilDecisions(
     { limit: 200, offset: 0, loai: "trung_tuyen", trang_thai: "hieu_luc" },
-    permissions.xem_danh_sach_qd && loai === "bo_sung",
+    permissions.xem_danh_sach_qd && kind === "bo_sung",
   )
 
   // Văn bản CÒN tính của bộ — theo định nghĩa của chính máy chủ (`van_ban_song_cua_bo`: chưa huỷ ghi nhận), mới nhất.
@@ -80,14 +80,14 @@ export function CouncilRecordStep({ docSet, permissions, gn, onBack, onCancelled
   // diện chọn ĐÚNG văn bản ấy trong danh sách; `null` ⇒ bộ chưa có văn bản còn tính — KHÔNG tự chọn "mới nhất" theo giờ.
   const decisionId = docSet.quyet_dinh?.id
   const existing: CouncilDecision | undefined = useMemo(
-    () => (decisionId === undefined ? undefined : (cua_bo.data ?? []).find((d) => d.id === decisionId)),
-    [cua_bo.data, decisionId],
+    () => (decisionId === undefined ? undefined : (setDecisions.data ?? []).find((d) => d.id === decisionId)),
+    [setDecisions.data, decisionId],
   )
 
   const allCandidates = all.data ?? []
 
-  const confirmNeeded = t.kieu === "bi_tu_choi" ? councilConfirmNeededFromError(t.loi) : undefined
-  const blockedRows = t.kieu === "bi_tu_choi" ? councilBlockedRowsFromError(t.loi) : undefined
+  const confirmNeeded = t.kind === "bi_tu_choi" ? councilConfirmNeededFromError(t.failure) : undefined
+  const blockedRows = t.kind === "bi_tu_choi" ? councilBlockedRowsFromError(t.failure) : undefined
   const confirmMatches =
     confirmNeeded === undefined ||
     Object.entries(confirmNeeded.so_ho_so_theo_loai).every(([k, n]) => (typedConfirm[k] ?? "").trim() === String(n))
@@ -96,7 +96,7 @@ export function CouncilRecordStep({ docSet, permissions, gn, onBack, onCancelled
     decisionNumber: lockDecisionNumber ?? decisionNumber,
     signingDate: lockDecisionDate ?? signingDate,
   }
-  const locking = t.kieu === "dang_gui" || t.kieu === "dang_phan_xu" || t.kieu === "chua_xac_dinh"
+  const locking = t.kind === "dang_gui" || t.kind === "dang_phan_xu" || t.kind === "chua_xac_dinh"
   const valid =
     ONE_TO_SIX_DIGITS_RE.test(value.decisionNumber.trim()) &&
     value.signingDate !== "" &&
@@ -105,14 +105,14 @@ export function CouncilRecordStep({ docSet, permissions, gn, onBack, onCancelled
     POSITIVE_INTEGER_RE.test(removeAgainNumber.trim()) &&
     Number(removeAgainNumber.trim()) >= 1 &&
     matches &&
-    (loai === "trung_tuyen" || goc !== "") &&
+    (kind === "trung_tuyen" || root !== "") &&
     confirmMatches
 
-  const gui = () => {
+  const submit = () => {
     if (!scan) return
     const dl: RecordSubmissionData = {
-      loai,
-      ...(loai === "bo_sung" && goc !== "" ? { goc_id: Number(goc) } : {}),
+      loai: kind,
+      ...(kind === "bo_sung" && root !== "" ? { goc_id: Number(root) } : {}),
       so_quyet_dinh: value.decisionNumber.trim(),
       ngay_ky: value.signingDate,
       ...((lockMinutes ?? minutesNumber) ? { so_bien_ban: (lockMinutes ?? minutesNumber).trim() } : {}),
@@ -128,14 +128,14 @@ export function CouncilRecordStep({ docSet, permissions, gn, onBack, onCancelled
   }
 
   // ── 1. kết quả (từ DTO máy chủ) ───────────────────────────────────────────
-  if (t.kieu === "da_ghi" && t.decision) {
+  if (t.kind === "da_ghi" && t.decision) {
     return (
       <div className="space-y-4" data-testid="buoc-ghi-nhan">
         <CouncilRecordResult decision={t.decision} setId={docSet.id} permissions={permissions} onCancelled={() => { onCancelled(); gn.startNewSubmissionAfterCancel() }} />
       </div>
     )
   }
-  if (t.kieu === "da_ghi") {
+  if (t.kind === "da_ghi") {
     return (
       <div className="space-y-3" data-testid="buoc-ghi-nhan">
         <div className="rounded border p-4 text-sm" data-testid="da-ghi-thieu-chi-tiet">
@@ -144,7 +144,7 @@ export function CouncilRecordStep({ docSet, permissions, gn, onBack, onCancelled
       </div>
     )
   }
-  if (t.kieu === "nhap" && existing) {
+  if (t.kind === "nhap" && existing) {
     return (
       <div className="space-y-4" data-testid="buoc-ghi-nhan">
         <p className="text-sm text-muted-foreground">Bước 6 — bộ #{docSet.id} đã có Quyết định đã ghi nhận.</p>
@@ -160,11 +160,11 @@ export function CouncilRecordStep({ docSet, permissions, gn, onBack, onCancelled
         Bước 6 — nhập theo giấy đã ký, kèm bản scan. Máy chủ đối chiếu với bản in của bộ #{docSet.id}.
       </p>
 
-      {t.kieu === "chua_xac_dinh" || t.kieu === "dang_phan_xu" ? (
+      {t.kind === "chua_xac_dinh" || t.kind === "dang_phan_xu" ? (
         <Unspecified t={t} onCheck={() => void gn.adjudicate()} />
       ) : null}
 
-      {t.kieu === "chua_ghi_da_chan" ? (
+      {t.kind === "chua_ghi_da_chan" ? (
         <div className="space-y-2 rounded border p-4 text-sm" data-testid="da-chan">
           <p className="font-medium">Đã chặn lượt gửi cũ</p>
           <p>
@@ -176,7 +176,7 @@ export function CouncilRecordStep({ docSet, permissions, gn, onBack, onCancelled
         </div>
       ) : null}
 
-      {t.kieu === "bo_khong_con" ? (
+      {t.kind === "bo_khong_con" ? (
         <p className="text-sm text-destructive" role="alert" data-testid="bo-khong-con">
           Bộ văn bản không còn — về danh sách bộ.
         </p>
@@ -187,30 +187,30 @@ export function CouncilRecordStep({ docSet, permissions, gn, onBack, onCancelled
           <Label>Loại văn bản</Label>
           <div className="flex flex-wrap gap-4 text-sm">
             <label className="flex items-center gap-2">
-              <input type="radio" name="loai-qd" value="trung_tuyen" checked={loai === "trung_tuyen"} onChange={() => setKind("trung_tuyen")} data-testid="loai-trung-tuyen" />
+              <input type="radio" name="loai-qd" value="trung_tuyen" checked={kind === "trung_tuyen"} onChange={() => setKind("trung_tuyen")} data-testid="loai-trung-tuyen" />
               Quyết định trúng tuyển
             </label>
             <label className="flex items-center gap-2">
-              <input type="radio" name="loai-qd" value="bo_sung" checked={loai === "bo_sung"} onChange={() => setKind("bo_sung")} data-testid="loai-bo-sung" />
+              <input type="radio" name="loai-qd" value="bo_sung" checked={kind === "bo_sung"} onChange={() => setKind("bo_sung")} data-testid="loai-bo-sung" />
               Quyết định bổ sung
             </label>
           </div>
         </div>
 
-        {loai === "bo_sung" ? (
+        {kind === "bo_sung" ? (
           <div className="space-y-1">
             <Label htmlFor="b6-goc">Quyết định gốc (bắt buộc với Quyết định bổ sung)</Label>
             <select
               id="b6-goc"
               data-testid="goc"
               className="h-10 w-full max-w-md rounded-md border border-border bg-card px-2 text-sm md:h-9"
-              value={goc}
+              value={root}
               onChange={(e) => setRoot(e.target.value)}
             >
               <option value="">Chưa chọn Quyết định gốc.</option>
               {allCandidates.map((d) => (
                 <option key={d.id} value={d.id}>
-                  {`${decisionKindLabel(d.loai)} số ${d.so_quyet_dinh} ngày ${ngay(d.ngay_ky)}`}
+                  {`${decisionKindLabel(d.loai)} số ${d.so_quyet_dinh} ngày ${formatDate(d.ngay_ky)}`}
                 </option>
               ))}
             </select>
@@ -219,12 +219,12 @@ export function CouncilRecordStep({ docSet, permissions, gn, onBack, onCancelled
         ) : null}
 
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <Field id="b6-so-qd" nhan="Số Quyết định" khoa={lockDecisionNumber} value={decisionNumber} onChange={setDecisionNumber} testid="so-quyet-dinh" numeric />
-          <Field id="b6-ngay-ky" nhan="Ngày ký (theo giấy)" khoa={lockDecisionDate} value={signingDate} onChange={setSigningDate} testid="ngay-ky" type="date" />
-          <Field id="b6-so-bb" nhan="Số Biên bản" khoa={lockMinutes} value={minutesNumber} onChange={setMinutesNumber} testid="so-bien-ban" numeric />
-          <Field id="b6-ngay-bb" nhan="Ngày Biên bản" khoa={lockMinutesDate} value={minutesDate} onChange={setMinutesDate} testid="ngay-bien-ban" type="date" />
-          <Field id="b6-dot-so" nhan="Đợt số" khoa={lockBatchNumber} value={batchNumber} onChange={setBatchNumber} testid="dot-so" numeric />
-          <Field id="b6-dot-thang" nhan="Tháng của đợt" khoa={lockBatchMonth} value={batchMonth} onChange={setBatchMonth} testid="dot-thang" numeric />
+          <Field id="b6-so-qd" label="Số Quyết định" locked={lockDecisionNumber} value={decisionNumber} onChange={setDecisionNumber} testid="so-quyet-dinh" numeric />
+          <Field id="b6-ngay-ky" label="Ngày ký (theo giấy)" locked={lockDecisionDate} value={signingDate} onChange={setSigningDate} testid="ngay-ky" type="date" />
+          <Field id="b6-so-bb" label="Số Biên bản" locked={lockMinutes} value={minutesNumber} onChange={setMinutesNumber} testid="so-bien-ban" numeric />
+          <Field id="b6-ngay-bb" label="Ngày Biên bản" locked={lockMinutesDate} value={minutesDate} onChange={setMinutesDate} testid="ngay-bien-ban" type="date" />
+          <Field id="b6-dot-so" label="Đợt số" locked={lockBatchNumber} value={batchNumber} onChange={setBatchNumber} testid="dot-so" numeric />
+          <Field id="b6-dot-thang" label="Tháng của đợt" locked={lockBatchMonth} value={batchMonth} onChange={setBatchMonth} testid="dot-thang" numeric />
         </div>
 
         <div className="space-y-1">
@@ -283,9 +283,9 @@ export function CouncilRecordStep({ docSet, permissions, gn, onBack, onCancelled
         ) : null}
       </fieldset>
 
-      {t.kieu === "bi_tu_choi" ? (
+      {t.kind === "bi_tu_choi" ? (
         <div className="space-y-2" data-testid="bi-tu-choi">
-          <CouncilErrorAlert error={t.loi} testId="ghi-nhan-loi" />
+          <CouncilErrorAlert error={t.failure} testId="ghi-nhan-loi" />
           {blockedRows ? (
             <ul className="list-disc pl-5 text-sm" data-testid="dong-bi-chan">
               {blockedRows.map((d) => (
@@ -293,10 +293,10 @@ export function CouncilRecordStep({ docSet, permissions, gn, onBack, onCancelled
               ))}
             </ul>
           ) : null}
-          {t.huong === "mo_luot_moi" ? (
+          {t.handling === "mo_luot_moi" ? (
             <p className="text-sm" data-testid="huong-mo-luot-moi">Lượt gửi cũ đã bị chặn — bấm “Ghi nhận” để mở lượt mới.</p>
           ) : null}
-          {t.huong === "phan_xu" ? (
+          {t.handling === "phan_xu" ? (
             <div className="space-y-2 text-sm" data-testid="huong-phan-xu">
               <p>Lượt này đã có văn bản ghi với nội dung khác — bấm để máy chủ cho biết văn bản đó.</p>
               <Button type="button" size="sm" variant="outline" onClick={() => void gn.adjudicate()} data-testid="kiem-tra-may-chu">
@@ -304,15 +304,15 @@ export function CouncilRecordStep({ docSet, permissions, gn, onBack, onCancelled
               </Button>
             </div>
           ) : null}
-          {t.huong === "tai_lai_bo" ? (
+          {t.handling === "tai_lai_bo" ? (
             <p className="text-sm" data-testid="huong-tai-lai-bo">Lượt gửi không hợp lệ với bộ này — tải lại trang để đọc lại trạng thái bộ.</p>
           ) : null}
         </div>
       ) : null}
 
-      {t.kieu === "loi_mo_luot" ? (
+      {t.kind === "loi_mo_luot" ? (
         <div className="space-y-2" data-testid="loi-mo-luot">
-          <CouncilErrorAlert error={t.loi} testId="mo-luot-loi" />
+          <CouncilErrorAlert error={t.failure} testId="mo-luot-loi" />
           <p className="text-sm">Chưa gửi gì lên máy chủ — thử lại an toàn.</p>
         </div>
       ) : null}
@@ -321,9 +321,9 @@ export function CouncilRecordStep({ docSet, permissions, gn, onBack, onCancelled
         <Button type="button" variant="outline" onClick={onBack} disabled={locking} data-testid="ghi-nhan-quay-lai">
           ← Quay lại
         </Button>
-        {t.kieu === "chua_xac_dinh" || t.kieu === "dang_phan_xu" ? null : (
-          <Button type="button" onClick={gui} disabled={!valid || t.kieu === "dang_gui" || t.kieu === "bo_khong_con"} data-testid="ghi-nhan">
-            {t.kieu === "dang_gui" ? (
+        {t.kind === "chua_xac_dinh" || t.kind === "dang_phan_xu" ? null : (
+          <Button type="button" onClick={submit} disabled={!valid || t.kind === "dang_gui" || t.kind === "bo_khong_con"} data-testid="ghi-nhan">
+            {t.kind === "dang_gui" ? (
               <>
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Đang gửi ghi nhận…
               </>
@@ -340,8 +340,8 @@ export function CouncilRecordStep({ docSet, permissions, gn, onBack, onCancelled
 /** Một ô nhập; ô đã in trên bộ ⇒ khoá đúng giá trị in. */
 function Field({
   id,
-  nhan,
-  khoa,
+  label,
+  locked,
   value,
   onChange,
   testid,
@@ -349,8 +349,8 @@ function Field({
   numeric,
 }: {
   id: string
-  nhan: string
-  khoa: string | null
+  label: string
+  locked: string | null
   value: string
   onChange: (v: string) => void
   testid: string
@@ -360,8 +360,8 @@ function Field({
   return (
     <div className="space-y-1">
       <Label htmlFor={id}>
-        {nhan}
-        {khoa !== null ? <span className="ml-1 text-xs text-muted-foreground">(đã in trên bộ)</span> : null}
+        {label}
+        {locked !== null ? <span className="ml-1 text-xs text-muted-foreground">(đã in trên bộ)</span> : null}
       </Label>
       <Input
         id={id}
@@ -369,8 +369,8 @@ function Field({
         type={type}
         inputMode={numeric ? "numeric" : undefined}
         autoComplete="off"
-        readOnly={khoa !== null}
-        value={khoa ?? value}
+        readOnly={locked !== null}
+        value={locked ?? value}
         onChange={(e) => onChange(e.target.value)}
       />
     </div>
@@ -382,18 +382,18 @@ function Unspecified({
   t,
   onCheck,
 }: {
-  t: { kieu: "chua_xac_dinh"; ma: string; luc: string; reason: string } | { kieu: "dang_phan_xu"; ma: string; luc: string }
+  t: { kind: "chua_xac_dinh"; code: string; at: string; reason: string } | { kind: "dang_phan_xu"; code: string; at: string }
   onCheck: () => void
 }) {
-  const checking = t.kieu === "dang_phan_xu"
-  const reason = t.kieu === "chua_xac_dinh" ? t.reason : null
+  const checking = t.kind === "dang_phan_xu"
+  const reason = t.kind === "chua_xac_dinh" ? t.reason : null
   return (
     <div className="space-y-2 rounded border border-warning-500/60 bg-warning-50 p-4 text-sm" role="status" data-testid="chua-xac-dinh">
       <div className="text-base font-semibold" data-testid="nhan-chua-xac-dinh">
         {UNDETERMINED_LABEL} được kết quả ghi nhận
       </div>
       <p>
-        Lượt gửi lúc {formatTime(t.luc)}, mã lượt gửi <span className="font-mono" data-testid="ma-luot">{t.ma}</span>. Quyết định CÓ THỂ
+        Lượt gửi lúc {formatTime(t.at)}, mã lượt gửi <span className="font-mono" data-testid="ma-luot">{t.code}</span>. Quyết định CÓ THỂ
         đã được ghi. Biểu mẫu đã khoá — đừng gửi lại; bấm nút dưới để máy chủ cho biết chắc.
       </p>
       {reason === "dang_xu_ly" ? <p data-testid="tb-dang-xu-ly">Máy chủ đang xử lý — vẫn chưa rõ, thử lại sau ít giây.</p> : null}

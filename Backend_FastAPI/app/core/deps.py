@@ -3778,10 +3778,10 @@ async def get_backfill_exception_for_admin(
 
 
 class CouncilDocumentScope(NamedTuple):
-    """Phạm vi xem bộ văn bản Hội đồng. ``tat_ca`` CHỈ đúng với admin; không thì
+    """Phạm vi xem bộ văn bản Hội đồng. ``all_units`` CHỈ đúng với admin; không thì
     ``unit_id`` là đơn vị (khác None) mà người dùng được thấy."""
 
-    tat_ca: bool
+    all_units: bool
     unit_id: Optional[int]
 
 
@@ -3789,11 +3789,11 @@ async def get_council_document_scope(
     current_user: models.User = Depends(check_permission),
 ) -> CouncilDocumentScope:
     if current_user.role == UserRole.ADMIN:
-        return CouncilDocumentScope(tat_ca=True, unit_id=None)
+        return CouncilDocumentScope(all_units=True, unit_id=None)
     if current_user.role == UserRole.MANAGER:
         # Manager chưa gán đơn vị ⇒ 403 (không bao giờ hiểu thành "mọi đơn vị").
         return CouncilDocumentScope(
-            tat_ca=False, unit_id=manager_unit_scope_or_deny(current_user)
+            all_units=False, unit_id=manager_unit_scope_or_deny(current_user)
         )
     raise PermissionDeniedError(
         detail="Chỉ admin hoặc quản lý đơn vị được xem bộ văn bản Hội đồng."
@@ -3818,7 +3818,7 @@ async def _council_document_set_in_scope(
 
     combo = await CouncilDocumentRepository(db).set_by_id(set_id)
     if combo is None or not (
-        scope.tat_ca or (combo.unit_id is not None and combo.unit_id == scope.unit_id)
+        scope.all_units or (combo.unit_id is not None and combo.unit_id == scope.unit_id)
     ):
         raise ResourceNotFoundError(detail="Không có bộ văn bản này.")
     return combo
@@ -3832,7 +3832,7 @@ async def _council_document_set_in_scope(
 async def require_council_document_admin(
     scope: CouncilDocumentScope = Depends(get_council_document_scope),
 ) -> CouncilDocumentScope:
-    if not scope.tat_ca:
+    if not scope.all_units:
         raise PermissionDeniedError(
             detail="Chỉ admin được làm thao tác này với bộ văn bản Hội đồng."
         )
@@ -3952,12 +3952,12 @@ _NON_COUNCIL_DOCUMENT_GATES = frozenset(
 
 def _functions_in_dependency_tree(dependant) -> set:
     """Mọi ``call`` trong cây dependency (đệ quy) của một ``Dependant`` FastAPI."""
-    out, hang = set(), list(dependant.dependencies)
-    while hang:
-        d = hang.pop()
+    out, queue = set(), list(dependant.dependencies)
+    while queue:
+        d = queue.pop()
         if d.call is not None:
             out.add(d.call)
-        hang.extend(d.dependencies)
+        queue.extend(d.dependencies)
     return out
 
 
@@ -4163,12 +4163,12 @@ def _policy_outside_route_pattern(
 
     if enforcer is None:
         return []
-    ham = set(endpoint_by_flag.values())
+    functions = set(endpoint_by_flag.values())
     paths = sorted(
         {
             r.path
             for r in request.app.routes
-            if isinstance(r, APIRoute) and r.endpoint in ham
+            if isinstance(r, APIRoute) and r.endpoint in functions
         }
     )
     if not paths:
@@ -4187,12 +4187,12 @@ def _policy_outside_route_pattern(
     if analysis is None:
         return [("<route-ngoai-ngu-phap>", "route_ngoai_ngu_phap")]
     try:
-        dong = list(enforcer.get_policy())
+        policies = list(enforcer.get_policy())
     # Không đọc được policy ⇒ fail-closed: coi là ngoài mẫu.
     except Exception:  # noqa: BLE001
         return [("<khong-doc-duoc-policy>", "khong_doc_duoc_policy")]
     out = []
-    for d in dong:
+    for d in policies:
         policy_object = d[obj_index] if len(d) > obj_index else None
         reason = _single_row_reason(policy_object, analysis[0], analysis[1], match_fn)
         if reason is not None:
@@ -4229,13 +4229,13 @@ async def council_document_permissions(
         )
     except PermissionDeniedError:
         scope = None
-    chi_admin_dat = False
+    admin_only_met = False
     if scope is not None:
         try:
             await require_council_document_admin(scope)
-            chi_admin_dat = True
+            admin_only_met = True
         except PermissionDeniedError:
-            chi_admin_dat = False
+            admin_only_met = False
 
     out: Dict[str, bool] = {}
     # F237 (Codex lần 8 → lần 9) — HỢP ĐỒNG: mọi dòng policy khớp đường của route như nhau với
@@ -4253,15 +4253,15 @@ async def council_document_permissions(
             so_dong=len(outside_pattern),
             ly_do=sorted({reason for _, reason in outside_pattern}),
         )
-        return {co: False for co in requested_flags}
-    for co, ham in requested_flags.items():
+        return {flag: False for flag in requested_flags}
+    for flag, check in requested_flags.items():
         route = [
             r
             for r in request.app.routes
-            if isinstance(r, APIRoute) and r.endpoint is ham
+            if isinstance(r, APIRoute) and r.endpoint is check
         ]
         if enforcer is None or len(route) != 1 or len(route[0].methods) != 1:
-            out[co] = False
+            out[flag] = False
             continue
         r = route[0]
         called = _functions_in_dependency_tree(r.dependant)
@@ -4269,22 +4269,22 @@ async def council_document_permissions(
         if unknown:
             log.warning(
                 "council_document_flag_unknown_dependency",
-                co=co,
+                co=flag,
                 ham=sorted(getattr(h, "__name__", type(h).__name__) for h in unknown),
             )
-            out[co] = False
+            out[flag] = False
             continue
-        dat = True
+        met = True
         if _HAS_GATE_CASBIN in called:
-            dat = dat and casbin_allows(
+            met = met and casbin_allows(
                 enforcer,
                 current_user,
                 route_pattern_path(r.path),
                 next(iter(r.methods)),
             )
         if _HAS_GATE_SCOPE in called:
-            dat = dat and scope is not None
+            met = met and scope is not None
         if _HAS_GATE_ADMIN_ONLY in called:
-            dat = dat and chi_admin_dat
-        out[co] = dat
+            met = met and admin_only_met
+        out[flag] = met
     return out

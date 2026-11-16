@@ -251,7 +251,7 @@ async def test_hai_phien_ghi_nhan_giu_khoa_truoc_cong_bo_sau(client, hs, ad, mon
     r_qd, r_cb = await asyncio.gather(t_qd, t_cb)
     assert do == "chan", "phép đo không hợp lệ: công bố không chờ khoá hồ sơ của ghi nhận"
     assert r_qd.status_code == 201, r_qd.text
-    assert _la_chan(r_cb) and r_cb.json()["tinh_trang_qd"] == tt_qd.HL, r_cb.text
+    assert _la_chan(r_cb) and r_cb.json()["tinh_trang_qd"] == tt_qd.HAS_EFFECTIVE_DECISION, r_cb.text
     assert (await _ban(pid))[0] == "submitted" and await _so_qd() == 1
 
 

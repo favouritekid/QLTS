@@ -176,7 +176,7 @@ async def test_dau_appsheet_chi_ap_ho_so_nam_2026(client, hs, ad):
     await qd._sql("UPDATE admission_profile SET academic_year = 2027 WHERE id = :p", p=pid)
     async with AsyncSessionLocal() as db:
         tt = await single_profile(db, pid)
-    assert tt.dau_appsheet is False, tt
+    assert tt.appsheet_mark is False, tt
 
 
 async def test_route_cu_tu_choi_giu_ma_loi_va_payload(client, hs, ad):
