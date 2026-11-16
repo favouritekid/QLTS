@@ -139,7 +139,7 @@ def test_q_j1_mot_ham_kiem_o_ba_thao_tac_duoi_khoa_truoc_ghi():
     (``lock_quota_of_set_rows``), TRƯỚC lệnh ghi đầu tiên của thao tác."""
     ghi_dau = {
         "record_decision": "await repo.add_objects(decision)",
-        "record_adjustment_decision": "await repo.add_objects(dc)",
+        "record_adjustment_decision": "await repo.add_objects(decision)",
         "revoke_record": 'x.trang_thai = "huy_ghi_nhan"',
     }
     for ten, moc_ghi in ghi_dau.items():
