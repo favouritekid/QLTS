@@ -190,6 +190,8 @@ def _nguon() -> dict:
 #: (137 cặp, đúng bảng ``kiem-thu-phien-a/ma/f339/bang-nguon.txt``) + docstring. MSW không phải sửa.
 #: 16-11-2026 — F339 vòng 2 (lượt quét không dựa từ điển): đổi thêm tên nội bộ (``stt``/``ts``/``ng``/``gh``…) — 7 băm HAM
 #: đổi; HANG / GIA_TRI giữ nguyên; AST so với ``39915c60`` chỉ khác định danh (đúng bảng ``ma/f339/bang-nguon-2.txt``).
+#: 16-11-2026 — F339 vòng 4: khoá log có cấu trúc sang tiếng Anh (``so_ho_so=`` → ``profile_count=``…) + trả 4 trường dùng chung
+#: của DecisionState — 9 băm HAM đổi; HANG / GIA_TRI giữ nguyên.
 GHIM = {
     "bo.CAU_DOI_TU_LUC_KIEM": "236fff0ad0195cf0",
     "bo.MA_LOI_DOI_TU_LUC_KIEM": "111c5b69b272ed2c",
@@ -223,16 +225,16 @@ GHIM = {
     "qd.kiem_xac_nhan_trang_thai": "0ae641a688355679",
     "route._doc_scan": "6a2e887efa3934ea",
     "route._json_xac_nhan": "2ed2c129558bd715",  # + RecursionError; Codex 42: vượt trần ký tự ⇒ "không đọc được" — MSW chép cùng lượt
-    "route.cancel_council_decision_record": "2f4e6435ca09fb40",
-    "route.create_council_decision": "0985d0fdb9ba8dd4",
-    "route.create_council_document_set": "a71b21f2cb41d259",
-    "route.delete_council_document_set": "dd8794d86af3f7ea",
+    "route.cancel_council_decision_record": "45fec0c5ba921c3e",
+    "route.create_council_decision": "758059c41ed43db0",
+    "route.create_council_document_set": "e5e78d82a4478798",
+    "route.delete_council_document_set": "661edb9ac62478ca",
     "route.open_council_decision_submission": "1fe073f4ee8bbe9e",
-    "route.preview_council_document_set": "85a4b293da58ea6d",
-    "route.resolve_council_decision_submission": "88efefe2acaa82e0",
-    "route.resolve_council_profile_codes": "da6cbd3b1314e1ef",
-    "route.search_council_profiles": "47f304fbff76d954",
-    "route.upload_council_template": "c1bd7d3b3b9e08e3",
+    "route.preview_council_document_set": "00d06a6dfaab22f7",
+    "route.resolve_council_decision_submission": "8dc17793dde6fca9",
+    "route.resolve_council_profile_codes": "f6bfed700b94839a",
+    "route.search_council_profiles": "9fc1b436636017de",
+    "route.upload_council_template": "ac627a6ac50f47ec",
     "schema.CouncilCodesIn": "b565161d8df6fba8",
     "schema.CouncilDecisionCancelIn": "fa53cae74ae5567c",
     "schema.CouncilProfileSearchIn": "5edfaebdfdaccde2",

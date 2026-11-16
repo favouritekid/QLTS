@@ -1935,15 +1935,15 @@ def _list1_row(i: int, h: _Profile) -> List[str]:
 
 
 def _score_row(i: int, h: _Profile) -> List[str]:
-    r, dm = h.dto, h.scores
+    r, scores = h.dto, h.scores
     return [
         str(i), r.ma_ho_so, r.ho, r.ten, r.gioi_tinh, r.ngay_sinh, r.noi_sinh, r.dan_toc,
         r.ut_ma, r.kv, r.to_hop, r.m1, r.m2, r.m3,
         ("%.2f" % to_number(r.diem_tb)) if r.diem_tb else "",
         r.tong_diem,
-        ("%.2f" % dm.priority) if dm.priority else "",
-        ("%.2f" % dm.area) if dm.area else "",
-        "%.2f" % dm.admission_total,
+        ("%.2f" % scores.priority) if scores.priority else "",
+        ("%.2f" % scores.area) if scores.area else "",
+        "%.2f" % scores.admission_total,
         "",
     ]  # fmt: skip
 
@@ -2208,11 +2208,11 @@ def _build_list_xlsx(major, list1, list2, list3, method_rows) -> bytes:
         _write_xlsx_row(ws, 3 + len(data) + 2, ["TỔNG CỘNG", len(data), "hồ sơ"])
         ws.freeze_panes = "A4"
         ws.auto_filter.ref = "A3:%s%d" % (chr(64 + len(hdr)), 3 + len(data))
-        for j, hd in enumerate(hdr, 1):
+        for j, header in enumerate(hdr, 1):
             lengths = (
-                max([len(hd)] + [len(str(fn(1, h)[j - 1])) for h in data[:200]])
+                max([len(header)] + [len(str(fn(1, h)[j - 1])) for h in data[:200]])
                 if data
-                else len(hd)
+                else len(header)
             )
             ws.column_dimensions[chr(64 + j)].width = min(max(lengths + 2, 8), 30)
         ws.row_dimensions[3].height = 34

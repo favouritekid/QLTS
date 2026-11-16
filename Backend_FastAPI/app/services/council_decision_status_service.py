@@ -13,7 +13,7 @@ Tình trạng của MỘT hồ sơ (đọc dữ liệu, KHÔNG suy từ trạng 
 * ``RECHECK_ALLOWED`` — không HAS_EFFECTIVE_DECISION / AWAITING_ADMIN, đã được Admin cho xét lại;
 * ``NO_DECISION`` — còn lại.
 
-Độc lập: ``appsheet_mark`` (dấu "Đã trúng tuyển theo QĐ số …" — ``SQL_APPSHEET_MARK``) và
+Độc lập: ``dau_appsheet`` (dấu "Đã trúng tuyển theo QĐ số …" — ``SQL_APPSHEET_MARK``) và
 ``named_in_document`` (có tên trong văn bản chưa huỷ ghi nhận — ĐÚNG điều kiện K5a).
 
 Luật (owner): đích ``draft`` / ``rejected`` / ``withdrawal_pending`` / ``withdrawn`` bị CHẶN khi HL
@@ -48,17 +48,20 @@ EXEMPT_TRANSITIONS = frozenset({("withdrawal_pending", "withdrawn")})
 
 @dataclass(frozen=True)
 class DecisionState:
+    # Bốn trường ``qd_hieu_luc_id`` / ``qd_chuoi_id`` / ``cho_quyet_id`` / ``dau_appsheet`` CỐ Ý trùng tên trường của
+    # ``council_set_gate_service.CheckData`` (vào HMAC dấu kiểm trước — không đổi tên được): MỘT hàm
+    # ``decision_state_block_reason`` đọc cả hai lớp theo tên trường. Đổi tên ở đây ⇒ AttributeError lúc chạy (F339 vòng 1).
     code: str
-    effective_decision_id: Optional[int] = None
-    chain_decision_id: Optional[int] = None
-    pending_hold_id: Optional[int] = None
+    qd_hieu_luc_id: Optional[int] = None
+    qd_chuoi_id: Optional[int] = None
+    cho_quyet_id: Optional[int] = None
     named_in_document: bool = False
-    appsheet_mark: bool = False
+    dau_appsheet: bool = False
 
     @property
     def locks_status(self) -> bool:
         """Rút / về Nháp / Từ chối bị chặn (C4, C5, J1 dòng 12, E1)."""
-        return self.code == HAS_EFFECTIVE_DECISION or self.appsheet_mark
+        return self.code == HAS_EFFECTIVE_DECISION or self.dau_appsheet
 
     @property
     def blocks_new_admission(self) -> bool:
@@ -70,9 +73,9 @@ class DecisionState:
         """Phần đi ra client — mã + id văn bản / mục chờ (không dữ liệu cá nhân)."""
         return {
             "tinh_trang_qd": self.code,
-            "quyet_dinh_id": self.effective_decision_id,
-            "muc_cho_id": self.pending_hold_id,
-            "dau_appsheet": self.appsheet_mark,
+            "quyet_dinh_id": self.qd_hieu_luc_id,
+            "muc_cho_id": self.cho_quyet_id,
+            "dau_appsheet": self.dau_appsheet,
         }
 
 
@@ -94,11 +97,11 @@ def from_row(h: Any) -> DecisionState:
         code = NO_DECISION
     return DecisionState(
         code=code,
-        effective_decision_id=effective_id,
-        chain_decision_id=h["qd_chuoi_id"],
-        pending_hold_id=pending_id,
+        qd_hieu_luc_id=effective_id,
+        qd_chuoi_id=h["qd_chuoi_id"],
+        cho_quyet_id=pending_id,
         named_in_document=bool(h["co_ten_van_ban"]),
-        appsheet_mark=bool(h["dau_appsheet"]),
+        dau_appsheet=bool(h["dau_appsheet"]),
     )
 
 
@@ -234,7 +237,7 @@ async def profile_decision_cell(
     state = await single_profile(db, profile_id)
     latest_document = (await db.execute(SQL_LATEST_DOCUMENT, {"p": int(profile_id)})).mappings().first()
     decision_number = None
-    if state.appsheet_mark:
+    if state.dau_appsheet:
         decision_number = (
             await db.execute(
                 SQL_APPSHEET_DECISION_NUMBER,
@@ -258,7 +261,7 @@ async def profile_decision_cell(
         "ly_do_huy_ghi_nhan": (
             latest_document["ly_do_huy_ghi_nhan"] if (view_cancel_reason and latest_document is not None) else None
         ),
-        "dau_appsheet": state.appsheet_mark,
+        "dau_appsheet": state.dau_appsheet,
         "dau_appsheet_so_qd": decision_number,
     }
 

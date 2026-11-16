@@ -721,10 +721,10 @@ def _build_snapshot(raw, pids, transaction) -> ProfileSnapshot:
             # Lượt I (F230): khoá đếm của NV in + tình trạng Quyết định (biểu thức một nguồn).
             nv_in_ai_id=k["nv_in_ai_id"],
             nv_in_offering_id=k["nv_in_offering_id"],
-            qd_hieu_luc_id=state.effective_decision_id,
-            qd_chuoi_id=state.chain_decision_id,
-            cho_quyet_id=state.pending_hold_id,
-            dau_appsheet=state.appsheet_mark,
+            qd_hieu_luc_id=state.qd_hieu_luc_id,
+            qd_chuoi_id=state.qd_chuoi_id,
+            cho_quyet_id=state.cho_quyet_id,
+            dau_appsheet=state.dau_appsheet,
             thieu_ma_ho_so=k["stt"] in missing_code,
             duplicate_reference=k["stt"] in duplicate_reference,
         )

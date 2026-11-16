@@ -157,7 +157,7 @@ async def count_effective_rows_missing_lock(db: AsyncSession, column) -> int:
 async def _report_missing_lock(db: AsyncSession, column, where: str) -> None:
     n = await count_effective_rows_missing_lock(db, column)
     if n:
-        log.warning("quota_phan_b_dong_thieu_khoa_dem", noi=where, khoa=column.key, so_dong=n)
+        log.warning("quota_phan_b_dong_thieu_khoa_dem", where=where, lock_column=column.key, row_count=n)
 
 
 # ═══════════════════════════════ bốn nơi đếm ═══════════════════════════════════════════════
@@ -573,7 +573,7 @@ async def over_quota_warnings(
     if out:
         log.warning(
             "council_decision_vuot_chi_tieu",
-            so_o=len(out),
+            cell_count=len(out),
             o=[(x["loai"], x.get("academic_info_id") or x.get("admission_path_id")) for x in out],
         )
     return out

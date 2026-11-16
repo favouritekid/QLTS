@@ -168,6 +168,6 @@ def test_bo_dung_dung_mot_nguon_khoa_sap():
     # MỘT nguồn (CLAUDE.md §7): mọi chỗ sắp trong nhóm của bộ dựng gọi hàm khoá chung; không còn biểu thức
     # sắp "-…tong_xt" viết tay; khoá nhóm của hồ sơ đã chuẩn bị đi qua hàm chung.
     nguon = inspect.getsource(render_service)
-    assert nguon.count("decision_in_group_key(h.diem.tong_xt, h.dto.ten)") == 2
-    assert not re.search(r"key=lambda h: \(-h\.diem\.tong_xt", nguon)
+    assert nguon.count("decision_in_group_key(h.scores.admission_total, h.dto.ten)") == 2
+    assert not re.search(r"key=lambda h: \(-h\.scores\.admission_total", nguon)
     assert "return decision_group_key(self.dto)" in inspect.getsource(render_service._Profile)

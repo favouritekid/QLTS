@@ -302,7 +302,7 @@ def _block_by_state(set_rows, states, allowed_chain: Optional[int] = None):
         code = decision_state_block_reason(t, allowed_chain)
         if code:
             out.append(
-                {"dong": d.stt, "ly_do": code[0], "ma": code, "quyet_dinh_id": t.effective_decision_id}
+                {"dong": d.stt, "ly_do": code[0], "ma": code, "quyet_dinh_id": t.qd_hieu_luc_id}
             )
     return out
 
@@ -651,14 +651,14 @@ async def record_adjustment_decision(
             removed_id_set = set(removed_ids)
             for d in added_rows:  # em có dòng trong chuỗi thì dòng ấy PHẢI nằm trong danh sách bỏ
                 t = states.get(d.profile_id)
-                if t is not None and t.effective_decision_id is not None and t.chain_decision_id == root.id:
+                if t is not None and t.qd_hieu_luc_id is not None and t.qd_chuoi_id == root.id:
                     old = await repo.effective_rows_of_profiles([d.profile_id])
                     if old.get(d.profile_id) is None or old[d.profile_id].id not in removed_id_set:
                         blocked.append(
                             {
                                 "dong": d.stt,
                                 "ly_do": "chua_bo_dong_cu",
-                                "quyet_dinh_id": t.effective_decision_id,
+                                "quyet_dinh_id": t.qd_hieu_luc_id,
                             }
                         )
             if blocked:

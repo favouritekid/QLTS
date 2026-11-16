@@ -145,8 +145,8 @@ async def upload_council_template(
     log.info(
         "council_template_uploaded",
         template_id=template.id,
-        loai=template.loai,
-        kich_thuoc=template.kich_thuoc,
+        kind=template.loai,
+        size_bytes=template.kich_thuoc,
         actor=current_user.id,
     )
     return CouncilTemplateOut.model_validate(template)
@@ -210,11 +210,11 @@ async def create_council_document_set(
     log.info(
         "council_document_set_created",
         set_id=doc_set.id,
-        so_ho_so=doc_set.so_ho_so,
-        so_tep=doc_set.so_tep,
+        profile_count=doc_set.so_ho_so,
+        file_count=doc_set.so_tep,
         actor=current_user.id,
         # lượt G — chỉ số đếm theo trạng thái (không mã, không số dòng)
-        xac_nhan_canh_bao=(confirmation or {}).get("so_ho_so_theo_trang_thai"),
+        confirmed_warnings=(confirmation or {}).get("so_ho_so_theo_trang_thai"),
     )
     return CouncilSetDetailOut.from_set_and_files(doc_set, await set_service.set_file(db, doc_set.id))
 
@@ -243,8 +243,8 @@ async def preview_council_document_set(
     # Chỉ số đếm — không id, không họ tên, không dấu.
     log.info(
         "council_document_set_previewed",
-        so_dong=len(result["dong"]),
-        so_khong_tim_thay=len(result["khong_tim_thay"]),
+        row_count=len(result["dong"]),
+        not_found_count=len(result["khong_tim_thay"]),
         actor=current_user.id,
     )
     return JSONResponse(
@@ -279,9 +279,9 @@ async def search_council_profiles(
     # KHÔNG log từ khoá (có thể là CCCD / tên) — chỉ số đếm.
     log.info(
         "council_profiles_searched",
-        so_dong=len(result["dong"]),
-        tong=result["tong"],
-        co_tu_khoa=bool(payload.tu_khoa),
+        row_count=len(result["dong"]),
+        total=result["tong"],
+        with_search_term=bool(payload.tu_khoa),
         actor=current_user.id,
     )
     return JSONResponse(
@@ -311,8 +311,8 @@ async def resolve_council_profile_codes(
     )
     log.info(
         "council_profile_codes_resolved",
-        so_khop=len(pids),
-        so_dong_loi=len(error_rows),
+        matched_count=len(pids),
+        error_row_count=len(error_rows),
         actor=current_user.id,
     )
     return JSONResponse(
@@ -424,7 +424,7 @@ async def download_council_document_file(
     log.info(
         "council_document_file_downloaded",
         set_id=doc_set.id,
-        thu_tu=thu_tu,
+        order_no=thu_tu,
         actor=current_user.id,
     )
     return Response(
@@ -462,7 +462,7 @@ async def download_council_document_set_zip(
     log.info(
         "council_document_set_zip_downloaded",
         set_id=doc_set.id,
-        so_tep=len(file),
+        file_count=len(file),
         actor=current_user.id,
     )
     return Response(
@@ -497,8 +497,8 @@ async def delete_council_document_set(
     log.info(
         "council_document_set_deleted",
         set_id=trace.set_id,
-        so_ho_so=trace.so_ho_so,
-        so_tep=trace.so_tep,
+        profile_count=trace.so_ho_so,
+        file_count=trace.so_tep,
         deletion_id=trace.id,
         actor=current_user.id,
     )
@@ -521,7 +521,7 @@ async def get_council_document_set_input_codes(
     log.info(  # KHÔNG log mã — chỉ id bộ + số đếm
         "council_document_input_codes_viewed",
         set_id=doc_set.id,
-        so_ho_so=len(code),
+        profile_count=len(code),
         actor=current_user.id,
     )
     return JSONResponse(
@@ -679,10 +679,10 @@ async def create_council_decision(
         "council_decision_recorded",
         decision_id=decision.id,
         set_id=decision.set_id,
-        so_ho_so=decision.so_ho_so,
+        profile_count=decision.so_ho_so,
         actor=current_user.id,
-        so_o_vuot_chi_tieu=len(warnings),
-        lap_lai=repeated,
+        over_quota_cell_count=len(warnings),
+        repeated=repeated,
     )
     return out
 
@@ -762,7 +762,7 @@ async def resolve_council_decision_submission(
             submission_code=str(code_uuid),
         )
     await db.commit()  # chỉ kết luận SAU commit
-    log.info("council_submission_resolved", ket_qua=result, actor=current_user.id)
+    log.info("council_submission_resolved", outcome=result, actor=current_user.id)
     return CouncilSubmissionResolveOut(ket_qua=result, quyet_dinh=resolved_decision)
 
 
@@ -875,7 +875,7 @@ async def cancel_council_decision_record(
         decision_id=decision.id,
         actor=current_user.id,
         **{k: v for k, v in figures.items() if isinstance(v, int)},
-        so_o_vuot_chi_tieu=len(warnings),
+        over_quota_cell_count=len(warnings),
     )
     return _recorded_decision_out(decision, figures, warnings=warnings)
 
@@ -910,7 +910,7 @@ async def revoke_council_decision(
         decision_id=decision.id,
         revoking_id=h.id,
         actor=current_user.id,
-        so_muc_cho_moi=figures.get("so_muc_cho_moi"),
+        new_hold_count=figures.get("so_muc_cho_moi"),
     )
     return _recorded_decision_out(h, figures)
 
@@ -944,8 +944,8 @@ async def create_council_adjustment_set(
     log.info(
         "council_adjustment_set_created",
         set_id=doc_set.id,
-        goc_id=decision.id,
-        so_ho_so=doc_set.so_ho_so,
+        root_id=decision.id,
+        profile_count=doc_set.so_ho_so,
         actor=current_user.id,
     )
     return CouncilSetDetailOut.from_set_and_files(doc_set, await set_service.set_file(db, doc_set.id))
@@ -991,8 +991,8 @@ async def create_council_decision_adjustment(
     log.info(
         "council_decision_adjusted",
         decision_id=adjusted_decision.id,
-        goc_id=decision.id,
-        so_dong_bo=len(bo_dong),
+        root_id=decision.id,
+        removed_row_count=len(bo_dong),
         actor=current_user.id,
     )
     return _recorded_decision_out(adjusted_decision, warnings=warnings)
@@ -1028,7 +1028,7 @@ async def resign_council_document_set(
         "council_set_resigned",
         set_id=new_set.id,
         tu_set_id=doc_set.id,
-        so_dong_sua_tay=len(payload.dong_sua_tay),
+        edited_row_count=len(payload.dong_sua_tay),
         actor=current_user.id,
     )
     return CouncilSetDetailOut.from_set_and_files(new_set, await set_service.set_file(db, new_set.id))

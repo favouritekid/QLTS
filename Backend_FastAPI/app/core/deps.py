@@ -4250,8 +4250,8 @@ async def council_document_permissions(
     if outside_pattern:
         log.warning(
             "council_document_flag_policy_ngoai_mau",
-            so_dong=len(outside_pattern),
-            ly_do=sorted({reason for _, reason in outside_pattern}),
+            row_count=len(outside_pattern),
+            reason=sorted({reason for _, reason in outside_pattern}),
         )
         return {flag: False for flag in requested_flags}
     for flag, check in requested_flags.items():
@@ -4269,8 +4269,8 @@ async def council_document_permissions(
         if unknown:
             log.warning(
                 "council_document_flag_unknown_dependency",
-                co=flag,
-                ham=sorted(getattr(h, "__name__", type(h).__name__) for h in unknown),
+                flag=flag,
+                check=sorted(getattr(h, "__name__", type(h).__name__) for h in unknown),
             )
             out[flag] = False
             continue
