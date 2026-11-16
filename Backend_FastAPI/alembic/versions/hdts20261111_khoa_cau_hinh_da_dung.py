@@ -34,14 +34,14 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 #: Trần chờ khoá bảng cấu hình (phiên sửa cấu hình giữ lâu hơn ⇒ upgrade đỏ ``55P03``, không cài gì).
-TRAN_CHO_KHOA = "15s"
+LOCK_TIMEOUT = "15s"
 #: SQLSTATE khi phát hiện dữ liệu đã lệch (khác SQLSTATE của trigger — ``QLK02``).
-SQLSTATE_DA_LECH = "QLK2M"
+SQLSTATE_DRIFTED = "QLK2M"
 #: SQLSTATE khi phiên chạy nâng cấp KHÔNG ở READ COMMITTED (F280) — khác ``QLK2M`` để người vận hành phân biệt "dữ liệu
 #: lệch" với "cấu hình phiên sai"; cùng khuôn ``QLLG3`` của hạ cấp ``hdts20261112``.
 SQLSTATE_CAN_READ_COMMITTED = "QLK2C"
 
-SQL_FN_HOC_VU = """
+SQL_FN_ACADEMIC_INFO = """
 CREATE OR REPLACE FUNCTION chan_sua_hoc_vu_da_tham_chieu()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -68,7 +68,7 @@ END;
 $$ LANGUAGE plpgsql;
 """
 
-SQL_FN_DUONG_XET = """
+SQL_FN_ADMISSION_PATH = """
 CREATE OR REPLACE FUNCTION chan_sua_duong_xet_da_tham_chieu()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -107,7 +107,7 @@ FOR EACH ROW EXECUTE FUNCTION chan_sua_duong_xet_da_tham_chieu();
 """,
 )
 
-SQL_DEM_LECH = """
+SQL_COUNT_DRIFT = """
 SELECT count(*)
 FROM council_decision_row r
 LEFT JOIN council_document_set_row b ON b.id = r.set_row_id
@@ -125,18 +125,18 @@ WHERE r.trang_thai_cha <> 'huy_ghi_nhan'
   )
 """
 
-CAC_CAU_LENH = (SQL_FN_HOC_VU, SQL_FN_DUONG_XET, *SQL_TRIGGERS)
+STATEMENTS = (SQL_FN_ACADEMIC_INFO, SQL_FN_ADMISSION_PATH, *SQL_TRIGGERS)
 
 
-def _bo_dau_cham_phay(cau: str) -> str:
-    return cau.strip().rstrip(";").strip()
+def _strip_trailing_semicolon(statement: str) -> str:
+    return statement.strip().rstrip(";").strip()
 
 
-def khoi_do_nang_cap() -> str:
+def upgrade_do_block() -> str:
     """MỘT câu ``DO`` (một giao dịch): kiểm mức cô lập → khoá → đếm → dừng / cài. Phép kiểm mức cô lập PHẢI đứng đầu
     (trước ``set_config``): nó tự nó cũng là một câu lấy ảnh chụp, nhưng ở mức khác READ COMMITTED nó dừng ngay nên ảnh
     ấy không bao giờ được dùng để đếm. Ký tự ``%`` và ``::`` không xuất hiện (``text()``)."""
-    cai = "".join("    EXECUTE $f$%s$f$;\n" % _bo_dau_cham_phay(c) for c in CAC_CAU_LENH)
+    install_sql = "".join("    EXECUTE $f$%s$f$;\n" % _strip_trailing_semicolon(c) for c in STATEMENTS)
     return (
         "DO $k2$\n"
         "DECLARE n bigint;\n"
@@ -145,22 +145,22 @@ def khoi_do_nang_cap() -> str:
         "        RAISE EXCEPTION USING ERRCODE = '" + SQLSTATE_CAN_READ_COMMITTED + "', MESSAGE = 'K2: nang cap can "
         "READ COMMITTED - khong cai trigger';\n"
         "    END IF;\n"
-        "    PERFORM set_config('lock_timeout', '" + TRAN_CHO_KHOA + "', true);\n"
+        "    PERFORM set_config('lock_timeout', '" + LOCK_TIMEOUT + "', true);\n"
         "    LOCK TABLE offering_academic_info, admission_path IN SHARE ROW EXCLUSIVE MODE;\n"
-        "    EXECUTE $f$" + _bo_dau_cham_phay(SQL_DEM_LECH) + "$f$ INTO n;\n"
+        "    EXECUTE $f$" + _strip_trailing_semicolon(SQL_COUNT_DRIFT) + "$f$ INTO n;\n"
         "    IF n > 0 THEN\n"
-        "        RAISE EXCEPTION USING ERRCODE = '" + SQLSTATE_DA_LECH + "', MESSAGE = 'K2: ' || n || "
+        "        RAISE EXCEPTION USING ERRCODE = '" + SQLSTATE_DRIFTED + "', MESSAGE = 'K2: ' || n || "
         "' dong Quyet dinh chua huy ghi nhan co khoa dem da lech cau hinh - khong cai trigger';\n"
         "    END IF;\n"
-        + cai +
+        + install_sql +
         "END $k2$"
     )
 
 
-KHOI_DO_HA_CAP = (
+DOWNGRADE_DO_BLOCK = (
     "DO $k2$\n"
     "BEGIN\n"
-    "    PERFORM set_config('lock_timeout', '" + TRAN_CHO_KHOA + "', true);\n"
+    "    PERFORM set_config('lock_timeout', '" + LOCK_TIMEOUT + "', true);\n"
     "    DROP TRIGGER IF EXISTS trg_chan_sua_hoc_vu_da_tham_chieu ON offering_academic_info;\n"
     "    DROP TRIGGER IF EXISTS trg_chan_sua_duong_xet_da_tham_chieu ON admission_path;\n"
     "    DROP FUNCTION IF EXISTS chan_sua_hoc_vu_da_tham_chieu();\n"
@@ -170,8 +170,8 @@ KHOI_DO_HA_CAP = (
 
 
 def upgrade() -> None:
-    op.get_bind().execute(text(khoi_do_nang_cap()))
+    op.get_bind().execute(text(upgrade_do_block()))
 
 
 def downgrade() -> None:
-    op.get_bind().execute(text(KHOI_DO_HA_CAP))
+    op.get_bind().execute(text(DOWNGRADE_DO_BLOCK))

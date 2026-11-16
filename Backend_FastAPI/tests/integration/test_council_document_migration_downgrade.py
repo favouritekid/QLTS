@@ -128,16 +128,16 @@ def _chay_downgrade(sync_conn):
 async def test_mot_bang_con_du_lieu_thi_ha_cap_dung_khong_xoa_gi(
     setup_test_database, monkeypatch, bang
 ):
-    monkeypatch.delenv(MIG.CO_CHO_PHEP_XOA, raising=False)
+    monkeypatch.delenv(MIG.DROP_DATA_ENABLED_ENV, raising=False)
     async with csdl.engine.connect() as conn:
         gd = await conn.begin()
         try:
             await _chen_mot_hang(conn, bang)
             ky_vong = {b: (1 if b == bang else 0) for b in BA_BANG}
             assert await _trang_thai(conn) == ky_vong  # đúng MỘT bảng có dữ liệu
-            with pytest.raises(MIG.ConDuLieuVanBanHoiDong) as e:
+            with pytest.raises(MIG.CouncilDocumentDataPresent) as e:
                 await conn.run_sync(_chay_downgrade)
-            assert bang in str(e.value) and MIG.CO_CHO_PHEP_XOA in str(e.value)
+            assert bang in str(e.value) and MIG.DROP_DATA_ENABLED_ENV in str(e.value)
             assert await _trang_thai(conn) == ky_vong  # KHÔNG xoá gì, cả ba bảng còn
         finally:
             await gd.rollback()
@@ -148,12 +148,12 @@ async def test_co_khong_dung_chuoi_1_thi_van_chan(
     setup_test_database, monkeypatch, gia_tri
 ):
     # Cờ mang nghĩa CHO PHÉP: chỉ đúng "1" mới mở; gõ sai / giá trị lạ ⇒ rơi về CHẶN (§8).
-    monkeypatch.setenv(MIG.CO_CHO_PHEP_XOA, gia_tri)
+    monkeypatch.setenv(MIG.DROP_DATA_ENABLED_ENV, gia_tri)
     async with csdl.engine.connect() as conn:
         gd = await conn.begin()
         try:
             await _chen_mot_hang(conn, MAU)
-            with pytest.raises(MIG.ConDuLieuVanBanHoiDong):
+            with pytest.raises(MIG.CouncilDocumentDataPresent):
                 await conn.run_sync(_chay_downgrade)
             assert await _trang_thai(conn) == {MAU: 1, BO: 0, TEP: 0}
         finally:
@@ -163,7 +163,7 @@ async def test_co_khong_dung_chuoi_1_thi_van_chan(
 async def test_co_cho_phep_thi_xoa_ca_ba_bang_du_con_du_lieu(
     setup_test_database, monkeypatch
 ):
-    monkeypatch.setenv(MIG.CO_CHO_PHEP_XOA, "1")
+    monkeypatch.setenv(MIG.DROP_DATA_ENABLED_ENV, "1")
     async with csdl.engine.connect() as conn:
         gd = await conn.begin()
         try:
@@ -180,7 +180,7 @@ async def test_co_cho_phep_thi_xoa_ca_ba_bang_du_con_du_lieu(
 
 
 async def test_ba_bang_rong_thi_ha_cap_khong_can_co(setup_test_database, monkeypatch):
-    monkeypatch.delenv(MIG.CO_CHO_PHEP_XOA, raising=False)
+    monkeypatch.delenv(MIG.DROP_DATA_ENABLED_ENV, raising=False)
     async with csdl.engine.connect() as conn:
         gd = await conn.begin()
         try:

@@ -4,7 +4,7 @@ THẬT, HAI PHIÊN, qua ĐÚNG ``alembic/env.py`` (``python -m alembic downgrade
 ⇒ đúng AUTOCOMMIT). Cùng khuôn ``test_council_document_downgrade_dong_thoi.py`` (dùng lại helper).
 
 Kịch bản: phiên GHI mở giao dịch + INSERT (chưa commit) và GIỮ lâu hơn trần ⇒ hạ cấp phải tự dừng
-sau ~``TRAN_CHO_KHOA`` (không chờ vô hạn), thoát khác 0 với lỗi miền nói rõ do chờ khoá; sau đó
+sau ~``LOCK_TIMEOUT`` (không chờ vô hạn), thoát khác 0 với lỗi miền nói rõ do chờ khoá; sau đó
 phiên GHI commit ⇒ bảng còn, dòng đã có trước + dòng vừa ghi còn, phiên bản không đổi. Ca CÓ cờ cho
 phép xoá: vẫn không xoá gì (trần thắng cờ). Sau khi hạ cấp dừng, lượt đọc mới KHÔNG bị chặn.
 Đo ở tầng CSDL từ phiên khác (CLAUDE.md §10).
@@ -31,12 +31,12 @@ from tests.integration.test_council_document_downgrade_dong_thoi import (  # noq
 
 pytestmark = pytest.mark.integration
 
-TRAN_GIAY = 10.0  # = TRAN_CHO_KHOA "10s" (ca dưới khoá hai migration cùng giá trị)
+TRAN_GIAY = 10.0  # = LOCK_TIMEOUT "10s" (ca dưới khoá hai migration cùng giá trị)
 GIU_KHOA_GIAY = TRAN_GIAY + 8.0  # phiên ghi giữ khoá LÂU HƠN trần
 
 
 def test_hai_migration_cung_tran_10_giay():
-    assert BO_VB.TRAN_CHO_KHOA == VET.TRAN_CHO_KHOA == "10s"
+    assert BO_VB.LOCK_TIMEOUT == VET.LOCK_TIMEOUT == "10s"
 
 
 async def _cho_toi_khi_bi_chan(k, pid_ghi, p, giay=60.0):
@@ -82,7 +82,7 @@ async def _giu_khoa_qua_tran(ten_db, chen, dich, co=None):
         doc = await asyncpg.connect(url)
         try:
             await doc.execute("SET statement_timeout = '3s'")
-            bang = VET.TAI if dich == "hdts20261103b" else BO_VB.BO
+            bang = VET.DOWNLOAD_LOG_TABLE if dich == "hdts20261103b" else BO_VB.SET_TABLE
             await doc.fetchval('SELECT count(*) FROM "%s"' % bang)
             doc_duoc = True
         except asyncpg.PostgresError:
@@ -119,7 +119,7 @@ async def _giu_khoa_qua_tran(ten_db, chen, dich, co=None):
         await ghi.close()
 
 
-def _kiem_dung_tran(do, ten_loi="HaCapChoKhoaQuaTran"):
+def _kiem_dung_tran(do, ten_loi="DowngradeLockTimeout"):
     bi_chan, cho, rc, out = do
     assert bi_chan, "phép đo không hợp lệ: hạ cấp không đợi phiên ghi (%r)" % (
         out[-400:],
@@ -143,7 +143,7 @@ async def test_1104_giu_khoa_qua_tran_thi_dung_khong_mat_gi(csdl_rieng):  # noqa
         csdl_rieng, _ghi_dong_nhat_ky, "hdts20261103b"
     )
     try:
-        assert (await _so_dong(k, VET.TAI), await _so_dong(k, VET.XOA)) == (2, 0)
+        assert (await _so_dong(k, VET.DOWNLOAD_LOG_TABLE), await _so_dong(k, VET.DELETION_TABLE)) == (2, 0)
         assert await _phien_ban(k) == "hdts20261104"
         _kiem_dung_tran(do)
         assert doc_duoc, "lượt đọc mới vẫn bị chặn sau khi hạ cấp dừng"
@@ -156,10 +156,10 @@ async def test_1104_co_cho_phep_xoa_van_khong_xoa_khi_qua_tran(
 ):
     await _dung_1104(csdl_rieng)
     k, do, _ = await _giu_khoa_qua_tran(
-        csdl_rieng, _ghi_dong_nhat_ky, "hdts20261103b", (VET.CO_CHO_PHEP_XOA, "1")
+        csdl_rieng, _ghi_dong_nhat_ky, "hdts20261103b", (VET.DROP_DATA_ENABLED_ENV, "1")
     )
     try:
-        assert (await _so_dong(k, VET.TAI), await _so_dong(k, VET.XOA)) == (1, 0)
+        assert (await _so_dong(k, VET.DOWNLOAD_LOG_TABLE), await _so_dong(k, VET.DELETION_TABLE)) == (1, 0)
         assert await _phien_ban(k) == "hdts20261104"
         _kiem_dung_tran(do)
     finally:
@@ -173,7 +173,7 @@ async def test_1103_giu_khoa_qua_tran_thi_dung_khong_mat_gi(csdl_rieng):  # noqa
         csdl_rieng, _tao_mot_bo, "v3circ20261011c"
     )
     try:
-        assert [await _so_dong(k, b) for b in (BO_VB.MAU, BO_VB.BO, BO_VB.TEP)] == [
+        assert [await _so_dong(k, b) for b in (BO_VB.TEMPLATE_TABLE, BO_VB.SET_TABLE, BO_VB.SET_FILE_TABLE)] == [
             0,
             1,
             1,
@@ -190,10 +190,10 @@ async def test_1103_co_cho_phep_xoa_van_khong_xoa_khi_qua_tran(
 ):
     await _dung_1103(csdl_rieng)
     k, do, _ = await _giu_khoa_qua_tran(
-        csdl_rieng, _tao_mot_bo, "v3circ20261011c", (BO_VB.CO_CHO_PHEP_XOA, "1")
+        csdl_rieng, _tao_mot_bo, "v3circ20261011c", (BO_VB.DROP_DATA_ENABLED_ENV, "1")
     )
     try:
-        assert [await _so_dong(k, b) for b in (BO_VB.MAU, BO_VB.BO, BO_VB.TEP)] == [
+        assert [await _so_dong(k, b) for b in (BO_VB.TEMPLATE_TABLE, BO_VB.SET_TABLE, BO_VB.SET_FILE_TABLE)] == [
             0,
             1,
             1,

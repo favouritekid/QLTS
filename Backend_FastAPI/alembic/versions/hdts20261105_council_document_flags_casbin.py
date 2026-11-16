@@ -26,13 +26,13 @@ down_revision = "hdts20261104"
 branch_labels = None
 depends_on = None
 
-TIEN_TO = "/api/admission-config/council-documents"
+PREFIX = "/api/admission-config/council-documents"
 #: (v0, v1, v2, v3)
-POLICIES = (("role:manager", TIEN_TO + "/quyen", "GET", "allow"),)
+POLICIES = (("role:manager", PREFIX + "/quyen", "GET", "allow"),)
 TEMPLATE_ID = "_hdts20261105_council_document_flags"
 
 
-def _chen_policy_sql(v0, v1, v2, v3) -> str:
+def _insert_policy_sql(v0, v1, v2, v3) -> str:
     return (
         "INSERT INTO casbin_rule (ptype, v0, v1, v2, v3, template_id, applied_at) "
         "SELECT 'p', '{v0}', '{v1}', '{v2}', '{v3}', '{tid}', now() "
@@ -41,13 +41,13 @@ def _chen_policy_sql(v0, v1, v2, v3) -> str:
     ).format(v0=v0, v1=v1, v2=v2, v3=v3, tid=TEMPLATE_ID)
 
 
-def _dem_policy_sql() -> str:
-    dk = " OR ".join(
+def _count_policy_sql() -> str:
+    condition = " OR ".join(
         "(v0 = '%s' AND v1 = '%s' AND v2 = '%s' AND v3 = '%s')" % p for p in POLICIES
     )
     return (
         "SELECT COUNT(DISTINCT (v0, v1, v2, v3)) INTO n FROM casbin_rule "
-        "WHERE ptype = 'p' AND (%s)" % dk
+        "WHERE ptype = 'p' AND (%s)" % condition
     )
 
 
@@ -63,8 +63,8 @@ BEGIN
 END
 $hdtsf$
 """.format(
-    chen=";\n".join("    " + _chen_policy_sql(*p) for p in POLICIES),
-    dem=_dem_policy_sql(),
+    chen=";\n".join("    " + _insert_policy_sql(*p) for p in POLICIES),
+    dem=_count_policy_sql(),
     so=len(POLICIES),
 )
 

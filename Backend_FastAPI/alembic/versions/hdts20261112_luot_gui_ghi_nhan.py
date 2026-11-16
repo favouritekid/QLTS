@@ -11,12 +11,12 @@ Create Date: 2026-11-11
 ngoại tới ``council_document_set`` / ``council_decision`` / ``user`` lấy khoá trên bảng đích). ``IF NOT EXISTS``: chạy
 lại được nếu tiến trình chết giữa câu ``DO`` và câu cập nhật ``alembic_version``.
 
-CHECK / chỉ mục viết lại ĐÚNG chuỗi của model ``app/models/council_document.py`` (``CHECK_LUOT_*``,
-``DIEU_KIEN_LUOT_CHO_GUI``); ``tests/unit/test_council_decision_submission_model.py`` so hai bên. Migration KHÔNG import
+CHECK / chỉ mục viết lại ĐÚNG chuỗi của model ``app/models/council_document.py`` (``CHECK_SUBMISSION_*``,
+``PENDING_SUBMISSION_CONDITION``); ``tests/unit/test_council_decision_submission_model.py`` so hai bên. Migration KHÔNG import
 mã ứng dụng.
 
 Hạ cấp: bảng còn dòng ⇒ DỪNG (vết lượt gửi là dữ liệu kiểm toán), không xoá gì. Khoá bảng TRƯỚC khi đếm (F277 — xem
-``KHOI_DO_HA_CAP``).
+``DOWNGRADE_DO_BLOCK``).
 """
 from typing import Sequence, Union
 
@@ -28,9 +28,9 @@ down_revision: Union[str, None] = "hdts20261111"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
-TRAN_CHO_KHOA = "15s"
+LOCK_TIMEOUT = "15s"
 
-SQL_TAO_BANG = """
+SQL_CREATE_TABLE = """
 CREATE TABLE IF NOT EXISTS council_decision_submission (
     id serial PRIMARY KEY,
     ma uuid NOT NULL,
@@ -60,7 +60,7 @@ CREATE TABLE IF NOT EXISTS council_decision_submission (
 )
 """
 
-SQL_CHI_MUC = (
+SQL_INDEXES = (
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_council_decision_submission_cho_gui "
     "ON council_decision_submission (set_id) WHERE trang_thai = 'cho_gui'",
     "CREATE INDEX IF NOT EXISTS ix_council_decision_submission_set_id_luc_tao "
@@ -70,7 +70,7 @@ SQL_CHI_MUC = (
 
 #: Tên ràng buộc KỲ VỌNG (13 — khoá chính tự đặt tên ``<bảng>_pkey``). So THEO TÊN, không đếm toàn bộ (PostgreSQL 18
 #: thêm ràng buộc NOT NULL vào ``pg_constraint``).
-RANG_BUOC_KY_VONG = (
+EXPECTED_CONSTRAINTS = (
     "council_decision_submission_pkey",
     "fk_council_decision_submission_set",
     "fk_council_decision_submission_decision",
@@ -85,37 +85,37 @@ RANG_BUOC_KY_VONG = (
     "ck_council_decision_submission_cho_co_bo",
     "ck_council_decision_submission_bo_khop",
 )
-CHI_MUC_KY_VONG = ("uq_council_decision_submission_cho_gui", "ix_council_decision_submission_set_id_luc_tao")
+EXPECTED_INDEXES = ("uq_council_decision_submission_cho_gui", "ix_council_decision_submission_set_id_luc_tao")
 #: SQLSTATE khi bảng / chỉ mục cùng tên có sẵn mà KHÁC HÌNH (``IF NOT EXISTS`` đã bỏ qua im lặng) — fail-closed.
-SQLSTATE_KHAC_HINH = "QLLG2"
+SQLSTATE_SHAPE_MISMATCH = "QLLG2"
 
 
-def _mang(ten) -> str:
-    return "ARRAY[" + ", ".join("'%s'" % t for t in ten) + "]"
+def _array_sql(name) -> str:
+    return "ARRAY[" + ", ".join("'%s'" % t for t in name) + "]"
 
 
-def khoi_do_nang_cap() -> str:
+def upgrade_do_block() -> str:
     """MỘT câu ``DO`` (một giao dịch): tạo bảng + chỉ mục (``IF NOT EXISTS`` — chạy lại được), rồi KIỂM HÌNH ngay trong câu
     ấy: đủ 13 ràng buộc theo tên trên đúng bảng này + đủ 2 chỉ mục trên đúng bảng này; thiếu ⇒ ``RAISE`` (cả câu lùi). Không
     có bước kiểm này thì một bảng / quan hệ cùng tên có sẵn mà khác hình làm ``IF NOT EXISTS`` bỏ qua IM LẶNG và migration
     vẫn "xanh" (phiên B phát hiện khi viết hướng dẫn vận hành)."""
-    cai = "".join("    EXECUTE $f$%s$f$;\n" % c.strip() for c in (SQL_TAO_BANG, *SQL_CHI_MUC))
+    install_sql = "".join("    EXECUTE $f$%s$f$;\n" % c.strip() for c in (SQL_CREATE_TABLE, *SQL_INDEXES))
     return (
         "DO $lg$\n"
         "DECLARE n bigint;\n"
         "BEGIN\n"
-        "    PERFORM set_config('lock_timeout', '" + TRAN_CHO_KHOA + "', true);\n"
-        + cai
+        "    PERFORM set_config('lock_timeout', '" + LOCK_TIMEOUT + "', true);\n"
+        + install_sql
         + "    SELECT count(*) INTO n FROM pg_constraint WHERE conrelid = to_regclass('council_decision_submission') "
-        "AND conname = ANY (" + _mang(RANG_BUOC_KY_VONG) + ");\n"
-        "    IF n <> " + str(len(RANG_BUOC_KY_VONG)) + " THEN\n"
-        "        RAISE EXCEPTION USING ERRCODE = '" + SQLSTATE_KHAC_HINH + "', MESSAGE = 'Bang luot gui co san khac hinh: ' "
+        "AND conname = ANY (" + _array_sql(EXPECTED_CONSTRAINTS) + ");\n"
+        "    IF n <> " + str(len(EXPECTED_CONSTRAINTS)) + " THEN\n"
+        "        RAISE EXCEPTION USING ERRCODE = '" + SQLSTATE_SHAPE_MISMATCH + "', MESSAGE = 'Bang luot gui co san khac hinh: ' "
         "|| n || ' rang buoc dung ten - khong ghi nhan migration';\n"
         "    END IF;\n"
         "    SELECT count(*) INTO n FROM pg_indexes WHERE schemaname = current_schema() "
-        "AND tablename = 'council_decision_submission' AND indexname = ANY (" + _mang(CHI_MUC_KY_VONG) + ");\n"
-        "    IF n <> " + str(len(CHI_MUC_KY_VONG)) + " THEN\n"
-        "        RAISE EXCEPTION USING ERRCODE = '" + SQLSTATE_KHAC_HINH + "', MESSAGE = 'Chi muc luot gui thieu: ' "
+        "AND tablename = 'council_decision_submission' AND indexname = ANY (" + _array_sql(EXPECTED_INDEXES) + ");\n"
+        "    IF n <> " + str(len(EXPECTED_INDEXES)) + " THEN\n"
+        "        RAISE EXCEPTION USING ERRCODE = '" + SQLSTATE_SHAPE_MISMATCH + "', MESSAGE = 'Chi muc luot gui thieu: ' "
         "|| n || ' - khong ghi nhan migration';\n"
         "    END IF;\n"
         "END $lg$"
@@ -130,7 +130,7 @@ SQLSTATE_CAN_READ_COMMITTED = "QLLG3"
 #: toán). Nay ``LOCK TABLE … ACCESS EXCLUSIVE`` TRƯỚC phép đếm (cùng khuôn ``hdts20261103`` / ``hdts20261104``): khoá chờ
 #: phiên ghi kết thúc, phép đếm lấy ảnh chụp MỚI sau khoá (READ COMMITTED) ⇒ thấy dòng ⇒ ``QLLG1``; khoá giữ tới hết câu.
 #: Mức cô lập khác READ COMMITTED ⇒ ``QLLG3``, không xoá gì. Chờ khoá quá ``lock_timeout`` ⇒ ``55P03``, không xoá gì.
-KHOI_DO_HA_CAP = (
+DOWNGRADE_DO_BLOCK = (
     "DO $lg$\n"
     "DECLARE n bigint;\n"
     "BEGIN\n"
@@ -138,7 +138,7 @@ KHOI_DO_HA_CAP = (
     "        RAISE EXCEPTION USING ERRCODE = '" + SQLSTATE_CAN_READ_COMMITTED + "', MESSAGE = 'Ha cap bang luot gui can "
     "READ COMMITTED - khong ha cap';\n"
     "    END IF;\n"
-    "    PERFORM set_config('lock_timeout', '" + TRAN_CHO_KHOA + "', true);\n"
+    "    PERFORM set_config('lock_timeout', '" + LOCK_TIMEOUT + "', true);\n"
     "    IF to_regclass('council_decision_submission') IS NOT NULL THEN\n"
     "        EXECUTE 'LOCK TABLE council_decision_submission IN ACCESS EXCLUSIVE MODE';\n"
     "        EXECUTE 'SELECT count(*) FROM council_decision_submission' INTO n;\n"
@@ -152,8 +152,8 @@ KHOI_DO_HA_CAP = (
 
 
 def upgrade() -> None:
-    op.get_bind().execute(text(khoi_do_nang_cap()))
+    op.get_bind().execute(text(upgrade_do_block()))
 
 
 def downgrade() -> None:
-    op.get_bind().execute(text(KHOI_DO_HA_CAP))
+    op.get_bind().execute(text(DOWNGRADE_DO_BLOCK))

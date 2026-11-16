@@ -52,6 +52,6 @@ def test_danh_sach_ky_vong_trong_migration_trung_model():
     spec.loader.exec_module(mig)
     bang = m.CouncilDecisionSubmission.__table__
     rb_model = {c.name for c in bang.constraints if c.name} | {"council_decision_submission_pkey"}
-    assert set(mig.RANG_BUOC_KY_VONG) == rb_model, (set(mig.RANG_BUOC_KY_VONG) ^ rb_model)
-    assert set(mig.CHI_MUC_KY_VONG) == {i.name for i in bang.indexes}
-    assert len(mig.RANG_BUOC_KY_VONG) == len(set(mig.RANG_BUOC_KY_VONG)) == 13
+    assert set(mig.EXPECTED_CONSTRAINTS) == rb_model, (set(mig.EXPECTED_CONSTRAINTS) ^ rb_model)
+    assert set(mig.EXPECTED_INDEXES) == {i.name for i in bang.indexes}
+    assert len(mig.EXPECTED_CONSTRAINTS) == len(set(mig.EXPECTED_CONSTRAINTS)) == 13

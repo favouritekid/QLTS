@@ -20,68 +20,9 @@ from app.services import council_document_template_service as kho_mau
 
 pytestmark = pytest.mark.unit
 
-#: tên hằng ở MIGRATION (giữ nguyên, tiếng Việt) → tên hằng cùng chuỗi ở model (đã đổi sang tiếng Anh)
-TEN_MODEL = {
-    "CHECK_BO_BAN_KY_DU": "CHECK_SET_SIGNED_COPY_COMPLETE",
-    "CHECK_BO_DUNG_LAI_CO_BAN_KY": "CHECK_SET_REBUILD_HAS_SIGNED_COPY",
-    "CHECK_BO_MOT_CHE_DO": "CHECK_SET_ONE_MODE",
-    "CHECK_BO_SO_BAN_KY": "CHECK_SET_SIGNED_COPY_NUMBER",
-    "CHECK_CHO_H3": "CHECK_HOLD_H3",
-    "CHECK_CHO_H4_CQ": "CHECK_HOLD_H4_PENDING",
-    "CHECK_CHO_H4_VH": "CHECK_HOLD_H4_VOID",
-    "CHECK_CHO_H4_XL": "CHECK_HOLD_H4_RECHECK",
-    "CHECK_CHO_LY_DO": "CHECK_HOLD_REASON",
-    "CHECK_CHO_LY_DO_VAO": "CHECK_HOLD_ENTRY_REASON",
-    "CHECK_CHO_TRANG_THAI": "CHECK_HOLD_STATUS",
-    "CHECK_DANH_SACH_TEP": "CHECK_FILE_LIST",
-    "CHECK_DONG_BO_STT": "CHECK_SET_ROW_SEQ",
-    "CHECK_DONG_QD_BO": "CHECK_DECISION_ROW_SET",
-    "CHECK_DONG_QD_K5A": "CHECK_DECISION_ROW_K5A",
-    "CHECK_DONG_QD_K5B": "CHECK_DECISION_ROW_K5B",
-    "CHECK_DONG_QD_K5C": "CHECK_DECISION_ROW_K5C",
-    "CHECK_DONG_QD_STT": "CHECK_DECISION_ROW_SEQ",
-    "CHECK_KICH_THUOC": "CHECK_SIZE",
-    "CHECK_LOAI_MAU": "CHECK_TEMPLATE_KIND",
-    "CHECK_LUOT_BO_KHOP": "CHECK_SUBMISSION_SET_MATCH",
-    "CHECK_LUOT_CHO_CO_BO": "CHECK_SUBMISSION_PENDING_HAS_SET",
-    "CHECK_LUOT_KET_THUC": "CHECK_SUBMISSION_FINISHED",
-    "CHECK_LUOT_QD": "CHECK_SUBMISSION_DECISION",
-    "CHECK_LUOT_SHA": "CHECK_SUBMISSION_SHA",
-    "CHECK_LUOT_SHA_HEX": "CHECK_SUBMISSION_SHA_HEX",
-    "CHECK_LUOT_TRANG_THAI": "CHECK_SUBMISSION_STATUS",
-    "CHECK_LY_DO": "CHECK_REASON",
-    "CHECK_MANG_DTO": "CHECK_DTO_ARRAY",
-    "CHECK_MANG_MA": "CHECK_CODE_ARRAY",
-    "CHECK_QD_K3_GOC": "CHECK_DECISION_K3_ROOT",
-    "CHECK_QD_K3_HET": "CHECK_DECISION_K3_EXPIRED",
-    "CHECK_QD_K3_HGN": "CHECK_DECISION_K3_REVOKED",
-    "CHECK_QD_K3_HUY": "CHECK_DECISION_K3_CANCEL",
-    "CHECK_QD_K3_LY_DO": "CHECK_DECISION_K3_REASON",
-    "CHECK_QD_K3_PHAM_VI": "CHECK_DECISION_K3_SCOPE",
-    "CHECK_QD_K3_SO": "CHECK_DECISION_K3_NUMBER",
-    "CHECK_QD_K3_TU_TRO": "CHECK_DECISION_K3_SELF_REFERENCE",
-    "CHECK_QD_K3_VBH": "CHECK_DECISION_K3_CANCELLATION",
-    "CHECK_QD_K4": "CHECK_DECISION_K4",
-    "CHECK_QD_K4B": "CHECK_DECISION_K4B",
-    "CHECK_QD_K4C": "CHECK_DECISION_K4C",
-    "CHECK_QD_K4D": "CHECK_DECISION_K4D",
-    "CHECK_QD_LOAI": "CHECK_DECISION_KIND",
-    "CHECK_QD_SHA_TEP": "CHECK_DECISION_FILE_SHA",
-    "CHECK_QD_SO_HO_SO": "CHECK_DECISION_PROFILE_COUNT",
-    "CHECK_QD_TRANG_THAI": "CHECK_DECISION_STATUS",
-    "CHECK_SCAN_KIEU": "CHECK_SCAN_TYPE",
-    "CHECK_SHA_NOI_DUNG": "CHECK_SHA_CONTENT",
-    "CHECK_SU_KIEN_LOAI": "CHECK_EVENT_KIND",
-    "CHECK_SU_KIEN_SO_LIEU": "CHECK_EVENT_FIGURES",
-    "DIEU_KIEN_DONG_GIU_HO_SO": "ROW_HOLDS_PROFILE_CONDITION",
-    "DIEU_KIEN_DONG_HIEU_LUC": "EFFECTIVE_ROW_CONDITION",
-    "DIEU_KIEN_H1": "CONDITION_H1",
-    "DIEU_KIEN_LUOT_CHO_GUI": "PENDING_SUBMISSION_CONDITION",
-    "DIEU_KIEN_U1": "CONDITION_U1",
-    "DIEU_KIEN_U2": "CONDITION_U2",
-    "DIEU_KIEN_U4": "CONDITION_U4",
-    "LY_DO_XOA_TOI_DA": "MAX_DELETE_REASON_LENGTH",
-}
+#: F339 (16-11-2026): hằng migration GĐ1 đã đổi sang tiếng Anh, TRÙNG tên hằng cùng chuỗi ở model ⇒ bảng ánh xạ
+#: rỗng (giữ ``TEN_MODEL.get(t, t)`` cho trường hợp hai bên lệch tên sau này).
+TEN_MODEL: dict = {}
 
 GOC = Path(__file__).resolve().parents[2]
 TEP_MIGRATION = GOC / "alembic" / "versions" / "hdts20261103_council_document_tables.py"
@@ -102,11 +43,11 @@ def test_ba_loai_mau_trung_nhau_o_moi_noi():
 def test_chuoi_check_cua_model_va_migration_bang_nhau():
     mig = _migration()
     for ten in (
-        "CHECK_LOAI_MAU",
-        "CHECK_SHA_NOI_DUNG",
-        "CHECK_KICH_THUOC",
-        "CHECK_MANG_MA",
-        "CHECK_MANG_DTO",
+        "CHECK_TEMPLATE_KIND",
+        "CHECK_SHA_CONTENT",
+        "CHECK_SIZE",
+        "CHECK_CODE_ARRAY",
+        "CHECK_DTO_ARRAY",
     ):
         assert getattr(mig, ten) == getattr(m, TEN_MODEL.get(ten, ten)), ten
 
@@ -194,12 +135,12 @@ def test_migration_la_head_duy_nhat_noi_tiep_head_cu():
     list(ScriptDirectory.from_config(cfg).iterate_revisions(heads[0], "hdts20261113"))  # ném nếu không phải tổ tiên
     mig = _migration()
     assert (mig.revision, mig.down_revision) == ("hdts20261103", "v3circ20261011c")
-    assert mig.CO_CHO_PHEP_XOA.endswith("_ENABLED")  # cờ CHO PHÉP, mặc định tắt
+    assert mig.DROP_DATA_ENABLED_ENV.endswith("_ENABLED")  # cờ CHO PHÉP, mặc định tắt
     cb = _migration_casbin()
     assert (cb.revision, cb.down_revision) == ("hdts20261103b", "hdts20261103")
     vet = _migration_vet()
     assert (vet.revision, vet.down_revision) == ("hdts20261104", "hdts20261103b")
-    assert vet.CO_CHO_PHEP_XOA.endswith("_ENABLED")
+    assert vet.DROP_DATA_ENABLED_ENV.endswith("_ENABLED")
     co = _migration_co()
     assert (co.revision, co.down_revision) == ("hdts20261105", "hdts20261104")
 
@@ -219,10 +160,10 @@ def _migration_vet():
 def test_bang_vet_chuoi_check_va_ten_rang_buoc_model_bang_migration():
     vet = _migration_vet()
     for ten in (
-        "CHECK_DANH_SACH_TEP",
-        "CHECK_LY_DO",
+        "CHECK_FILE_LIST",
+        "CHECK_REASON",
         "CHECK_SHA_HEX",
-        "LY_DO_XOA_TOI_DA",
+        "MAX_DELETE_REASON_LENGTH",
     ):
         assert getattr(vet, ten) == getattr(m, TEN_MODEL.get(ten, ten)), ten
     nguon = TEP_MIGRATION_VET.read_text(encoding="utf-8")

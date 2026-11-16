@@ -36,7 +36,7 @@ from tests.integration.test_council_document_downgrade_dong_thoi import (  # noq
 pytestmark = pytest.mark.integration
 
 MIG = _nap("hdts20261107_council_decision.py", "hdts20261107_tich_hop")
-BANG = MIG.BANG_MOI_THU_TU_XOA
+BANG = MIG.NEW_TABLES_DROP_ORDER
 TRAN_GIAY = 10.0
 
 
@@ -67,7 +67,7 @@ async def _alembic(ten_db, lenh, dich, co=None):
     env = dict(os.environ)
     env["DATABASE_URL"] = _url(ten_db, "postgresql+asyncpg")
     env["PYTHONDONTWRITEBYTECODE"] = "1"
-    for k in HAI_CO + (MIG.CO_CHO_PHEP_XOA,):
+    for k in HAI_CO + (MIG.DROP_DATA_ENABLED_ENV,):
         env.pop(k, None)
     if co is not None:
         env[co[0]] = co[1]
@@ -151,7 +151,7 @@ async def _luoc_do(k):
     ``*_council_decision*`` — để ghi trạng thái nâng cấp dở vào log."""
     return {
         "phien_ban": await _phien_ban(k),
-        "cot_moi": {c: await _co_cot(k, c) for c in MIG.COT_MOI_CUA_BO},
+        "cot_moi": {c: await _co_cot(k, c) for c in MIG.NEW_SET_COLUMNS},
         "bang_moi": {
             b: (await k.fetchval("SELECT to_regclass($1)", b)) is not None for b in BANG
         },
@@ -169,7 +169,7 @@ async def test_nang_cap_tao_du_bang_rang_buoc_va_chay_lai_khong_loi(csdl_rieng):
         assert await _phien_ban(k) == "hdts20261107"
         for b in BANG:
             assert await _so_dong(k, b) == 0, b
-        for cot in MIG.COT_MOI_CUA_BO:
+        for cot in MIG.NEW_SET_COLUMNS:
             assert await _co_cot(k, cot) == 1, cot
         await _kiem_du_rang_buoc(k)
     finally:
@@ -177,7 +177,7 @@ async def test_nang_cap_tao_du_bang_rang_buoc_va_chay_lai_khong_loi(csdl_rieng):
     # chạy lại phần câu DO của nâng cấp (IF NOT EXISTS) ⇒ không lỗi, không trùng ràng buộc
     k = await _ket_noi(csdl_rieng)
     try:
-        await k.execute(MIG._sql_them_cot_bo())
+        await k.execute(MIG._add_set_columns_sql())
         assert (
             await k.fetchval(
                 "SELECT count(*) FROM pg_constraint WHERE conname = "
@@ -205,7 +205,7 @@ async def test_nang_cap_cho_khoa_bang_bo_qua_tran_thi_dung_khong_doi_gi(csdl_rie
         rc, out = await asyncio.wait_for(_xong(p), 60)
         troi = time.monotonic() - t0
         await gd.rollback()
-        assert rc != 0 and "NangCapChoKhoaQuaTran" in out, (rc, out[-800:])
+        assert rc != 0 and "UpgradeLockTimeout" in out, (rc, out[-800:])
         assert TRAN_GIAY - 1 <= troi <= TRAN_GIAY + 25, troi
         assert await _phien_ban(k) == "hdts20261105"
         assert await _co_cot(k, "ban_ky_ngay") == 0
@@ -248,7 +248,7 @@ async def test_nang_cap_cho_khoa_bang_ho_so_qua_tran_thi_dung_roi_chay_lai_toi_h
         troi = time.monotonic() - t0
         giua = await _luoc_do(k)
         print("F258-NANG-CAP-DO rc=%s troi=%.1fs luoc_do=%s" % (rc, troi, giua))
-        assert rc != 0 and "NangCapChoKhoaQuaTran" in out, (rc, out[-800:])
+        assert rc != 0 and "UpgradeLockTimeout" in out, (rc, out[-800:])
         assert "chạy lại" in out, out[-800:]
         assert TRAN_GIAY - 1 <= troi <= TRAN_GIAY + 25, troi
         # Trạng thái nâng cấp DỞ (ghi rõ): phiên bản chưa đổi; câu DO (bốn cột) đã commit; bảng mới đầu tiên
@@ -344,7 +344,7 @@ async def test_nang_cap_dung_sau_hai_bang_moi_da_commit_roi_chay_lai_toi_head(cs
         rc, out = await asyncio.wait_for(_xong(p), 60)
         giua = await _luoc_do(k)
         print("F258-DUNG-SAU-HAI-BANG rc=%s luoc_do=%s" % (rc, giua))
-        assert rc != 0 and "NangCapChoKhoaQuaTran" in out, (rc, out[-800:])
+        assert rc != 0 and "UpgradeLockTimeout" in out, (rc, out[-800:])
         assert giua["phien_ban"] == "hdts20261105"
         assert sorted(b for b, co in giua["bang_moi"].items() if co) == sorted(
             ["council_document_set_row", "council_decision"]
@@ -378,7 +378,7 @@ async def test_ha_cap_bang_moi_con_hang_thi_dung_khong_xoa_gi(csdl_rieng):  # no
     try:
         await _chen_su_kien(k)
         rc, out = await _chay_xong(csdl_rieng, "downgrade", "hdts20261105")
-        assert rc != 0 and "ConDuLieuQuyetDinh" in out, (rc, out[-800:])
+        assert rc != 0 and "CouncilDecisionDataPresent" in out, (rc, out[-800:])
         assert await _so_dong(k, "council_document_event") == 1
         assert all([await _so_dong(k, b) is not None for b in BANG])
         assert await _phien_ban(k) == "hdts20261107"
@@ -397,7 +397,7 @@ async def test_ha_cap_cot_moi_cua_bo_con_gia_tri_thi_dung(csdl_rieng):  # noqa: 
             "'{}', 7)"
         )
         rc, out = await _chay_xong(csdl_rieng, "downgrade", "hdts20261105")
-        assert rc != 0 and "ConDuLieuQuyetDinh" in out, (rc, out[-800:])
+        assert rc != 0 and "CouncilDecisionDataPresent" in out, (rc, out[-800:])
         assert await _co_cot(k, "cho_quyet_dinh_goc_id") == 1
         assert await _phien_ban(k) == "hdts20261107"
     finally:
@@ -411,9 +411,9 @@ async def test_ha_cap_co_cho_phep_sai_chu_van_dung(csdl_rieng):  # noqa: F811
         await _chen_su_kien(k)
         for gt in ("true", "yes", " 1"):
             rc, out = await _chay_xong(
-                csdl_rieng, "downgrade", "hdts20261105", (MIG.CO_CHO_PHEP_XOA, gt)
+                csdl_rieng, "downgrade", "hdts20261105", (MIG.DROP_DATA_ENABLED_ENV, gt)
             )
-            assert rc != 0 and "ConDuLieuQuyetDinh" in out, (gt, rc, out[-400:])
+            assert rc != 0 and "CouncilDecisionDataPresent" in out, (gt, rc, out[-400:])
         assert await _so_dong(k, "council_document_event") == 1
     finally:
         await k.close()
@@ -425,11 +425,11 @@ async def test_ha_cap_co_cho_phep_thi_xoa_bang_va_cot(csdl_rieng):  # noqa: F811
     try:
         await _chen_su_kien(k)
         rc, out = await _chay_xong(
-            csdl_rieng, "downgrade", "hdts20261105", (MIG.CO_CHO_PHEP_XOA, "1")
+            csdl_rieng, "downgrade", "hdts20261105", (MIG.DROP_DATA_ENABLED_ENV, "1")
         )
         assert rc == 0, out[-800:]
         assert all([await _so_dong(k, b) is None for b in BANG])
-        for cot in MIG.COT_MOI_CUA_BO:
+        for cot in MIG.NEW_SET_COLUMNS:
             assert await _co_cot(k, cot) == 0, cot
         assert await _phien_ban(k) == "hdts20261105"
         assert await _so_dong(k, "council_document_set") == 0  # bảng cũ còn
@@ -460,9 +460,9 @@ async def test_ha_cap_repeatable_read_thi_tu_choi_khong_mat_gi(csdl_rieng):  # n
             % csdl_rieng
         )
         rc, out = await _chay_xong(
-            csdl_rieng, "downgrade", "hdts20261105", (MIG.CO_CHO_PHEP_XOA, "1")
+            csdl_rieng, "downgrade", "hdts20261105", (MIG.DROP_DATA_ENABLED_ENV, "1")
         )
-        assert rc != 0 and "HaCapCanReadCommitted" in out, (rc, out[-800:])
+        assert rc != 0 and "DowngradeNeedsReadCommitted" in out, (rc, out[-800:])
         assert all([await _so_dong(k, b) is not None for b in BANG])
         assert await _phien_ban(k) == "hdts20261107"
     finally:
@@ -485,7 +485,7 @@ async def test_ha_cap_ghi_chen_vao_thi_khong_mat_dong(csdl_rieng):  # noqa: F811
         rc, out = await _xong(p)
         assert bi_chan, "phép đo không hợp lệ: hạ cấp không chờ phiên ghi"
         assert await _so_dong(k, "council_document_event") == 1, "MẤT dòng đã commit"
-        assert rc != 0 and "ConDuLieuQuyetDinh" in out, (rc, out[-800:])
+        assert rc != 0 and "CouncilDecisionDataPresent" in out, (rc, out[-800:])
         assert await _phien_ban(k) == "hdts20261107"
     finally:
         if p is not None and p.returncode is None:
@@ -507,13 +507,13 @@ async def test_ha_cap_cho_khoa_qua_tran_thi_dung_ke_ca_co_cho_phep(csdl_rieng): 
         pid = await ghi.fetchval("SELECT pg_backend_pid()")
         t0 = time.monotonic()
         p = await _alembic(
-            csdl_rieng, "downgrade", "hdts20261105", (MIG.CO_CHO_PHEP_XOA, "1")
+            csdl_rieng, "downgrade", "hdts20261105", (MIG.DROP_DATA_ENABLED_ENV, "1")
         )
         assert await _doi_bi_chan(k, pid, p), "phép đo không hợp lệ"
         rc, out = await asyncio.wait_for(_xong(p), 60)
         troi = time.monotonic() - t0
         await gd.commit()
-        assert rc != 0 and "HaCapChoKhoaQuaTran" in out, (rc, out[-800:])
+        assert rc != 0 and "DowngradeLockTimeout" in out, (rc, out[-800:])
         assert TRAN_GIAY - 1 <= troi <= TRAN_GIAY + 25, troi
         assert await _so_dong(k, "council_document_event") == 1
         assert await _phien_ban(k) == "hdts20261107"

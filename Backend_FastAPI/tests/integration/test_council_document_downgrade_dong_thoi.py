@@ -56,7 +56,7 @@ def _nap(ten_tep, ten_module):
 
 BO_VB = _nap("hdts20261103_council_document_tables.py", "hdts20261103_e4_dong_thoi")
 VET = _nap("hdts20261104_council_document_audit.py", "hdts20261104_e4_dong_thoi")
-HAI_CO = (BO_VB.CO_CHO_PHEP_XOA, VET.CO_CHO_PHEP_XOA)
+HAI_CO = (BO_VB.DROP_DATA_ENABLED_ENV, VET.DROP_DATA_ENABLED_ENV)
 
 
 def _url(ten_db, driver):
@@ -254,16 +254,16 @@ async def test_1104_ghi_nhat_ky_chen_vao_khi_ha_cap_thi_khong_mat_dong(csdl_rien
         csdl_rieng, _ghi_dong_nhat_ky, "hdts20261103b"
     )
     try:
-        dong = await _so_dong(k, VET.TAI)
+        dong = await _so_dong(k, VET.DOWNLOAD_LOG_TABLE)
         assert (
             dong == 1
         ), "MẤT DÒNG nhật ký tải đã COMMIT khi cờ chưa bật: bảng %s %s" % (
-            VET.TAI,
+            VET.DOWNLOAD_LOG_TABLE,
             "đã bị xoá" if dong is None else "còn %d dòng" % dong,
         )
-        assert await _so_dong(k, VET.XOA) == 0
+        assert await _so_dong(k, VET.DELETION_TABLE) == 0
         assert bi_chan, "phép đo không hợp lệ: hạ cấp không đợi phiên ghi"
-        assert rc != 0 and "ConVetVanBanHoiDong" in out, (rc, out[-600:])
+        assert rc != 0 and "CouncilDocumentTracePresent" in out, (rc, out[-600:])
         assert await _phien_ban(k) == "hdts20261104"
     finally:
         await k.close()
@@ -276,14 +276,14 @@ async def test_1104_ghi_vet_xoa_chen_vao_khi_ha_cap_thi_khong_mat_vet(csdl_rieng
         csdl_rieng, _ghi_vet_xoa, "hdts20261103b"
     )
     try:
-        dong = await _so_dong(k, VET.XOA)
+        dong = await _so_dong(k, VET.DELETION_TABLE)
         assert dong == 1, "MẤT VẾT XOÁ đã COMMIT khi cờ chưa bật: bảng %s %s" % (
-            VET.XOA,
+            VET.DELETION_TABLE,
             "đã bị xoá" if dong is None else "còn %d dòng" % dong,
         )
-        assert await _so_dong(k, VET.TAI) == 0
+        assert await _so_dong(k, VET.DOWNLOAD_LOG_TABLE) == 0
         assert bi_chan, "phép đo không hợp lệ: hạ cấp không đợi phiên ghi"
-        assert rc != 0 and "ConVetVanBanHoiDong" in out, (rc, out[-600:])
+        assert rc != 0 and "CouncilDocumentTracePresent" in out, (rc, out[-600:])
         assert await _phien_ban(k) == "hdts20261104"
     finally:
         await k.close()
@@ -299,7 +299,7 @@ async def test_1104_phien_ghi_huy_thi_ha_cap_van_xoa_bang_rong(csdl_rieng):
     try:
         assert bi_chan, "phép đo không hợp lệ: hạ cấp không đợi phiên ghi"
         assert rc == 0, out[-600:]
-        assert (await _so_dong(k, VET.TAI), await _so_dong(k, VET.XOA)) == (None, None)
+        assert (await _so_dong(k, VET.DOWNLOAD_LOG_TABLE), await _so_dong(k, VET.DELETION_TABLE)) == (None, None)
         assert await _phien_ban(k) == "hdts20261103b"
     finally:
         await k.close()
@@ -311,10 +311,10 @@ async def test_1104_co_cho_phep_thi_van_xoa_duoc(csdl_rieng):
     try:
         await _ghi_dong_nhat_ky(k)  # đã COMMIT trước khi hạ cấp
         rc, out = await _xong(
-            await _ha_cap(csdl_rieng, "hdts20261103b", (VET.CO_CHO_PHEP_XOA, "1"))
+            await _ha_cap(csdl_rieng, "hdts20261103b", (VET.DROP_DATA_ENABLED_ENV, "1"))
         )
         assert rc == 0, out[-600:]
-        assert (await _so_dong(k, VET.TAI), await _so_dong(k, VET.XOA)) == (None, None)
+        assert (await _so_dong(k, VET.DOWNLOAD_LOG_TABLE), await _so_dong(k, VET.DELETION_TABLE)) == (None, None)
         assert await _phien_ban(k) == "hdts20261103b"
     finally:
         await k.close()
@@ -336,14 +336,14 @@ async def test_1104_muc_co_lap_repeatable_read_thi_tu_choi_khong_mat_dong(csdl_r
         csdl_rieng, _ghi_dong_nhat_ky, "hdts20261103b"
     )
     try:
-        dong = await _so_dong(k, VET.TAI)
+        dong = await _so_dong(k, VET.DOWNLOAD_LOG_TABLE)
         assert (
             dong == 1
         ), "MẤT DÒNG nhật ký tải đã COMMIT ở REPEATABLE READ: bảng %s %s" % (
-            VET.TAI,
+            VET.DOWNLOAD_LOG_TABLE,
             "đã bị xoá" if dong is None else "còn %d dòng" % dong,
         )
-        assert rc != 0 and "HaCapCanReadCommitted" in out, (rc, out[-600:])
+        assert rc != 0 and "DowngradeNeedsReadCommitted" in out, (rc, out[-600:])
         assert await _phien_ban(k) == "hdts20261104"
     finally:
         await k.close()
@@ -356,14 +356,14 @@ async def test_1103_tao_bo_chen_vao_khi_ha_cap_thi_khong_mat_bo(csdl_rieng):
         csdl_rieng, _tao_mot_bo, "v3circ20261011c"
     )
     try:
-        bo, tep = await _so_dong(k, BO_VB.BO), await _so_dong(k, BO_VB.TEP)
+        bo, tep = await _so_dong(k, BO_VB.SET_TABLE), await _so_dong(k, BO_VB.SET_FILE_TABLE)
         assert (bo, tep) == (1, 1), (
             "MẤT bộ văn bản đã COMMIT khi cờ chưa bật: (bộ, tệp) = %r (None = bảng đã bị xoá)"
             % ((bo, tep),)
         )
-        assert await _so_dong(k, BO_VB.MAU) == 0
+        assert await _so_dong(k, BO_VB.TEMPLATE_TABLE) == 0
         assert bi_chan, "phép đo không hợp lệ: hạ cấp không đợi phiên ghi"
-        assert rc != 0 and "ConDuLieuVanBanHoiDong" in out, (rc, out[-600:])
+        assert rc != 0 and "CouncilDocumentDataPresent" in out, (rc, out[-600:])
         assert await _phien_ban(k) == "hdts20261103"
     finally:
         await k.close()
@@ -376,14 +376,14 @@ async def test_1103_tai_mau_chen_vao_khi_ha_cap_thi_khong_mat_mau(csdl_rieng):
         csdl_rieng, _tai_mot_mau, "v3circ20261011c"
     )
     try:
-        dong = await _so_dong(k, BO_VB.MAU)
+        dong = await _so_dong(k, BO_VB.TEMPLATE_TABLE)
         assert dong == 1, "MẤT MẪU đã COMMIT khi cờ chưa bật: bảng %s %s" % (
-            BO_VB.MAU,
+            BO_VB.TEMPLATE_TABLE,
             "đã bị xoá" if dong is None else "còn %d dòng" % dong,
         )
-        assert (await _so_dong(k, BO_VB.BO), await _so_dong(k, BO_VB.TEP)) == (0, 0)
+        assert (await _so_dong(k, BO_VB.SET_TABLE), await _so_dong(k, BO_VB.SET_FILE_TABLE)) == (0, 0)
         assert bi_chan, "phép đo không hợp lệ: hạ cấp không đợi phiên ghi"
-        assert rc != 0 and "ConDuLieuVanBanHoiDong" in out, (rc, out[-600:])
+        assert rc != 0 and "CouncilDocumentDataPresent" in out, (rc, out[-600:])
         assert await _phien_ban(k) == "hdts20261103"
     finally:
         await k.close()
@@ -395,10 +395,10 @@ async def test_1103_co_cho_phep_thi_van_xoa_duoc(csdl_rieng):
     try:
         await _tao_mot_bo(k)  # đã COMMIT trước khi hạ cấp
         rc, out = await _xong(
-            await _ha_cap(csdl_rieng, "v3circ20261011c", (BO_VB.CO_CHO_PHEP_XOA, "1"))
+            await _ha_cap(csdl_rieng, "v3circ20261011c", (BO_VB.DROP_DATA_ENABLED_ENV, "1"))
         )
         assert rc == 0, out[-600:]
-        assert [await _so_dong(k, b) for b in (BO_VB.MAU, BO_VB.BO, BO_VB.TEP)] == [
+        assert [await _so_dong(k, b) for b in (BO_VB.TEMPLATE_TABLE, BO_VB.SET_TABLE, BO_VB.SET_FILE_TABLE)] == [
             None,
             None,
             None,

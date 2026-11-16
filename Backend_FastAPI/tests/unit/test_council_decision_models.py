@@ -18,68 +18,9 @@ from app.models import council_document as m
 
 pytestmark = pytest.mark.unit
 
-#: tên hằng ở MIGRATION (giữ nguyên, tiếng Việt) → tên hằng cùng chuỗi ở model (đã đổi sang tiếng Anh)
-TEN_MODEL = {
-    "CHECK_BO_BAN_KY_DU": "CHECK_SET_SIGNED_COPY_COMPLETE",
-    "CHECK_BO_DUNG_LAI_CO_BAN_KY": "CHECK_SET_REBUILD_HAS_SIGNED_COPY",
-    "CHECK_BO_MOT_CHE_DO": "CHECK_SET_ONE_MODE",
-    "CHECK_BO_SO_BAN_KY": "CHECK_SET_SIGNED_COPY_NUMBER",
-    "CHECK_CHO_H3": "CHECK_HOLD_H3",
-    "CHECK_CHO_H4_CQ": "CHECK_HOLD_H4_PENDING",
-    "CHECK_CHO_H4_VH": "CHECK_HOLD_H4_VOID",
-    "CHECK_CHO_H4_XL": "CHECK_HOLD_H4_RECHECK",
-    "CHECK_CHO_LY_DO": "CHECK_HOLD_REASON",
-    "CHECK_CHO_LY_DO_VAO": "CHECK_HOLD_ENTRY_REASON",
-    "CHECK_CHO_TRANG_THAI": "CHECK_HOLD_STATUS",
-    "CHECK_DANH_SACH_TEP": "CHECK_FILE_LIST",
-    "CHECK_DONG_BO_STT": "CHECK_SET_ROW_SEQ",
-    "CHECK_DONG_QD_BO": "CHECK_DECISION_ROW_SET",
-    "CHECK_DONG_QD_K5A": "CHECK_DECISION_ROW_K5A",
-    "CHECK_DONG_QD_K5B": "CHECK_DECISION_ROW_K5B",
-    "CHECK_DONG_QD_K5C": "CHECK_DECISION_ROW_K5C",
-    "CHECK_DONG_QD_STT": "CHECK_DECISION_ROW_SEQ",
-    "CHECK_KICH_THUOC": "CHECK_SIZE",
-    "CHECK_LOAI_MAU": "CHECK_TEMPLATE_KIND",
-    "CHECK_LUOT_BO_KHOP": "CHECK_SUBMISSION_SET_MATCH",
-    "CHECK_LUOT_CHO_CO_BO": "CHECK_SUBMISSION_PENDING_HAS_SET",
-    "CHECK_LUOT_KET_THUC": "CHECK_SUBMISSION_FINISHED",
-    "CHECK_LUOT_QD": "CHECK_SUBMISSION_DECISION",
-    "CHECK_LUOT_SHA": "CHECK_SUBMISSION_SHA",
-    "CHECK_LUOT_SHA_HEX": "CHECK_SUBMISSION_SHA_HEX",
-    "CHECK_LUOT_TRANG_THAI": "CHECK_SUBMISSION_STATUS",
-    "CHECK_LY_DO": "CHECK_REASON",
-    "CHECK_MANG_DTO": "CHECK_DTO_ARRAY",
-    "CHECK_MANG_MA": "CHECK_CODE_ARRAY",
-    "CHECK_QD_K3_GOC": "CHECK_DECISION_K3_ROOT",
-    "CHECK_QD_K3_HET": "CHECK_DECISION_K3_EXPIRED",
-    "CHECK_QD_K3_HGN": "CHECK_DECISION_K3_REVOKED",
-    "CHECK_QD_K3_HUY": "CHECK_DECISION_K3_CANCEL",
-    "CHECK_QD_K3_LY_DO": "CHECK_DECISION_K3_REASON",
-    "CHECK_QD_K3_PHAM_VI": "CHECK_DECISION_K3_SCOPE",
-    "CHECK_QD_K3_SO": "CHECK_DECISION_K3_NUMBER",
-    "CHECK_QD_K3_TU_TRO": "CHECK_DECISION_K3_SELF_REFERENCE",
-    "CHECK_QD_K3_VBH": "CHECK_DECISION_K3_CANCELLATION",
-    "CHECK_QD_K4": "CHECK_DECISION_K4",
-    "CHECK_QD_K4B": "CHECK_DECISION_K4B",
-    "CHECK_QD_K4C": "CHECK_DECISION_K4C",
-    "CHECK_QD_K4D": "CHECK_DECISION_K4D",
-    "CHECK_QD_LOAI": "CHECK_DECISION_KIND",
-    "CHECK_QD_SHA_TEP": "CHECK_DECISION_FILE_SHA",
-    "CHECK_QD_SO_HO_SO": "CHECK_DECISION_PROFILE_COUNT",
-    "CHECK_QD_TRANG_THAI": "CHECK_DECISION_STATUS",
-    "CHECK_SCAN_KIEU": "CHECK_SCAN_TYPE",
-    "CHECK_SHA_NOI_DUNG": "CHECK_SHA_CONTENT",
-    "CHECK_SU_KIEN_LOAI": "CHECK_EVENT_KIND",
-    "CHECK_SU_KIEN_SO_LIEU": "CHECK_EVENT_FIGURES",
-    "DIEU_KIEN_DONG_GIU_HO_SO": "ROW_HOLDS_PROFILE_CONDITION",
-    "DIEU_KIEN_DONG_HIEU_LUC": "EFFECTIVE_ROW_CONDITION",
-    "DIEU_KIEN_H1": "CONDITION_H1",
-    "DIEU_KIEN_LUOT_CHO_GUI": "PENDING_SUBMISSION_CONDITION",
-    "DIEU_KIEN_U1": "CONDITION_U1",
-    "DIEU_KIEN_U2": "CONDITION_U2",
-    "DIEU_KIEN_U4": "CONDITION_U4",
-    "LY_DO_XOA_TOI_DA": "MAX_DELETE_REASON_LENGTH",
-}
+#: F339 (16-11-2026): hằng migration GĐ1 đã đổi sang tiếng Anh, TRÙNG tên hằng cùng chuỗi ở model ⇒ bảng ánh xạ
+#: rỗng (giữ ``TEN_MODEL.get(t, t)`` cho trường hợp hai bên lệch tên sau này).
+TEN_MODEL: dict = {}
 
 GOC = Path(__file__).resolve().parents[2]
 VERS = GOC / "alembic" / "versions"
@@ -109,13 +50,13 @@ def test_moi_chuoi_check_va_dieu_kien_chi_muc_bang_nhau_model_migration():
     ten = [
         t
         for t in vars(MIG)
-        if t.startswith(("CHECK_", "DIEU_KIEN_")) and isinstance(getattr(MIG, t), str)
+        if (t.startswith("CHECK_") or "CONDITION" in t) and isinstance(getattr(MIG, t), str)
     ]
     assert len(ten) >= 40, "phép đo rỗng: %d hằng" % len(ten)
     for t in ten:
         assert getattr(MIG, t) == getattr(m, TEN_MODEL.get(t, t)), t
-    assert MIG.LOAI_SU_KIEN == m.EVENT_KINDS
-    assert MIG.LY_DO_TOI_DA == m.MAX_DELETE_REASON_LENGTH
+    assert MIG.EVENT_KINDS == m.EVENT_KINDS
+    assert MIG.MAX_REASON_LENGTH == m.MAX_DELETE_REASON_LENGTH
 
 
 def _ten_rang_buoc(lop):
@@ -174,9 +115,9 @@ def test_ten_chi_muc_cua_model_dung_bang_migration():
 def test_ba_migration_hoi_dong_cung_tran_cho_khoa():
     a = _nap("hdts20261103_council_document_tables.py", "hdts20261103_i")
     b = _nap("hdts20261104_council_document_audit.py", "hdts20261104_i")
-    assert a.TRAN_CHO_KHOA == b.TRAN_CHO_KHOA == MIG.TRAN_CHO_KHOA == "10s"
-    assert "set_config('lock_timeout', '10s', true)" in MIG._sql_them_cot_bo()
-    assert "set_config('lock_timeout', '10s', true)" in MIG._sql_ha_cap(False)
+    assert a.LOCK_TIMEOUT == b.LOCK_TIMEOUT == MIG.LOCK_TIMEOUT == "10s"
+    assert "set_config('lock_timeout', '10s', true)" in MIG._add_set_columns_sql()
+    assert "set_config('lock_timeout', '10s', true)" in MIG._downgrade_sql(False)
 
 
 def test_migration_la_head_noi_sau_hdts20261105_va_co_cho_phep_dung_chu():
@@ -195,9 +136,9 @@ def test_migration_la_head_noi_sau_hdts20261105_va_co_cho_phep_dung_chu():
     assert kho.get_revision("hdts20261112").down_revision == "hdts20261111"
     assert kho.get_revision("hdts20261111").down_revision == "hdts20261107"
     assert (MIG.revision, MIG.down_revision) == ("hdts20261107", "hdts20261105")
-    assert MIG.CO_CHO_PHEP_XOA == "COUNCIL_DECISION_DOWNGRADE_DROP_DATA_ENABLED"
+    assert MIG.DROP_DATA_ENABLED_ENV == "COUNCIL_DECISION_DOWNGRADE_DROP_DATA_ENABLED"
     with pytest.raises(TypeError):
-        MIG._sql_ha_cap(1)
+        MIG._downgrade_sql(1)
 
 
 def test_khoa_ngoai_ghep_va_hanh_dong_dung_dac_ta():
@@ -230,7 +171,7 @@ def test_khoa_ngoai_ghep_va_hanh_dong_dung_dac_ta():
     # Bảng sự kiện ĐỘC LẬP: không khoá ngoại nào.
     assert not m.CouncilDocumentEvent.__table__.foreign_keys
     assert "ForeignKey" not in re.search(
-        r"op\.create_table\(\n        SU_KIEN,(.*?)if_not_exists=True", TEP.read_text(encoding="utf-8"), re.S
+        r"op\.create_table\(\n        EVENT_TABLE,(.*?)if_not_exists=True", TEP.read_text(encoding="utf-8"), re.S
     ).group(1)
 
 

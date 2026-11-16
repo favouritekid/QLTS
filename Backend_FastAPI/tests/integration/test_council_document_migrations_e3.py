@@ -149,7 +149,7 @@ async def test_casbin_downgrade_chi_xoa_dong_mang_template_cua_minh(
 
 
 # ═══════════════════════════════ hdts20261104 — upgrade ═════════════════════════════════
-HAI_BANG = (VET.XOA, VET.TAI)
+HAI_BANG = (VET.DELETION_TABLE, VET.DOWNLOAD_LOG_TABLE)
 
 
 async def _co_bang(conn, b):
@@ -171,8 +171,8 @@ async def test_vet_upgrade_dung_hai_bang_khong_khoa_ngoai_dung_rang_buoc(
             assert [await _co_bang(conn, b) for b in HAI_BANG] == [None, None]
             await conn.run_sync(_chay, VET, "upgrade")
             for b, lop in (
-                (VET.XOA, m.CouncilDocumentSetDeletion),
-                (VET.TAI, m.CouncilDocumentDownloadLog),
+                (VET.DELETION_TABLE, m.CouncilDocumentSetDeletion),
+                (VET.DOWNLOAD_LOG_TABLE, m.CouncilDocumentDownloadLog),
             ):
                 rb = dict(
                     (
@@ -201,7 +201,7 @@ _SHA = "a" * 64
 
 
 async def _chen_mot_hang(conn, bang):
-    if bang == VET.XOA:
+    if bang == VET.DELETION_TABLE:
         await conn.execute(
             text(
                 "INSERT INTO council_document_set_deletion (set_id, so_ho_so, so_tep, "
@@ -235,16 +235,16 @@ async def _trang_thai(conn):
 async def test_vet_mot_bang_con_du_lieu_thi_ha_cap_dung_khong_xoa_gi(
     setup_test_database, monkeypatch, bang
 ):
-    monkeypatch.delenv(VET.CO_CHO_PHEP_XOA, raising=False)
+    monkeypatch.delenv(VET.DROP_DATA_ENABLED_ENV, raising=False)
     async with csdl.engine.connect() as conn:
         gd = await conn.begin()
         try:
             await _chen_mot_hang(conn, bang)
             ky_vong = {b: (1 if b == bang else 0) for b in HAI_BANG}
             assert await _trang_thai(conn) == ky_vong
-            with pytest.raises(VET.ConVetVanBanHoiDong) as e:
+            with pytest.raises(VET.CouncilDocumentTracePresent) as e:
                 await conn.run_sync(_chay, VET, "downgrade")
-            assert bang in str(e.value) and VET.CO_CHO_PHEP_XOA in str(e.value)
+            assert bang in str(e.value) and VET.DROP_DATA_ENABLED_ENV in str(e.value)
             assert await _trang_thai(conn) == ky_vong  # KHÔNG xoá gì
         finally:
             await gd.rollback()
@@ -254,20 +254,20 @@ async def test_vet_mot_bang_con_du_lieu_thi_ha_cap_dung_khong_xoa_gi(
 async def test_vet_co_khong_dung_chuoi_1_thi_van_chan(
     setup_test_database, monkeypatch, gia_tri
 ):
-    monkeypatch.setenv(VET.CO_CHO_PHEP_XOA, gia_tri)
+    monkeypatch.setenv(VET.DROP_DATA_ENABLED_ENV, gia_tri)
     async with csdl.engine.connect() as conn:
         gd = await conn.begin()
         try:
-            await _chen_mot_hang(conn, VET.TAI)
-            with pytest.raises(VET.ConVetVanBanHoiDong):
+            await _chen_mot_hang(conn, VET.DOWNLOAD_LOG_TABLE)
+            with pytest.raises(VET.CouncilDocumentTracePresent):
                 await conn.run_sync(_chay, VET, "downgrade")
-            assert await _trang_thai(conn) == {VET.XOA: 0, VET.TAI: 1}
+            assert await _trang_thai(conn) == {VET.DELETION_TABLE: 0, VET.DOWNLOAD_LOG_TABLE: 1}
         finally:
             await gd.rollback()
 
 
 async def test_vet_co_cho_phep_thi_xoa_ca_hai_bang(setup_test_database, monkeypatch):
-    monkeypatch.setenv(VET.CO_CHO_PHEP_XOA, "1")
+    monkeypatch.setenv(VET.DROP_DATA_ENABLED_ENV, "1")
     async with csdl.engine.connect() as conn:
         gd = await conn.begin()
         try:
@@ -282,7 +282,7 @@ async def test_vet_co_cho_phep_thi_xoa_ca_hai_bang(setup_test_database, monkeypa
 async def test_vet_hai_bang_rong_thi_ha_cap_khong_can_co(
     setup_test_database, monkeypatch
 ):
-    monkeypatch.delenv(VET.CO_CHO_PHEP_XOA, raising=False)
+    monkeypatch.delenv(VET.DROP_DATA_ENABLED_ENV, raising=False)
     async with csdl.engine.connect() as conn:
         gd = await conn.begin()
         try:
@@ -294,6 +294,6 @@ async def test_vet_hai_bang_rong_thi_ha_cap_khong_can_co(
 
 
 def test_co_cho_phep_rieng_va_mang_nghia_cho_phep():
-    assert VET.CO_CHO_PHEP_XOA.endswith("_ENABLED")
+    assert VET.DROP_DATA_ENABLED_ENV.endswith("_ENABLED")
     goc = _nap("hdts20261103_council_document_tables.py", "hdts20261103_e3")
-    assert VET.CO_CHO_PHEP_XOA != goc.CO_CHO_PHEP_XOA  # bỏ VẾT ≠ bỏ bộ văn bản
+    assert VET.DROP_DATA_ENABLED_ENV != goc.DROP_DATA_ENABLED_ENV  # bỏ VẾT ≠ bỏ bộ văn bản
