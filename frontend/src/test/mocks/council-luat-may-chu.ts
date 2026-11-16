@@ -69,7 +69,7 @@ export const TRANG_THAI_HO_SO = [
 /** Trần KỸ THUẬT của bản scan PDF = mặc định của `COUNCIL_DECISION_SCAN_MAX_BYTES` (app/config.py — `default=9 * 1024 * 1024`;
  *  review max PR #724 R1, owner 15-11: hạ từ 20 MiB xuống dưới nginx `client_max_body_size 10M`). */
 export const TRAN_BYTE_SCAN_MAC_DINH = 9 * 1024 * 1024
-/** Review max PR #724 (R7, owner 15-11): câu của `CAU_SO_QD_0_DAU` (council_document_render_service.py) — số Quyết định không có 0 đầu. */
+/** Review max PR #724 (R7, owner 15-11): câu của `DECISION_NUMBER_LEADING_ZERO_MESSAGE` (council_document_render_service.py) — số Quyết định không có 0 đầu. */
 export const CAU_SO_QD_0_DAU = "Số Quyết định không bắt đầu bằng số 0 — ví dụ nhập 7, không nhập 07."
 /** Codex 42 (câu 4): `CONFIRMATION_JSON_MAX_CHARS` (council_decision_service.py) — trần ký tự (code point) của chuỗi JSON
  *  `xac_nhan_trang_thai`; vượt ⇒ router coi là "không đọc được". */

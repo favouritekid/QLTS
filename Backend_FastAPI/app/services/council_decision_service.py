@@ -107,7 +107,7 @@ def check_decision_number(number: object) -> str:
     # hơn làm lớp phụ; tầng chủ sở hữu luật là đây.) Owner chốt: số KHÁC "0" mà có 0 đứng đầu ⇒ từ chối; "0" một chữ số
     # vẫn nhận (Codex 42 F337).
     if len(number) > 1 and number[0] == "0":
-        raise DataValidationError(render_service.QUERY_DECISION_NUMBER_LEADING_ZERO)
+        raise DataValidationError(render_service.DECISION_NUMBER_LEADING_ZERO_MESSAGE)
     return number
 
 

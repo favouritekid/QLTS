@@ -350,11 +350,11 @@ async def test_ghi_nhan_xac_nhan_json_long_qua_sau_400_khong_500(client, hs, ad)
 async def test_ghi_nhan_so_qd_0_dau_400_khong_ghi(client, hs, ad):
     # Review max PR #724 (R7, owner 15-11): '07' / '007' từng là số KHÁC '7' trước luật không trùng số trong năm (U1).
     # Nay số có 0 đứng đầu bị từ chối ở service (câu tiếng Việt), không ghi gì.
-    from app.services.council_document_render_service import QUERY_DECISION_NUMBER_LEADING_ZERO
+    from app.services.council_document_render_service import DECISION_NUMBER_LEADING_ZERO_MESSAGE
 
     bo = await _bo_ok(client, ad, hs, SACH)
     r = await _ghi(client, ad, bo["id"], so="07", so_hs=3)
-    assert r.status_code == 400 and r.json()["detail"] == QUERY_DECISION_NUMBER_LEADING_ZERO, r.text
+    assert r.status_code == 400 and r.json()["detail"] == DECISION_NUMBER_LEADING_ZERO_MESSAGE, r.text
     assert await _q1("SELECT count(*) FROM council_decision") == 0
 
 

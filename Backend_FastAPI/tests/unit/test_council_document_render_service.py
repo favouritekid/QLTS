@@ -1202,19 +1202,19 @@ def test_tham_so_quyet_dinh_chuoi_chi_nhan_chu_so_ascii(truong, gia_tri):
 def test_tham_so_so_quyet_dinh_0_dau_bi_tu_choi():
     # Review max PR #724 (R7, §6 nhánh anh em): số in sẵn có 0 đầu ⇒ lúc ghi nhận (gõ lại ĐÚNG số đã in) không bao
     # giờ qua ``kiem_so_quyet_dinh`` ⇒ chặn ngay lúc dựng, cùng câu.
-    from app.services.council_document_render_service import QUERY_DECISION_NUMBER_LEADING_ZERO
+    from app.services.council_document_render_service import DECISION_NUMBER_LEADING_ZERO_MESSAGE
 
     assert DecisionParams(so_quyet_dinh="7").so_quyet_dinh == "7"  # đối chứng
-    with pytest.raises(PydanticValidationError, match=QUERY_DECISION_NUMBER_LEADING_ZERO):
+    with pytest.raises(PydanticValidationError, match=DECISION_NUMBER_LEADING_ZERO_MESSAGE):
         DecisionParams(so_quyet_dinh="07")
 
 
 def test_tham_so_so_quyet_dinh_0_mot_chu_so_duoc_nhan():
     # Codex 42 F337 — owner chốt: số KHÁC "0" có 0 đứng đầu ⇒ từ chối; "0" một chữ số vẫn nhận; "00" bị từ chối.
-    from app.services.council_document_render_service import QUERY_DECISION_NUMBER_LEADING_ZERO
+    from app.services.council_document_render_service import DECISION_NUMBER_LEADING_ZERO_MESSAGE
 
     assert DecisionParams(so_quyet_dinh="0").so_quyet_dinh == "0"
-    with pytest.raises(PydanticValidationError, match=QUERY_DECISION_NUMBER_LEADING_ZERO):
+    with pytest.raises(PydanticValidationError, match=DECISION_NUMBER_LEADING_ZERO_MESSAGE):
         DecisionParams(so_quyet_dinh="00")
 
 

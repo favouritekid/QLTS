@@ -199,7 +199,7 @@ _RE_OUTSIDE_XML = re.compile(r"[^\t\n\r\x20-\uD7FF\uE000-\uFFFD\U00010000-\U0010
 
 #: Review max PR #724 (R7, owner 15-11): câu DUY NHẤT cho luật "số Quyết định không bắt đầu bằng số 0" — dùng ở
 #: ``DecisionParams`` (số in sẵn lúc dựng bộ) và ``council_decision_service.kiem_so_quyet_dinh`` (số lúc ghi nhận).
-QUERY_DECISION_NUMBER_LEADING_ZERO = "Số Quyết định không bắt đầu bằng số 0 — ví dụ nhập 7, không nhập 07."
+DECISION_NUMBER_LEADING_ZERO_MESSAGE = "Số Quyết định không bắt đầu bằng số 0 — ví dụ nhập 7, không nhập 07."
 
 
 class DecisionParams(BaseModel):
@@ -224,7 +224,7 @@ class DecisionParams(BaseModel):
         # "sau hôm nay" (văn bản có thể in trước ngày ký). Cùng luật owner với ``kiem_so_quyet_dinh``: số KHÁC "0" mà có
         # 0 đứng đầu ⇒ từ chối; "0" một chữ số vẫn nhận (Codex 42 F337).
         if v is not None and len(v) > 1 and v.startswith("0"):
-            raise ValueError(QUERY_DECISION_NUMBER_LEADING_ZERO)
+            raise ValueError(DECISION_NUMBER_LEADING_ZERO_MESSAGE)
         return v
 
     @model_validator(mode="after")

@@ -197,7 +197,7 @@ GHIM = {
     "bo.tao_bo_van_ban_theo_id": "5079197c8fe0bfeb",
     "cau_hinh.COUNCIL_DECISION_SCAN_MAX_BYTES": "cb01a688cfdfae4b",  # review max PR #724 R1: 9 MiB — MSW chép cùng lượt
     "cau_hinh.COUNCIL_SET_MAX_PROFILES": "b09d7b699cf5ffdf",
-    "dung.DecisionParams": "24a1de91e685a8bb",  # review max PR #724 R7: số in sẵn không 0 đầu; Codex 42 F337 "0" nhận — MSW chép cùng lượt
+    "dung.DecisionParams": "6e651ef48bffd4b4",  # review max PR #724 R7: số in sẵn không 0 đầu; Codex 42 F337 "0" nhận — MSW chép cùng lượt
     "luot.kiem_ma_luot": "069114521e4618bd",
     "mau.TEN_LOAI": "ff27ce4a7da9b1c2",
     "mau.kiem_goi_mau": "6c5b54edfd761661",
@@ -213,7 +213,7 @@ GHIM = {
     "qd.huy_ghi_nhan": "2e623b1a543aca5f",
     "qd.kiem_ngay": "ff50f4a05fb99172",  # review max PR #724 R7: ngày ký không sau hôm nay (giờ VN), câu = hằng nguyên văn — MSW chép cùng lượt
     "qd.kiem_scan": "a51c3ba6959c9bf3",
-    "qd.kiem_so_quyet_dinh": "8f39ce4aaadd7c7a",  # R7 cấm 0 đầu; Codex 42 F337: "0" một chữ số nhận — MSW chép cùng lượt
+    "qd.kiem_so_quyet_dinh": "2d53d20a2e55808d",  # R7 cấm 0 đầu; Codex 42 F337: "0" một chữ số nhận — MSW chép cùng lượt
     "qd.CONFIRMATION_JSON_MAX_CHARS": "e39eef82f61b21e2",  # Codex 42 câu 4 — MSW TRAN_KY_TU_JSON_XAC_NHAN = 1024
     "qd.kiem_xac_nhan_trang_thai": "0ae641a688355679",
     "route._doc_scan": "6a2e887efa3934ea",
