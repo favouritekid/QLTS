@@ -130,7 +130,7 @@ async def test_moi_truong_dto_bang_cot_cung_ten_cua_bo_xuat(hs):
         bx = await _bo_xuat([pid])
         assert list(bx) == [pid], nhan
         try:
-            anh = await doc.doc_ho_so_theo_ma(csdl.engine, [cccd], academic_year=2026)
+            anh = await doc.read_profiles_by_code(csdl.engine, [cccd], academic_year=2026)
         except Exception as e:  # noqa: BLE001 — ghi lại ĐÚNG ca nào hàm đọc dừng
             ket_qua[nhan] = "lỗi: %s" % type(e).__name__
             continue
@@ -141,7 +141,7 @@ async def test_moi_truong_dto_bang_cot_cung_ten_cua_bo_xuat(hs):
 async def test_ca_lo_dung_thu_tu_dau_vao_va_bang_bo_xuat(hs):
     nhan = NHAN_CA[5:] + NHAN_CA[:5][::-1]  # thứ tự đầu vào CỐ Ý khác thứ tự id
     ma = [hs[n][0] for n in nhan]
-    anh = await doc.doc_ho_so_theo_ma(csdl.engine, ma, academic_year=2026)
+    anh = await doc.read_profiles_by_code(csdl.engine, ma, academic_year=2026)
     assert [r.ma_ho_so for r in anh.rows] == ma
     bx = await _bo_xuat([hs[n][1] for n in nhan])
     assert {n: _lech(r.model_dump(), bx[hs[n][1]]) for n, r in zip(nhan, anh.rows)} == {
@@ -155,7 +155,7 @@ async def test_du_lieu_gia_phu_dung_nhanh_kho(hs):
     # Kỳ vọng VIẾT TAY theo luật (không lấy từ hai nguồn SQL) — chứng minh bộ dữ liệu giả
     # thật sự đi qua từng nhánh khó; một bộ giả không phủ nhánh thì phép so bằng nhau vô nghĩa.
     nhan = NHAN_CA
-    anh = await doc.doc_ho_so_theo_ma(
+    anh = await doc.read_profiles_by_code(
         csdl.engine, [hs[n][0] for n in nhan], academic_year=2026
     )
     r = dict(zip(nhan, (x.model_dump() for x in anh.rows)))
@@ -244,7 +244,7 @@ async def test_hai_loai_hinh_cung_chuyen_mon_cung_so_dem_bien_ban(hs):
     bx = await _bo_xuat([hs[n1][1], hs[n2][1]])
     assert bx[hs[n1][1]]["loai_hinh"] == "chinh_quy"
     assert bx[hs[n2][1]]["loai_hinh"] == "lien_thong"
-    anh = await doc.doc_ho_so_theo_ma(
+    anh = await doc.read_profiles_by_code(
         csdl.engine, [hs[n1][0], hs[n2][0]], academic_year=2026
     )
     x, y = (r.model_dump() for r in anh.rows)
@@ -270,7 +270,7 @@ async def test_hai_loai_hinh_cung_chuyen_mon_cung_so_dem_bien_ban(hs):
 
 # ═══════════════════════════════ giao dịch chỉ đọc ═══════════════════════════════════
 async def test_giao_dich_doc_repeatable_read_read_only_do_tu_trong(hs):
-    anh = await doc.doc_ho_so_theo_ma(
+    anh = await doc.read_profiles_by_code(
         csdl.engine, [hs["dia_chi_rong"][0]], academic_year=2026
     )
     assert anh.giao_dich.transaction_isolation == "repeatable read"
@@ -279,14 +279,14 @@ async def test_giao_dich_doc_repeatable_read_read_only_do_tu_trong(hs):
         isinstance(anh.giao_dich.moc_chup, datetime) and anh.giao_dich.moc_chup.tzinfo
     )
     # Đo lại bằng lệnh RIÊNG (SHOW) trong chính khối giao dịch mà hàm đọc dùng.
-    async with kho_doc.giao_dich_chi_doc(csdl.engine) as (conn, _):
+    async with kho_doc.read_only_transaction(csdl.engine) as (conn, _):
         iso = (await conn.execute(text("SHOW transaction_isolation"))).scalar_one()
         ro = (await conn.execute(text("SHOW transaction_read_only"))).scalar_one()
     assert (iso, ro) == ("repeatable read", "on")
 
 
 async def test_trong_giao_dich_doc_lenh_ghi_bi_csdl_tu_choi(hs):
-    async with kho_doc.giao_dich_chi_doc(csdl.engine) as (conn, _):
+    async with kho_doc.read_only_transaction(csdl.engine) as (conn, _):
         with pytest.raises(DBAPIError) as e:
             await conn.execute(
                 text(
@@ -305,8 +305,8 @@ async def test_anh_chup_khong_doi_khi_phien_khac_commit(hs):
     # REPEATABLE READ thật (không chỉ là nhãn): phiên khác commit giữa hai lần đọc trong cùng
     # giao dịch ⇒ lần đọc sau vẫn thấy dữ liệu của mốc chụp.
     cccd, pid = hs["dia_chi_rong"]
-    async with kho_doc.giao_dich_chi_doc(csdl.engine) as (conn, _):
-        truoc = (await kho_doc.doc_so_lieu(conn, [pid]))[0]["ten"]
+    async with kho_doc.read_only_transaction(csdl.engine) as (conn, _):
+        truoc = (await kho_doc.read_print_figures(conn, [pid]))[0]["ten"]
         async with csdl.engine.begin() as khac:
             await khac.execute(
                 text(
@@ -314,9 +314,9 @@ async def test_anh_chup_khong_doi_khi_phien_khac_commit(hs):
                 ),
                 {"p": pid},
             )
-        sau = (await kho_doc.doc_so_lieu(conn, [pid]))[0]["ten"]
+        sau = (await kho_doc.read_print_figures(conn, [pid]))[0]["ten"]
     assert (truoc, sau) == ("Sáu", "Sáu")
-    moi = await doc.doc_ho_so_theo_ma(csdl.engine, [cccd], academic_year=2026)
+    moi = await doc.read_profiles_by_code(csdl.engine, [cccd], academic_year=2026)
     assert moi.rows[0].ten == "Đổi"
 
 
@@ -324,7 +324,7 @@ async def test_ket_noi_tra_pool_khong_mang_che_do_chi_doc(hs):
     # Pool MỘT kết nối ⇒ phiên sau chắc chắn dùng lại đúng kết nối vừa đọc.
     eng = create_async_engine(settings.DATABASE_URL, pool_size=1, max_overflow=0)
     try:
-        anh = await doc.doc_ho_so_theo_ma(
+        anh = await doc.read_profiles_by_code(
             eng, [hs["dia_chi_rong"][0]], academic_year=2026
         )
         async with eng.begin() as c:
@@ -345,7 +345,7 @@ async def test_ket_noi_tra_pool_khong_mang_che_do_chi_doc(hs):
 # ═══════════════════════════════ lỗi đầu vào / dữ liệu ═══════════════════════════════
 def test_chuan_hoa_ma_loi_neu_so_dong_khong_neu_gia_tri():
     a, b = ma_gia(901), ma_gia(902)
-    assert doc.chuan_hoa_ma([" " + a + " ", b]) == [a, b]
+    assert doc.normalize_codes([" " + a + " ", b]) == [a, b]
     for vao, khop in (
         ([], "rỗng"),
         (a, "phải là một danh sách"),
@@ -356,7 +356,7 @@ def test_chuan_hoa_ma_loi_neu_so_dong_khong_neu_gia_tri():
         (["G" * 33], "Dòng 1: không phải mã hồ sơ"),
     ):
         with pytest.raises(DataValidationError, match=khop) as e:
-            doc.chuan_hoa_ma(vao)
+            doc.normalize_codes(vao)
         assert a not in str(e.value) and b not in str(e.value)
 
 
@@ -378,7 +378,7 @@ def test_ma_co_ky_tu_nhom_c_thi_loi_mien(ten):
     c = KY_TU_NHOM_C[ten]
     assert unicodedata.category(c) == ten[:2]  # đúng nhóm như tên ca
     with pytest.raises(DataValidationError, match="Dòng 2: không phải mã hồ sơ") as e:
-        doc.chuan_hoa_ma([ma_gia(1), "GIA" + c + "2"])
+        doc.normalize_codes([ma_gia(1), "GIA" + c + "2"])
     assert "GIA" not in str(e.value)
 
 
@@ -388,7 +388,7 @@ DINH_DANG_MA = "Dòng 2: mã hồ sơ phải gồm đúng 12 chữ số [(]CCCD[
 
 def test_ma_12_hoac_9_chu_so_duoc_nhan_giu_so_0_dau():
     ma = [ma_gia(1), ma_gia(2, 9), " " + ma_gia(3) + " "]
-    ra = doc.chuan_hoa_ma(ma)
+    ra = doc.normalize_codes(ma)
     assert ra == [ma_gia(1), ma_gia(2, 9), ma_gia(3)]
     assert [len(m) for m in ra] == [12, 9, 12] and ra[0][
         0
@@ -400,7 +400,7 @@ def test_ma_khong_phai_9_hoac_12_chu_so_thi_loi_mien(so_chu_so):
     sai = (ma_gia(4) * 2)[:so_chu_so]
     assert len(sai) == so_chu_so and sai.isascii() and sai.isdigit()
     with pytest.raises(DataValidationError, match=DINH_DANG_MA) as e:
-        doc.chuan_hoa_ma([ma_gia(1), sai])
+        doc.normalize_codes([ma_gia(1), sai])
     assert sai not in str(e.value) and ma_gia(1) not in str(e.value)
 
 
@@ -425,13 +425,13 @@ def test_chu_so_khong_ascii_thi_loi_mien(ten, so_chu_so):
     ):
         assert unicodedata.category(sai[-1]) == "Nd" and len(sai) == so_chu_so
         with pytest.raises(DataValidationError, match=DINH_DANG_MA):
-            doc.chuan_hoa_ma([ma_gia(1), sai])
+            doc.normalize_codes([ma_gia(1), sai])
 
 
 async def test_ma_khong_khop_dung_mot_ho_so_thi_loi_neu_so_dong(hs):
     ma = [hs["nhieu_nv_khoang_trang"][0], ma_gia(999), hs["dia_chi_rong"][0]]
     with pytest.raises(DataValidationError) as e:
-        await doc.doc_ho_so_theo_ma(csdl.engine, ma, academic_year=2026)
+        await doc.read_profiles_by_code(csdl.engine, ma, academic_year=2026)
     msg = str(e.value)
     assert "dòng 2 không có hồ sơ" in msg and "trong năm học đã chọn" in msg
     assert "dòng 1" not in msg and "dòng 3" not in msg
@@ -460,13 +460,13 @@ async def test_cccd_o_hai_nam_hoc_khop_dung_ho_so_cua_nam_da_chon(hs):
     cccd, pid_2026 = hs["dia_chi_rong"]
     pid_2025 = await _them_ho_so_nam_khac(hs, "dia_chi_rong", 2025)
     for nam, pid, ten in ((2026, pid_2026, "Sáu"), (2025, pid_2025, "Khác")):
-        anh = await doc.doc_ho_so_theo_ma(csdl.engine, [cccd], academic_year=nam)
+        anh = await doc.read_profiles_by_code(csdl.engine, [cccd], academic_year=nam)
         assert [r.ma_ho_so for r in anh.rows] == [cccd]
         assert anh.rows[0].ten == ten, nam  # đúng HỒ SƠ của năm đã chọn
         bx = await _bo_xuat([pid])
         assert _lech(anh.rows[0].model_dump(), bx[pid]) == []
     with pytest.raises(DataValidationError, match="dòng 1 không có hồ sơ") as e:
-        await doc.doc_ho_so_theo_ma(csdl.engine, [cccd], academic_year=2027)
+        await doc.read_profiles_by_code(csdl.engine, [cccd], academic_year=2027)
     assert cccd not in str(e.value)
 
 
@@ -491,22 +491,22 @@ async def test_ma_9_chu_so_so_chinh_xac_khong_dem_so_0(hs):
     cmnd, goc9 = ma_gia(7, 9), ma_gia(8, 9)
     await _them_ho_so_ma(hs, cmnd, "Chín")
     await _them_ho_so_ma(hs, "000" + goc9, "Mười Hai")  # 12 chữ số, ba số 0 đầu
-    anh = await doc.doc_ho_so_theo_ma(csdl.engine, [cmnd], academic_year=2026)
+    anh = await doc.read_profiles_by_code(csdl.engine, [cmnd], academic_year=2026)
     assert [r.ma_ho_so for r in anh.rows] == [cmnd] and anh.rows[0].ten == "Chín"
-    anh = await doc.doc_ho_so_theo_ma(csdl.engine, ["000" + goc9], academic_year=2026)
+    anh = await doc.read_profiles_by_code(csdl.engine, ["000" + goc9], academic_year=2026)
     assert [r.ma_ho_so for r in anh.rows] == ["000" + goc9]  # số 0 đầu giữ nguyên
     for sai in (goc9, "000" + cmnd):  # bỏ 0 đầu / đệm 0 ⇒ không phải mã đã lưu
         with pytest.raises(DataValidationError, match="dòng 1 không có hồ sơ") as e:
-            await doc.doc_ho_so_theo_ma(csdl.engine, [sai], academic_year=2026)
+            await doc.read_profiles_by_code(csdl.engine, [sai], academic_year=2026)
         assert sai not in str(e.value)
 
 
 @pytest.mark.parametrize("nam", [None, "2026", 2026.0, True], ids=repr)
 async def test_thieu_nam_hoc_thi_loi_mien_truoc_khi_doc(hs, monkeypatch, nam):
     goi = []
-    monkeypatch.setattr(doc, "giao_dich_chi_doc", lambda *a: goi.append(1))
+    monkeypatch.setattr(doc, "read_only_transaction", lambda *a: goi.append(1))
     with pytest.raises(DataValidationError, match="Thiếu năm học"):
-        await doc.doc_ho_so_theo_ma(
+        await doc.read_profiles_by_code(
             csdl.engine, [hs["dia_chi_rong"][0]], academic_year=nam
         )
     assert goi == []  # dừng TRƯỚC khi mở giao dịch đọc
@@ -514,10 +514,10 @@ async def test_thieu_nam_hoc_thi_loi_mien_truoc_khi_doc(hs, monkeypatch, nam):
 
 async def test_vuot_gioi_han_so_ho_so_thi_dung_truoc_khi_doc(hs, monkeypatch):
     goi = []
-    monkeypatch.setattr(doc, "giao_dich_chi_doc", lambda *a: goi.append(1))
+    monkeypatch.setattr(doc, "read_only_transaction", lambda *a: goi.append(1))
     with pytest.raises(DataValidationError, match="vượt giới hạn kỹ thuật 2 hồ sơ"):
-        await doc.doc_ho_so_theo_ma(
-            csdl.engine, [ma_gia(1), ma_gia(2), ma_gia(3)], academic_year=2026, toi_da=2
+        await doc.read_profiles_by_code(
+            csdl.engine, [ma_gia(1), ma_gia(2), ma_gia(3)], academic_year=2026, max_count=2
         )
     assert goi == []
 
@@ -556,23 +556,23 @@ async def test_bang_tham_chieu_trung_hang_chan_dong_ay_khong_tu_chon(hs):
     async with csdl.engine.connect() as c:
         n = (await c.execute(text(sql), {"ids": [pid]})).all()
     assert len(n) == 2  # bộ xuất: hai hàng cho một hồ sơ
-    anh = await doc.doc_ho_so_theo_ma(csdl.engine, [hs["dia_chi_rong"][0], cccd], academic_year=2026)
+    anh = await doc.read_profiles_by_code(csdl.engine, [hs["dia_chi_rong"][0], cccd], academic_year=2026)
     assert [r.ma_ho_so for r in anh.rows] == [hs["dia_chi_rong"][0], cccd]
     assert [k.duplicate_reference for k in anh.kiem] == [False, True]
     assert anh.rows[1].dia_chi == ""  # hai hàng khác địa chỉ ⇒ không chọn hàng nào
     assert anh.rows[1].ho == "Họ Giả"  # trường giống nhau giữ nguyên
-    assert "tham_chieu_trung" in cong.ly_do_cua_dong(anh.kiem[1])
-    assert "tham_chieu_trung" not in cong.ly_do_cua_dong(anh.kiem[0])
+    assert "tham_chieu_trung" in cong.row_block_reason(anh.kiem[1])
+    assert "tham_chieu_trung" not in cong.row_block_reason(anh.kiem[0])
 
 
 async def test_loi_csdl_khong_mang_cau_sql_hay_tham_so(hs, monkeypatch):
     monkeypatch.setattr(
         kho_doc,
-        "SQL_SO_LIEU",
+        "SQL_PRINT_FIGURES",
         text("SELECT khong_co_cot FROM chon_gia WHERE x = ANY(:pids)"),
     )
     cccd = hs["nhieu_nv_khoang_trang"][0]
     with pytest.raises(ServiceError) as e:
-        await doc.doc_ho_so_theo_ma(csdl.engine, [cccd], academic_year=2026)
+        await doc.read_profiles_by_code(csdl.engine, [cccd], academic_year=2026)
     assert cccd not in str(e.value) and "SELECT" not in str(e.value)
     assert e.value.__cause__ is None and e.value.__suppress_context__

@@ -1283,9 +1283,9 @@ _S6_HAM_BOC = {
     "type", "isinstance", "_is_lock_not_available", "_handle_lead_integrity_error",
     "log_dispatch_failure", "thoat_cli_an_toan", "loai_loi_an_toan",
     # Lượt I (F230): (SQLSTATE, tên ràng buộc) đọc từ THUỘC TÍNH, không ``str``/``args`` —
-    # ``council_decision_repository.ma_loi_csdl``; khoá bằng
+    # ``council_decision_repository.db_error_codes``; khoá bằng
     # ``test_council_decision_models.py::test_ma_loi_csdl_chi_doc_thuoc_tinh_khong_doc_chu``.
-    "ma_loi_csdl",
+    "db_error_codes",
 }
 #: Hàm chuyển đổi — tự nó không phải lối ra; kết quả đi đâu thì lối ra ở đó.
 _S6_TRUNG_TINH = {"str", "repr", "len", "getattr", "format"}

@@ -32,8 +32,8 @@ def test_chi_muc_va_khoa_ngoai_trung_ten():
     for i in bang.indexes:
         assert i.name in van, i.name
     cho = [i for i in bang.indexes if i.name == "uq_council_decision_submission_cho_gui"][0]
-    assert cho.unique and str(cho.dialect_options["postgresql"]["where"]) == m.DIEU_KIEN_LUOT_CHO_GUI
-    assert "WHERE %s" % m.DIEU_KIEN_LUOT_CHO_GUI in van
+    assert cho.unique and str(cho.dialect_options["postgresql"]["where"]) == m.PENDING_SUBMISSION_CONDITION
+    assert "WHERE %s" % m.PENDING_SUBMISSION_CONDITION in van
     fk = {f.name: f for f in bang.foreign_key_constraints}
     assert fk["fk_council_decision_submission_set"].ondelete == "SET NULL"
     assert "REFERENCES council_document_set (id) ON DELETE SET NULL" in van

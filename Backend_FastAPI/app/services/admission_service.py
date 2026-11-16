@@ -53,7 +53,7 @@ from ..schemas.admission import DEFAULT_UPLOAD_CONFIG
 from ..core.constants import UserRole, SYSTEM_CONSULTATION_METHOD
 from .admission_state_service import transition as state_transition
 from . import quota_occupancy_service as _qos
-from ..repositories.council_decision_repository import ma_loi_csdl
+from ..repositories.council_decision_repository import db_error_codes
 from .commission_service import safe_check_commission_on_status_change
 from .notification_bundle import (
     NotificationIntent,
@@ -307,9 +307,9 @@ def _safe_bulk_error_message(
     return f"Unexpected error (ref: {correlation_id})"
 
 
-def _bao_muc_bi_huy(*, bulk_label: str, profile_id: int, actor_id: Optional[int]) -> str:
+def _cancelled_item_message(*, bulk_label: str, profile_id: int, actor_id: Optional[int]) -> str:
     """F259: MỘT mục hàng loạt bị PostgreSQL chọn huỷ vì vòng chờ khoá (40P01; savepoint của mục đã lùi) ⇒ log
-    CHỈ id, trả câu cố định "thử lại". Nơi gọi đọc SQLSTATE bằng ``ma_loi_csdl`` (không đọc chữ ngoại lệ — guard
+    CHỈ id, trả câu cố định "thử lại". Nơi gọi đọc SQLSTATE bằng ``db_error_codes`` (không đọc chữ ngoại lệ — guard
     che log §6); lỗi khác đi ``_safe_bulk_error_message`` (khuôn ADM-012)."""
     log.warning(
         "bulk_action_item_deadlock_victim",
@@ -317,23 +317,23 @@ def _bao_muc_bi_huy(*, bulk_label: str, profile_id: int, actor_id: Optional[int]
         profile_id=profile_id,
         actor_id=actor_id,
     )
-    return _qos.THONG_DIEP_XUNG_DOT
+    return _qos.CONFLICT_MESSAGE
 
 
-def _loi_goc_cua_savepoint(sp) -> Optional[BaseException]:
+def _savepoint_root_error(sp) -> Optional[BaseException]:
     """Lỗi đã làm savepoint ``sp`` (``AsyncSessionTransaction``) lùi — SQLAlchemy ghi lỗi flush vào giao dịch cha
     của lần flush hỏng (``_rollback_exception``). Không có / savepoint còn sống ⇒ None. Dùng khi lớp dưới
     (``dispatch_bundle``) NUỐT lỗi rồi lỗi lộ ra ở lệnh sau dưới dạng khác."""
-    return _qos.loi_goc_giao_dich(sp)  # D.2 (Codex lần 16): một chỗ đọc thuộc tính riêng của SQLAlchemy
+    return _qos.transaction_root_error(sp)  # D.2 (Codex lần 16): một chỗ đọc thuộc tính riêng của SQLAlchemy
 
 
-async def _khoa_truoc_lo_duyet(db: AsyncSession, profile_ids: List[int]) -> Dict[int, Optional[int]]:
+async def _lock_before_batch_approval(db: AsyncSession, profile_ids: List[int]) -> Dict[int, Optional[int]]:
     """F259: khoá TRƯỚC toàn lô Phê duyệt hàng loạt theo THỨ TỰ CHUẨN — mọi hồ sơ (id tăng dần, MỘT câu) rồi
     mọi dòng chỉ tiêu mà ``_assert_quota_or_bypass`` của từng mục sẽ khoá (cùng ``_resolve_quota_context``,
-    không khoá ở bước dò) qua ``_qos.khoa_o_chi_tieu``.
+    không khoá ở bước dò) qua ``_qos.lock_quota_cells``.
 
     F263 (Codex lần 16): trả ÁNH XẠ ĐÃ DÒ ``{profile_id: academic_info_id | None}`` cho MỌI hồ sơ khoá được —
-    kể cả hồ sơ dò ra None. Từng mục truyền nó vào ``_assert_quota_or_bypass(ngu_canh_da_do=…)``: ngữ cảnh
+    kể cả hồ sơ dò ra None. Từng mục truyền nó vào ``_assert_quota_or_bypass(probed_context=…)``: ngữ cảnh
     của mục phải đúng như đã dò (so TRƯỚC mọi khoá mới), nên lô không bao giờ khoá dòng chỉ tiêu NGOÀI tập đã
     khoá ở đây (hồ sơ cũ dò theo ``lead.offering_id`` + năm — phiên sửa cấu hình có thể đổi năm giữa dò và
     khoá)."""
@@ -356,12 +356,12 @@ async def _khoa_truoc_lo_duyet(db: AsyncSession, profile_ids: List[int]) -> Dict
         .scalars()
         .all()
     )
-    da_do: Dict[int, Optional[int]] = {}
+    probed: Dict[int, Optional[int]] = {}
     for p in ho_so:
         ai, _ = await _resolve_quota_context(db, p, lock=False)
-        da_do[p.id] = ai.id if ai is not None else None
-    await _qos.khoa_o_chi_tieu(db, [a for a in da_do.values() if a is not None], [])
-    return da_do
+        probed[p.id] = ai.id if ai is not None else None
+    await _qos.lock_quota_cells(db, [a for a in probed.values() if a is not None], [])
+    return probed
 
 
 # ==============================================================================
@@ -589,22 +589,22 @@ def _check_idor_access(
 
 #: Trạng thái được TẠO link tự rút — MỘT hằng cho cờ ``send_withdraw_link`` và
 #: ``generate_action_magic_link`` (lượt I gộp hai bản chép — CLAUDE.md §7).
-TRANG_THAI_TAO_LINK_RUT = (
+WITHDRAWAL_LINK_STATUSES = (
     "draft", "submitted", "reviewing", "rejected",
     "resubmitted", "revision_requested", "waitlisted",
 )
 
 
-def _doc_tinh_trang_qd(profile):
-    from .council_decision_status_service import doc_tinh_trang
+def _read_decision_state(profile):
+    from .council_decision_status_service import read_decision_state
 
-    return doc_tinh_trang(profile)
+    return read_decision_state(profile)
 
 
-async def _gan_tinh_trang_qd(db, profiles) -> None:
-    from .council_decision_status_service import gan_tinh_trang_qd
+async def _attach_decision_state(db, profiles) -> None:
+    from .council_decision_status_service import attach_decision_state
 
-    await gan_tinh_trang_qd(db, profiles)
+    await attach_decision_state(db, profiles)
 
 
 # Statuses that occupy a quota slot. These are profiles already committed to
@@ -619,7 +619,7 @@ async def _gan_tinh_trang_qd(db, profiles) -> None:
 #
 # F230 chặng 2b: tập này ĐỊNH NGHĨA MỘT LẦN ở ``quota_occupancy_service`` (một nguồn
 # cho bốn nơi đếm chỉ tiêu — CLAUDE.md §7); tên cũ trỏ vào CÙNG đối tượng.
-QUOTA_OCCUPYING_STATUSES = _qos.TRANG_THAI_CHIEM_CHO
+QUOTA_OCCUPYING_STATUSES = _qos.OCCUPYING_STATUSES
 
 
 async def _resolve_quota_context(
@@ -627,14 +627,14 @@ async def _resolve_quota_context(
     profile: models.AdmissionProfile,
     *,
     lock: bool = True,
-    ngu_canh_da_do: Optional[Mapping[int, Optional[int]]] = None,
+    probed_context: Optional[Mapping[int, Optional[int]]] = None,
 ) -> tuple[Optional[models.OfferingAcademicInfo], Optional[int]]:
     """
     Resolve the OfferingAcademicInfo + quota for ``profile``.
 
-    F263 (Codex lần 16) — ``ngu_canh_da_do`` (chỉ Phê duyệt hàng loạt truyền; ánh xạ của
-    ``_khoa_truoc_lo_duyet``). ``None`` = thao tác đơn, hành vi như cũ. CÓ ánh xạ (kể cả mọi giá trị là None —
-    tập khoá rỗng VẪN là ràng buộc; cấm thử ``if not ngu_canh_da_do``):
+    F263 (Codex lần 16) — ``probed_context`` (chỉ Phê duyệt hàng loạt truyền; ánh xạ của
+    ``_lock_before_batch_approval``). ``None`` = thao tác đơn, hành vi như cũ. CÓ ánh xạ (kể cả mọi giá trị là None —
+    tập khoá rỗng VẪN là ràng buộc; cấm thử ``if not probed_context``):
 
     1. hồ sơ không có trong ánh xạ ⇒ ``ServiceError`` (thiếu ≠ "dò ra None");
     2. dò KHÔNG khoá; khác giá trị đã dò ⇒ ``ConflictError`` (câu "thử lại") TRƯỚC mọi câu khoá;
@@ -657,27 +657,27 @@ async def _resolve_quota_context(
         ``None`` when the profile cannot be linked to an offering academic
         info row (legacy profile without offering_id, or seed/test data).
     """
-    if ngu_canh_da_do is not None:
-        if profile.id not in ngu_canh_da_do:
+    if probed_context is not None:
+        if profile.id not in probed_context:
             raise ServiceError("Thiếu ngữ cảnh chỉ tiêu đã dò của hồ sơ — không duyệt.")
-        ai_moi, _ = await _resolve_quota_context(db, profile, lock=False)
-        id_moi = ai_moi.id if ai_moi is not None else None
-        if id_moi != ngu_canh_da_do[profile.id]:
-            raise ConflictError(_qos.THONG_DIEP_XUNG_DOT)
-        if id_moi is None:
+        new_academic_info, _ = await _resolve_quota_context(db, profile, lock=False)
+        new_id = new_academic_info.id if new_academic_info is not None else None
+        if new_id != probed_context[profile.id]:
+            raise ConflictError(_qos.CONFLICT_MESSAGE)
+        if new_id is None:
             return (None, None)
         if lock:
-            ai_moi = (
+            new_academic_info = (
                 await db.execute(
                     select(models.OfferingAcademicInfo)
-                    .where(models.OfferingAcademicInfo.id == id_moi)
+                    .where(models.OfferingAcademicInfo.id == new_id)
                     .with_for_update()
                     # Review max PR #724 (R4): bước dò của lô đã nạp dòng này KHÔNG khoá ⇒ không có cờ này thì
                     # câu khoá trả lại đối tượng cũ trong identity map (trần chỉ tiêu ĐỌC TRƯỚC lúc chờ khoá).
                     .execution_options(populate_existing=True)
                 )
             ).scalar_one()
-        return (ai_moi, ai_moi.annual_admission_quota)
+        return (new_academic_info, new_academic_info.annual_admission_quota)
 
     applied_rules = profile.applied_rules or {}
     academic_info_id = applied_rules.get("academic_info_id")
@@ -717,11 +717,11 @@ async def _count_quota_occupying_profiles(
     ``exclude_profile_id`` so a transition INTO a quota-occupying status
     doesn't double-count itself when the profile is mid-update.
 
-    F230 chặng 2b: đếm qua MỘT helper ``quota_occupancy_service.dem_theo_nganh_nam``
+    F230 chặng 2b: đếm qua MỘT helper ``quota_occupancy_service.count_by_offering_year``
     = Phần A (hồ sơ chiếm chỗ theo ``lead.offering_id`` + năm như cũ, KHÔNG có dòng
     Quyết định hiệu lực) + Phần B (dòng Quyết định hiệu lực theo khoá CHỤP ở dòng bộ).
     """
-    return await _qos.dem_theo_nganh_nam(
+    return await _qos.count_by_offering_year(
         db,
         offering_id=offering_id,
         academic_year=academic_year,
@@ -738,7 +738,7 @@ async def _assert_quota_or_bypass(
     *,
     transition: str,
     source: str = "api",
-    ngu_canh_da_do: Optional[Mapping[int, Optional[int]]] = None,
+    probed_context: Optional[Mapping[int, Optional[int]]] = None,
 ) -> None:
     """
     ADM-026: Enforce ``annual_admission_quota`` for transitions INTO
@@ -780,9 +780,9 @@ async def _assert_quota_or_bypass(
         PermissionDeniedError: bypass requested by non-admin.
         ValidationError: bypass requested without valid reason.
     """
-    # F263: lô duyệt truyền ánh xạ đã dò (``_khoa_truoc_lo_duyet``) ⇒ không khoá dòng chỉ tiêu ngoài tập.
+    # F263: lô duyệt truyền ánh xạ đã dò (``_lock_before_batch_approval``) ⇒ không khoá dòng chỉ tiêu ngoài tập.
     academic_info, quota = await _resolve_quota_context(
-        db, profile, lock=True, ngu_canh_da_do=ngu_canh_da_do
+        db, profile, lock=True, probed_context=probed_context
     )
 
     # ADM-026 review (Round 2): three distinct quota states must be
@@ -864,7 +864,7 @@ async def _assert_quota_or_bypass(
     # approve from submitted), count_after = count_before + 1.
     # F230 chặng 2b (đặc tả 5.4): em có dòng Quyết định hiệu lực đã được đếm ở Phần B
     # (khoá chụp) ⇒ duyệt kiểu cũ cho em ấy KHÔNG cộng thêm chỗ.
-    is_already_occupying = await _qos.dang_chiem_cho(db, profile)
+    is_already_occupying = await _qos.is_occupying(db, profile)
     count_after = count_before if is_already_occupying else count_before + 1
 
     over_cap = count_after > quota
@@ -1831,7 +1831,7 @@ def _list_action_flags(
     return {
         "approve": can_review and not outstanding_debt_codes,
         # Lượt I (F230, J1 dòng 12 + E1): không Từ chối em có Quyết định đã ký / dấu AppSheet.
-        "reject": can_review and not _doc_tinh_trang_qd(profile).khoa_trang_thai,
+        "reject": can_review and not _read_decision_state(profile).locks_status,
         "claim": can_review and not profile.assigned_reviewer_id,
         "unclaim": bool(profile.assigned_reviewer_id)
         and (profile.assigned_reviewer_id == current_user.id or is_admin),
@@ -2392,8 +2392,8 @@ def _compute_frontend_fields(
         documents: Optional list of ProfileDocument (to avoid re-fetching)
     """
     status = profile.status
-    # Lượt I (F230): tình trạng Quyết định đã gán TRƯỚC (``gan_tinh_trang_qd``); chưa gán ⇒ như chưa có.
-    _tq = _doc_tinh_trang_qd(profile)
+    # Lượt I (F230): tình trạng Quyết định đã gán TRƯỚC (``attach_decision_state``); chưa gán ⇒ như chưa có.
+    _tq = _read_decision_state(profile)
     user_role = current_user.role                                   
     is_admin = user_role == UserRole.ADMIN                          
     is_manager = user_role == UserRole.MANAGER                      
@@ -2467,7 +2467,7 @@ def _compute_frontend_fields(
             and status in ["submitted", "reviewing"]
             and (is_manager or is_admin)
             and not _outstanding_debt_codes
-            and not _tq.chan_xet_moi  # lượt I: QĐ hiệu lực / chờ quyết / dấu AppSheet
+            and not _tq.blocks_new_admission  # lượt I: QĐ hiệu lực / chờ quyết / dấu AppSheet
         ),
         "request_revision": status in ["submitted", "resubmitted"] and (is_manager or is_admin),
         "resubmit": status in ["rejected", "revision_requested"] and (is_owner or is_manager or is_admin),
@@ -2503,9 +2503,9 @@ def _compute_frontend_fields(
             and (is_owner or is_manager or is_admin)
         ),
         "send_withdraw_link": (
-            status in TRANG_THAI_TAO_LINK_RUT
+            status in WITHDRAWAL_LINK_STATUSES
             and (is_owner or is_manager or is_admin)
-            and not _tq.khoa_trang_thai  # lượt I: em có QĐ đã ký / dấu AppSheet
+            and not _tq.locks_status  # lượt I: em có QĐ đã ký / dấu AppSheet
         ),
         # Q9 #07 Phase E.4 commit 7 hardening (yêu cầu nghiệp vụ #10):
         # Officer KHÔNG được override KV. Chỉ admin + manager mới có quyền.
@@ -2561,7 +2561,7 @@ def _compute_frontend_fields(
         # PR-B: admin reverts a pending withdrawal back to draft when the refund
         # was rejected (so the profile is not stuck awaiting a refund).
         "cancel_withdrawal": (
-            is_admin and status == "withdrawal_pending" and not _tq.khoa_trang_thai
+            is_admin and status == "withdrawal_pending" and not _tq.locks_status
         ),
         "drop": status == "enrolled" and not _is_dropped and (is_manager or is_admin),
         "claim": _la["claim"],
@@ -2614,7 +2614,7 @@ def _compute_frontend_fields(
         "admin_rollback": (
             is_admin
             and status in ("submitted", "resubmitted")
-            and not _tq.khoa_trang_thai
+            and not _tq.locks_status
         ),
         # Tentative — true only when role + status + path_id snapshot
         # exists. Async resolver _resolve_minor_correction_state flips
@@ -3929,7 +3929,7 @@ async def _populate_response_fields(
     # SELECT so the documents_checklist response carries verified_by_name
     # without N+1.
     verifier_names = await _resolve_verifier_names(db, documents)
-    await _gan_tinh_trang_qd(db, [profile])
+    await _attach_decision_state(db, [profile])
     _compute_frontend_fields(profile, current_user, documents, verifier_names)
 
     # Refine the tentative minor_correction permission flag against the
@@ -5320,7 +5320,7 @@ async def get_profiles(
                     )
                 ).scalars().all()
             )
-        await _gan_tinh_trang_qd(db, profiles)
+        await _attach_decision_state(db, profiles)
         for profile in profiles:
             profile.completion_percent = (
                 profile.cached_completion if profile.cached_completion is not None else 0
@@ -5378,7 +5378,7 @@ async def get_profiles(
         )
 
     # Hydrate computed fields (same as detail API) using eager-loaded relations
-    await _gan_tinh_trang_qd(db, profiles)
+    await _attach_decision_state(db, profiles)
     for profile in profiles:
         _calculate_and_update_totals(profile)
         # documents already loaded via selectinload in get_filtered_with_count
@@ -5619,7 +5619,7 @@ async def get_profile(
     # =========================================================================
     # Fetch documents for completion calculation
     documents = await admission_repo.get_all_documents(profile_id)
-    await _gan_tinh_trang_qd(db, [profile])
+    await _attach_decision_state(db, [profile])
     _compute_frontend_fields(
         profile,
         current_user,
@@ -6215,7 +6215,7 @@ async def update_profile(
     # (or, conversely, showing "missing" for docs that are actually uploaded). See MEDIUM #1 in
     # the post-BUG-001 residual risks audit.
     documents = await admission_repo.get_all_documents(profile.id)
-    await _gan_tinh_trang_qd(db, [profile])
+    await _attach_decision_state(db, [profile])
     _compute_frontend_fields(
         profile,
         current_user,
@@ -12349,12 +12349,12 @@ async def delete_profile(
         )
     # Lượt I (F230): hồ sơ có tên trong văn bản đã ký chưa huỷ ghi nhận KHÔNG xoá cứng được — CSDL giữ
     # (K5a, ``ck_council_decision_row_k5a``); báo trước bằng ĐÚNG điều kiện ấy.
-    from .council_decision_status_service import mot_ho_so
+    from .council_decision_status_service import single_profile
 
-    if (await mot_ho_so(db, profile.id)).co_ten_van_ban:
-        from app.utils.exceptions import QuyetDinhKhoaHoSo
+    if (await single_profile(db, profile.id)).co_ten_van_ban:
+        from app.utils.exceptions import ProfileLockedByDecisionError
 
-        raise QuyetDinhKhoaHoSo(
+        raise ProfileLockedByDecisionError(
             "Hồ sơ có tên trong văn bản đã ký (Quyết định / điều chỉnh / văn bản huỷ chưa huỷ ghi "
             "nhận) — không xoá được.",
             public_payload={"thao_tac": "xoa_ho_so"},
@@ -12850,9 +12850,9 @@ async def withdraw_profile(
 
     # Lượt I (F230, owner C4 + E1): em có tên trong Quyết định đã ký / mang dấu AppSheet ⇒ tạm chặn rút
     # (kể cả cán bộ, kể cả token tạo trước) — TRƯỚC khi tự lập yêu cầu hoàn. Chốt cuối: ``transition``.
-    from .council_decision_status_service import kiem_som_khoa_trang_thai
+    from .council_decision_status_service import early_check_status_lock
 
-    await kiem_som_khoa_trang_thai(db, profile.id, "rut_ho_so")
+    await early_check_status_lock(db, profile.id, "rut_ho_so")
 
     # Actor attribution (officer dashboard vs. magic-link self-service).
     # Downstream consumers accept Optional ids; the human-readable label is
@@ -13072,9 +13072,9 @@ async def cancel_withdrawal(
         )
     # Lượt I (F230, owner C5 + E1): không về Nháp khi có Quyết định đã ký / dấu AppSheet — TRƯỚC khi
     # từ chối yêu cầu hoàn đang mở. Chốt cuối: ``transition``.
-    from .council_decision_status_service import kiem_som_khoa_trang_thai
+    from .council_decision_status_service import early_check_status_lock
 
-    await kiem_som_khoa_trang_thai(db, profile.id, "huy_quy_trinh_rut")
+    await early_check_status_lock(db, profile.id, "huy_quy_trinh_rut")
     if not reason:
         raise BadRequest("Lý do hủy quy trình rút là bắt buộc")
 
@@ -13589,16 +13589,16 @@ async def generate_action_magic_link(
             f"Chỉ tạo magic-link 'resubmit' khi hồ sơ ở trạng thái "
             f"'revision_requested'. Trạng thái hiện tại: '{status}'."
         )
-    if action == "withdraw" and status not in TRANG_THAI_TAO_LINK_RUT:
+    if action == "withdraw" and status not in WITHDRAWAL_LINK_STATUSES:
         raise BadRequest(
             f"Hồ sơ ở trạng thái '{status}' không thể tạo magic-link "
             f"'withdraw' (hồ sơ đã ở trạng thái cuối)."
         )
     if action == "withdraw":
         # Lượt I (F230): link tự rút KHÔNG mở cho em có Quyết định đã ký / dấu AppSheet (J1 dòng 15, E1).
-        from .council_decision_status_service import kiem_som_khoa_trang_thai
+        from .council_decision_status_service import early_check_status_lock
 
-        await kiem_som_khoa_trang_thai(db, profile.id, "tao_link_rut")
+        await early_check_status_lock(db, profile.id, "tao_link_rut")
 
     # Generate secure token + repo upsert with action_type
     token_value = secrets.token_urlsafe(32)
@@ -14253,14 +14253,14 @@ async def bulk_approve(
     items = sorted(items, key=lambda it: it["profile_id"])
 
     # F259 (Codex lần 15): THỨ TỰ KHOÁ CHUẨN cho CẢ giao dịch — MỌI hồ sơ của lô (id tăng dần, một câu)
-    # rồi MỌI dòng chỉ tiêu các mục sẽ khoá (``_qos.khoa_o_chi_tieu``) TRƯỚC khi xét mục đầu. Trước đây lô
+    # rồi MỌI dòng chỉ tiêu các mục sẽ khoá (``_qos.lock_quota_cells``) TRƯỚC khi xét mục đầu. Trước đây lô
     # khoá XEN KẼ hồ sơ ↔ chỉ tiêu (P1 → Q → P2) trong khi ghi nhận khoá hồ sơ rồi chỉ tiêu ⇒ vòng chờ
     # (lô giữ Q chờ P2, ghi nhận giữ P2 chờ Q). Khoá lại trong từng mục chỉ là khoá lại dòng đã giữ.
     try:
-        ngu_canh_da_do = await _khoa_truoc_lo_duyet(db, [it["profile_id"] for it in items])
+        probed_context = await _lock_before_batch_approval(db, [it["profile_id"] for it in items])
     except DBAPIError as e:
-        if ma_loi_csdl(e)[0] == _qos.SQLSTATE_DEADLOCK:
-            raise ConflictError(_qos.THONG_DIEP_XUNG_DOT) from None
+        if db_error_codes(e)[0] == _qos.SQLSTATE_DEADLOCK:
+            raise ConflictError(_qos.CONFLICT_MESSAGE) from None
         raise
 
     for item in items:
@@ -14367,7 +14367,7 @@ async def bulk_approve(
                         bypass_reason=item.get("bypass_reason"),
                         transition="bulk_approve",
                         source="bulk_api",
-                        ngu_canh_da_do=ngu_canh_da_do,
+                        probed_context=probed_context,
                     )
                 # F263: ConflictError = ngữ cảnh chỉ tiêu đổi từ lúc dò (câu "thử lại"); chưa ghi gì ở mục này.
                 except (
@@ -14489,10 +14489,10 @@ async def bulk_approve(
             # dịch ngoài còn dùng được. Lỗi CSDL gốc (40P01 ⇒ câu "thử lại") lấy từ savepoint nếu có.
             failed_ids.append(profile_id)
             if (
-                ma_loi_csdl(e if isinstance(e, DBAPIError) else _loi_goc_cua_savepoint(sp))[0]
+                db_error_codes(e if isinstance(e, DBAPIError) else _savepoint_root_error(sp))[0]
                 == _qos.SQLSTATE_DEADLOCK
             ):
-                errors[profile_id] = _bao_muc_bi_huy(
+                errors[profile_id] = _cancelled_item_message(
                     bulk_label="admission_bulk_approve", profile_id=profile_id, actor_id=approver.id,
                 )
             else:
@@ -14737,10 +14737,10 @@ async def bulk_reject(
             # dịch ngoài còn dùng được. Lỗi CSDL gốc (40P01 ⇒ câu "thử lại") lấy từ savepoint nếu có.
             failed_ids.append(profile_id)
             if (
-                ma_loi_csdl(e if isinstance(e, DBAPIError) else _loi_goc_cua_savepoint(sp))[0]
+                db_error_codes(e if isinstance(e, DBAPIError) else _savepoint_root_error(sp))[0]
                 == _qos.SQLSTATE_DEADLOCK
             ):
-                errors[profile_id] = _bao_muc_bi_huy(
+                errors[profile_id] = _cancelled_item_message(
                     bulk_label="admission_bulk_reject", profile_id=profile_id, actor_id=rejector.id,
                 )
             else:

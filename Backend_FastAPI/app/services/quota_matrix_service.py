@@ -175,7 +175,7 @@ class QuotaMatrixService:
 
         Returns map ``path_id → {submitted, approved, enrolled, dropped}``,
         default 0. ``approved`` (số chỗ đã dùng) = ``quota_occupancy_service.
-        dem_da_trung_tuyen_theo_duong_xet`` (F230 chặng 2b — một nguồn với cổng
+        count_admitted_by_path`` (F230 chặng 2b — một nguồn với cổng
         công bố; gồm dòng Quyết định hiệu lực); ba cột còn lại đếm ở đây như cũ.
         **Read-only SELECT** — tách hẳn đường enforcement
         (``check_choice_admit_capacity`` tự đếm có lock riêng). Hiển thị
@@ -285,7 +285,7 @@ class QuotaMatrixService:
             d["dropped"] += int(row.dropped_cnt or 0)
 
         for pid, n in (
-            await _qos.dem_da_trung_tuyen_theo_duong_xet(self.db, path_ids)
+            await _qos.count_admitted_by_path(self.db, path_ids)
         ).items():
             if pid in counts:
                 counts[pid]["approved"] = n

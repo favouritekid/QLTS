@@ -129,7 +129,7 @@ export const NO_COUNCIL_PERMISSIONS: CouncilDocumentPermissions = {
  * Luồng "dựng từ danh sách chọn" dùng được: cần quyền tạo bộ + CẢ HAI route nền của luồng (kiểm trước, tìm hồ sơ) — mỗi
  * route một cờ (phiên A chốt 11-11). Một nguồn cho mọi nơi hiện lối vào luồng.
  */
-export function coTheDungTuDanhSach(q: CouncilDocumentPermissions): boolean {
+export function canBuildFromList(q: CouncilDocumentPermissions): boolean {
   return q.tao_bo && q.kiem_truoc && q.tim_ho_so
 }
 
@@ -231,8 +231,8 @@ export function useCreateCouncilSet() {
   return useMutation({
     mutationFn: (payload: CouncilSetCreate) => createCouncilSet(payload),
     gcTime: 0,
-    onSuccess: (bo) => {
-      qc.setQueryData(councilDocumentKeys.set(bo.id), bo)
+    onSuccess: (docSet) => {
+      qc.setQueryData(councilDocumentKeys.set(docSet.id), docSet)
       void qc.invalidateQueries({ queryKey: councilDocumentKeys.sets() })
     },
   })
@@ -241,14 +241,14 @@ export function useCreateCouncilSet() {
 export function useDeleteCouncilSet() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ setId, lyDo }: { setId: number; lyDo: string }) =>
-      deleteCouncilSet(setId, lyDo),
+    mutationFn: ({ setId, reason }: { setId: number; reason: string }) =>
+      deleteCouncilSet(setId, reason),
     gcTime: 0,
-    onSuccess: (vet) => {
-      qc.removeQueries({ queryKey: councilDocumentKeys.inputCodes(vet.set_id) })
+    onSuccess: (trace) => {
+      qc.removeQueries({ queryKey: councilDocumentKeys.inputCodes(trace.set_id) })
       // Chi tiết bộ: đánh dấu cũ, KHÔNG tải lại ngay (trang đang chuyển đi — tải lại ⇒ 404 nháy).
       void qc.invalidateQueries({
-        queryKey: councilDocumentKeys.set(vet.set_id),
+        queryKey: councilDocumentKeys.set(trace.set_id),
         refetchType: "none",
       })
       void qc.invalidateQueries({ queryKey: [...councilDocumentKeys.sets(), "list"] })
@@ -279,8 +279,8 @@ export function useCouncilSetInputCodes(setId: number, enabled: boolean) {
 
 export function useDownloadCouncilSetFile() {
   return useMutation({
-    mutationFn: async ({ setId, thuTu }: { setId: number; thuTu: number }) => {
-      const tep = await downloadCouncilSetFile(setId, thuTu)
+    mutationFn: async ({ setId, order }: { setId: number; order: number }) => {
+      const tep = await downloadCouncilSetFile(setId, order)
       downloadBlob(tep.blob, tep.filename)
       return tep.filename
     },
@@ -365,8 +365,8 @@ export function useCreateCouncilSetByIds() {
   return useMutation({
     mutationFn: (payload: CouncilSetCreateByIds) => createCouncilSetByIds(payload),
     gcTime: 0,
-    onSuccess: (bo) => {
-      qc.setQueryData(councilDocumentKeys.set(bo.id), bo)
+    onSuccess: (docSet) => {
+      qc.setQueryData(councilDocumentKeys.set(docSet.id), docSet)
       void qc.invalidateQueries({ queryKey: councilDocumentKeys.sets() })
     },
   })

@@ -61,10 +61,10 @@ class CouncilSetCreate(BaseModel):
     xac_nhan_trang_thai: Optional[Dict[str, StrictInt]] = None
 
     @model_validator(mode="after")
-    def _dung_mot_dang(self) -> "CouncilSetCreate":
-        theo_ma = self.ma_ho_so is not None
+    def _exactly_one_form(self) -> "CouncilSetCreate":
+        by_code = self.ma_ho_so is not None
         theo_id = self.profile_ids is not None or self.phien_ban_kiem is not None
-        if theo_ma == theo_id:
+        if by_code == theo_id:
             raise ValueError(
                 "Gửi đúng MỘT dạng: ma_ho_so, hoặc profile_ids kèm phien_ban_kiem."
             )
@@ -208,7 +208,7 @@ class CouncilSetOut(BaseModel):
     kich_thuoc_tong: int
     nam_hoc: Optional[int] = None
     tham_so_quyet_dinh: Optional[Dict[str, Any]] = None
-    # Vòng giao diện (đặc tả 3.4 / 3.5) — ``GET /sets`` và ``GET /sets/{id}`` điền (MỘT câu ``SQL_BO_MO_RONG``); route
+    # Vòng giao diện (đặc tả 3.4 / 3.5) — ``GET /sets`` và ``GET /sets/{id}`` điền (MỘT câu ``SQL_SET_EXTENDED``); route
     # khác (dựng bộ vừa xong) để None. ``tinh_trang``: chua_ghi_nhan | con_hieu_luc | het_hieu_luc | da_huy_ghi_nhan |
     # chua_xac_dinh. ``quyet_dinh``: {id, loai, trang_thai, so_quyet_dinh, ngay_ky, so_ho_so, goc{id, so_quyet_dinh,
     # ngay_ky} | null} | null. ``luot_gui_cho``: {ma, tao_luc} — CHỈ người có quyền ghi nhận (admin), người khác null.
@@ -218,19 +218,19 @@ class CouncilSetOut(BaseModel):
     luot_gui_cho: Optional[Dict[str, Any]] = None
 
     @classmethod
-    def tu_bo(cls, bo) -> "CouncilSetOut":
+    def from_set(cls, doc_set) -> "CouncilSetOut":
         return cls(
-            id=bo.id,
-            nguoi_tao_id=bo.nguoi_tao_id,
-            tao_luc=bo.tao_luc,
-            moc_chup=bo.moc_chup,
-            unit_id=bo.unit_id,
-            trinh_do=bo.trinh_do,
-            so_ho_so=bo.so_ho_so,
-            so_tep=bo.so_tep,
-            kich_thuoc_tong=bo.kich_thuoc_tong,
-            nam_hoc=(bo.thong_tin_dung or {}).get("nam_hoc"),
-            tham_so_quyet_dinh=bo.tham_so_quyet_dinh,
+            id=doc_set.id,
+            nguoi_tao_id=doc_set.nguoi_tao_id,
+            tao_luc=doc_set.tao_luc,
+            moc_chup=doc_set.moc_chup,
+            unit_id=doc_set.unit_id,
+            trinh_do=doc_set.trinh_do,
+            so_ho_so=doc_set.so_ho_so,
+            so_tep=doc_set.so_tep,
+            kich_thuoc_tong=doc_set.kich_thuoc_tong,
+            nam_hoc=(doc_set.thong_tin_dung or {}).get("nam_hoc"),
+            tham_so_quyet_dinh=doc_set.tham_so_quyet_dinh,
         )
 
 
@@ -247,18 +247,18 @@ class CouncilSetDetailOut(CouncilSetOut):
     cho_quyet_dinh_goc_id: Optional[int] = None
 
     @classmethod
-    def tu_bo_va_tep(cls, bo, tep, mo_rong=None) -> "CouncilSetDetailOut":
-        """``mo_rong`` = dict của ``chi_tiet_bo_mo_rong`` (``GET /sets/{id}``) — thay các trường chung của bộ; vắng
+    def from_set_and_files(cls, doc_set, file, extended=None) -> "CouncilSetDetailOut":
+        """``extended`` = dict của ``extended_set_detail`` (``GET /sets/{id}``) — thay các trường chung của bộ; vắng
         (vừa dựng bộ) ⇒ dựng từ hàng ORM, các trường mở rộng để None."""
-        chung = mo_rong if mo_rong is not None else CouncilSetOut.tu_bo(bo).model_dump()
+        common = extended if extended is not None else CouncilSetOut.from_set(doc_set).model_dump()
         return cls(
-            **chung,
-            thong_tin_dung=bo.thong_tin_dung,
-            tep=[CouncilSetFileOut.model_validate(t) for t in tep],
-            dung_lai_tu_set_id=bo.dung_lai_tu_set_id,
-            ban_ky_so_quyet_dinh=bo.ban_ky_so_quyet_dinh,
-            ban_ky_ngay=bo.ban_ky_ngay,
-            cho_quyet_dinh_goc_id=bo.cho_quyet_dinh_goc_id,
+            **common,
+            thong_tin_dung=doc_set.thong_tin_dung,
+            tep=[CouncilSetFileOut.model_validate(t) for t in file],
+            dung_lai_tu_set_id=doc_set.dung_lai_tu_set_id,
+            ban_ky_so_quyet_dinh=doc_set.ban_ky_so_quyet_dinh,
+            ban_ky_ngay=doc_set.ban_ky_ngay,
+            cho_quyet_dinh_goc_id=doc_set.cho_quyet_dinh_goc_id,
         )
 
 
@@ -306,8 +306,8 @@ class CouncilSetInputCodesOut(BaseModel):
 
 class CouncilDocumentPermissions(BaseModel):
     """Cờ quyền GIAO DIỆN (lượt F) — mỗi cờ ứng với ĐÚNG MỘT route của module, do máy chủ đánh
-    giá chính các cổng của route ấy cho người gọi (``deps.quyen_van_ban_hoi_dong``). Giao diện
-    ẩn / hiện theo cờ, không theo vai. Tên trường = khoá của ``ENDPOINT_THEO_CO`` ở router
+    giá chính các cổng của route ấy cho người gọi (``deps.council_document_permissions``). Giao diện
+    ẩn / hiện theo cờ, không theo vai. Tên trường = khoá của ``ENDPOINT_BY_FLAG`` ở router
     (test khoá bằng nhau)."""
 
     model_config = ConfigDict(extra="forbid")

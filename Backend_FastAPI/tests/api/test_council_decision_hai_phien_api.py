@@ -8,7 +8,7 @@ hai chạy tới khi PostgreSQL báo nó bị chặn (``pg_blocking_pids``) ho�
 
 * (i)  ghi nhận ↔ từ chối hồ sơ lẻ — hai thứ tự;
 * (ii) gọi THẲNG ``admission_state_service.transition`` tới đích bị khoá, KHÔNG khoá hồ sơ trước, trong lúc ghi nhận
-       giữ khoá hồ sơ — chỉ khoá CỦA CHỐT (``kiem_chuyen_trang_thai``) giữ bất biến (đột biến ``c7-m08`` ⇒ ĐỎ);
+       giữ khoá hồ sơ — chỉ khoá CỦA CHỐT (``check_status_transition``) giữ bất biến (đột biến ``c7-m08`` ⇒ ĐỎ);
 * (iii) công bố theo nguyện vọng ĐI TỚI nhánh thành công (seed thêm cấu hình trình độ) + hai phiên ghi nhận ↔ công bố;
 * chỗ CUỐI CÙNG: Phê duyệt cũ / công bố ↔ ghi nhận — ghi nhận khoá dòng chỉ tiêu SAU hồ sơ ⇒ lần đếm của bên kia
   thấy dòng mới (không vượt); thứ tự ngược ⇒ ghi nhận vẫn ghi (owner N9: không chặn theo chỉ tiêu);
@@ -30,7 +30,7 @@ from app.services import admission_state_service as state_service
 from app.services import council_decision_service as qd_vb
 from app.services import council_decision_status_service as tt_qd
 from app.services import quota_occupancy_service as qos
-from app.utils.exceptions import QuyetDinhKhoaHoSo
+from app.utils.exceptions import ProfileLockedByDecisionError
 from tests.api import test_council_decisions_api as qd
 from tests.api.test_council_decision_profile_gates_api import (  # noqa: F401 — fixture
     A,
@@ -123,7 +123,7 @@ async def test_hai_phien_ghi_nhan_giu_khoa_truoc_tu_choi_sau(client, hs, ad, mon
     bo = await _bo_da_nop(client, ad, hs, nhan)
     ver = (await _ban(pid))[1]
     diem = _Diem()
-    _boc(monkeypatch, CouncilDecisionRepository, "khoa_ho_so", diem)
+    _boc(monkeypatch, CouncilDecisionRepository, "lock_profiles", diem)
     t_qd = asyncio.create_task(qd._ghi(client, ad, bo["id"], so="501", so_hs=1))
     await asyncio.wait_for(diem.toi.wait(), 30)
     t_tc = asyncio.create_task(_tu_choi(client, ad, pid, ver))
@@ -144,7 +144,7 @@ async def test_hai_phien_tu_choi_giu_khoa_truoc_ghi_nhan_sau(client, hs, ad, mon
     bo = await _bo_da_nop(client, ad, hs, nhan)
     ver = (await _ban(pid))[1]
     diem = _Diem()
-    _boc(monkeypatch, tt_qd, "kiem_chuyen_trang_thai", diem)
+    _boc(monkeypatch, tt_qd, "check_status_transition", diem)
     t_tc = asyncio.create_task(_tu_choi(client, ad, pid, ver))
     await asyncio.wait_for(diem.toi.wait(), 30)
     t_qd = asyncio.create_task(qd._ghi(client, ad, bo["id"], so="501", so_hs=1))
@@ -168,7 +168,7 @@ async def test_hai_phien_chot_transition_goi_thang_khong_khoa_truoc_va_ghi_nhan(
     pid = hs[nhan][1]
     bo = await _bo_da_nop(client, ad, hs, nhan)
     diem = _Diem()
-    _boc(monkeypatch, CouncilDecisionRepository, "khoa_ho_so", diem)
+    _boc(monkeypatch, CouncilDecisionRepository, "lock_profiles", diem)
     t_qd = asyncio.create_task(qd._ghi(client, ad, bo["id"], so="501", so_hs=1))
     await asyncio.wait_for(diem.toi.wait(), 30)
 
@@ -180,7 +180,7 @@ async def test_hai_phien_chot_transition_goi_thang_khong_khoa_truoc_va_ghi_nhan(
                 await db.flush()
                 await db.commit()
                 return "da_chuyen"
-            except QuyetDinhKhoaHoSo:
+            except ProfileLockedByDecisionError:
                 await db.rollback()
                 return "bi_chan"
 
@@ -236,13 +236,13 @@ async def test_cong_bo_theo_nguyen_vong_thanh_cong_khi_du_cau_hinh(client, hs, a
 
 
 async def test_hai_phien_ghi_nhan_giu_khoa_truoc_cong_bo_sau(client, hs, ad, monkeypatch):  # noqa: F811
-    # Thứ tự khoá: ghi nhận bộ → hồ sơ (GIỮ) ; công bố hồ sơ (CHỜ — ``kiem_xet_moi`` FOR UPDATE) → thấy QĐ ⇒ 409.
+    # Thứ tự khoá: ghi nhận bộ → hồ sơ (GIỮ) ; công bố hồ sơ (CHỜ — ``check_new_admission`` FOR UPDATE) → thấy QĐ ⇒ 409.
     await _cau_hinh_trinh_do()
     nhan = SACH[1]
     pid = hs[nhan][1]
     bo = await _bo_da_nop(client, ad, hs, nhan)
     diem = _Diem()
-    _boc(monkeypatch, CouncilDecisionRepository, "khoa_ho_so", diem)
+    _boc(monkeypatch, CouncilDecisionRepository, "lock_profiles", diem)
     t_qd = asyncio.create_task(qd._ghi(client, ad, bo["id"], so="501", so_hs=1))
     await asyncio.wait_for(diem.toi.wait(), 30)
     t_cb = asyncio.create_task(_cong_bo(client, ad, pid))
@@ -263,7 +263,7 @@ async def test_hai_phien_cong_bo_thanh_cong_truoc_ghi_nhan_sau(client, hs, ad, m
     pid = hs[nhan][1]
     bo = await _bo_da_nop(client, ad, hs, nhan)
     diem = _Diem()
-    _boc(monkeypatch, tt_qd, "kiem_xet_moi", diem)
+    _boc(monkeypatch, tt_qd, "check_new_admission", diem)
     t_cb = asyncio.create_task(_cong_bo(client, ad, pid))
     await asyncio.wait_for(diem.toi.wait(), 30)
     t_qd = asyncio.create_task(qd._ghi(client, ad, bo["id"], so="501", so_hs=1))
@@ -310,7 +310,7 @@ async def _dam_bao_sts09():
 
 async def _da_dung(o):
     async with AsyncSessionLocal() as db:
-        return await qos.dem_theo_nganh_nam(db, offering_id=o["off"], academic_year=2026)
+        return await qos.count_by_offering_year(db, offering_id=o["off"], academic_year=2026)
 
 
 async def test_cho_cuoi_phe_duyet_cu_trong_luc_ghi_nhan_chua_commit_khong_vuot(  # noqa: F811
@@ -332,7 +332,7 @@ async def test_cho_cuoi_phe_duyet_cu_trong_luc_ghi_nhan_chua_commit_khong_vuot( 
     bo = await qd._bo_ok(client, ad, hs, [SACH[0]])
     assert await _da_dung(o) == 0
     diem = _Diem()
-    _boc(monkeypatch, CouncilDecisionRepository, "chen_dong_tu_bo", diem)
+    _boc(monkeypatch, CouncilDecisionRepository, "insert_rows_from_set", diem)
     t_qd = asyncio.create_task(qd._ghi(client, ad, bo["id"], so="501", so_hs=1))
     await asyncio.wait_for(diem.toi.wait(), 30)
     ver = (await _ban(a))[1]
@@ -403,7 +403,7 @@ async def test_cho_cuoi_cong_bo_trong_luc_ghi_nhan_chua_commit_khong_vuot(  # no
     ) == o["path"]
     bo = await qd._bo_ok(client, ad, hs, [SACH[0]])
     diem = _Diem()
-    _boc(monkeypatch, CouncilDecisionRepository, "chen_dong_tu_bo", diem)
+    _boc(monkeypatch, CouncilDecisionRepository, "insert_rows_from_set", diem)
     t_qd = asyncio.create_task(qd._ghi(client, ad, bo["id"], so="501", so_hs=1))
     await asyncio.wait_for(diem.toi.wait(), 30)
     t_cb = asyncio.create_task(_cong_bo(client, ad, a))
@@ -414,7 +414,7 @@ async def test_cho_cuoi_cong_bo_trong_luc_ghi_nhan_chua_commit_khong_vuot(  # no
     assert r_cb.status_code == 200, r_cb.text
     assert await qd._q1("SELECT decision FROM admission_profile_choice WHERE id = :c", c=nv1) != "admitted"
     async with AsyncSessionLocal() as db:
-        assert await qos.dem_theo_thong_tin_hoc_vu(db, academic_info_id=o["ai"]) == 1
+        assert await qos.count_by_academic_info(db, academic_info_id=o["ai"]) == 1
     assert do == "chan", "phép đo không hợp lệ: công bố không chờ dòng chỉ tiêu của ghi nhận"
 
 
@@ -433,10 +433,10 @@ async def test_dem_cho_theo_thao_tac_that_ghi_nhan_huy_hieu_luc_khoi_phuc(client
     async def dem():
         async with AsyncSessionLocal() as db:
             return (
-                await qos.dem_theo_duong_xet(db, admission_path_id=k[0]),
-                await qos.dem_theo_thong_tin_hoc_vu(db, academic_info_id=k[1]),
-                await qos.dem_theo_nganh_nam(db, offering_id=k[2], academic_year=k[3]),
-                (await qos.dem_da_trung_tuyen_theo_duong_xet(db, [k[0]]))[k[0]],
+                await qos.count_by_path(db, admission_path_id=k[0]),
+                await qos.count_by_academic_info(db, academic_info_id=k[1]),
+                await qos.count_by_offering_year(db, offering_id=k[2], academic_year=k[3]),
+                (await qos.count_admitted_by_path(db, [k[0]]))[k[0]],
             )
 
     truoc = await dem()
@@ -470,11 +470,11 @@ async def test_dong_bo_dung_qua_cong_luon_du_khoa_dem_va_dung_chuoi(client, hs, 
 
 
 def test_thu_tu_khoa_ghi_nhan_ho_so_truoc_dong_chi_tieu():
-    """Kiểm kê thứ tự khoá trong MÃ (đọc nguồn): ở ba thao tác làm tăng Phần B, ``khoa_chi_tieu_cua_dong_bo`` đứng
-    SAU ``khoa_ho_so`` (thứ tự chung hồ sơ → học vụ → đường xét)."""
+    """Kiểm kê thứ tự khoá trong MÃ (đọc nguồn): ở ba thao tác làm tăng Phần B, ``lock_quota_of_set_rows`` đứng
+    SAU ``lock_profiles`` (thứ tự chung hồ sơ → học vụ → đường xét)."""
     import inspect
 
-    for ham in (qd_vb.ghi_nhan_quyet_dinh, qd_vb.ghi_nhan_dieu_chinh, qd_vb.huy_ghi_nhan):
+    for ham in (qd_vb.record_decision, qd_vb.record_adjustment_decision, qd_vb.revoke_record):
         nguon = inspect.getsource(ham)
-        assert nguon.count("khoa_chi_tieu_cua_dong_bo(") == 1, ham.__name__
-        assert nguon.index("repo.khoa_ho_so(") < nguon.index("khoa_chi_tieu_cua_dong_bo("), ham.__name__
+        assert nguon.count("lock_quota_of_set_rows(") == 1, ham.__name__
+        assert nguon.index("repo.lock_profiles(") < nguon.index("lock_quota_of_set_rows("), ham.__name__

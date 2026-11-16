@@ -90,7 +90,7 @@ async def test_n9_chi_vuot_duong_xet(client, hs, ad):  # noqa: F811
 # Em thứ hai (``SACH[1]``, KHÔNG nằm trong bộ) được đặt để chiếm chỗ ở ĐÚNG MỘT cách đếm. Tiền điều kiện đo bằng
 # chính hai hàm đếm trước khi ghi (dựng dữ liệu sai thì ca đỏ ở tiền điều kiện, không đỏ vì cảnh báo). Chỉ tiêu
 # năm = 1, đường xét không đặt ⇒ sau khi ghi em ``SACH[0]``: một cách đếm = 1 (đầy, chưa vượt), cách kia = 2 (vượt)
-# ⇒ phải cảnh báo, kèm ĐÚNG hai số. Bỏ một nhánh khỏi ``max(cong_bo, phe_duyet)`` ⇒ đúng một trong hai ca đỏ.
+# ⇒ phải cảnh báo, kèm ĐÚNG hai số. Bỏ một nhánh khỏi ``max(cong_bo, approved_count)`` ⇒ đúng một trong hai ca đỏ.
 
 
 async def _hai_cach_dem(o):
@@ -99,8 +99,8 @@ async def _hai_cach_dem(o):
 
     async with AsyncSessionLocal() as db:
         return (
-            await qos.dem_theo_thong_tin_hoc_vu(db, academic_info_id=o["ai"]),
-            await qos.dem_theo_nganh_nam(db, offering_id=o["off"], academic_year=2026),
+            await qos.count_by_academic_info(db, academic_info_id=o["ai"]),
+            await qos.count_by_offering_year(db, offering_id=o["off"], academic_year=2026),
         )
 
 

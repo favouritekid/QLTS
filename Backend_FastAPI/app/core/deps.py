@@ -722,23 +722,23 @@ async def require_password_not_forced(
 PasswordSafeDep = Depends(require_password_not_forced)
 
 
-def chu_the_casbin(current_user: models.User) -> str:
+def casbin_subject(current_user: models.User) -> str:
     """Chủ thể Casbin của một người dùng (``role:<user.role>``) — MỘT nguồn cho
     ``check_permission`` và phép tính cờ quyền giao diện
-    (``quyen_van_ban_hoi_dong``)."""
+    (``council_document_permissions``)."""
     return f"role:{current_user.role}"
 
 
-def casbin_cho_phep(
+def casbin_allows(
     enforcer: casbin.AsyncEnforcer,
     current_user: models.User,
     object_path: str,
     action: str,
 ) -> bool:
     """Câu hỏi Casbin "người này được ``action`` trên ``object_path`` không" — MỘT
-    nguồn cho ``check_permission`` (chặn request) và ``quyen_van_ban_hoi_dong`` (cờ
+    nguồn cho ``check_permission`` (chặn request) và ``council_document_permissions`` (cờ
     giao diện). Không log, không ném lỗi: người gọi quyết."""
-    return bool(enforcer.enforce(chu_the_casbin(current_user), object_path, action))
+    return bool(enforcer.enforce(casbin_subject(current_user), object_path, action))
 
 
 async def check_permission(
@@ -762,11 +762,11 @@ async def check_permission(
         raise PermissionDeniedError("Permission system is misconfigured.")
 
     # ✅ FIX: Use role:X instead of user:X to match policy templates
-    subject = chu_the_casbin(current_user)
+    subject = casbin_subject(current_user)
     object_path = request.url.path
     action = request.method
 
-    if not casbin_cho_phep(enforcer, current_user, object_path, action):
+    if not casbin_allows(enforcer, current_user, object_path, action):
         log.warning(
             "Permission Denied (Casbin)",
             subject=subject,
@@ -3807,21 +3807,21 @@ async def get_council_document_set_for_user(
 ) -> "models.CouncilDocumentSet":
     """Bộ văn bản ``set_id`` nếu người gọi được thấy nó; không có HOẶC ngoài phạm vi ⇒
     ``ResourceNotFoundError`` (404) — cùng một thông báo cho cả hai ca (IDOR)."""
-    return await _council_document_set_trong_pham_vi(db, set_id, scope)
+    return await _council_document_set_in_scope(db, set_id, scope)
 
 
-async def _council_document_set_trong_pham_vi(
+async def _council_document_set_in_scope(
     db: AsyncSession, set_id: int, scope: CouncilDocumentScope
 ) -> "models.CouncilDocumentSet":
     """MỘT nguồn so bộ ↔ phạm vi cho mọi route có ``set_id`` của văn bản Hội đồng."""
     from ..repositories.council_document_repository import CouncilDocumentRepository
 
-    bo = await CouncilDocumentRepository(db).bo_theo_id(set_id)
-    if bo is None or not (
-        scope.tat_ca or (bo.unit_id is not None and bo.unit_id == scope.unit_id)
+    combo = await CouncilDocumentRepository(db).set_by_id(set_id)
+    if combo is None or not (
+        scope.tat_ca or (combo.unit_id is not None and combo.unit_id == scope.unit_id)
     ):
         raise ResourceNotFoundError(detail="Không có bộ văn bản này.")
-    return bo
+    return combo
 
 
 # Route CHỈ ADMIN của văn bản Hội đồng (owner 04-11, J1 dòng 29–31): xoá bộ, xem danh sách mã
@@ -3845,14 +3845,14 @@ async def get_council_document_set_for_admin(
     db: AsyncSession = Depends(database.get_db),
 ) -> "models.CouncilDocumentSet":
     """Bộ ``set_id`` cho route CHỈ ADMIN; không có ⇒ 404."""
-    return await _council_document_set_trong_pham_vi(db, set_id, scope)
+    return await _council_document_set_in_scope(db, set_id, scope)
 
 
 # Lượt G (owner 05-11, F228): hồ sơ ở mức CẢNH BÁO chỉ vào bộ khi ADMIN xác nhận. Tầng chủ sở hữu
 # câu "ai được xác nhận" = ở đây, cùng nguồn với lớp "chỉ Admin" (gọi ĐÚNG
 # ``get_council_document_scope`` + ``require_council_document_admin``). KHÔNG phải cổng của
 # route (không bao giờ từ chối) — trả ``bool`` cho service; service từ chối yêu cầu mang xác
-# nhận của người không được xác nhận (``council_set_gate_service.kiem_quyen_xac_nhan``).
+# nhận của người không được xác nhận (``council_set_gate_service.check_confirm_permission``).
 async def get_council_document_confirm_right(
     current_user: models.User = Depends(check_permission),
 ) -> bool:
@@ -3890,10 +3890,10 @@ async def get_council_decision_for_admin(
 ) -> "models.CouncilDecision":
     from ..repositories.council_decision_repository import CouncilDecisionRepository
 
-    qd = await CouncilDecisionRepository(db).qd_theo_id(decision_id)
-    if qd is None:
+    decision = await CouncilDecisionRepository(db).decision_by_id(decision_id)
+    if decision is None:
         raise ResourceNotFoundError(detail="Không có văn bản này.")
-    return qd
+    return decision
 
 
 async def get_council_decision_hold_for_admin(
@@ -3903,10 +3903,10 @@ async def get_council_decision_hold_for_admin(
 ) -> "models.CouncilDecisionHold":
     from ..repositories.council_decision_repository import CouncilDecisionRepository
 
-    muc = await CouncilDecisionRepository(db).muc_cho_theo_id(hold_id)
-    if muc is None:
+    hold = await CouncilDecisionRepository(db).hold_by_id(hold_id)
+    if hold is None:
         raise ResourceNotFoundError(detail="Không có mục chờ này.")
-    return muc
+    return hold
 
 
 # ── Cờ quyền GIAO DIỆN của văn bản Hội đồng (lượt F) ─────────────────────────────────────────
@@ -3915,7 +3915,7 @@ async def get_council_decision_hold_for_admin(
 # bảng "vai nào được gì" thứ hai (CLAUDE.md §7):
 #   * route nào có cổng nào: đọc từ CÂY DEPENDENCY THẬT của route (``route.dependant``) —
 #     không khai lại ở đây;
-#   * Casbin: ``casbin_cho_phep`` (cùng chủ thể / enforcer với ``check_permission``) trên
+#   * Casbin: ``casbin_allows`` (cùng chủ thể / enforcer với ``check_permission``) trên
 #     đường của route, tham số đường thay bằng id mẫu 1 — đúng với MỌI id chỉ khi policy theo
 #     ngữ pháp G (khối F237 bên dưới, canh mỗi lần tính cờ);
 #   * phạm vi / chỉ-admin: gọi ĐÚNG ``get_council_document_scope`` /
@@ -3925,15 +3925,15 @@ async def get_council_decision_hold_for_admin(
 # thấy (bộ ngoài phạm vi vẫn 404 — lọc ở danh sách / chi tiết, không phải việc của cờ).
 # Đóng băng (503), giới hạn tần suất (429), lỗi đầu vào (400 / 422) không thuộc cờ.
 # Khoá: ``tests/api/test_council_documents_quyen_api.py`` (cờ = hành vi thật từng route, năm vai).
-_CO_CONG_CASBIN = check_permission
-_CO_CONG_PHAM_VI = get_council_document_scope
-_CO_CONG_CHI_ADMIN = require_council_document_admin
-_CONG_VAN_BAN_HOI_DONG = frozenset(
-    {_CO_CONG_CASBIN, _CO_CONG_PHAM_VI, _CO_CONG_CHI_ADMIN}
+_HAS_GATE_CASBIN = check_permission
+_HAS_GATE_SCOPE = get_council_document_scope
+_HAS_GATE_ADMIN_ONLY = require_council_document_admin
+_COUNCIL_DOCUMENT_GATES = frozenset(
+    {_HAS_GATE_CASBIN, _HAS_GATE_SCOPE, _HAS_GATE_ADMIN_ONLY}
 )
 # Không phải cổng của module: xác thực + người dùng hoạt động (chính route cờ đã qua, cùng người
 # dùng), phiên CSDL, và tìm bộ theo id (404 ngoài phạm vi do cổng phạm vi ở cây con quyết).
-_KHONG_PHAI_CONG_VAN_BAN_HOI_DONG = frozenset(
+_NON_COUNCIL_DOCUMENT_GATES = frozenset(
     {
         get_current_user,
         get_current_active_user,
@@ -3950,7 +3950,7 @@ _KHONG_PHAI_CONG_VAN_BAN_HOI_DONG = frozenset(
 )
 
 
-def _ham_trong_cay_dependency(dependant) -> set:
+def _functions_in_dependency_tree(dependant) -> set:
     """Mọi ``call`` trong cây dependency (đệ quy) của một ``Dependant`` FastAPI."""
     out, hang = set(), list(dependant.dependencies)
     while hang:
@@ -3998,7 +3998,7 @@ def _ham_trong_cay_dependency(dependant) -> set:
 #      route} ∪ {k số mới lớn hơn mọi số ấy} (k = số tham số của route), lấy MỌI tổ hợp; kết quả
 #      khác nhau ⇒ PHỤ THUỘC ID ⇒ VI PHẠM.
 #   Có vi phạm ⇒ MỌI cờ tắt + log ``council_document_flag_policy_ngoai_mau``. Matcher của enforcer
-#   khác ``MATCHER_CO_VAN_BAN_HOI_DONG`` / không lấy được hàm khớp / không đọc được policy / route
+#   khác ``MATCHER_WITH_COUNCIL_DOCUMENTS`` / không lấy được hàm khớp / không đọc được policy / route
 #   của module ngoài dạng ``/chu/{ten}`` ⇒ cũng tắt mọi cờ (ngữ pháp không còn đúng).
 # Vì sao bước 3 ĐỦ với G: giá trị tham số là số thập phân chuẩn, không chứa ``/`` ⇒ ranh giới đoạn
 # của đường cố định. Trong regex của G, mỗi đoạn chữ đứng giữa ``/`` và ``/``-hoặc-``$`` nên chỉ có
@@ -4011,36 +4011,36 @@ def _ham_trong_cay_dependency(dependant) -> set:
 # Casbin theo id cụ thể còn bị lách bằng cách viết id khác đi: thêm một lý do hợp đồng cấm nó.
 # Khoá: ``tests/unit/test_council_flag_policy_grammar.py`` (ngữ pháp + so với vét cạn bằng hàm
 # khớp thật) và ``tests/api/test_council_documents_hop_dong_api.py`` (cờ ↔ route thật, id ≠ 1).
-MATCHER_CO_VAN_BAN_HOI_DONG = (
+MATCHER_WITH_COUNCIL_DOCUMENTS = (
     "g(r_sub, p_sub) && keyMatch4(r_obj, p_obj) && regexMatch(r_act, p_act)"
 )
-_HAM_KHOP_DOI_TUONG = "keyMatch4"
-_KY_TU_REGEX_POLICY = frozenset(".^$*+?{}[]\\|()")
-_LUONG_TU_REGEX = frozenset("*+?{")
-ID_DO_CO_DINH = ("1", "57", "2147483647")
+_OBJECT_MATCH_FUNCTION = "keyMatch4"
+_POLICY_REGEX_CHARS = frozenset(".^$*+?{}[]\\|()")
+_REGEX_QUANTIFIERS = frozenset("*+?{")
+FIXED_PROBE_IDS = ("1", "57", "2147483647")
 
 
-def _la_id_chuan(s: str) -> bool:
+def _is_standard_id(s: str) -> bool:
     """Số thập phân chuẩn (không số 0 ở đầu) — dạng id giao diện gửi."""
     return s.isascii() and s.isdigit() and (s == "0" or s[0] != "0")
 
 
-def _doan_doi_tuong_trong_ngu_phap(doi_tuong: str) -> Optional[List[str]]:
+def _guess_object_in_grammar(policy_object: str) -> Optional[List[str]]:
     """Các đoạn của ``doi_tuong`` nếu nó thuộc NGỮ PHÁP G (khối chú thích trên); ngoài G ⇒ None."""
     import re
 
-    if not doi_tuong.startswith("/"):
+    if not policy_object.startswith("/"):
         return None
-    doan = doi_tuong.split("/")[1:]
-    for d in doan:
+    segments = policy_object.split("/")[1:]
+    for d in segments:
         if d == "*" or re.fullmatch(r"\{[^/{}]+\}", d):
             continue
-        if _KY_TU_REGEX_POLICY.intersection(d):
+        if _POLICY_REGEX_CHARS.intersection(d):
             return None
-    return doan
+    return segments
 
 
-def _doan_route(path: str) -> Optional[List[Optional[str]]]:
+def _guess_route(path: str) -> Optional[List[Optional[str]]]:
     """``/a/{x}/b`` ⇒ ``["a", None, "b"]`` (None = vị trí tham số). Tham số không chiếm trọn
     một đoạn, hoặc có bộ chuyển đổi (``{x:path}`` — giá trị chứa được ``/``) ⇒ None."""
     import re
@@ -4056,105 +4056,105 @@ def _doan_route(path: str) -> Optional[List[Optional[str]]]:
     return out
 
 
-def _co_the_khop_module(doi_tuong: str, tien_to_module: str) -> bool:
+def _may_match_module(policy_object: str, module_prefix: str) -> bool:
     """Bước 2 của ngữ pháp: dòng NGOÀI G có thể khớp một đường bắt đầu bằng ``tien_to_module``
     không (đánh giá BẢO THỦ — "có thể" khi không loại trừ được)."""
-    if "|" in doi_tuong:
+    if "|" in policy_object:
         return True
     i = next(
-        (k for k, c in enumerate(doi_tuong) if c in _KY_TU_REGEX_POLICY),
-        len(doi_tuong),
+        (k for k, c in enumerate(policy_object) if c in _POLICY_REGEX_CHARS),
+        len(policy_object),
     )
-    chu = doi_tuong[:i]
-    if i < len(doi_tuong) and doi_tuong[i] in _LUONG_TU_REGEX:
-        chu = chu[:-1]
-    return chu.startswith(tien_to_module) or tien_to_module.startswith(chu)
+    prefix_text = policy_object[:i]
+    if i < len(policy_object) and policy_object[i] in _REGEX_QUANTIFIERS:
+        prefix_text = prefix_text[:-1]
+    return prefix_text.startswith(module_prefix) or module_prefix.startswith(prefix_text)
 
 
-def _phu_thuoc_id(
-    doi_tuong: str,
-    doan_doi_tuong: List[str],
-    doan_cac_route: List[List[Optional[str]]],
-    ham_khop: Callable[..., Any],
+def _dependency_ids(
+    policy_object: str,
+    object_segments: List[str],
+    route_segments: List[List[Optional[str]]],
+    match_fn: Callable[..., Any],
 ) -> bool:
     """Bước 3: hàm khớp THẬT trả kết quả khác nhau giữa các tổ hợp id ⇒ True. Hàm khớp ném lỗi
     ⇒ True (fail-closed)."""
     import itertools
 
-    so_dong = [d for d in doan_doi_tuong if _la_id_chuan(d)]
-    for doan in doan_cac_route:
-        vi_tri = [i for i, d in enumerate(doan) if d is None]
-        if not vi_tri:
+    numeric_segments = [d for d in object_segments if _is_standard_id(d)]
+    for segments in route_segments:
+        positions = [i for i, d in enumerate(segments) if d is None]
+        if not positions:
             continue
-        so_route = [d for d in doan if d is not None and _la_id_chuan(d)]
-        gia_tri = list(dict.fromkeys(list(ID_DO_CO_DINH) + so_dong + so_route))
-        moi = max(int(v) for v in gia_tri) + 1
-        gia_tri += [str(moi + j) for j in range(len(vi_tri))]
-        ket_qua = set()
-        for bo in itertools.product(gia_tri, repeat=len(vi_tri)):
-            cu_the = list(doan)
-            for i, v in zip(vi_tri, bo):
-                cu_the[i] = v
+        route_numbers = [d for d in segments if d is not None and _is_standard_id(d)]
+        values = list(dict.fromkeys(list(FIXED_PROBE_IDS) + numeric_segments + route_numbers))
+        next_value = max(int(v) for v in values) + 1
+        values += [str(next_value + j) for j in range(len(positions))]
+        outcomes = set()
+        for combo in itertools.product(values, repeat=len(positions)):
+            concrete = list(segments)
+            for i, v in zip(positions, combo):
+                concrete[i] = v
             try:
-                ket_qua.add(bool(ham_khop("/" + "/".join(cu_the), doi_tuong)))
+                outcomes.add(bool(match_fn("/" + "/".join(concrete), policy_object)))
             except Exception:  # noqa: BLE001 — hàm khớp ném lỗi ⇒ không chứng minh được
                 return True
-            if len(ket_qua) > 1:
+            if len(outcomes) > 1:
                 return True
     return False
 
 
-def _phan_tich_route_module(cac_duong_route: List[str]) -> Optional[tuple]:
+def _analyze_module_routes(route_paths: List[str]) -> Optional[tuple]:
     """``(đoạn của từng route, tiền tố module)``; route ngoài dạng ``/chu/{ten}`` ⇒ None.
     Tiền tố = phần chung của các đường, cắt trước ``{`` đầu tiên rồi tới ``/`` cuối — mọi đường
     CỤ THỂ của module đều bắt đầu bằng nó."""
     import os.path
 
-    doan_cac_route = [_doan_route(p) for p in cac_duong_route]
-    if not doan_cac_route or any(d is None for d in doan_cac_route):
+    route_segments = [_guess_route(p) for p in route_paths]
+    if not route_segments or any(d is None for d in route_segments):
         return None
-    chung = os.path.commonprefix(sorted(cac_duong_route)).split("{", 1)[0]
-    return doan_cac_route, chung.rsplit("/", 1)[0] + "/"
+    common = os.path.commonprefix(sorted(route_paths)).split("{", 1)[0]
+    return route_segments, common.rsplit("/", 1)[0] + "/"
 
 
-def _ly_do_mot_dong(
-    doi_tuong: Any,
-    doan_cac_route: List[List[Optional[str]]],
-    tien_to: str,
-    ham_khop: Callable[..., Any],
+def _single_row_reason(
+    policy_object: Any,
+    route_segments: List[List[Optional[str]]],
+    prefix: str,
+    match_fn: Callable[..., Any],
 ) -> Optional[str]:
-    if not isinstance(doi_tuong, str):
+    if not isinstance(policy_object, str):
         return "khong_phai_chuoi"
-    if not _co_the_khop_module(doi_tuong, tien_to):
+    if not _may_match_module(policy_object, prefix):
         return None  # bước 2: loại trừ được cho MỌI chuỗi (trong hay ngoài G)
-    doan = _doan_doi_tuong_trong_ngu_phap(doi_tuong)
-    if doan is None:
+    segments = _guess_object_in_grammar(policy_object)
+    if segments is None:
         return "ngoai_ngu_phap"
-    if _phu_thuoc_id(doi_tuong, doan, doan_cac_route, ham_khop):
+    if _dependency_ids(policy_object, segments, route_segments, match_fn):
         return "phu_thuoc_id"
     return None
 
 
-def ly_do_policy_ngoai_hop_dong(
-    doi_tuong: Any,
-    cac_duong_route: List[str],
-    ham_khop: Callable[..., Any],
+def policy_outside_contract_reason(
+    policy_object: Any,
+    route_paths: List[str],
+    match_fn: Callable[..., Any],
 ) -> Optional[str]:
     """MỘT dòng policy (đối tượng ``doi_tuong``) có vi phạm hợp đồng cờ của module không, xét
     trên các route ``cac_duong_route`` (đường mẫu FastAPI) với hàm khớp ``ham_khop`` (hàm của
     enforcer cho ``keyMatch4``). None = hợp lệ; ngược lại là lý do: ``khong_phai_chuoi`` ·
     ``ngoai_ngu_phap`` · ``phu_thuoc_id`` · ``route_ngoai_ngu_phap``. Ngữ pháp + chứng minh:
     khối chú thích ngay trên."""
-    phan_tich = _phan_tich_route_module(list(cac_duong_route))
-    if phan_tich is None:
+    analysis = _analyze_module_routes(list(route_paths))
+    if analysis is None:
         return "route_ngoai_ngu_phap"
-    return _ly_do_mot_dong(doi_tuong, phan_tich[0], phan_tich[1], ham_khop)
+    return _single_row_reason(policy_object, analysis[0], analysis[1], match_fn)
 
 
-def _policy_ngoai_mau_route(
+def _policy_outside_route_pattern(
     request: Request,
     enforcer: Any,
-    endpoint_theo_co: Mapping[str, Callable[..., Any]],
+    endpoint_by_flag: Mapping[str, Callable[..., Any]],
 ) -> List[tuple]:
     """``[(đối tượng, lý do)]`` của các dòng policy vi phạm hợp đồng cờ (khối chú thích trên),
     đọc policy + matcher + hàm khớp THẬT của enforcer mỗi lần tính cờ. Không có enforcer /
@@ -4163,28 +4163,28 @@ def _policy_ngoai_mau_route(
 
     if enforcer is None:
         return []
-    ham = set(endpoint_theo_co.values())
-    duong = sorted(
+    ham = set(endpoint_by_flag.values())
+    paths = sorted(
         {
             r.path
             for r in request.app.routes
             if isinstance(r, APIRoute) and r.endpoint in ham
         }
     )
-    if not duong:
+    if not paths:
         return []
     try:
-        mo_hinh = enforcer.get_model()
-        matcher = mo_hinh["m"]["m"].value
-        chi_so = list(mo_hinh["p"]["p"].tokens).index("p_obj")
-        ham_khop = enforcer.fm.get_functions()[_HAM_KHOP_DOI_TUONG]
+        model = enforcer.get_model()
+        matcher = model["m"]["m"].value
+        obj_index = list(model["p"]["p"].tokens).index("p_obj")
+        match_fn = enforcer.fm.get_functions()[_OBJECT_MATCH_FUNCTION]
     # Không đọc được matcher / hàm khớp ⇒ fail-closed.
     except Exception:  # noqa: BLE001
         return [("<khong-doc-duoc-matcher>", "matcher_khac")]
-    if "".join(str(matcher).split()) != "".join(MATCHER_CO_VAN_BAN_HOI_DONG.split()):
+    if "".join(str(matcher).split()) != "".join(MATCHER_WITH_COUNCIL_DOCUMENTS.split()):
         return [("<matcher-khac>", "matcher_khac")]
-    phan_tich = _phan_tich_route_module(duong)
-    if phan_tich is None:
+    analysis = _analyze_module_routes(paths)
+    if analysis is None:
         return [("<route-ngoai-ngu-phap>", "route_ngoai_ngu_phap")]
     try:
         dong = list(enforcer.get_policy())
@@ -4193,24 +4193,24 @@ def _policy_ngoai_mau_route(
         return [("<khong-doc-duoc-policy>", "khong_doc_duoc_policy")]
     out = []
     for d in dong:
-        doi_tuong = d[chi_so] if len(d) > chi_so else None
-        ly_do = _ly_do_mot_dong(doi_tuong, phan_tich[0], phan_tich[1], ham_khop)
-        if ly_do is not None:
-            out.append((doi_tuong, ly_do))
+        policy_object = d[obj_index] if len(d) > obj_index else None
+        reason = _single_row_reason(policy_object, analysis[0], analysis[1], match_fn)
+        if reason is not None:
+            out.append((policy_object, reason))
     return out
 
 
-def duong_mau_cua_route(path: str) -> str:
+def route_pattern_path(path: str) -> str:
     """``/sets/{set_id}/files/{thu_tu}`` ⇒ ``/sets/1/files/1`` — đường cụ thể để hỏi Casbin."""
     import re
 
     return re.sub(r"\{[^}/]+\}", "1", path)
 
 
-async def quyen_van_ban_hoi_dong(
+async def council_document_permissions(
     request: Request,
     current_user: models.User,
-    endpoint_theo_co: Mapping[str, Callable[..., Any]],
+    endpoint_by_flag: Mapping[str, Callable[..., Any]],
     only_flag: Optional[str] = None,
 ) -> Dict[str, bool]:
     """``{cờ: bool}`` cho người gọi — mỗi cờ ứng với ĐÚNG MỘT route (tìm theo HÀM xử lý trong
@@ -4224,34 +4224,34 @@ async def quyen_van_ban_hoi_dong(
 
     enforcer = getattr(request.app.state, "enforcer", None)
     try:
-        pham_vi: Optional[CouncilDocumentScope] = await get_council_document_scope(
+        scope: Optional[CouncilDocumentScope] = await get_council_document_scope(
             current_user
         )
     except PermissionDeniedError:
-        pham_vi = None
+        scope = None
     chi_admin_dat = False
-    if pham_vi is not None:
+    if scope is not None:
         try:
-            await require_council_document_admin(pham_vi)
+            await require_council_document_admin(scope)
             chi_admin_dat = True
         except PermissionDeniedError:
             chi_admin_dat = False
 
     out: Dict[str, bool] = {}
     # F237 (Codex lần 8 → lần 9) — HỢP ĐỒNG: mọi dòng policy khớp đường của route như nhau với
-    # MỌI id (ngữ pháp G + cách quyết: khối chú thích trên ``MATCHER_CO_VAN_BAN_HOI_DONG``). Cờ hỏi
+    # MỌI id (ngữ pháp G + cách quyết: khối chú thích trên ``MATCHER_WITH_COUNCIL_DOCUMENTS``). Cờ hỏi
     # Casbin bằng đường mẫu (id 1); một dòng phụ thuộc id (vd deny ``…/sets/57/files/*``) làm cờ
     # khác hành vi thật của bộ 57 ⇒ gặp dòng như thế: MỌI cờ tắt (fail-closed) + log (số dòng +
     # lý do, không in đối tượng). Phạm vi theo bộ thuộc ``deps`` (đơn vị), không thuộc Casbin.
-    ngoai_mau = _policy_ngoai_mau_route(request, enforcer, endpoint_theo_co)
+    outside_pattern = _policy_outside_route_pattern(request, enforcer, endpoint_by_flag)
     requested_flags = (
-        endpoint_theo_co if only_flag is None else {only_flag: endpoint_theo_co[only_flag]}
+        endpoint_by_flag if only_flag is None else {only_flag: endpoint_by_flag[only_flag]}
     )
-    if ngoai_mau:
+    if outside_pattern:
         log.warning(
             "council_document_flag_policy_ngoai_mau",
-            so_dong=len(ngoai_mau),
-            ly_do=sorted({ly_do for _, ly_do in ngoai_mau}),
+            so_dong=len(outside_pattern),
+            ly_do=sorted({reason for _, reason in outside_pattern}),
         )
         return {co: False for co in requested_flags}
     for co, ham in requested_flags.items():
@@ -4264,27 +4264,27 @@ async def quyen_van_ban_hoi_dong(
             out[co] = False
             continue
         r = route[0]
-        goi = _ham_trong_cay_dependency(r.dependant)
-        la = goi - _CONG_VAN_BAN_HOI_DONG - _KHONG_PHAI_CONG_VAN_BAN_HOI_DONG
-        if la:
+        called = _functions_in_dependency_tree(r.dependant)
+        unknown = called - _COUNCIL_DOCUMENT_GATES - _NON_COUNCIL_DOCUMENT_GATES
+        if unknown:
             log.warning(
                 "council_document_flag_unknown_dependency",
                 co=co,
-                ham=sorted(getattr(h, "__name__", type(h).__name__) for h in la),
+                ham=sorted(getattr(h, "__name__", type(h).__name__) for h in unknown),
             )
             out[co] = False
             continue
         dat = True
-        if _CO_CONG_CASBIN in goi:
-            dat = dat and casbin_cho_phep(
+        if _HAS_GATE_CASBIN in called:
+            dat = dat and casbin_allows(
                 enforcer,
                 current_user,
-                duong_mau_cua_route(r.path),
+                route_pattern_path(r.path),
                 next(iter(r.methods)),
             )
-        if _CO_CONG_PHAM_VI in goi:
-            dat = dat and pham_vi is not None
-        if _CO_CONG_CHI_ADMIN in goi:
+        if _HAS_GATE_SCOPE in called:
+            dat = dat and scope is not None
+        if _HAS_GATE_ADMIN_ONLY in called:
             dat = dat and chi_admin_dat
         out[co] = dat
     return out

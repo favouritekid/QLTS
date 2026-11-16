@@ -9,8 +9,8 @@ năm học (``_resolve_quota_context``). Lô dò KHÔNG khoá, rồi khoá tập
 
 Điểm đồng bộ (bọc hàm bằng ``monkeypatch`` — chỉ có trong test):
 
-* P0 — sau khi dò lần đầu, TRƯỚC khi khoá tập (bọc ``qos.khoa_o_chi_tieu``, lần gọi đầu);
-* P1 — sau khi khoá tập, trước mục đầu tiên (bọc ``asv._khoa_truoc_lo_duyet``);
+* P0 — sau khi dò lần đầu, TRƯỚC khi khoá tập (bọc ``qos.lock_quota_cells``, lần gọi đầu);
+* P1 — sau khi khoá tập, trước mục đầu tiên (bọc ``asv._lock_before_batch_approval``);
 * P2 — trong mục của hồ sơ đích, ngay sau quyết định của ``_resolve_quota_context`` có ánh xạ (trả về HOẶC ném),
   TRƯỚC khi SAVEPOINT của mục kết thúc (khoá lấy trong SAVEPOINT bị nhả khi SAVEPOINT lùi ⇒ đo sau đó vô nghĩa).
 
@@ -26,7 +26,7 @@ from sqlalchemy.exc import DBAPIError
 import app.database as csdl
 from app import models
 from app.database import AsyncSessionLocal
-from app.repositories.council_decision_repository import ma_loi_csdl
+from app.repositories.council_decision_repository import db_error_codes
 from app.services import admission_service as asv
 from app.services import quota_occupancy_service as qos
 from app.utils.exceptions import ServiceError
@@ -64,7 +64,7 @@ async def _thu_khoa(bang, id_):
             await k.execute(text("SELECT id FROM %s WHERE id = :i FOR UPDATE NOWAIT" % bang), {"i": id_})
             return "trong"
         except DBAPIError as e:
-            if ma_loi_csdl(e)[0] == "55P03":
+            if db_error_codes(e)[0] == "55P03":
                 return "bi_giu"
             raise
         finally:
@@ -119,9 +119,9 @@ async def _nganh_khac(off):
 
 
 def _boc_p0(monkeypatch, diem, viec_chen):
-    """P0: lần gọi đầu ``qos.khoa_o_chi_tieu`` (từ ``_khoa_truoc_lo_duyet``) — chạy ``viec_chen`` ở phiên khác
+    """P0: lần gọi đầu ``qos.lock_quota_cells`` (từ ``_lock_before_batch_approval``) — chạy ``viec_chen`` ở phiên khác
     (commit) TRƯỚC khi lô khoá tập."""
-    goc = qos.khoa_o_chi_tieu
+    goc = qos.lock_quota_cells
 
     async def boc(*a, **kw):
         if diem.so_lan == 0:
@@ -129,12 +129,12 @@ def _boc_p0(monkeypatch, diem, viec_chen):
             await viec_chen()
         return await goc(*a, **kw)
 
-    monkeypatch.setattr(qos, "khoa_o_chi_tieu", boc)
+    monkeypatch.setattr(qos, "lock_quota_cells", boc)
 
 
 def _boc_p1(monkeypatch, diem, viec_chen):
-    """P1: sau khi ``_khoa_truoc_lo_duyet`` khoá xong tập — chạy ``viec_chen`` ở phiên khác (commit)."""
-    goc = asv._khoa_truoc_lo_duyet
+    """P1: sau khi ``_lock_before_batch_approval`` khoá xong tập — chạy ``viec_chen`` ở phiên khác (commit)."""
+    goc = asv._lock_before_batch_approval
 
     async def boc(*a, **kw):
         kq = await goc(*a, **kw)
@@ -143,14 +143,14 @@ def _boc_p1(monkeypatch, diem, viec_chen):
             await viec_chen()
         return kq
 
-    monkeypatch.setattr(asv, "_khoa_truoc_lo_duyet", boc)
+    monkeypatch.setattr(asv, "_lock_before_batch_approval", boc)
 
 
 def _boc_p2(monkeypatch, pid_dich, do):
     """P2: trong mục của ``pid_dich``, ngay sau lần gọi ``_resolve_quota_context(lock=True)`` ĐẦU TIÊN (trả về hoặc
     ném) — chạy ``do()`` (phép đo của phiên thứ ba) TRƯỚC khi SAVEPOINT của mục kết thúc. Ghi kết quả vào ``ket``.
-    Điều kiện kích hoạt KHÔNG dựa vào tham số mới ``ngu_canh_da_do`` ⇒ cùng phép đo chạy được trên mã cũ (đỏ do
-    hành vi — khoá dòng ngoài tập — không phải do thiếu ký hiệu). Bước dò của ``_khoa_truoc_lo_duyet`` và lần dò
+    Điều kiện kích hoạt KHÔNG dựa vào tham số mới ``probed_context`` ⇒ cùng phép đo chạy được trên mã cũ (đỏ do
+    hành vi — khoá dòng ngoài tập — không phải do thiếu ký hiệu). Bước dò của ``_lock_before_batch_approval`` và lần dò
     không khoá bên trong đều gọi ``lock=False`` ⇒ không kích hoạt."""
     goc = asv._resolve_quota_context
     ket = {}
@@ -204,7 +204,7 @@ async def test_f263_doi_nam_truoc_khi_khoa(client, hs, ad, monkeypatch):  # noqa
     kq = r.json()
     assert do == {"y": "trong", "x": "bi_giu"}, do  # x: đối chứng dương (lô giữ X từ đầu lô)
     assert (kq["success_count"], kq["failed_ids"]) == (0, [p]), kq
-    assert kq["errors"][str(p)] == qos.THONG_DIEP_XUNG_DOT, kq
+    assert kq["errors"][str(p)] == qos.CONFLICT_MESSAGE, kq
     assert (await _ban(p))[0] == "submitted"  # đọc SAU commit, từ kết nối khác
     assert hoa_hong == []
 
@@ -241,7 +241,7 @@ async def test_f263_dong_moi_sau_khi_khoa_tap(client, hs, ad, monkeypatch):  # n
     kq = r.json()
     assert do == {"z": "trong", "x": "bi_giu"}, do
     assert (kq["success_count"], kq["failed_ids"]) == (1, [p]), kq
-    assert kq["errors"][str(p)] == qos.THONG_DIEP_XUNG_DOT, kq
+    assert kq["errors"][str(p)] == qos.CONFLICT_MESSAGE, kq
     assert ((await _ban(p))[0], (await _ban(q))[0]) == ("submitted", "approved")
     assert hoa_hong == [await _lead(q)]  # callback CHỈ cho mục đã commit
 
@@ -273,7 +273,7 @@ async def test_f263_tap_khoa_rong(client, hs, ad, monkeypatch):  # noqa: F811
     kq = r.json()
     assert do == {"z": "trong", "p": "bi_giu"}, do
     assert (kq["success_count"], kq["failed_ids"]) == (0, [p]), kq
-    assert kq["errors"][str(p)] == qos.THONG_DIEP_XUNG_DOT, kq
+    assert kq["errors"][str(p)] == qos.CONFLICT_MESSAGE, kq
     assert (await _ban(p))[0] == "submitted"
     assert hoa_hong == []
 
@@ -302,7 +302,7 @@ async def test_f263_anh_xa_thieu(hs):  # noqa: F811
             ho_so = await db.get(models.AdmissionProfile, p)
             await db.refresh(ho_so, ["lead"])
             with pytest.raises(ServiceError):
-                await asv._resolve_quota_context(db, ho_so, lock=True, ngu_canh_da_do={})
+                await asv._resolve_quota_context(db, ho_so, lock=True, probed_context={})
             await db.rollback()
     finally:
         await _doi_nam(z, nam_z)

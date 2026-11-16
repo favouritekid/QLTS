@@ -61,7 +61,7 @@ def db_session():
 def patched_audit_and_dispatch():
     """Patch ``audit_service.log_status_change`` + ``dispatch_event`` so
     the helper runs without touching DB or NotificationOutbox."""
-    # F230 (85c71119): ``transition`` gọi chốt ``kiem_chuyen_trang_thai`` (đọc Quyết định đã ký từ CSDL — tầng chủ sở hữu
+    # F230 (85c71119): ``transition`` gọi chốt ``check_status_transition`` (đọc Quyết định đã ký từ CSDL — tầng chủ sở hữu
     # luật, hành vi canh ở tests/api/test_council_decision_profile_gates_api.py). CSDL ở đây là MagicMock truyền qua ⇒ chốt được
     # thay bằng AsyncMock "cho phép" (hồ sơ thử không có Quyết định). Nối dây chốt canh ở
     # ``test_transition_goi_chot_quyet_dinh_da_ky_dung_tham_so``.
@@ -72,7 +72,7 @@ def patched_audit_and_dispatch():
         "app.services.notification_dispatcher.dispatch_event",
         new=AsyncMock(return_value=None),
     ) as dispatch_mock, patch(
-        "app.services.council_decision_status_service.kiem_chuyen_trang_thai",
+        "app.services.council_decision_status_service.check_status_transition",
         new=AsyncMock(return_value=None),
     ):
         yield audit_mock, dispatch_mock
@@ -80,11 +80,11 @@ def patched_audit_and_dispatch():
 
 @pytest.mark.asyncio
 async def test_transition_goi_chot_quyet_dinh_da_ky_dung_tham_so(db_session, patched_audit_and_dispatch):
-    """Nối dây chốt F230: ``transition`` PHẢI gọi ``kiem_chuyen_trang_thai(db, id, trạng thái cũ, trạng thái mới)`` đúng một lần,
+    """Nối dây chốt F230: ``transition`` PHẢI gọi ``check_status_transition(db, id, trạng thái cũ, trạng thái mới)`` đúng một lần,
     TRƯỚC khi ghi — gỡ lời gọi (hoặc truyền nhầm trạng thái) thì ca này đỏ."""
     profile = _profile(status="submitted", profile_id=5)
     with patch(
-        "app.services.council_decision_status_service.kiem_chuyen_trang_thai",
+        "app.services.council_decision_status_service.check_status_transition",
         new=AsyncMock(return_value=None),
     ) as chot:
         await state_service.transition(db_session, profile, "rejected", actor=_actor())
@@ -97,7 +97,7 @@ async def test_transition_chot_tu_choi_thi_khong_ghi(db_session, patched_audit_a
     audit_mock, dispatch_mock = patched_audit_and_dispatch
     profile = _profile(status="submitted", profile_id=5)
     with patch(
-        "app.services.council_decision_status_service.kiem_chuyen_trang_thai",
+        "app.services.council_decision_status_service.check_status_transition",
         new=AsyncMock(side_effect=BusinessRuleViolation("co Quyet dinh da ky")),
     ):
         with pytest.raises(BusinessRuleViolation):

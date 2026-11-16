@@ -29,7 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.models.council_document import CouncilDocumentTemplate
 from app.repositories.council_document_repository import CouncilDocumentRepository
-from app.services import council_document_render_service as bo_dung
+from app.services import council_document_render_service as render_service
 from app.utils.exceptions import (
     BusinessRuleViolation,
     DataValidationError,
@@ -38,16 +38,16 @@ from app.utils.exceptions import (
     FileValidationError,
 )
 
-TEN_LOAI = {
+KIND_NAMES = {
     "bien_ban": "Biên bản",
     "quyet_dinh": "Quyết định",
     "danh_sach": "Danh sách xét tuyển",
 }
-_KHUC = 64 * 1024
+_CHUNK = 64 * 1024
 
 
 @dataclass(frozen=True)
-class GioiHanGoi:
+class PackageLimits:
     """Trần kỹ thuật cho một gói mẫu (mặc định đọc từ cấu hình)."""
 
     tep: int
@@ -55,7 +55,7 @@ class GioiHanGoi:
     so_muc: int
 
     @classmethod
-    def tu_cau_hinh(cls) -> "GioiHanGoi":
+    def from_settings(cls) -> "PackageLimits":
         return cls(
             tep=settings.COUNCIL_TEMPLATE_MAX_BYTES,
             giai_nen=settings.COUNCIL_TEMPLATE_MAX_UNCOMPRESSED_BYTES,
@@ -63,40 +63,40 @@ class GioiHanGoi:
         )
 
 
-def kiem_goi_mau(
-    noi_dung: bytes, ten: str, gioi_han: Optional[GioiHanGoi] = None
+def check_template_package(
+    content: bytes, name: str, limits: Optional[PackageLimits] = None
 ) -> None:
     """Chặn tệp quá cỡ / bom zip TRƯỚC python-docx. Chỉ dùng ``zipfile``; không giải nén ra
     đĩa. Thông báo chỉ có tên mẫu và số đếm."""
-    gh = gioi_han or GioiHanGoi.tu_cau_hinh()
-    if not isinstance(noi_dung, bytes) or not noi_dung:
-        raise FileValidationError("Mẫu %s: tệp rỗng hoặc không phải bytes." % ten)
-    if len(noi_dung) > gh.tep:
+    gh = limits or PackageLimits.from_settings()
+    if not isinstance(content, bytes) or not content:
+        raise FileValidationError("Mẫu %s: tệp rỗng hoặc không phải bytes." % name)
+    if len(content) > gh.tep:
         raise FileSizeError(
-            "Mẫu %s: tệp %d byte, vượt giới hạn %d byte." % (ten, len(noi_dung), gh.tep)
+            "Mẫu %s: tệp %d byte, vượt giới hạn %d byte." % (name, len(content), gh.tep)
         )
     try:
-        z = zipfile.ZipFile(io.BytesIO(noi_dung))
+        z = zipfile.ZipFile(io.BytesIO(content))
     except (zipfile.BadZipFile, zipfile.LargeZipFile, ValueError, EOFError):
         raise FileValidationError(
-            "Mẫu %s không đọc được như tệp Word (.docx)." % ten
+            "Mẫu %s không đọc được như tệp Word (.docx)." % name
         ) from None
     with z:
-        muc = z.infolist()
-        if len(muc) > gh.so_muc:
+        item = z.infolist()
+        if len(item) > gh.so_muc:
             raise FileValidationError(
-                "Mẫu %s: gói có %d mục, vượt giới hạn %d." % (ten, len(muc), gh.so_muc)
+                "Mẫu %s: gói có %d mục, vượt giới hạn %d." % (name, len(item), gh.so_muc)
             )
-        khai = sum(m.file_size for m in muc)
+        khai = sum(m.file_size for m in item)
         if khai > gh.giai_nen:
             raise FileValidationError(
                 "Mẫu %s: tổng kích thước giải nén khai báo %d byte, vượt giới hạn %d."
-                % (ten, khai, gh.giai_nen)
+                % (name, khai, gh.giai_nen)
             )
-        # Thư mục trung tâm TRƯỚC khi mở bất kỳ mục nào — cùng MỘT hàm với ``_mo_docx`` của
+        # Thư mục trung tâm TRƯỚC khi mở bất kỳ mục nào — cùng MỘT hàm với ``_open_docx`` của
         # bộ dựng: kiểu nén chỉ STORED / DEFLATED (F216 — LZMA / BZIP2 nở cả khúc trong RAM
         # trước khi zipfile cắt theo số khai) và không mục nào mã hoá (F211).
-        bo_dung.kiem_goi_truoc_khi_mo(z, ten)
+        render_service.check_package_before_open(z, name)
         # Đọc THẬT theo khúc với trần tổng; không bao giờ giữ quá một khúc trong RAM.
         # Đo 03-11 (CPython 3.12, ``cong-cu/kham_pha_zip_docx_e2.py``): zipfile CẮT mỗi mục ở
         # kích thước KHAI trong thư mục trung tâm — tiêu đề khai nhỏ hơn dữ liệu thì phần
@@ -104,19 +104,19 @@ def kiem_goi_mau(
         # khai ⇒ chỉ đọc đúng phần khai). Vì vậy với zipfile, ``da_doc`` không vượt được tổng
         # khai đã kiểm ở trên; trần dưới đây là lớp PHỤ, giữ cho trường hợp bộ đọc không cắt
         # theo số khai (test giả lập bộ đọc như thế).
-        da_doc = 0
+        bytes_read = 0
         try:
-            for m in muc:
+            for m in item:
                 with z.open(m) as f:
                     while True:
-                        khuc = f.read(_KHUC)
-                        if not khuc:
+                        chunk = f.read(_CHUNK)
+                        if not chunk:
                             break
-                        da_doc += len(khuc)
-                        if da_doc > gh.giai_nen:
+                        bytes_read += len(chunk)
+                        if bytes_read > gh.giai_nen:
                             raise FileValidationError(
                                 "Mẫu %s: giải nén vượt giới hạn %d byte."
-                                % (ten, gh.giai_nen)
+                                % (name, gh.giai_nen)
                             )
         except (
             zipfile.BadZipFile,
@@ -130,96 +130,96 @@ def kiem_goi_mau(
             # ``Exception``); mã nén không hỗ trợ ⇒ ``NotImplementedError``; CRC sai ⇒
             # ``BadZipFile``.
             raise FileValidationError(
-                "Mẫu %s: gói zip hỏng (CRC / dữ liệu nén sai)." % ten
+                "Mẫu %s: gói zip hỏng (CRC / dữ liệu nén sai)." % name
             ) from None
         # Mọi mục đã đọc thử được trong trần ⇒ kiểm CÁC PHẦN của gói Word (kiểu nội dung,
         # DOCTYPE, quan hệ — không TargetMode External —, mã trường theo danh sách CHO PHÉP)
-        # — cùng MỘT hàm với ``_mo_docx`` của bộ dựng (bổ sung E3, owner 04-11; E4).
-        bo_dung.kiem_cac_phan_goi_word(z, ten)
+        # — cùng MỘT hàm với ``_open_docx`` của bộ dựng (bổ sung E3, owner 04-11; E4).
+        render_service.check_word_package_parts(z, name)
 
 
-async def tai_mau_len(
+async def upload_template(
     db: AsyncSession,
     *,
-    loai: str,
-    hieu_luc_tu: date,
-    noi_dung: bytes,
-    nguoi_tai_id: Optional[int],
-    ghi_chu: Optional[str] = None,
-    gioi_han: Optional[GioiHanGoi] = None,
+    kind: str,
+    effective_from: date,
+    content: bytes,
+    downloader_id: Optional[int],
+    note: Optional[str] = None,
+    limits: Optional[PackageLimits] = None,
 ) -> Tuple[CouncilDocumentTemplate, None]:
     """Kiểm rồi lưu một mẫu. Cùng loại + cùng ngày hiệu lực đã có ⇒ ``DuplicateResourceError``
     (không ghi đè: sửa mẫu = tải bản mới với ngày hiệu lực mới)."""
-    if loai not in TEN_LOAI:
+    if kind not in KIND_NAMES:
         raise DataValidationError(
-            "Loại mẫu không thuộc %s." % " / ".join(bo_dung.LOAI_MAU)
+            "Loại mẫu không thuộc %s." % " / ".join(render_service.TEMPLATE_KINDS)
         )
-    if not isinstance(hieu_luc_tu, date):
+    if not isinstance(effective_from, date):
         raise DataValidationError("Ngày hiệu lực của mẫu không phải ngày.")
-    if ghi_chu is not None and (not isinstance(ghi_chu, str) or len(ghi_chu) > 500):
+    if note is not None and (not isinstance(note, str) or len(note) > 500):
         raise DataValidationError("Ghi chú của mẫu dài quá 500 ký tự.")
-    ten = TEN_LOAI[loai]
-    kiem_goi_mau(noi_dung, ten, gioi_han)
-    bo_dung.kiem_mau(loai, noi_dung)
+    name = KIND_NAMES[kind]
+    check_template_package(content, name, limits)
+    render_service.check_template(kind, content)
 
     repo = CouncilDocumentRepository(db)
-    if await repo.mau_cung_ngay(loai, hieu_luc_tu) is not None:
+    if await repo.template_same_date(kind, effective_from) is not None:
         raise DuplicateResourceError(
-            "Đã có mẫu %s hiệu lực từ ngày %s." % (ten, hieu_luc_tu.isoformat())
+            "Đã có mẫu %s hiệu lực từ ngày %s." % (name, effective_from.isoformat())
         )
-    mau = CouncilDocumentTemplate(
-        loai=loai,
-        hieu_luc_tu=hieu_luc_tu,
-        sha256=hashlib.sha256(noi_dung).hexdigest(),
-        kich_thuoc=len(noi_dung),
-        noi_dung=noi_dung,
-        nguoi_tai_id=nguoi_tai_id,
-        ghi_chu=ghi_chu,
+    template = CouncilDocumentTemplate(
+        loai=kind,
+        hieu_luc_tu=effective_from,
+        sha256=hashlib.sha256(content).hexdigest(),
+        kich_thuoc=len(content),
+        noi_dung=content,
+        nguoi_tai_id=downloader_id,
+        ghi_chu=note,
     )
     try:
         async with db.begin_nested():
-            await repo.them_mau(mau)
+            await repo.add_template(template)
     except IntegrityError:
         # Hai lần tải cùng lúc qua được phép kiểm trên ⇒ UNIQUE (loai, hieu_luc_tu) chặn.
         # Không giữ lỗi gốc: thông báo của trình điều khiển mang cả bytes tham số.
         raise DuplicateResourceError(
-            "Đã có mẫu %s hiệu lực từ ngày %s." % (ten, hieu_luc_tu.isoformat())
+            "Đã có mẫu %s hiệu lực từ ngày %s." % (name, effective_from.isoformat())
         ) from None
-    return mau, None
+    return template, None
 
 
-async def liet_ke_mau(db: AsyncSession) -> List[CouncilDocumentTemplate]:
+async def list_templates(db: AsyncSession) -> List[CouncilDocumentTemplate]:
     """Mọi mẫu trong kho — metadata, KHÔNG nạp bytes (cột ``noi_dung`` deferred)."""
-    return await CouncilDocumentRepository(db).danh_sach_mau()
+    return await CouncilDocumentRepository(db).list_templates()
 
 
-async def chon_mau(
-    db: AsyncSession, ngay_ky: date
-) -> Tuple[bo_dung.CouncilTemplates, Dict[str, Dict[str, object]]]:
+async def pick_templates(
+    db: AsyncSession, signing_date: date
+) -> Tuple[render_service.CouncilTemplates, Dict[str, Dict[str, object]]]:
     """Ba mẫu áp cho văn bản ký ngày ``ngay_ky`` + {loại: {id, sha256, hieu_luc_tu}}."""
     repo = CouncilDocumentRepository(db)
-    chon: Dict[str, CouncilDocumentTemplate] = {}
-    thieu = []
-    for loai in bo_dung.LOAI_MAU:
-        mau = await repo.mau_hieu_luc(loai, ngay_ky)
-        if mau is None:
-            thieu.append(TEN_LOAI[loai])
+    picked: Dict[str, CouncilDocumentTemplate] = {}
+    missing = []
+    for kind in render_service.TEMPLATE_KINDS:
+        template = await repo.effective_template(kind, signing_date)
+        if template is None:
+            missing.append(KIND_NAMES[kind])
         else:
-            chon[loai] = mau
-    if thieu:
+            picked[kind] = template
+    if missing:
         raise BusinessRuleViolation(
             "Chưa có mẫu %s hiệu lực tới ngày ký %s — không dựng bộ văn bản."
-            % (", ".join(thieu), ngay_ky.isoformat())
+            % (", ".join(missing), signing_date.isoformat())
         )
-    mau_dung = bo_dung.CouncilTemplates(
-        **{loai: bytes(chon[loai].noi_dung) for loai in bo_dung.LOAI_MAU}
+    templates = render_service.CouncilTemplates(
+        **{kind: bytes(picked[kind].noi_dung) for kind in render_service.TEMPLATE_KINDS}
     )
-    thong_tin = {
-        loai: {
-            "id": chon[loai].id,
-            "sha256": chon[loai].sha256,
-            "hieu_luc_tu": chon[loai].hieu_luc_tu.isoformat(),
+    info = {
+        kind: {
+            "id": picked[kind].id,
+            "sha256": picked[kind].sha256,
+            "hieu_luc_tu": picked[kind].hieu_luc_tu.isoformat(),
         }
-        for loai in bo_dung.LOAI_MAU
+        for kind in render_service.TEMPLATE_KINDS
     }
-    return mau_dung, thong_tin
+    return templates, info

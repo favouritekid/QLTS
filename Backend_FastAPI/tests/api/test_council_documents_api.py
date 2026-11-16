@@ -52,9 +52,9 @@ from app.main import fastapi_app
 from app.middleware import exception_handlers as eh
 from app.repositories.council_document_repository import CouncilDocumentRepository
 from app.routers import council_documents as rt
-from app.services import council_document_render_service as bo_dung
-from app.services import council_document_set_service as bo_vb
-from app.services import council_document_template_service as kho_mau
+from app.services import council_document_render_service as render_service
+from app.services import council_document_set_service as set_service
+from app.services import council_document_template_service as template_service
 from app.utils.exceptions import ConflictError, PermissionDeniedError
 from tests.fixtures.constants import AuthURLs, TestUsers
 from tests.fixtures.goc_repo import goc_repo_co
@@ -395,12 +395,12 @@ async def test_tao_bo_qua_api_tai_tung_tep_la_bytes_da_luu(client, tk, hs, monke
     assert "ma_ho_so_dau_vao" not in bo and "snapshot_dto" not in bo  # PII không ra API
     for n in HO_SO_U1:
         assert hs[n][0] not in r.text  # không mã hồ sơ nào trong phản hồi
-    assert bo["thong_tin_dung"]["phien_ban_ma"] == bo_vb.PHIEN_BAN_MA
+    assert bo["thong_tin_dung"]["phien_ban_ma"] == set_service.CODE_VERSIONS
     assert [t["thu_tu"] for t in bo["tep"]] == list(range(1, bo["so_tep"] + 1))
 
     # Tải lại KHÔNG dựng lại: bộ dựng bị chặn hẳn từ đây.
     monkeypatch.setattr(
-        bo_dung, "render_council_documents", lambda *a, **k: pytest.fail("dựng lại")
+        render_service, "render_council_documents", lambda *a, **k: pytest.fail("dựng lại")
     )
     # Đóng DẤU VẾT vào bytes đã lưu (chú thích zip — tệp vẫn mở được như cũ): không cách dựng
     # lại nào (python-docx mở + lưu lại, dựng từ ảnh chụp) tái tạo được dấu vết ⇒ tải tệp PHẢI
@@ -480,7 +480,7 @@ async def test_tao_bo_loi_mien_khong_lo_ma_ho_so(client, tk, hs):
 
 def test_content_disposition_an_toan_voi_ten_co_dau():
     ten = 'Biên bản "xét"\r\nX: y.docx'
-    cd = rt.content_disposition_tai_ve("HoiDong/" + ten)
+    cd = rt.download_content_disposition("HoiDong/" + ten)
     cd.encode("latin-1")  # tiêu đề HTTP mã hoá được
     assert "\r" not in cd and "\n" not in cd and cd.count('"') == 2
     assert unquote(cd.split("filename*=UTF-8''", 1)[1]) == ten
@@ -594,48 +594,48 @@ def test_moi_route_cua_module_khop_vi_tu_bo_input_422():
     # giao diện 2 đường: /sets/{id}/luot-ghi-nhan (POST + GET), /luot-ghi-nhan/{ma}/chan + đường chọn hồ sơ 3
     # đường: /sets/kiem-truoc, /sets/doi-ma, /sets/tim-ho-so + /sets/{id}/tai-ca-bo, /nguoi-tao-bo.
     assert len(duong) == 27
-    assert all(eh._khong_log_input_422(p) for p in duong)
-    assert not eh._khong_log_input_422("/api/admission-config/council-documentsX")
-    assert not eh._khong_log_input_422("/api/admission-config/criteria")
+    assert all(eh._no_log_input_422(p) for p in duong)
+    assert not eh._no_log_input_422("/api/admission-config/council-documentsX")
+    assert not eh._no_log_input_422("/api/admission-config/criteria")
 
 
 # ═══════════════════════════════ một lần dựng cùng lúc — hai phiên CSDL thật ═══════════
 async def _tai_ba_mau_service(hs):
     async with AsyncSessionLocal() as db:
         for loai, b in MAU_GIA.items():
-            await kho_mau.tai_mau_len(
+            await template_service.upload_template(
                 db,
-                loai=loai,
-                hieu_luc_tu=date(2026, 1, 1),
-                noi_dung=b,
-                nguoi_tai_id=None,
+                kind=loai,
+                effective_from=date(2026, 1, 1),
+                content=b,
+                downloader_id=None,
             )
         await db.commit()
 
 
 async def _dung(db, hs):
-    return await bo_vb.tao_bo_van_ban(
+    return await set_service.create_document_set(
         db,
         csdl.engine,
-        ma_ho_so=[hs[n][0] for n in HO_SO_U1],
+        profile_codes=[hs[n][0] for n in HO_SO_U1],
         academic_year=2026,
-        tham_so=None,
-        nguoi_tao_id=None,
+        params=None,
+        creator_id=None,
     )
 
 
 async def test_phien_khac_giu_khoa_thi_lan_dung_sau_bi_tu_choi(hs, monkeypatch):
     await _tai_ba_mau_service(hs)
     dung = []
-    goc = bo_dung.render_council_documents
+    goc = render_service.render_council_documents
 
     def gian(*a, **k):
         dung.append(1)
         return goc(*a, **k)
 
-    monkeypatch.setattr(bo_dung, "render_council_documents", gian)
+    monkeypatch.setattr(render_service, "render_council_documents", gian)
     async with AsyncSessionLocal() as a, AsyncSessionLocal() as b:
-        assert await CouncilDocumentRepository(a).thu_khoa_dung() is True  # A giữ khoá
+        assert await CouncilDocumentRepository(a).try_build_lock() is True  # A giữ khoá
         with pytest.raises(ConflictError, match="Đang dựng một bộ văn bản khác"):
             await _dung(b, hs)
         assert dung == [] and await _dem() == (3, 0, 0)  # B không dựng, không ghi
@@ -649,7 +649,7 @@ async def test_phien_khac_giu_khoa_thi_lan_dung_sau_bi_tu_choi(hs, monkeypatch):
 async def test_hai_lan_dung_dong_thoi_lan_thu_hai_bi_tu_choi(hs, monkeypatch):
     await _tai_ba_mau_service(hs)
     vao, tha = threading.Event(), threading.Event()
-    goc = bo_dung.render_council_documents
+    goc = render_service.render_council_documents
 
     def cham(
         *a, **k
@@ -658,7 +658,7 @@ async def test_hai_lan_dung_dong_thoi_lan_thu_hai_bi_tu_choi(hs, monkeypatch):
         assert tha.wait(30)
         return goc(*a, **k)
 
-    monkeypatch.setattr(bo_dung, "render_council_documents", cham)
+    monkeypatch.setattr(render_service, "render_council_documents", cham)
     async with AsyncSessionLocal() as a, AsyncSessionLocal() as b:
         viec_a = asyncio.create_task(_dung(a, hs))
         assert await asyncio.to_thread(vao.wait, 30)  # A ĐANG dựng (giữ khoá)
@@ -673,7 +673,7 @@ async def test_hai_lan_dung_dong_thoi_lan_thu_hai_bi_tu_choi(hs, monkeypatch):
 async def test_api_tao_bo_khi_dang_dung_bo_khac_tra_409(client, tk, hs):
     await _tai_ba_mau_api(client, (await tk("admin")))
     async with AsyncSessionLocal() as a:
-        assert await CouncilDocumentRepository(a).thu_khoa_dung() is True
+        assert await CouncilDocumentRepository(a).try_build_lock() is True
         r = await client.post(
             P + "/sets", json=_than_tao(hs), headers=(await tk("admin"))
         )
@@ -786,7 +786,7 @@ async def test_422_khoa_thua_cap_dau_la_ma_gia_khong_vao_log(client, tk, hs, cap
     bg = _ban_ghi_422(caplog)
     assert len(bg) == 1  # đo đúng bản ghi của lỗi này (không xanh vì không có log)
     assert bg[0].errors == [
-        {"type": "extra_forbidden", "loc": ["body", eh.NHAN_LOC_KHONG_KHAI]}
+        {"type": "extra_forbidden", "loc": ["body", eh.UNDECLARED_LOC_LABEL]}
     ]
     toan_bo = _toan_bo_log(caplog)
     assert ma not in toan_bo
@@ -808,7 +808,7 @@ async def test_422_khoa_thua_long_trong_tham_so_khong_vao_log(client, tk, hs, ca
     assert bg[0].errors == [
         {
             "type": "extra_forbidden",
-            "loc": ["body", "tham_so_quyet_dinh", eh.NHAN_LOC_KHONG_KHAI],
+            "loc": ["body", "tham_so_quyet_dinh", eh.UNDECLARED_LOC_LABEL],
         }
     ]
     assert khoa not in _toan_bo_log(caplog)
@@ -854,8 +854,8 @@ def test_chuan_hoa_422_khong_co_route_thi_moi_chuoi_thanh_nhan():
         "input": {"GIA": 1},
         "ctx": {"error": "GIA"},
     }
-    assert eh._loi_422_an_toan_de_log([loi], None) == [
-        {"type": "missing", "loc": ["body", eh.NHAN_LOC_KHONG_KHAI, 0]}
+    assert eh._safe_422_error_for_log([loi], None) == [
+        {"type": "missing", "loc": ["body", eh.UNDECLARED_LOC_LABEL, 0]}
     ]
 
 
@@ -871,7 +871,7 @@ async def test_qua_api_doc_o_giao_dich_rieng_da_dong_truoc_khi_dung(
     bat = {}
     loop = asyncio.get_running_loop()
 
-    goc_doc = bo_vb.doc_ho_so_theo_ma
+    goc_doc = set_service.read_profiles_by_code
 
     async def gian_doc(*a, **k):
         anh = await goc_doc(*a, **k)
@@ -891,7 +891,7 @@ async def test_qua_api_doc_o_giao_dich_rieng_da_dong_truoc_khi_dung(
             luc = (await c.execute(text("SELECT clock_timestamp()"))).scalar_one()
         return xs, luc
 
-    goc_dung = bo_dung.render_council_documents
+    goc_dung = render_service.render_council_documents
 
     def gian_dung(*a, **k):  # luồng của to_thread: hỏi CSDL qua event loop chính
         fut = asyncio.run_coroutine_threadsafe(
@@ -900,7 +900,7 @@ async def test_qua_api_doc_o_giao_dich_rieng_da_dong_truoc_khi_dung(
         bat["xact_doc_luc_dung"], bat["luc_dung"] = fut.result(30)
         return goc_dung(*a, **k)
 
-    goc_ghi = CouncilDocumentRepository.them_bo
+    goc_ghi = CouncilDocumentRepository.add_set
 
     async def gian_ghi(self, bo, tep):
         bat["ghi"] = (
@@ -914,9 +914,9 @@ async def test_qua_api_doc_o_giao_dich_rieng_da_dong_truoc_khi_dung(
         ).one()
         return await goc_ghi(self, bo, tep)
 
-    monkeypatch.setattr(bo_vb, "doc_ho_so_theo_ma", gian_doc)
-    monkeypatch.setattr(bo_dung, "render_council_documents", gian_dung)
-    monkeypatch.setattr(CouncilDocumentRepository, "them_bo", gian_ghi)
+    monkeypatch.setattr(set_service, "read_profiles_by_code", gian_doc)
+    monkeypatch.setattr(render_service, "render_council_documents", gian_dung)
+    monkeypatch.setattr(CouncilDocumentRepository, "add_set", gian_ghi)
     r = await client.post(P + "/sets", json=_than_tao(hs), headers=h)
     assert r.status_code == 201, r.text
     doc, ghi = bat["doc"], bat["ghi"]

@@ -202,7 +202,7 @@ beforeEach(() => {
   mucGhiDe = null
   mayChuHienTai = {}
   push.mockClear()
-  useCouncilSelectionStore.getState().lamSach()
+  useCouncilSelectionStore.getState().reset()
   vi.spyOn(console, "error").mockImplementation(() => undefined)
 })
 
@@ -239,8 +239,8 @@ describe("trang /moi — luồng chính", () => {
       tham_so_quyet_dinh: { so_quyet_dinh: "501" },
     })
     // dựng xong ⇒ xoá lựa chọn + tham số khỏi bộ nhớ
-    expect(useCouncilSelectionStore.getState().idHoSo).toEqual([])
-    expect(useCouncilSelectionStore.getState().namHoc).toBeNull()
+    expect(useCouncilSelectionStore.getState().profileId).toEqual([])
+    expect(useCouncilSelectionStore.getState().academicYear).toBeNull()
   })
 
   it("review max PR #724 (R12): đang dựng ⇒ thanh bước khoá MỌI bước; dựng xong vẫn chuyển trang (không mất kết quả)", async () => {
@@ -371,7 +371,7 @@ describe("đóng băng tuyển sinh chặn route chỉ đọc (503)", () => {
     expect(loi.textContent).toMatch(/đóng băng/)
     expect(loi.textContent).toMatch(/chọn \/ kiểm trước/)
     expect(doiMaBodies).toHaveLength(1)
-    expect(useCouncilSelectionStore.getState().idHoSo).toEqual([])
+    expect(useCouncilSelectionStore.getState().profileId).toEqual([])
     for (const u of urls) expect(u).not.toContain(CCCD_GIA(13))
   })
 
@@ -402,7 +402,7 @@ describe("bước 2 — chốt danh sách", () => {
 
     fireEvent.click(screen.getByTestId("bo-khoi-bo-12"))
     await waitFor(() => expect((screen.getByTestId("chot-tiep") as HTMLButtonElement).disabled).toBe(false), { timeout: 4000 })
-    expect(useCouncilSelectionStore.getState().idHoSo).toEqual([11])
+    expect(useCouncilSelectionStore.getState().profileId).toEqual([11])
   })
 
   it("trong lúc kiểm lại: 'Chốt' bị khoá và KHÔNG hiện số cũ như còn đúng", async () => {
@@ -412,7 +412,7 @@ describe("bước 2 — chốt danh sách", () => {
     fireEvent.click(screen.getByTestId("tiep-kiem-tra"))
     await screen.findByTestId("bang-kiem-tra")
     expect((screen.getByTestId("chot-tiep") as HTMLButtonElement).disabled).toBe(false)
-    act(() => useCouncilSelectionStore.getState().them([12])) // danh sách đổi ⇒ đang chờ 600 ms
+    act(() => useCouncilSelectionStore.getState().add([12])) // danh sách đổi ⇒ đang chờ 600 ms
     expect((screen.getByTestId("chot-tiep") as HTMLButtonElement).disabled).toBe(true)
     expect(screen.getByTestId("tom-tat-dang-kiem")).toBeTruthy()
     expect(screen.queryByTestId("tom-tat-tong")).toBeNull()
@@ -544,15 +544,15 @@ describe("danh sách chọn", () => {
     await chon([11])
     fireEvent.change(screen.getByTestId("loc-nam"), { target: { value: "2025" } })
     expect(await screen.findByTestId("doi-nam-dialog")).toBeTruthy()
-    expect(useCouncilSelectionStore.getState().idHoSo).toEqual([11]) // chưa xoá
+    expect(useCouncilSelectionStore.getState().profileId).toEqual([11]) // chưa xoá
     fireEvent.click(screen.getByText("Giữ nguyên"))
     await waitFor(() => expect(screen.queryByTestId("doi-nam-dialog")).toBeNull())
-    expect(useCouncilSelectionStore.getState().namHoc).toBe(2026)
+    expect(useCouncilSelectionStore.getState().academicYear).toBe(2026)
 
     fireEvent.change(screen.getByTestId("loc-nam"), { target: { value: "2025" } })
     fireEvent.click(await screen.findByTestId("doi-nam-dong-y"))
-    await waitFor(() => expect(useCouncilSelectionStore.getState().idHoSo).toEqual([]))
-    expect(useCouncilSelectionStore.getState().namHoc).toBe(2025)
+    await waitFor(() => expect(useCouncilSelectionStore.getState().profileId).toEqual([]))
+    expect(useCouncilSelectionStore.getState().academicYear).toBe(2025)
   })
 
   it("dán mã: danh sách mã chỉ ở thân JSON; id thêm vào danh sách; dòng lỗi báo SỐ DÒNG, không giá trị", async () => {
@@ -570,7 +570,7 @@ describe("danh sách chọn", () => {
       "Dòng 2: không khớp hồ sơ nào của năm học đã chọn (hoặc hồ sơ ngoài phạm vi của bạn)",
     )
     expect(screen.getByTestId("dan-ma-dong-loi").textContent).not.toContain(CCCD_GIA(99))
-    expect(useCouncilSelectionStore.getState().idHoSo).toEqual([13])
+    expect(useCouncilSelectionStore.getState().profileId).toEqual([13])
     for (const u of urls) expect(u).not.toContain(CCCD_GIA(13))
   })
 
@@ -584,7 +584,7 @@ describe("danh sách chọn", () => {
     fireEvent.click(screen.getByTestId("dan-ma-them"))
     const loi = await screen.findByTestId("dan-ma-loi")
     expect(loi.textContent).toContain("Danh sách có 1001 dòng, vượt giới hạn kỹ thuật 1000 hồ sơ cho một bộ văn bản.")
-    expect(useCouncilSelectionStore.getState().idHoSo).toEqual([])
+    expect(useCouncilSelectionStore.getState().profileId).toEqual([])
     // đúng 1000 dòng qua trần (máy chủ giả trả lỗi theo SỐ DÒNG vì kho chỉ có vài mã) ⇒ KHÔNG còn câu trần
     fireEvent.change(screen.getByTestId("dan-ma-input"), { target: { value: dong(1000) } })
     fireEvent.click(screen.getByTestId("dan-ma-them"))
@@ -599,9 +599,9 @@ describe("danh sách chọn", () => {
     await chon([11])
     fireEvent.click(screen.getByTestId("tiep-kiem-tra"))
     await screen.findByTestId("buoc-kiem-tra")
-    act(() => useCouncilSelectionStore.getState().boTatCa())
+    act(() => useCouncilSelectionStore.getState().clearAll())
     expect(await screen.findByTestId("buoc-chon")).toBeTruthy()
-    act(() => useCouncilSelectionStore.getState().them([12]))
+    act(() => useCouncilSelectionStore.getState().add([12]))
     expect(screen.getByTestId("buoc-chon")).toBeTruthy() // vẫn bước 1
     expect(screen.queryByTestId("buoc-kiem-tra")).toBeNull()
   })
@@ -613,7 +613,7 @@ describe("danh sách chọn", () => {
     ve()
     await chon([11])
     expect(them.mock.calls.some((c) => c[0] === "beforeunload")).toBe(true)
-    act(() => useCouncilSelectionStore.getState().boTatCa())
+    act(() => useCouncilSelectionStore.getState().clearAll())
     await waitFor(() => expect(go.mock.calls.some((c) => c[0] === "beforeunload")).toBe(true))
   })
 })

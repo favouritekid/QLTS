@@ -35,7 +35,7 @@ from fastapi import FastAPI
 from sentry_sdk.transport import Transport
 
 from app.core import sentry_init
-from app.core.sentry_init import khoi_tao_sentry, loc_su_kien
+from app.core.sentry_init import init_sentry, filter_event
 from tests.fixtures.hoi_dong_seed import ma_gia
 
 pytestmark = pytest.mark.unit
@@ -164,7 +164,7 @@ def sg(mang_bi_chan):
     ma = ma_gia(random.randrange(10**6))
     token = "tokgia" + secrets.token_hex(8)
     try:
-        assert khoi_tao_sentry(DSN_GIA, "test", 1.0, transport=bg) is True
+        assert init_sentry(DSN_GIA, "test", 1.0, transport=bg) is True
         yield {
             "bg": bg,
             "ma": ma,
@@ -202,7 +202,7 @@ def _khong_co(sg, tho, khoa="ma"):
 
 # ═══════════════════════════════ không DSN ⇒ không khởi tạo ═══════════════════════════════
 def test_dsn_rong_thi_khong_khoi_tao():
-    assert khoi_tao_sentry("", "test", 1.0) is False
+    assert init_sentry("", "test", 1.0) is False
     assert not sentry_sdk.get_client().is_active()
 
 
@@ -229,7 +229,7 @@ async def test_bien_cuc_bo_khong_vao_su_kien(sg):
 
 
 async def test_chuoi_truy_van_khong_vao_su_kien(sg):
-    # loc_su_kien bỏ query_string (SDK luôn thu — _asgi_common._get_request_data).
+    # filter_event bỏ query_string (SDK luôn thu — _asgi_common._get_request_data).
     r, loi, gd, tho = await _gui(sg, "GET", "/gia/loi?ma=" + sg["ma"])
     assert r.status_code == 500 and len(loi) == 1 and len(gd) == 1
     assert "query_string" not in loi[0]["request"]
@@ -237,7 +237,7 @@ async def test_chuoi_truy_van_khong_vao_su_kien(sg):
 
 
 async def test_chu_ngoai_le_chi_con_loai(sg):
-    # loc_su_kien: chữ của ngoại lệ ⇒ chỉ loại + mã số (loai_loi_an_toan).
+    # filter_event: chữ của ngoại lệ ⇒ chỉ loại + mã số (loai_loi_an_toan).
     r, loi, _gd, tho = await _gui(sg, "GET", "/gia/thong-diep")
     assert r.status_code == 500 and len(loi) == 1
     assert loi[0]["exception"]["values"][-1]["type"] == "RuntimeError"
@@ -262,7 +262,7 @@ async def test_log_error_khong_thanh_su_kien(sg):
 
 
 async def test_header_referer_khong_vao_su_kien(sg):
-    # loc_su_kien: chỉ giữ header thuộc TIEU_DE_GIU.
+    # filter_event: chỉ giữ header thuộc KEPT_HEADERS.
     r, loi, _gd, tho = await _gui(
         sg,
         "GET",
@@ -270,7 +270,7 @@ async def test_header_referer_khong_vao_su_kien(sg):
         headers={"referer": "https://gia.invalid/?ma=" + sg["ma"]},
     )
     assert r.status_code == 500 and len(loi) == 1
-    assert set(loi[0]["request"]["headers"]) <= sentry_init.TIEU_DE_GIU
+    assert set(loi[0]["request"]["headers"]) <= sentry_init.KEPT_HEADERS
     assert _khong_co(sg, tho), "header Referer (mã giả) có trong envelope"
 
 
@@ -285,7 +285,7 @@ async def test_cookie_khong_vao_su_kien(sg):
 
 
 async def test_token_trong_duong_dan_bi_che(sg):
-    # loc_su_kien: url qua bộ che log (tiền tố đường dẫn mang token — TOKEN_PATH_PREFIXES).
+    # filter_event: url qua bộ che log (tiền tố đường dẫn mang token — TOKEN_PATH_PREFIXES).
     r, loi, _gd, tho = await _gui(sg, "GET", "/api/admissions/confirm/" + sg["token"])
     assert r.status_code == 500 and len(loi) == 1
     assert "<redacted>" in loi[0]["request"]["url"]
@@ -293,7 +293,7 @@ async def test_token_trong_duong_dan_bi_che(sg):
 
 
 async def test_token_trong_ten_giao_dich_khi_khong_khop_route_bi_che(sg):
-    # Đường không khớp route ⇒ SDK đặt TÊN giao dịch = đường dẫn thô ⇒ loc_su_kien che cả tên.
+    # Đường không khớp route ⇒ SDK đặt TÊN giao dịch = đường dẫn thô ⇒ filter_event che cả tên.
     r, loi, gd, tho = await _gui(sg, "GET", "/confirm/" + sg["token"])
     assert r.status_code == 404 and loi == [] and len(gd) == 1
     assert _khong_co(
@@ -306,19 +306,19 @@ SPAN = {"sql": "/gia/span-sql", "http": "/gia/span-http", "redis": "/gia/span-re
 
 @pytest.mark.parametrize("nguon", sorted(SPAN))
 async def test_span_giao_dich_khong_mang_ma(sg, nguon):
-    # loc_su_kien: mỗi span chỉ còn TRUONG_SPAN_GIU (bỏ description / data / tags).
+    # filter_event: mỗi span chỉ còn KEPT_SPAN_FIELDS (bỏ description / data / tags).
     r, loi, gd, tho = await _gui(sg, "GET", SPAN[nguon])
     assert r.status_code == 200 and loi == [] and len(gd) == 1
     assert _khong_co(sg, tho), "span (%s) mang mã giả vào envelope" % nguon
     assert gd[0].get("spans"), "giao dịch không có span — phép đo không hợp lệ"
-    assert all(set(s) <= sentry_init.TRUONG_SPAN_GIU for s in gd[0]["spans"])
+    assert all(set(s) <= sentry_init.KEPT_SPAN_FIELDS for s in gd[0]["spans"])
 
 
 @pytest.mark.parametrize("nguon", sorted(SPAN))
 async def test_span_doi_chung_khong_loc_thi_co_ma(sg, monkeypatch, nguon):
     # ĐỐI CHỨNG: bỏ RIÊNG bước lọc span ⇒ mã giả CÓ trong envelope (ca trên dựng đúng: SDK thật sự
     # ghi span mang mã — không xanh giả vì tích hợp không chạy).
-    monkeypatch.setattr(sentry_init, "_loc_span", lambda s: s)
+    monkeypatch.setattr(sentry_init, "_filter_span", lambda s: s)
     r, loi, gd, tho = await _gui(sg, "GET", SPAN[nguon])
     assert r.status_code == 200 and len(gd) == 1
     assert not _khong_co(sg, tho), (
@@ -341,7 +341,7 @@ def test_span_goc_contexts_trace_chi_giu_truong_cho_phep():
             }
         },
     }
-    ra = loc_su_kien(ev, {})
+    ra = filter_event(ev, {})
     assert ma not in json.dumps(ra)
     assert ra["contexts"]["trace"] == {
         "trace_id": "t" * 32,
@@ -355,7 +355,7 @@ def test_bo_loc_hong_thi_bo_su_kien():
         def items(self):
             raise RuntimeError("hỏng")
 
-    assert loc_su_kien({"request": {"headers": _Hong(a=1)}}, {}) is None
+    assert filter_event({"request": {"headers": _Hong(a=1)}}, {}) is None
 
 
 # ═══════════════════════════════ nối dây: main.py ⇒ hàm chủ sở hữu ═══════════════════════════
@@ -380,7 +380,7 @@ def test_moi_noi_goi_sentry_init_chi_o_chu_so_huu():
         isinstance(n, ast.Expr)
         and isinstance(n.value, ast.Call)
         and isinstance(n.value.func, ast.Name)
-        and n.value.func.id == "khoi_tao_sentry"
+        and n.value.func.id == "init_sentry"
         for n in main.body
     ), "main.py không gọi khoi_tao_sentry ở cấp module"
 
@@ -439,8 +439,8 @@ def test_main_khoi_tao_sentry_qua_ham_chu_so_huu():
         "max_request_body_size": "never",
         "include_local_variables": False,
         "max_breadcrumbs": 0,
-        "before_send": "app.core.sentry_init.loc_su_kien",
-        "before_send_transaction": "app.core.sentry_init.loc_su_kien",
+        "before_send": "app.core.sentry_init.filter_event",
+        "before_send_transaction": "app.core.sentry_init.filter_event",
         "log_thanh_su_kien": False,
         "goi_mang": 0,
     }

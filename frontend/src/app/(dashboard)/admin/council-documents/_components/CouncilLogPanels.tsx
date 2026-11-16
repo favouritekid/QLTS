@@ -18,21 +18,21 @@ import {
 } from "@/hooks/admin/useCouncilDocuments"
 
 import { CouncilErrorAlert } from "./CouncilErrorAlert"
-import { kichThuoc, nguoiHienThi, shaRutGon, thoiDiem } from "./hien-thi"
+import { formatSize, userLabel, shortSha, formatTime } from "./display"
 
-const CO_TRANG = 100
+const PAGE_SIZE = 100
 
-function PhanTrang({
+function Pagination({
   offset,
   setOffset,
   day,
-  dangTai,
+  loading,
   ten,
 }: {
   offset: number
   setOffset: (f: (o: number) => number) => void
   day: boolean
-  dangTai: boolean
+  loading: boolean
   ten: string
 }) {
   return (
@@ -40,18 +40,18 @@ function PhanTrang({
       <Button
         variant="outline"
         size="sm"
-        disabled={offset === 0 || dangTai}
-        onClick={() => setOffset((o) => Math.max(0, o - CO_TRANG))}
+        disabled={offset === 0 || loading}
+        onClick={() => setOffset((o) => Math.max(0, o - PAGE_SIZE))}
         data-testid={`${ten}-prev`}
       >
         Trang trước
       </Button>
-      <span className="text-sm text-muted-foreground">Trang {Math.floor(offset / CO_TRANG) + 1}</span>
+      <span className="text-sm text-muted-foreground">Trang {Math.floor(offset / PAGE_SIZE) + 1}</span>
       <Button
         variant="outline"
         size="sm"
-        disabled={!day || dangTai}
-        onClick={() => setOffset((o) => o + CO_TRANG)}
+        disabled={!day || loading}
+        onClick={() => setOffset((o) => o + PAGE_SIZE)}
         data-testid={`${ten}-next`}
       >
         Trang sau
@@ -67,7 +67,7 @@ function PhanTrang({
 export function CouncilDownloadLogPanel({ setId }: { setId?: number }) {
   const [offset, setOffset] = useState(0)
   const q = useCouncilDownloadLog(
-    setId === undefined ? { limit: CO_TRANG, offset } : { limit: CO_TRANG, offset, set_id: setId },
+    setId === undefined ? { limit: PAGE_SIZE, offset } : { limit: PAGE_SIZE, offset, set_id: setId },
     true,
   )
   if (q.isPending) {
@@ -98,25 +98,25 @@ export function CouncilDownloadLogPanel({ setId }: { setId?: number }) {
           <TableBody>
             {q.data.map((d) => (
               <TableRow key={d.id} data-testid={`download-log-row-${d.id}`}>
-                <TableCell>{thoiDiem(d.tai_luc)}</TableCell>
-                <TableCell>{nguoiHienThi(d.nguoi_tai_ten, d.nguoi_tai_id)}</TableCell>
+                <TableCell>{formatTime(d.tai_luc)}</TableCell>
+                <TableCell>{userLabel(d.nguoi_tai_ten, d.nguoi_tai_id)}</TableCell>
                 <TableCell>#{d.set_id}</TableCell>
                 <TableCell className="break-all">
                   {d.thu_tu}. {d.path}
                 </TableCell>
                 <TableCell className="font-mono text-xs" title={d.sha256}>
-                  {shaRutGon(d.sha256)}
+                  {shortSha(d.sha256)}
                 </TableCell>
               </TableRow>
             ))}
           </TableBody>
         </Table>
       )}
-      <PhanTrang
+      <Pagination
         offset={offset}
         setOffset={setOffset}
-        day={q.data.length === CO_TRANG}
-        dangTai={q.isFetching}
+        day={q.data.length === PAGE_SIZE}
+        loading={q.isFetching}
         ten="download-log"
       />
     </div>
@@ -126,7 +126,7 @@ export function CouncilDownloadLogPanel({ setId }: { setId?: number }) {
 /** Vết xoá bộ (CHỈ admin, cờ `xem_nhat_ky_xoa`) — không có danh sách CCCD. */
 export function CouncilDeletionLogPanel() {
   const [offset, setOffset] = useState(0)
-  const q = useCouncilSetDeletions({ limit: CO_TRANG, offset }, true)
+  const q = useCouncilSetDeletions({ limit: PAGE_SIZE, offset }, true)
   if (q.isPending) {
     return (
       <div className="flex items-center gap-2 text-muted-foreground">
@@ -156,8 +156,8 @@ export function CouncilDeletionLogPanel() {
           <TableBody>
             {q.data.map((v) => (
               <TableRow key={v.id} data-testid={`deletion-row-${v.id}`}>
-                <TableCell>{thoiDiem(v.xoa_luc)}</TableCell>
-                <TableCell>{nguoiHienThi(v.nguoi_xoa_ten, v.nguoi_xoa_id)}</TableCell>
+                <TableCell>{formatTime(v.xoa_luc)}</TableCell>
+                <TableCell>{userLabel(v.nguoi_xoa_ten, v.nguoi_xoa_id)}</TableCell>
                 <TableCell>#{v.set_id}</TableCell>
                 <TableCell className="text-right">{v.so_ho_so}</TableCell>
                 <TableCell>
@@ -166,9 +166,9 @@ export function CouncilDeletionLogPanel() {
                       <li key={i} className="break-all">
                         {String(t.thu_tu ?? "")}. {String(t.path ?? "")} ·{" "}
                         <span className="font-mono" title={String(t.sha256 ?? "")}>
-                          {shaRutGon(String(t.sha256 ?? ""))}
+                          {shortSha(String(t.sha256 ?? ""))}
                         </span>
-                        {typeof t.kich_thuoc === "number" ? ` · ${kichThuoc(t.kich_thuoc)}` : ""}
+                        {typeof t.kich_thuoc === "number" ? ` · ${formatSize(t.kich_thuoc)}` : ""}
                       </li>
                     ))}
                   </ul>
@@ -179,11 +179,11 @@ export function CouncilDeletionLogPanel() {
           </TableBody>
         </Table>
       )}
-      <PhanTrang
+      <Pagination
         offset={offset}
         setOffset={setOffset}
-        day={q.data.length === CO_TRANG}
-        dangTai={q.isFetching}
+        day={q.data.length === PAGE_SIZE}
+        loading={q.isFetching}
         ten="deletion-log"
       />
     </div>

@@ -4,35 +4,35 @@
 import { getStatusConfig } from "@/lib/status-config"
 
 /** Nhãn trạng thái hồ sơ (chỉ để đọc) + mã gốc của máy chủ — mức chặn / cảnh báo do MÁY CHỦ quyết. */
-export function nhanTrangThai(s: string): string {
+export function statusLabel(s: string): string {
   const nhan = getStatusConfig(s).label
   return nhan && nhan !== s ? `${nhan} (${s})` : s
 }
 
 /** Nhãn loại mẫu — trùng `TEN_LOAI` của `council_document_template_service.py`. Loại lạ ⇒ in nguyên. */
-const NHAN_LOAI_MAU: Record<string, string> = {
+const TEMPLATE_KIND_LABELS: Record<string, string> = {
   bien_ban: "Biên bản",
   quyet_dinh: "Quyết định",
   danh_sach: "Danh sách xét tuyển",
 }
 
-export function nhanLoaiMau(loai: string): string {
-  return NHAN_LOAI_MAU[loai] ?? loai
+export function templateKindLabel(loai: string): string {
+  return TEMPLATE_KIND_LABELS[loai] ?? loai
 }
 
 /** sha256 rút gọn để nhìn (12 ký tự đầu) — bản đầy đủ ở thuộc tính `title`. */
-export function shaRutGon(sha: string): string {
+export function shortSha(sha: string): string {
   return sha.length > 12 ? `${sha.slice(0, 12)}…` : sha
 }
 
-export function kichThuoc(byte: number): string {
+export function formatSize(byte: number): string {
   if (byte < 1024) return `${byte} B`
   if (byte < 1024 * 1024) return `${(byte / 1024).toFixed(1)} KB`
   return `${(byte / (1024 * 1024)).toFixed(2)} MB`
 }
 
 /** Thời điểm ISO (UTC) ⇒ giờ Việt Nam, dạng dd/MM/yyyy HH:mm. Không đọc được ⇒ in nguyên. */
-export function thoiDiem(iso: string): string {
+export function formatTime(iso: string): string {
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return iso
   return new Intl.DateTimeFormat("vi-VN", {
@@ -57,54 +57,54 @@ export function nguoi(id: number | null): string {
 }
 
 /** Tên người máy chủ trả (`nguoi_tao_ten` / `nguoi_tai_ten` / `nguoi_xoa_ten`: họ tên, không có thì tên đăng nhập); `null` (tài khoản không còn) ⇒ "Tài khoản #n". */
-export function nguoiHienThi(ten: string | null | undefined, id: number | null): string {
+export function userLabel(ten: string | null | undefined, id: number | null): string {
   return ten ? ten : nguoi(id)
 }
 
 // ── mức kiểm trước (bước 1–2) ────────────────────────────────────────────────
-const NHAN_MUC_KIEM: Record<string, string> = {
+const CHECK_ITEM_LABELS: Record<string, string> = {
   duoc_dung: "Được dựng",
   can_xac_nhan: "Cần xác nhận",
   bi_chan: "Bị chặn",
 }
 /** Nhãn mức do MÁY CHỦ quyết; mã lạ ⇒ in nguyên (không suy mức). */
-export function nhanMucKiem(muc: string): string {
-  return NHAN_MUC_KIEM[muc] ?? muc
+export function checkItemLabel(muc: string): string {
+  return CHECK_ITEM_LABELS[muc] ?? muc
 }
 
 // ── tình trạng bộ / văn bản (danh sách bộ, bước 6) ───────────────────────────
-const NHAN_TINH_TRANG_BO: Record<string, string> = {
+const SET_STATE_LABELS: Record<string, string> = {
   chua_ghi_nhan: "Chưa ghi nhận",
   con_hieu_luc: "Còn hiệu lực",
   het_hieu_luc: "Hết hiệu lực",
   da_huy_ghi_nhan: "Đã huỷ ghi nhận",
   chua_xac_dinh: "Chưa xác định",
 }
-export function nhanTinhTrangBo(t: string): string {
-  return NHAN_TINH_TRANG_BO[t] ?? t
+export function setStateLabel(t: string): string {
+  return SET_STATE_LABELS[t] ?? t
 }
 /** Chú thích đi kèm nhãn "Chưa ghi nhận" (đặc tả 3.4): nói đúng nghĩa của nhãn. */
-export const CHU_THICH_CHUA_GHI_NHAN = "phần mềm chưa có bản ghi Quyết định đã ký của bộ này; không có nghĩa là giấy chưa ký"
+export const NOT_RECORDED_NOTE = "phần mềm chưa có bản ghi Quyết định đã ký của bộ này; không có nghĩa là giấy chưa ký"
 
-const NHAN_LOAI_QD: Record<string, string> = {
+const DECISION_KIND_LABELS: Record<string, string> = {
   trung_tuyen: "Quyết định trúng tuyển",
   bo_sung: "Quyết định bổ sung",
 }
-export function nhanLoaiQuyetDinh(loai: string): string {
-  return NHAN_LOAI_QD[loai] ?? loai
+export function decisionKindLabel(loai: string): string {
+  return DECISION_KIND_LABELS[loai] ?? loai
 }
 
-const NHAN_TRANG_THAI_QD: Record<string, string> = {
+const DECISION_STATUS_LABELS: Record<string, string> = {
   hieu_luc: "Còn hiệu lực",
   het_hieu_luc: "Hết hiệu lực",
   huy_ghi_nhan: "Đã huỷ ghi nhận",
 }
-export function nhanTrangThaiQuyetDinh(t: string): string {
-  return NHAN_TRANG_THAI_QD[t] ?? t
+export function decisionStatusLabel(t: string): string {
+  return DECISION_STATUS_LABELS[t] ?? t
 }
 
 /** Lý do một dòng dán mã không khớp (`POST /sets/doi-ma`) — máy chủ chỉ nêu SỐ DÒNG, không giá trị. */
-const NHAN_LY_DO_DAN_MA: Record<string, string> = {
+const PASTE_CODE_REASON_LABELS: Record<string, string> = {
   rong: "dòng trống",
   trung: "mã trùng",
   ky_tu_la: "có ký tự lạ",
@@ -113,26 +113,26 @@ const NHAN_LY_DO_DAN_MA: Record<string, string> = {
   khong_khop: "không khớp hồ sơ nào của năm học đã chọn (hoặc hồ sơ ngoài phạm vi của bạn)",
   nhieu_ho_so: "mã khớp nhiều hơn một hồ sơ",
 }
-export function nhanLyDoDanMa(ly_do: string): string {
-  return NHAN_LY_DO_DAN_MA[ly_do] ?? ly_do
+export function pasteCodeReasonLabel(ly_do: string): string {
+  return PASTE_CODE_REASON_LABELS[ly_do] ?? ly_do
 }
 
 /** Ngành trên hồ sơ để hiện: hồ sơ không có ngành (máy chủ trả chuỗi rỗng) ⇒ "—", như màn Hồ sơ tuyển sinh. */
-export function nganhHienThi(nganh: string): string {
+export function majorLabel(nganh: string): string {
   return nganh.trim() === "" ? "—" : nganh
 }
 
 /** "Ngành · trình độ" của một dòng kiểm trước. */
-export function nganhTrinhDo(nganh: string, trinhDo: string): string {
-  const n = nganhHienThi(nganh)
-  return trinhDo ? `${n} · ${trinhDo}` : n
+export function majorWithLevel(nganh: string, level: string): string {
+  const n = majorLabel(nganh)
+  return level ? `${n} · ${level}` : n
 }
 
 /**
  * Nhãn tiếng Việt của TÊN TRƯỜNG ở bước 5 "Đối chiếu bản ký" (máy chủ trả khoá thô của dòng in — `CandidateRowV1`).
  * Bảng TRÌNH BÀY (không phải luật): chỉ khoá nghĩa chắc chắn; khoá khác ⇒ in nguyên khoá, không đoán nghĩa.
  */
-const NHAN_TRUONG_DOI_CHIEU: Record<string, string> = {
+const COMPARE_FIELD_LABELS: Record<string, string> = {
   ma_ho_so: "Mã hồ sơ",
   ho: "Họ",
   ten: "Tên",
@@ -155,6 +155,6 @@ const NHAN_TRUONG_DOI_CHIEU: Record<string, string> = {
   ut_ma: "Đối tượng ưu tiên",
   diem_ut: "Điểm ưu tiên",
 }
-export function nhanTruongDoiChieu(khoa: string): string {
-  return NHAN_TRUONG_DOI_CHIEU[khoa] ?? khoa
+export function compareFieldLabel(khoa: string): string {
+  return COMPARE_FIELD_LABELS[khoa] ?? khoa
 }

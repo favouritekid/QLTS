@@ -695,7 +695,7 @@ MANAGER_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/admission-config/council-documents/sets/{set_id}", "action": "GET"},
         {"subject": "{role}", "object": "/api/admission-config/council-documents/sets/{set_id}/files/{thu_tu}", "action": "GET"},
         # Cờ quyền giao diện của module (lượt F): máy chủ đánh giá chính các cổng của từng
-        # route cho người gọi (deps.quyen_van_ban_hoi_dong). Seed DB: migration hdts20261105.
+        # route cho người gọi (deps.council_document_permissions). Seed DB: migration hdts20261105.
         {"subject": "{role}", "object": "/api/admission-config/council-documents/quyen", "action": "GET"},
         # Vòng giao diện GĐ1: tải cả bộ (quyền + phạm vi y hệt tải lẻ) + người tạo bộ (bộ lọc danh sách).
         # Seed DB: migration hdts20261113.

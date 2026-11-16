@@ -159,9 +159,9 @@ export async function createCouncilSet(
 
 export async function deleteCouncilSet(
   setId: number,
-  lyDo: string,
+  reason: string,
 ): Promise<CouncilSetDeletion> {
-  const body = councilSetDeleteSchema.parse({ ly_do: lyDo })
+  const body = councilSetDeleteSchema.parse({ ly_do: reason })
   const res = await api.delete(`${P}/sets/${setId}`, { data: body })
   return councilSetDeletionSchema.parse(res.data)
 }
@@ -188,22 +188,22 @@ export function filenameFromContentDisposition(
   header: string | undefined,
   fallback: string,
 ): string {
-  const sach = (ten: string) => {
-    const cuoi = ten.split(/[\\/]/).pop() ?? ""
-    const bo = cuoi.replace(/[\u0000-\u001f\u007f]/g, "").trim()
-    return bo || fallback
+  const copy = (ten: string) => {
+    const last = ten.split(/[\\/]/).pop() ?? ""
+    const docSet = last.replace(/[\u0000-\u001f\u007f]/g, "").trim()
+    return docSet || fallback
   }
   if (!header) return fallback
   const sao = /filename\*\s*=\s*UTF-8''([^;]+)/i.exec(header)
   if (sao) {
     try {
-      return sach(decodeURIComponent(sao[1].trim()))
+      return copy(decodeURIComponent(sao[1].trim()))
     } catch {
       /* mã hoá hỏng ⇒ thử bản ASCII */
     }
   }
   const thuong = /filename\s*=\s*"([^"]*)"/i.exec(header) ?? /filename\s*=\s*([^;]+)/i.exec(header)
-  if (thuong) return sach(thuong[1].trim())
+  if (thuong) return copy(thuong[1].trim())
   return fallback
 }
 
@@ -214,20 +214,20 @@ export function filenameFromContentDisposition(
  */
 export async function downloadCouncilSetFile(
   setId: number,
-  thuTu: number,
+  order: number,
 ): Promise<CouncilFileBlob> {
-  return taiBlob(`${P}/sets/${setId}/files/${thuTu}`, `bo-${setId}-tep-${thuTu}`)
+  return fetchBlob(`${P}/sets/${setId}/files/${order}`, `bo-${setId}-tep-${order}`)
 }
 
 /** Tải một đường dẫn trả byte (tệp lẻ / zip cả bộ). Lỗi: thân lỗi (Blob) đọc lại thành JSON để hiện đúng câu máy chủ. */
-async function taiBlob(url: string, tenDuPhong: string): Promise<CouncilFileBlob> {
+async function fetchBlob(url: string, fallbackName: string): Promise<CouncilFileBlob> {
   try {
     const res = await api.get<Blob>(url, { responseType: "blob" })
     return {
       blob: res.data,
       filename: filenameFromContentDisposition(
         res.headers["content-disposition"] as string | undefined,
-        tenDuPhong,
+        fallbackName,
       ),
     }
   } catch (e) {
@@ -248,7 +248,7 @@ async function taiBlob(url: string, tenDuPhong: string): Promise<CouncilFileBlob
  * `Cache-Control: no-store`); tệp hỏng ⇒ 500, không zip, không nhật ký; Quản lý ngoài đơn vị ⇒ 404. Giao diện chỉ nhận và lưu.
  */
 export async function downloadCouncilSetZip(setId: number): Promise<CouncilFileBlob> {
-  return taiBlob(`${P}/sets/${setId}/tai-ca-bo`, `bo-${setId}.zip`)
+  return fetchBlob(`${P}/sets/${setId}/tai-ca-bo`, `bo-${setId}.zip`)
 }
 
 // ── nhật ký (CHỈ admin) ──────────────────────────────────────────────────────
@@ -422,7 +422,7 @@ export function councilBlockedRowsFromError(error: unknown): CouncilBlockedRows 
 }
 
 /** Mã lượt gửi: uuid do máy chủ cấp (không phải dữ liệu cá nhân ⇒ được nằm trong URL). Chặn chuỗi lạ trước khi ghép URL. */
-const MA_LUOT_RE = /^[0-9a-fA-F-]{36}$/
+const SUBMISSION_CODE_RE = /^[0-9a-fA-F-]{36}$/
 
 /** Mở MỘT lượt gửi ghi nhận cho bộ — gọi NGAY trước khi gửi, không gọi khi vào bước 6 (tránh lượt treo). */
 export async function openCouncilSubmission(setId: number): Promise<CouncilSubmissionOpen> {
@@ -437,27 +437,27 @@ export async function listCouncilSubmissions(setId: number): Promise<CouncilSubm
 }
 
 /** Phân xử lượt chưa rõ. Chỉ kết luận theo `ket_qua` của phản hồi 2xx; lỗi ⇒ vẫn "chưa xác định". */
-export async function resolveCouncilSubmission(ma: string): Promise<CouncilSubmissionResolve> {
-  if (!MA_LUOT_RE.test(ma)) throw new Error("Mã lượt gửi không hợp lệ.")
-  const res = await api.post(`${P}/luot-ghi-nhan/${ma}/chan`)
+export async function resolveCouncilSubmission(code: string): Promise<CouncilSubmissionResolve> {
+  if (!SUBMISSION_CODE_RE.test(code)) throw new Error("Mã lượt gửi không hợp lệ.")
+  const res = await api.post(`${P}/luot-ghi-nhan/${code}/chan`)
   return councilSubmissionResolveSchema.parse(res.data)
 }
 
 // ── thông báo lỗi ────────────────────────────────────────────────────────────
 /** Mã lỗi riêng của máy chủ (`ma_loi` ở cấp cao nhất của thân lỗi, cùng `ma`, `tao_luc`) — giao diện rẽ nhánh theo ĐÂY. */
 export interface CouncilApiErrorCode {
-  maLoi?: string
+  errorCode?: string
   /** `ma` lượt gửi kèm lỗi (409 `luot_dang_cho`; có thể `null`) */
   ma?: string | null
-  taoLuc?: string
+  createdAt?: string
 }
 
 export function councilErrorCode(error: unknown): CouncilApiErrorCode {
   const d = readApiError(error).data
   if (!d) return {}
-  const chuoi = (v: unknown) => (typeof v === "string" && v.length > 0 ? v : undefined)
-  const ma = d.ma === null ? null : chuoi(d.ma)
-  return { maLoi: chuoi(d.ma_loi), ma, taoLuc: chuoi(d.tao_luc) }
+  const asString = (v: unknown) => (typeof v === "string" && v.length > 0 ? v : undefined)
+  const code = d.ma === null ? null : asString(d.ma)
+  return { errorCode: asString(d.ma_loi), ma: code, createdAt: asString(d.tao_luc) }
 }
 
 export interface CouncilErrorMessage {
@@ -469,12 +469,12 @@ export interface CouncilErrorMessage {
   /** cổng dựng bộ (lượt G): danh sách bị chặn / cần xác nhận theo SỐ DÒNG — chỉ ở 400 / 409 */
   gate?: CouncilSetGate
   /** mã lỗi riêng của máy chủ (`ma_loi`: `du_lieu_doi_tu_luc_kiem`, `luot_dang_cho`, …) — chỉ ở 409; giao diện rẽ nhánh theo đây */
-  maLoi?: string
+  errorCode?: string
 }
 
 /** `kiem_tra_dung_bo` của thân lỗi 400 / 409 (máy chủ: chỉ số dòng, mã lý do, trạng thái, số
  * đếm). Sai dạng ⇒ undefined (giao diện chỉ hiện câu máy chủ). */
-function docGate(data: Record<string, unknown> | undefined): CouncilSetGate | undefined {
+function readGate(data: Record<string, unknown> | undefined): CouncilSetGate | undefined {
   const r = councilSetGateSchema.safeParse(data?.kiem_tra_dung_bo)
   return r.success ? r.data : undefined
 }
@@ -507,7 +507,7 @@ export function describeCouncilDocumentError(error: unknown): CouncilErrorMessag
   const status = e.status
   switch (status) {
     case 400:
-      return { status, title: "Máy chủ từ chối dữ liệu.", detail: e.detail, gate: docGate(e.data) }
+      return { status, title: "Máy chủ từ chối dữ liệu.", detail: e.detail, gate: readGate(e.data) }
     case 403:
       return { status, title: "Bạn không có quyền thực hiện thao tác này." }
     case 404:
@@ -520,8 +520,8 @@ export function describeCouncilDocumentError(error: unknown): CouncilErrorMessag
         status,
         title: "Không thực hiện được lúc này.",
         detail: e.detail,
-        gate: docGate(e.data),
-        maLoi: councilErrorCode(error).maLoi,
+        gate: readGate(e.data),
+        errorCode: councilErrorCode(error).errorCode,
       }
     case 422: {
       const dong = e.validation.map((x) => {

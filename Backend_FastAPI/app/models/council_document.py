@@ -59,69 +59,69 @@ from app.core.constants import SYSTEM_CONSULTATION_METHOD
 
 from .base import Base
 
-#: Ba loại mẫu — PHẢI trùng ``LOAI_MAU`` của bộ dựng; test khoá hai bên bằng nhau.
-LOAI_MAU_HOI_DONG = ("bien_ban", "quyet_dinh", "danh_sach")
+#: Ba loại mẫu — PHẢI trùng ``TEMPLATE_KINDS`` của bộ dựng; test khoá hai bên bằng nhau.
+COUNCIL_TEMPLATE_KINDS = ("bien_ban", "quyet_dinh", "danh_sach")
 
 #: Biểu thức CHECK dùng chung cho model (CSDL test) — migration viết lại đúng chuỗi này;
 #: ``tests/unit/test_council_document_models.py`` so ba nơi.
-CHECK_LOAI_MAU = "loai IN ('bien_ban', 'quyet_dinh', 'danh_sach')"
-CHECK_SHA_NOI_DUNG = "sha256 = encode(sha256(noi_dung), 'hex')"
-CHECK_KICH_THUOC = "kich_thuoc > 0 AND kich_thuoc = octet_length(noi_dung)"
-CHECK_MANG_MA = (
+CHECK_TEMPLATE_KIND = "loai IN ('bien_ban', 'quyet_dinh', 'danh_sach')"
+CHECK_SHA_CONTENT = "sha256 = encode(sha256(noi_dung), 'hex')"
+CHECK_SIZE = "kich_thuoc > 0 AND kich_thuoc = octet_length(noi_dung)"
+CHECK_CODE_ARRAY = (
     "jsonb_typeof(ma_ho_so_dau_vao) = 'array' "
     "AND jsonb_array_length(ma_ho_so_dau_vao) = so_ho_so"
 )
-CHECK_MANG_DTO = (
+CHECK_DTO_ARRAY = (
     "jsonb_typeof(snapshot_dto) = 'array' "
     "AND jsonb_array_length(snapshot_dto) = so_ho_so"
 )
 # -- hai bảng vết (migration hdts20261104) — migration viết lại đúng các chuỗi này --
 #: Trần KỸ THUẬT độ dài lý do xoá (ký tự) — không phải luật nghiệp vụ: đủ một đoạn giải
 #: thích, chặn thân request phình vào bảng vết (mỗi byte vào bản sao lưu).
-LY_DO_XOA_TOI_DA = 1000
-CHECK_DANH_SACH_TEP = (
+MAX_DELETE_REASON_LENGTH = 1000
+CHECK_FILE_LIST = (
     "jsonb_typeof(danh_sach_tep) = 'array' "
     "AND jsonb_array_length(danh_sach_tep) = so_tep"
 )
-CHECK_LY_DO = "char_length(btrim(ly_do)) > 0"
+CHECK_REASON = "char_length(btrim(ly_do)) > 0"
 CHECK_SHA_HEX = "sha256 ~ '^[0-9a-f]{64}$'"
 
 # ═══════════ Lượt I (F230) — ghi nhận Quyết định ĐÃ KÝ (migration hdts20261107) ═══════════
 # Đặc tả: logs-P5/cong-bo-ket-qua/ma-gd1/DAC-TA-TRIEN-KHAI-F230-2026-11-07.md mục 1 (+ mục 8).
 # Mọi chuỗi dưới đây migration viết lại ĐÚNG như thế; ``tests/unit/test_council_decision_models.py``
 # so model ↔ migration.
-LOAI_VAN_BAN = ("trung_tuyen", "bo_sung", "dieu_chinh", "van_ban_huy")
-TRANG_THAI_VAN_BAN = ("hieu_luc", "het_hieu_luc", "huy_ghi_nhan")
+DOCUMENT_KINDS = ("trung_tuyen", "bo_sung", "dieu_chinh", "van_ban_huy")
+DOCUMENT_STATUSES = ("hieu_luc", "het_hieu_luc", "huy_ghi_nhan")
 #: "Dòng còn hiệu lực" — MỘT biểu thức cho U3 (model + migration), hàm hỏi tình trạng và cột của
 #: cổng dựng bộ (``SQL_COT_TINH_TRANG_QD``). Tên cột không kèm bí danh bảng (dùng được trong câu
 #: con ``FROM council_decision_row``).
-DIEU_KIEN_DONG_HIEU_LUC = "trang_thai_cha = 'hieu_luc' AND bi_bo_boi_id IS NULL"
+EFFECTIVE_ROW_CONDITION = "trang_thai_cha = 'hieu_luc' AND bi_bo_boi_id IS NULL"
 #: Hồ sơ "có tên" trong văn bản chưa huỷ ghi nhận — ĐÚNG điều kiện CSDL giữ liên kết (K5a): xoá
 #: cứng hồ sơ bị chặn. Service báo trước bằng CHÍNH chuỗi này.
-DIEU_KIEN_DONG_GIU_HO_SO = "trang_thai_cha <> 'huy_ghi_nhan'"
+ROW_HOLDS_PROFILE_CONDITION = "trang_thai_cha <> 'huy_ghi_nhan'"
 #: Tiền tố dấu "Đã trúng tuyển theo QĐ số …" của 182 hồ sơ nhập từ AppSheet (công cụ
 #: ``cong-cu-nhap-appsheet/nhap_ho_so.py``: dòng 1 của ``ghi_chu_tu_van_dau`` — ghi chú lần tư vấn
 #: ``method = 'system'`` và tiền tố của ``revision_reason``). Owner 07-11 E1: em mang dấu áp CÙNG
 #: luật như em có Quyết định hiệu lực.
-DAU_APPSHEET_TIEN_TO = "Đã trúng tuyển theo QĐ số "
-assert not any(k in DAU_APPSHEET_TIEN_TO for k in "%_\\'"), "tiền tố dùng trong LIKE"
+APPSHEET_MARK_PREFIX = "Đã trúng tuyển theo QĐ số "
+assert not any(k in APPSHEET_MARK_PREFIX for k in "%_\\'"), "tiền tố dùng trong LIKE"
 assert "'" not in SYSTEM_CONSULTATION_METHOD
 #: Biểu thức DUY NHẤT của dấu AppSheet (hồ sơ bí danh ``p``) — cổng dựng bộ, ghi nhận, chốt chuyển
 #: trạng thái, cờ giao diện đều đọc qua đây. KHÔNG lọc ``deleted_at`` của lần tư vấn (fail-closed).
 #: Review max PR #724 (R2, owner 15-11 "chỉ áp cho hồ sơ năm 2026"): năm học của đợt nhập AppSheet (182 em). Nhánh tư
 #: vấn nối theo ``lead_id`` (không theo hồ sơ) ⇒ trước đây hồ sơ NĂM SAU của cùng lead thừa hưởng dấu (chặn từ chối /
 #: rút / về nháp / dựng bộ / ghi nhận; ghi chú ``method='system'`` bất biến ⇒ chỉ gỡ được bằng SQL tay).
-NAM_HOC_APPSHEET = 2026
-SQL_DAU_APPSHEET = (
+APPSHEET_ACADEMIC_YEAR = 2026
+SQL_APPSHEET_MARK = (
     "(p.academic_year = %d AND (COALESCE(p.revision_reason, '') LIKE '%s%%' "
     "OR EXISTS (SELECT 1 FROM consultation c_dau WHERE c_dau.lead_id = p.lead_id "
     "AND c_dau.method = '%s' AND COALESCE(c_dau.notes, '') LIKE '%s%%')))"
-    % (NAM_HOC_APPSHEET, DAU_APPSHEET_TIEN_TO, SYSTEM_CONSULTATION_METHOD, DAU_APPSHEET_TIEN_TO)
+    % (APPSHEET_ACADEMIC_YEAR, APPSHEET_MARK_PREFIX, SYSTEM_CONSULTATION_METHOD, APPSHEET_MARK_PREFIX)
 )
 #: Các cột tình trạng Quyết định của MỘT hồ sơ (bí danh ``p``) — dùng nguyên văn trong
-#: ``SQL_KIEM_NGUON`` (cổng dựng bộ, giao dịch chỉ đọc) và trong hàm hỏi
+#: ``SQL_CHECK_SOURCE`` (cổng dựng bộ, giao dịch chỉ đọc) và trong hàm hỏi
 #: ``council_decision_status_service`` (test khoá hai nơi cùng chuỗi + cùng kết quả).
-SQL_COT_TINH_TRANG_QD = (
+SQL_DECISION_STATE_COLUMNS = (
     "(SELECT min(decision_id) FROM council_decision_row "
     "WHERE profile_id = p.id AND (%s)) AS qd_hieu_luc_id, "
     "(SELECT COALESCE(d_qd.goc_id, d_qd.id) FROM council_decision d_qd "
@@ -135,85 +135,85 @@ SQL_COT_TINH_TRANG_QD = (
     "WHERE profile_id = p.id AND (%s)) AS co_ten_van_ban, "
     "%s AS dau_appsheet"
     % (
-        DIEU_KIEN_DONG_HIEU_LUC,
-        DIEU_KIEN_DONG_HIEU_LUC,
-        DIEU_KIEN_DONG_GIU_HO_SO,
-        SQL_DAU_APPSHEET,
+        EFFECTIVE_ROW_CONDITION,
+        EFFECTIVE_ROW_CONDITION,
+        ROW_HOLDS_PROFILE_CONDITION,
+        SQL_APPSHEET_MARK,
     )
 )
 
-CHECK_BO_BAN_KY_DU = "(ban_ky_so_quyet_dinh IS NULL) = (ban_ky_ngay IS NULL)"
-CHECK_BO_DUNG_LAI_CO_BAN_KY = (
+CHECK_SET_SIGNED_COPY_COMPLETE = "(ban_ky_so_quyet_dinh IS NULL) = (ban_ky_ngay IS NULL)"
+CHECK_SET_REBUILD_HAS_SIGNED_COPY = (
     "dung_lai_tu_set_id IS NULL OR ban_ky_so_quyet_dinh IS NOT NULL"
 )
-CHECK_BO_MOT_CHE_DO = "ban_ky_so_quyet_dinh IS NULL OR cho_quyet_dinh_goc_id IS NULL"
-CHECK_BO_SO_BAN_KY = (
+CHECK_SET_ONE_MODE = "ban_ky_so_quyet_dinh IS NULL OR cho_quyet_dinh_goc_id IS NULL"
+CHECK_SET_SIGNED_COPY_NUMBER = (
     "ban_ky_so_quyet_dinh IS NULL OR ban_ky_so_quyet_dinh ~ '^[0-9]{1,6}$'"
 )
 
-CHECK_DONG_BO_STT = "stt >= 1"
+CHECK_SET_ROW_SEQ = "stt >= 1"
 
-CHECK_QD_LOAI = "loai IN ('trung_tuyen', 'bo_sung', 'dieu_chinh', 'van_ban_huy')"
-CHECK_QD_TRANG_THAI = "trang_thai IN ('hieu_luc', 'het_hieu_luc', 'huy_ghi_nhan')"
-CHECK_QD_K3_GOC = "(loai IN ('bo_sung', 'dieu_chinh')) = (goc_id IS NOT NULL)"
-CHECK_QD_K3_HUY = "(loai = 'van_ban_huy') = (huy_qd_id IS NOT NULL)"
-CHECK_QD_K3_HET = "(trang_thai = 'het_hieu_luc') = (het_hieu_luc_boi_id IS NOT NULL)"
-CHECK_QD_K3_VBH = "loai <> 'van_ban_huy' OR trang_thai <> 'het_hieu_luc'"
-CHECK_QD_K3_HGN = (
+CHECK_DECISION_KIND = "loai IN ('trung_tuyen', 'bo_sung', 'dieu_chinh', 'van_ban_huy')"
+CHECK_DECISION_STATUS = "trang_thai IN ('hieu_luc', 'het_hieu_luc', 'huy_ghi_nhan')"
+CHECK_DECISION_K3_ROOT = "(loai IN ('bo_sung', 'dieu_chinh')) = (goc_id IS NOT NULL)"
+CHECK_DECISION_K3_CANCEL = "(loai = 'van_ban_huy') = (huy_qd_id IS NOT NULL)"
+CHECK_DECISION_K3_EXPIRED = "(trang_thai = 'het_hieu_luc') = (het_hieu_luc_boi_id IS NOT NULL)"
+CHECK_DECISION_K3_VBH = "loai <> 'van_ban_huy' OR trang_thai <> 'het_hieu_luc'"
+CHECK_DECISION_K3_HGN = (
     "(trang_thai = 'huy_ghi_nhan') = (huy_ghi_nhan_boi_id IS NOT NULL "
     "AND huy_ghi_nhan_luc IS NOT NULL AND ly_do_huy_ghi_nhan IS NOT NULL)"
 )
-CHECK_QD_K3_SO = "so_quyet_dinh ~ '^[0-9]{1,6}$'"
+CHECK_DECISION_K3_NUMBER = "so_quyet_dinh ~ '^[0-9]{1,6}$'"
 #: C1 (owner 06-11): số Quyết định không trùng TRONG năm dương lịch của ngày ký.
-CHECK_QD_K3_PHAM_VI = "pham_vi_so = CAST(EXTRACT(YEAR FROM ngay_ky) AS integer)"
-CHECK_QD_K3_LY_DO = (
+CHECK_DECISION_K3_SCOPE = "pham_vi_so = CAST(EXTRACT(YEAR FROM ngay_ky) AS integer)"
+CHECK_DECISION_K3_REASON = (
     "ly_do_huy_ghi_nhan IS NULL OR char_length(btrim(ly_do_huy_ghi_nhan)) > 0"
 )
-CHECK_QD_K3_TU_TRO = (
+CHECK_DECISION_K3_SELF_REFERENCE = (
     "(goc_id IS NULL OR goc_id <> id) AND (huy_qd_id IS NULL OR huy_qd_id <> id)"
 )
-CHECK_QD_K4 = "set_id IS NOT NULL OR NOT can_bo OR trang_thai = 'huy_ghi_nhan'"
-CHECK_QD_K4B = "can_bo OR set_id IS NULL"
-CHECK_QD_K4C = "loai NOT IN ('trung_tuyen', 'bo_sung') OR can_bo"
-CHECK_QD_K4D = "loai <> 'van_ban_huy' OR NOT can_bo"
-CHECK_QD_SHA_TEP = (
+CHECK_DECISION_K4 = "set_id IS NOT NULL OR NOT can_bo OR trang_thai = 'huy_ghi_nhan'"
+CHECK_DECISION_K4B = "can_bo OR set_id IS NULL"
+CHECK_DECISION_K4C = "loai NOT IN ('trung_tuyen', 'bo_sung') OR can_bo"
+CHECK_DECISION_K4D = "loai <> 'van_ban_huy' OR NOT can_bo"
+CHECK_DECISION_FILE_SHA = (
     "sha_tep_quyet_dinh IS NULL OR sha_tep_quyet_dinh ~ '^[0-9a-f]{64}$'"
 )
-CHECK_QD_SO_HO_SO = "so_ho_so >= 0"
+CHECK_DECISION_PROFILE_COUNT = "so_ho_so >= 0"
 #: U1 — một số trong sổ chỉ dùng một lần (số của văn bản bị huỷ hiệu lực VẪN là số đã dùng — C1).
-DIEU_KIEN_U1 = "trang_thai <> 'huy_ghi_nhan'"
+CONDITION_U1 = "trang_thai <> 'huy_ghi_nhan'"
 #: U2 — một bộ ↔ tối đa một văn bản chưa huỷ ghi nhận.
-DIEU_KIEN_U2 = "trang_thai <> 'huy_ghi_nhan' AND set_id IS NOT NULL"
+CONDITION_U2 = "trang_thai <> 'huy_ghi_nhan' AND set_id IS NOT NULL"
 #: U4 — một văn bản ↔ tối đa một văn bản huỷ còn sống.
-DIEU_KIEN_U4 = "loai = 'van_ban_huy' AND trang_thai = 'hieu_luc'"
+CONDITION_U4 = "loai = 'van_ban_huy' AND trang_thai = 'hieu_luc'"
 
-CHECK_DONG_QD_K5A = "profile_id IS NOT NULL OR trang_thai_cha = 'huy_ghi_nhan'"
-CHECK_DONG_QD_K5B = "set_row_id IS NOT NULL OR trang_thai_cha = 'huy_ghi_nhan'"
+CHECK_DECISION_ROW_K5A = "profile_id IS NOT NULL OR trang_thai_cha = 'huy_ghi_nhan'"
+CHECK_DECISION_ROW_K5B = "set_row_id IS NOT NULL OR trang_thai_cha = 'huy_ghi_nhan'"
 #: K5c (F257 — Codex lần 14): ``set_id`` nằm trong HAI khoá ngoại ghép (``fk_council_decision_row_bo``,
 #: ``fk_council_decision_row_dong_bo``). ``MATCH SIMPLE`` bỏ qua khoá ngoại có cột NULL ⇒ thiếu CHECK này
 #: thì dòng chưa huỷ ghi nhận mang ``set_id`` NULL + ``set_row_id`` của bộ + hồ sơ KHÁC vượt cả hai khoá
 #: ngoại lẫn K5a / K5b (gắn sai hồ sơ; bộ đếm lấy khoá từ dòng bộ). Dòng của văn bản đã huỷ ghi nhận được
 #: NULL (xoá bộ ⇒ ``council_decision.set_id`` SET NULL ⇒ ON UPDATE CASCADE lan xuống dòng).
-CHECK_DONG_QD_K5C = "set_id IS NOT NULL OR trang_thai_cha = 'huy_ghi_nhan'"
-CHECK_DONG_QD_BO = "bi_bo_boi_id IS NULL OR bi_bo_boi_id <> decision_id"
-CHECK_DONG_QD_STT = "stt >= 1"
+CHECK_DECISION_ROW_K5C = "set_id IS NOT NULL OR trang_thai_cha = 'huy_ghi_nhan'"
+CHECK_DECISION_ROW_SET = "bi_bo_boi_id IS NULL OR bi_bo_boi_id <> decision_id"
+CHECK_DECISION_ROW_SEQ = "stt >= 1"
 
-LOAI_SCAN = "application/pdf"
-CHECK_SCAN_KIEU = "kieu = 'application/pdf'"
+SCAN_KIND = "application/pdf"
+CHECK_SCAN_TYPE = "kieu = 'application/pdf'"
 
-CHECK_CHO_LY_DO_VAO = "ly_do_vao IN ('qd_bi_huy', 'bi_bo_boi_van_ban_bi_huy')"
-CHECK_CHO_TRANG_THAI = "trang_thai IN ('cho_quyet', 'da_cho_xet_lai', 'vo_hieu')"
-CHECK_CHO_H3 = "profile_id IS NOT NULL OR trang_thai = 'vo_hieu'"
-CHECK_CHO_H4_XL = (
+CHECK_HOLD_ENTRY_REASON = "ly_do_vao IN ('qd_bi_huy', 'bi_bo_boi_van_ban_bi_huy')"
+CHECK_HOLD_STATUS = "trang_thai IN ('cho_quyet', 'da_cho_xet_lai', 'vo_hieu')"
+CHECK_HOLD_H3 = "profile_id IS NOT NULL OR trang_thai = 'vo_hieu'"
+CHECK_HOLD_H4_XL = (
     "trang_thai <> 'da_cho_xet_lai' OR (quyet_boi_id IS NOT NULL "
     "AND quyet_luc IS NOT NULL AND ly_do_quyet IS NOT NULL)"
 )
-CHECK_CHO_H4_CQ = "trang_thai <> 'cho_quyet' OR quyet_luc IS NULL"
-CHECK_CHO_H4_VH = "(trang_thai = 'vo_hieu') = (vo_hieu_luc IS NOT NULL)"
-CHECK_CHO_LY_DO = "ly_do_quyet IS NULL OR char_length(btrim(ly_do_quyet)) > 0"
-DIEU_KIEN_H1 = "trang_thai = 'cho_quyet'"
+CHECK_HOLD_H4_CQ = "trang_thai <> 'cho_quyet' OR quyet_luc IS NULL"
+CHECK_HOLD_H4_VH = "(trang_thai = 'vo_hieu') = (vo_hieu_luc IS NOT NULL)"
+CHECK_HOLD_REASON = "ly_do_quyet IS NULL OR char_length(btrim(ly_do_quyet)) > 0"
+CONDITION_H1 = "trang_thai = 'cho_quyet'"
 
-LOAI_SU_KIEN = (
+EVENT_KINDS = (
     "tao_bo",
     "xoa_bo",
     "tao_bo_dieu_chinh",
@@ -225,8 +225,8 @@ LOAI_SU_KIEN = (
     "cho_xet_lai",
     "tai_scan",
 )
-CHECK_SU_KIEN_LOAI = "loai IN (%s)" % ", ".join("'%s'" % x for x in LOAI_SU_KIEN)
-CHECK_SU_KIEN_SO_LIEU = "jsonb_typeof(so_lieu) = 'object'"
+CHECK_EVENT_KIND = "loai IN (%s)" % ", ".join("'%s'" % x for x in EVENT_KINDS)
+CHECK_EVENT_FIGURES = "jsonb_typeof(so_lieu) = 'object'"
 
 
 class CouncilDocumentTemplate(Base):
@@ -237,12 +237,12 @@ class CouncilDocumentTemplate(Base):
         UniqueConstraint(
             "loai", "hieu_luc_tu", name="uq_council_document_template_loai_hieu_luc"
         ),
-        CheckConstraint(CHECK_LOAI_MAU, name="ck_council_document_template_loai"),
+        CheckConstraint(CHECK_TEMPLATE_KIND, name="ck_council_document_template_loai"),
         CheckConstraint(
-            CHECK_SHA_NOI_DUNG, name="ck_council_document_template_sha256_noi_dung"
+            CHECK_SHA_CONTENT, name="ck_council_document_template_sha256_noi_dung"
         ),
         CheckConstraint(
-            CHECK_KICH_THUOC, name="ck_council_document_template_kich_thuoc"
+            CHECK_SIZE, name="ck_council_document_template_kich_thuoc"
         ),
     )
 
@@ -279,16 +279,16 @@ class CouncilDocumentSet(Base):
         CheckConstraint(
             "kich_thuoc_tong > 0", name="ck_council_document_set_kich_thuoc_tong"
         ),
-        CheckConstraint(CHECK_MANG_MA, name="ck_council_document_set_ma_dau_vao"),
-        CheckConstraint(CHECK_MANG_DTO, name="ck_council_document_set_snapshot_dto"),
+        CheckConstraint(CHECK_CODE_ARRAY, name="ck_council_document_set_ma_dau_vao"),
+        CheckConstraint(CHECK_DTO_ARRAY, name="ck_council_document_set_snapshot_dto"),
         # Lượt I (F230, migration hdts20261107) — ba chế độ của bộ: thường / tái dựng bản ký
         # (``ban_ky_*``) / dữ liệu cho văn bản điều chỉnh (``cho_quyet_dinh_goc_id``).
-        CheckConstraint(CHECK_BO_BAN_KY_DU, name="ck_council_document_set_ban_ky_du"),
+        CheckConstraint(CHECK_SET_SIGNED_COPY_COMPLETE, name="ck_council_document_set_ban_ky_du"),
         CheckConstraint(
-            CHECK_BO_DUNG_LAI_CO_BAN_KY, name="ck_council_document_set_dung_lai_ban_ky"
+            CHECK_SET_REBUILD_HAS_SIGNED_COPY, name="ck_council_document_set_dung_lai_ban_ky"
         ),
-        CheckConstraint(CHECK_BO_MOT_CHE_DO, name="ck_council_document_set_mot_che_do"),
-        CheckConstraint(CHECK_BO_SO_BAN_KY, name="ck_council_document_set_so_ban_ky"),
+        CheckConstraint(CHECK_SET_ONE_MODE, name="ck_council_document_set_mot_che_do"),
+        CheckConstraint(CHECK_SET_SIGNED_COPY_NUMBER, name="ck_council_document_set_so_ban_ky"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -364,10 +364,10 @@ class CouncilDocumentSetFile(Base):
         CheckConstraint("thu_tu >= 1", name="ck_council_document_set_file_thu_tu"),
         CheckConstraint("path <> ''", name="ck_council_document_set_file_path"),
         CheckConstraint(
-            CHECK_SHA_NOI_DUNG, name="ck_council_document_set_file_sha256_noi_dung"
+            CHECK_SHA_CONTENT, name="ck_council_document_set_file_sha256_noi_dung"
         ),
         CheckConstraint(
-            CHECK_KICH_THUOC, name="ck_council_document_set_file_kich_thuoc"
+            CHECK_SIZE, name="ck_council_document_set_file_kich_thuoc"
         ),
     )
 
@@ -399,9 +399,9 @@ class CouncilDocumentSetDeletion(Base):
         ),
         CheckConstraint("so_tep > 0", name="ck_council_document_set_deletion_so_tep"),
         CheckConstraint(
-            CHECK_DANH_SACH_TEP, name="ck_council_document_set_deletion_danh_sach_tep"
+            CHECK_FILE_LIST, name="ck_council_document_set_deletion_danh_sach_tep"
         ),
-        CheckConstraint(CHECK_LY_DO, name="ck_council_document_set_deletion_ly_do"),
+        CheckConstraint(CHECK_REASON, name="ck_council_document_set_deletion_ly_do"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -421,7 +421,7 @@ class CouncilDocumentSetDeletion(Base):
     xoa_luc: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), index=True
     )
-    ly_do: Mapped[str] = mapped_column(String(LY_DO_XOA_TOI_DA), nullable=False)
+    ly_do: Mapped[str] = mapped_column(String(MAX_DELETE_REASON_LENGTH), nullable=False)
 
 
 class CouncilDocumentDownloadLog(Base):
@@ -470,7 +470,7 @@ class CouncilDocumentSetRow(Base):
         UniqueConstraint(
             "id", "set_id", "profile_id", name="uq_council_document_set_row_dich"
         ),
-        CheckConstraint(CHECK_DONG_BO_STT, name="ck_council_document_set_row_stt"),
+        CheckConstraint(CHECK_SET_ROW_SEQ, name="ck_council_document_set_row_stt"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -503,23 +503,23 @@ class CouncilDecision(Base):
 
     __tablename__ = "council_decision"
     __table_args__ = (
-        CheckConstraint(CHECK_QD_LOAI, name="ck_council_decision_loai"),
-        CheckConstraint(CHECK_QD_TRANG_THAI, name="ck_council_decision_trang_thai"),
-        CheckConstraint(CHECK_QD_K3_GOC, name="ck_council_decision_k3_goc"),
-        CheckConstraint(CHECK_QD_K3_HUY, name="ck_council_decision_k3_huy"),
-        CheckConstraint(CHECK_QD_K3_HET, name="ck_council_decision_k3_het"),
-        CheckConstraint(CHECK_QD_K3_VBH, name="ck_council_decision_k3_vbh"),
-        CheckConstraint(CHECK_QD_K3_HGN, name="ck_council_decision_k3_hgn"),
-        CheckConstraint(CHECK_QD_K3_SO, name="ck_council_decision_k3_so"),
-        CheckConstraint(CHECK_QD_K3_PHAM_VI, name="ck_council_decision_k3_pham_vi"),
-        CheckConstraint(CHECK_QD_K3_LY_DO, name="ck_council_decision_k3_ly_do"),
-        CheckConstraint(CHECK_QD_K3_TU_TRO, name="ck_council_decision_k3_tu_tro"),
-        CheckConstraint(CHECK_QD_K4, name="ck_council_decision_k4"),
-        CheckConstraint(CHECK_QD_K4B, name="ck_council_decision_k4b"),
-        CheckConstraint(CHECK_QD_K4C, name="ck_council_decision_k4c"),
-        CheckConstraint(CHECK_QD_K4D, name="ck_council_decision_k4d"),
-        CheckConstraint(CHECK_QD_SHA_TEP, name="ck_council_decision_sha_tep"),
-        CheckConstraint(CHECK_QD_SO_HO_SO, name="ck_council_decision_so_ho_so"),
+        CheckConstraint(CHECK_DECISION_KIND, name="ck_council_decision_loai"),
+        CheckConstraint(CHECK_DECISION_STATUS, name="ck_council_decision_trang_thai"),
+        CheckConstraint(CHECK_DECISION_K3_ROOT, name="ck_council_decision_k3_goc"),
+        CheckConstraint(CHECK_DECISION_K3_CANCEL, name="ck_council_decision_k3_huy"),
+        CheckConstraint(CHECK_DECISION_K3_EXPIRED, name="ck_council_decision_k3_het"),
+        CheckConstraint(CHECK_DECISION_K3_VBH, name="ck_council_decision_k3_vbh"),
+        CheckConstraint(CHECK_DECISION_K3_HGN, name="ck_council_decision_k3_hgn"),
+        CheckConstraint(CHECK_DECISION_K3_NUMBER, name="ck_council_decision_k3_so"),
+        CheckConstraint(CHECK_DECISION_K3_SCOPE, name="ck_council_decision_k3_pham_vi"),
+        CheckConstraint(CHECK_DECISION_K3_REASON, name="ck_council_decision_k3_ly_do"),
+        CheckConstraint(CHECK_DECISION_K3_SELF_REFERENCE, name="ck_council_decision_k3_tu_tro"),
+        CheckConstraint(CHECK_DECISION_K4, name="ck_council_decision_k4"),
+        CheckConstraint(CHECK_DECISION_K4B, name="ck_council_decision_k4b"),
+        CheckConstraint(CHECK_DECISION_K4C, name="ck_council_decision_k4c"),
+        CheckConstraint(CHECK_DECISION_K4D, name="ck_council_decision_k4d"),
+        CheckConstraint(CHECK_DECISION_FILE_SHA, name="ck_council_decision_sha_tep"),
+        CheckConstraint(CHECK_DECISION_PROFILE_COUNT, name="ck_council_decision_so_ho_so"),
         UniqueConstraint("id", "trang_thai", name="uq_council_decision_id_trang_thai"),
         UniqueConstraint("id", "set_id", name="uq_council_decision_id_set"),
         UniqueConstraint("id", "huy_qd_id", name="uq_council_decision_id_huy"),
@@ -533,19 +533,19 @@ class CouncilDecision(Base):
             "so_quyet_dinh",
             "pham_vi_so",
             unique=True,
-            postgresql_where=text(DIEU_KIEN_U1),
+            postgresql_where=text(CONDITION_U1),
         ),
         Index(
             "uq_council_decision_u2_bo",
             "set_id",
             unique=True,
-            postgresql_where=text(DIEU_KIEN_U2),
+            postgresql_where=text(CONDITION_U2),
         ),
         Index(
             "uq_council_decision_u4_huy",
             "huy_qd_id",
             unique=True,
-            postgresql_where=text(DIEU_KIEN_U4),
+            postgresql_where=text(CONDITION_U4),
         ),
     )
 
@@ -577,7 +577,7 @@ class CouncilDecision(Base):
     sha_tep_quyet_dinh: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     xac_nhan: Mapped[Optional[dict[str, Any]]] = mapped_column(JSONB, nullable=True)
     ghi_chu_mau: Mapped[Optional[str]] = mapped_column(
-        String(LY_DO_XOA_TOI_DA), nullable=True
+        String(MAX_DELETE_REASON_LENGTH), nullable=True
     )
     ghi_nhan_boi_id: Mapped[int] = mapped_column(
         Integer, nullable=False, comment="id người ghi nhận — KHÔNG khoá ngoại (vết)"
@@ -590,7 +590,7 @@ class CouncilDecision(Base):
         DateTime(timezone=True), nullable=True
     )
     ly_do_huy_ghi_nhan: Mapped[Optional[str]] = mapped_column(
-        String(LY_DO_XOA_TOI_DA), nullable=True
+        String(MAX_DELETE_REASON_LENGTH), nullable=True
     )
 
 
@@ -624,11 +624,11 @@ class CouncilDecisionRow(Base):
             ondelete="SET NULL (set_row_id)",
             name="fk_council_decision_row_dong_bo",
         ),
-        CheckConstraint(CHECK_DONG_QD_K5A, name="ck_council_decision_row_k5a"),
-        CheckConstraint(CHECK_DONG_QD_K5B, name="ck_council_decision_row_k5b"),
-        CheckConstraint(CHECK_DONG_QD_K5C, name="ck_council_decision_row_k5c"),
-        CheckConstraint(CHECK_DONG_QD_BO, name="ck_council_decision_row_bo"),
-        CheckConstraint(CHECK_DONG_QD_STT, name="ck_council_decision_row_stt"),
+        CheckConstraint(CHECK_DECISION_ROW_K5A, name="ck_council_decision_row_k5a"),
+        CheckConstraint(CHECK_DECISION_ROW_K5B, name="ck_council_decision_row_k5b"),
+        CheckConstraint(CHECK_DECISION_ROW_K5C, name="ck_council_decision_row_k5c"),
+        CheckConstraint(CHECK_DECISION_ROW_SET, name="ck_council_decision_row_bo"),
+        CheckConstraint(CHECK_DECISION_ROW_SEQ, name="ck_council_decision_row_stt"),
         UniqueConstraint("decision_id", "stt", name="uq_council_decision_row_stt"),
         UniqueConstraint(
             "decision_id", "set_row_id", name="uq_council_decision_row_u5"
@@ -637,7 +637,7 @@ class CouncilDecisionRow(Base):
             "uq_council_decision_row_u3_ho_so",
             "profile_id",
             unique=True,
-            postgresql_where=text(DIEU_KIEN_DONG_HIEU_LUC),
+            postgresql_where=text(EFFECTIVE_ROW_CONDITION),
         ),
     )
 
@@ -661,10 +661,10 @@ class CouncilDecisionScan(Base):
     __tablename__ = "council_decision_scan"
     __table_args__ = (
         CheckConstraint(
-            CHECK_SHA_NOI_DUNG, name="ck_council_decision_scan_sha256_noi_dung"
+            CHECK_SHA_CONTENT, name="ck_council_decision_scan_sha256_noi_dung"
         ),
-        CheckConstraint(CHECK_KICH_THUOC, name="ck_council_decision_scan_kich_thuoc"),
-        CheckConstraint(CHECK_SCAN_KIEU, name="ck_council_decision_scan_kieu"),
+        CheckConstraint(CHECK_SIZE, name="ck_council_decision_scan_kich_thuoc"),
+        CheckConstraint(CHECK_SCAN_TYPE, name="ck_council_decision_scan_kieu"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -686,15 +686,15 @@ class CouncilDecisionHold(Base):
 
     __tablename__ = "council_decision_hold"
     __table_args__ = (
-        CheckConstraint(CHECK_CHO_LY_DO_VAO, name="ck_council_decision_hold_ly_do_vao"),
+        CheckConstraint(CHECK_HOLD_ENTRY_REASON, name="ck_council_decision_hold_ly_do_vao"),
         CheckConstraint(
-            CHECK_CHO_TRANG_THAI, name="ck_council_decision_hold_trang_thai"
+            CHECK_HOLD_STATUS, name="ck_council_decision_hold_trang_thai"
         ),
-        CheckConstraint(CHECK_CHO_H3, name="ck_council_decision_hold_h3"),
-        CheckConstraint(CHECK_CHO_H4_XL, name="ck_council_decision_hold_h4_xl"),
-        CheckConstraint(CHECK_CHO_H4_CQ, name="ck_council_decision_hold_h4_cq"),
-        CheckConstraint(CHECK_CHO_H4_VH, name="ck_council_decision_hold_h4_vh"),
-        CheckConstraint(CHECK_CHO_LY_DO, name="ck_council_decision_hold_ly_do"),
+        CheckConstraint(CHECK_HOLD_H3, name="ck_council_decision_hold_h3"),
+        CheckConstraint(CHECK_HOLD_H4_XL, name="ck_council_decision_hold_h4_xl"),
+        CheckConstraint(CHECK_HOLD_H4_CQ, name="ck_council_decision_hold_h4_cq"),
+        CheckConstraint(CHECK_HOLD_H4_VH, name="ck_council_decision_hold_h4_vh"),
+        CheckConstraint(CHECK_HOLD_REASON, name="ck_council_decision_hold_ly_do"),
         UniqueConstraint(
             "van_ban_huy_id", "profile_id", name="uq_council_decision_hold_h2"
         ),
@@ -702,7 +702,7 @@ class CouncilDecisionHold(Base):
             "uq_council_decision_hold_h1_cho",
             "profile_id",
             unique=True,
-            postgresql_where=text(DIEU_KIEN_H1),
+            postgresql_where=text(CONDITION_H1),
         ),
     )
 
@@ -729,7 +729,7 @@ class CouncilDecisionHold(Base):
         DateTime(timezone=True), nullable=True
     )
     ly_do_quyet: Mapped[Optional[str]] = mapped_column(
-        String(LY_DO_XOA_TOI_DA), nullable=True
+        String(MAX_DELETE_REASON_LENGTH), nullable=True
     )
     vo_hieu_boi_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     vo_hieu_luc: Mapped[Optional[datetime]] = mapped_column(
@@ -744,9 +744,9 @@ class CouncilDocumentEvent(Base):
 
     __tablename__ = "council_document_event"
     __table_args__ = (
-        CheckConstraint(CHECK_SU_KIEN_LOAI, name="ck_council_document_event_loai"),
+        CheckConstraint(CHECK_EVENT_KIND, name="ck_council_document_event_loai"),
         CheckConstraint(
-            CHECK_SU_KIEN_SO_LIEU, name="ck_council_document_event_so_lieu"
+            CHECK_EVENT_FIGURES, name="ck_council_document_event_so_lieu"
         ),
     )
 
@@ -767,17 +767,17 @@ class CouncilDocumentEvent(Base):
 # ═══════════════════════════════ lượt gửi ghi nhận (vòng giao diện — đặc tả bản 2 mục 3.7) ═══════════
 #: Ba trạng thái của một lượt gửi ghi nhận Quyết định. Mọi chuyển trạng thái là MỘT câu đặt đủ cột (CHECK của
 #: PostgreSQL kiểm theo từng câu, không trì hoãn được — F265).
-CHECK_LUOT_TRANG_THAI = "trang_thai IN ('cho_gui', 'da_ghi', 'da_chan')"
-CHECK_LUOT_QD = "(trang_thai = 'da_ghi') = (decision_id IS NOT NULL)"
-CHECK_LUOT_SHA = "(trang_thai = 'da_ghi') = (noi_dung_sha IS NOT NULL)"
-CHECK_LUOT_SHA_HEX = "noi_dung_sha IS NULL OR noi_dung_sha ~ '^[0-9a-f]{64}$'"
-CHECK_LUOT_KET_THUC = "(trang_thai = 'cho_gui') = (ket_thuc_luc IS NULL)"
+CHECK_SUBMISSION_STATUS = "trang_thai IN ('cho_gui', 'da_ghi', 'da_chan')"
+CHECK_SUBMISSION_DECISION = "(trang_thai = 'da_ghi') = (decision_id IS NOT NULL)"
+CHECK_SUBMISSION_SHA = "(trang_thai = 'da_ghi') = (noi_dung_sha IS NOT NULL)"
+CHECK_SUBMISSION_SHA_HEX = "noi_dung_sha IS NULL OR noi_dung_sha ~ '^[0-9a-f]{64}$'"
+CHECK_SUBMISSION_FINISHED = "(trang_thai = 'cho_gui') = (ket_thuc_luc IS NULL)"
 #: Lượt chưa rõ kết quả phải còn bộ: khoá ngoại tới bộ là ON DELETE SET NULL ⇒ xoá bộ đang có lượt ``cho_gui`` bị
 #: CSDL chặn (cập nhật dây chuyền vi phạm CHECK này) — lớp cuối; service chặn trước bằng 409 (F269).
-CHECK_LUOT_CHO_CO_BO = "trang_thai <> 'cho_gui' OR set_id IS NOT NULL"
-CHECK_LUOT_BO_KHOP = "set_id IS NULL OR set_id = set_id_luc_tao"
+CHECK_SUBMISSION_PENDING_HAS_SET = "trang_thai <> 'cho_gui' OR set_id IS NOT NULL"
+CHECK_SUBMISSION_SET_MATCH = "set_id IS NULL OR set_id = set_id_luc_tao"
 #: Mỗi bộ tối đa MỘT lượt chưa rõ kết quả.
-DIEU_KIEN_LUOT_CHO_GUI = "trang_thai = 'cho_gui'"
+PENDING_SUBMISSION_CONDITION = "trang_thai = 'cho_gui'"
 
 
 class CouncilDecisionSubmission(Base):
@@ -788,20 +788,20 @@ class CouncilDecisionSubmission(Base):
 
     __tablename__ = "council_decision_submission"
     __table_args__ = (
-        CheckConstraint(CHECK_LUOT_TRANG_THAI, name="ck_council_decision_submission_trang_thai"),
-        CheckConstraint(CHECK_LUOT_QD, name="ck_council_decision_submission_qd"),
-        CheckConstraint(CHECK_LUOT_SHA, name="ck_council_decision_submission_sha"),
-        CheckConstraint(CHECK_LUOT_SHA_HEX, name="ck_council_decision_submission_sha_hex"),
-        CheckConstraint(CHECK_LUOT_KET_THUC, name="ck_council_decision_submission_ket_thuc"),
-        CheckConstraint(CHECK_LUOT_CHO_CO_BO, name="ck_council_decision_submission_cho_co_bo"),
-        CheckConstraint(CHECK_LUOT_BO_KHOP, name="ck_council_decision_submission_bo_khop"),
+        CheckConstraint(CHECK_SUBMISSION_STATUS, name="ck_council_decision_submission_trang_thai"),
+        CheckConstraint(CHECK_SUBMISSION_DECISION, name="ck_council_decision_submission_qd"),
+        CheckConstraint(CHECK_SUBMISSION_SHA, name="ck_council_decision_submission_sha"),
+        CheckConstraint(CHECK_SUBMISSION_SHA_HEX, name="ck_council_decision_submission_sha_hex"),
+        CheckConstraint(CHECK_SUBMISSION_FINISHED, name="ck_council_decision_submission_ket_thuc"),
+        CheckConstraint(CHECK_SUBMISSION_PENDING_HAS_SET, name="ck_council_decision_submission_cho_co_bo"),
+        CheckConstraint(CHECK_SUBMISSION_SET_MATCH, name="ck_council_decision_submission_bo_khop"),
         UniqueConstraint("ma", name="uq_council_decision_submission_ma"),
         UniqueConstraint("decision_id", name="uq_council_decision_submission_decision"),
         Index(
             "uq_council_decision_submission_cho_gui",
             "set_id",
             unique=True,
-            postgresql_where=text(DIEU_KIEN_LUOT_CHO_GUI),
+            postgresql_where=text(PENDING_SUBMISSION_CONDITION),
         ),
     )
 

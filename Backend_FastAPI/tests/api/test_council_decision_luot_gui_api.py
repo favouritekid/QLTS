@@ -22,7 +22,7 @@ from sqlalchemy.exc import DBAPIError
 
 import app.database as csdl
 from app.config import settings as app_settings
-from app.repositories.council_decision_repository import ma_loi_csdl
+from app.repositories.council_decision_repository import db_error_codes
 from app.services import council_decision_submission_service as luot_gui
 from tests.api import test_council_decisions_api as qd
 from tests.api.test_council_decision_hai_phien_api import _cho_bi_chan_hoac_xong, _Diem  # noqa: F401
@@ -85,7 +85,7 @@ async def test_mo_luot_khi_luot_cu_vua_ket_thuc_thi_thu_lai(client, hs, ad, monk
     # Bản 3 mục 3.7.2: lần chèn đụng UNIQUE (lượt cũ còn cho_gui) nhưng lượt cũ KẾT THÚC trước câu đọc ⇒ không còn mã
     # để trả ⇒ thử lại ⇒ mở được lượt mới.
     bo, ma_cu = await _bo_va_ma(client, ad, hs)
-    goc = luot_gui._luot_cho_gui_cua_bo
+    goc = luot_gui._set_pending_submission
     da_chen = []
 
     async def boc(db, set_id):
@@ -98,7 +98,7 @@ async def test_mo_luot_khi_luot_cu_vua_ket_thuc_thi_thu_lai(client, hs, ad, monk
             )
         return await goc(db, set_id)
 
-    monkeypatch.setattr(luot_gui, "_luot_cho_gui_cua_bo", boc)
+    monkeypatch.setattr(luot_gui, "_set_pending_submission", boc)
     r = await _mo(client, ad, bo["id"])
     assert r.status_code == 201, r.text
     assert r.json()["ma"] != ma_cu and da_chen == [1]
@@ -227,7 +227,7 @@ async def test_phan_xu_ma_khong_co_404(client, hs, ad):  # noqa: F811
 
 def _giu_luot_sau_khi_khoa(monkeypatch, diem):
     """Ghi nhận DỪNG ngay sau câu khoá lượt (đang GIỮ lượt ``cho_gui``)."""
-    goc = luot_gui.khoa_luot_cho_gui
+    goc = luot_gui.lock_pending_submission
 
     async def boc(*a, **kw):
         kq = await goc(*a, **kw)
@@ -235,7 +235,7 @@ def _giu_luot_sau_khi_khoa(monkeypatch, diem):
             await diem.cho()
         return kq
 
-    monkeypatch.setattr(luot_gui, "khoa_luot_cho_gui", boc)
+    monkeypatch.setattr(luot_gui, "lock_pending_submission", boc)
 
 
 @pytest.mark.parametrize("ghi_nhan_ket_thuc", ["commit", "loi"])
@@ -299,7 +299,7 @@ async def test_xoa_bo_csdl_chan_cuoi_khi_con_cho_gui(client, hs, ad):  # noqa: F
         await qd._sql("DELETE FROM council_document_set WHERE id = :s", s=bo["id"])
         loi = None
     except DBAPIError as e:
-        loi = ma_loi_csdl(e)
+        loi = db_error_codes(e)
     assert loi == ("23514", "ck_council_decision_submission_cho_co_bo"), loi
     assert (await _luot(ma))["tt"] == "cho_gui"
 
@@ -326,14 +326,14 @@ async def test_xoa_giu_khoa_bo_mo_luot_chen_giua_thi_cho_roi_404(client, hs, ad,
     # lượt mới commit chen giữa ⇒ DELETE vấp CHECK ở CSDL (500) thay vì kết quả rõ ràng.
     bo = await qd._bo_ok(client, ad, hs, SACH[:1])
     diem = _Diem()
-    goc = luot_gui.co_luot_cho_gui
+    goc = luot_gui.has_pending_submission
 
     async def boc(*a, **kw):
         kq = await goc(*a, **kw)
         await diem.cho()  # đã kiểm xong "không có lượt chờ", CHƯA DELETE
         return kq
 
-    monkeypatch.setattr(luot_gui, "co_luot_cho_gui", boc)
+    monkeypatch.setattr(luot_gui, "has_pending_submission", boc)
     t_d = asyncio.create_task(_xoa(client, ad, bo["id"]))
     await asyncio.wait_for(diem.toi.wait(), 30)
     t_m = asyncio.create_task(_mo(client, ad, bo["id"]))
@@ -351,7 +351,7 @@ async def test_f272_ba_phien_khong_be_tac(client, hs, ad, monkeypatch):  # noqa:
     # khoá dòng lượt đã kết thúc, dừng ở nhánh chỉ đọc → D xoá bộ: SET NULL dây chuyền CHỜ G → G kết thúc → D xong.
     bo, ma = await _bo_va_ma(client, ad, hs)
     diem_p, diem_g = _Diem(), _Diem()
-    goc_px, goc_doc = luot_gui.phan_xu, luot_gui.doc_luot
+    goc_px, goc_doc = luot_gui.adjudicate, luot_gui.read_submission
 
     async def px(*a, **kw):
         kq = await goc_px(*a, **kw)
@@ -363,8 +363,8 @@ async def test_f272_ba_phien_khong_be_tac(client, hs, ad, monkeypatch):  # noqa:
         await diem_g.cho()  # G ở nhánh 0 dòng (chỉ đọc), đang giữ khoá dòng lượt
         return kq
 
-    monkeypatch.setattr(luot_gui, "phan_xu", px)
-    monkeypatch.setattr(luot_gui, "doc_luot", doc)
+    monkeypatch.setattr(luot_gui, "adjudicate", px)
+    monkeypatch.setattr(luot_gui, "read_submission", doc)
     t_p = asyncio.create_task(_phan_xu(client, ad, ma))
     await asyncio.wait_for(diem_p.toi.wait(), 30)
     t_g = asyncio.create_task(_gui(client, ad, bo["id"], ma))

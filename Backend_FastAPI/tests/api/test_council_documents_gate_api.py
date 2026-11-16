@@ -66,7 +66,7 @@ async def test_route_tao_bo_noi_quyen_xac_nhan(hs):
         if isinstance(x, APIRoute) and x.endpoint is rt.create_council_document_set
     ]
     assert len(r) == 1
-    goi = deps._ham_trong_cay_dependency(r[0].dependant)
+    goi = deps._functions_in_dependency_tree(r[0].dependant)
     assert deps.get_council_document_confirm_right in goi
 
 

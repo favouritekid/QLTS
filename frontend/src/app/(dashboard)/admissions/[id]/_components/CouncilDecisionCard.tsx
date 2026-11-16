@@ -6,14 +6,14 @@ import Link from "next/link"
 import { Badge } from "@/components/ui/badge"
 import {
   ngay,
-  nhanLoaiQuyetDinh,
-  nhanTrangThaiQuyetDinh,
-} from "@/app/(dashboard)/admin/council-documents/_components/hien-thi"
+  decisionKindLabel,
+  decisionStatusLabel,
+} from "@/app/(dashboard)/admin/council-documents/_components/display"
 import { useCouncilDocumentPermissions } from "@/hooks/admin/useCouncilDocuments"
 import { councilProfileDecisionSchema } from "@/lib/zod/council-documents"
 
 /** Nhãn tình trạng do MÁY CHỦ tính (đặc tả 3.9); giá trị lạ ⇒ in nguyên (không suy). */
-const NHAN_TINH_TRANG: Record<string, string> = {
+const STATE_LABELS: Record<string, string> = {
   co_qd_hieu_luc: "Còn hiệu lực",
   cho_admin_quyet: "Đang chờ Admin quyết",
   da_cho_xet_lai: "Đã cho xét lại",
@@ -33,7 +33,7 @@ const DECISION_BADGE_VARIANT: Record<string, "success" | "warning" | "error"> = 
  * máy chủ báo cờ `xem_chi_tiet_bo` (`GET /quyen`; 403 = mọi cờ tắt — hợp đồng hiện có). Đang tải / lỗi / 403 / thiếu cờ ⇒ chỉ
  * hiện mã bộ dạng chữ (bấm ra chỉ gặp từ chối quyền — F279). Đọc cờ CHỈ khi thật sự có bộ để trỏ tới (component con).
  */
-function MaBo({ setId }: { setId: number }) {
+function SetCode({ setId }: { setId: number }) {
   const vm = useCouncilDocumentPermissions()
   const nhan = `bộ #${setId}`
   if (vm.state === "ready" && vm.permissions.xem_chi_tiet_bo) {
@@ -69,7 +69,7 @@ export function CouncilDecisionCard({ value }: { value: unknown }) {
   const badgeLabel = vb
     ? activeDocumentWithoutProfile
       ? "Văn bản còn hiệu lực"
-      : nhanTrangThaiQuyetDinh(vb.trang_thai)
+      : decisionStatusLabel(vb.trang_thai)
     : ""
 
   return (
@@ -79,11 +79,11 @@ export function CouncilDecisionCard({ value }: { value: unknown }) {
       {vb ? (
         <div className="space-y-1" data-testid="qd-co-van-ban">
           <div>
-            {nhanLoaiQuyetDinh(vb.loai)} số {vb.so_quyet_dinh} ngày {ngay(vb.ngay_ky)}
+            {decisionKindLabel(vb.loai)} số {vb.so_quyet_dinh} ngày {ngay(vb.ngay_ky)}
             {vb.set_id !== null ? (
               <>
                 {" · "}
-                <MaBo setId={vb.set_id} />
+                <SetCode setId={vb.set_id} />
               </>
             ) : null}
           </div>
@@ -97,7 +97,7 @@ export function CouncilDecisionCard({ value }: { value: unknown }) {
               </span>
             ) : (
               <span className="text-xs text-muted-foreground" data-testid="qd-tinh-trang">
-                {NHAN_TINH_TRANG[d.tinh_trang] ?? d.tinh_trang}
+                {STATE_LABELS[d.tinh_trang] ?? d.tinh_trang}
               </span>
             )}
           </div>

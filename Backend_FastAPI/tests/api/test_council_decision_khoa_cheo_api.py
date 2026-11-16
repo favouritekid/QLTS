@@ -2,7 +2,7 @@
 """F259 (Codex lần 15) — vòng chờ khoá giữa GHI NHẬN Quyết định và PHÊ DUYỆT HÀNG LOẠT / CÔNG BỐ NHIỀU NGUYỆN
 VỌNG; phản hồi + callback phải khớp trạng thái ĐÃ COMMIT khi một bên bị PostgreSQL chọn huỷ (40P01).
 
-Thứ tự khoá chuẩn (``quota_occupancy_service.khoa_o_chi_tieu``): mọi hồ sơ (id tăng dần) → mọi
+Thứ tự khoá chuẩn (``quota_occupancy_service.lock_quota_cells``): mọi hồ sơ (id tăng dần) → mọi
 ``offering_academic_info`` (id tăng dần) → mọi ``admission_path`` (id tăng dần). Ghi nhận đi đúng thứ tự ấy;
 trước lượt K, Phê duyệt hàng loạt khoá XEN KẼ hồ sơ ↔ chỉ tiêu (P1 → Q → P2) và công bố khoá chỉ tiêu theo
 THỨ TỰ NGUYỆN VỌNG (Q lớn → Q nhỏ) ⇒ vòng chờ với ghi nhận.
@@ -65,13 +65,13 @@ async def _dat_tran(db, ms):
 
 def _boc_ghi_nhan_tran(monkeypatch, ms):
     """Phiên ghi nhận đặt ``deadlock_timeout`` ngay ở khoá đầu tiên (khoá bộ) — trước mọi lần chờ."""
-    goc = CouncilDecisionRepository.khoa_bo
+    goc = CouncilDecisionRepository.lock_set
 
     async def boc(self, set_id):
         await _dat_tran(self.db, ms)
         return await goc(self, set_id)
 
-    monkeypatch.setattr(CouncilDecisionRepository, "khoa_bo", boc)
+    monkeypatch.setattr(CouncilDecisionRepository, "lock_set", boc)
 
 
 def _boc_dung(monkeypatch, chu, ten, diem, ms):
@@ -346,7 +346,7 @@ async def test_hang_loat_bi_huy_giua_lo_chi_lui_muc_ay(client, hs, ad, monkeypat
     da_duyet = await _da_duyet(p1, p2)
     assert da_duyet == {p1}, (kq, da_duyet)
     assert (kq["success_count"], kq["failed_ids"]) == (1, [p2]), kq
-    assert kq["errors"][str(p2)] == qos.THONG_DIEP_XUNG_DOT, kq
+    assert kq["errors"][str(p2)] == qos.CONFLICT_MESSAGE, kq
     assert hoa_hong == [l1]
 
 
@@ -384,7 +384,7 @@ async def test_cong_bo_bi_huy_tra_409_khong_ghi_gi(client, hs, ad, monkeypatch):
         await t_gd.rollback()
         await t_ket.close()
     assert do == "chan", "phép đo không hợp lệ: phiên thứ ba không chờ dòng học vụ của công bố"
-    assert r_cb.status_code == 409 and qos.THONG_DIEP_XUNG_DOT in r_cb.text, r_cb.text
+    assert r_cb.status_code == 409 and qos.CONFLICT_MESSAGE in r_cb.text, r_cb.text
     assert (await _ban(a))[0] == "submitted"
     assert await _nguyen_vong(a) == nv_truoc
 
@@ -417,6 +417,6 @@ async def test_ghi_nhan_bi_huy_tra_409_khong_ghi_gi(client, hs, ad, monkeypatch)
         await t_gd.rollback()
         await t_ket.close()
     assert do == "chan", "phép đo không hợp lệ: ghi nhận không chờ dòng học vụ"
-    assert r_qd.status_code == 409 and qos.THONG_DIEP_XUNG_DOT in r_qd.text, r_qd.text
+    assert r_qd.status_code == 409 and qos.CONFLICT_MESSAGE in r_qd.text, r_qd.text
     assert await _so_qd() == 0
     assert await qd._q1("SELECT count(*) FROM council_decision_row") == 0

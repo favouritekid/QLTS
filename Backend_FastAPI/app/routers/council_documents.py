@@ -18,13 +18,13 @@ Quyền — hai tầng (``AUTHORIZATION_GUIDELINES.md``):
      29–31) thêm lớp phụ ``deps.require_council_document_admin`` /
      ``deps.get_council_document_set_for_admin`` (không phải admin ⇒ 403).
   Cờ quyền giao diện (lượt F): ``GET /quyen`` — máy chủ đánh giá CHÍNH hai tầng trên cho từng
-  route (``deps.quyen_van_ban_hoi_dong`` + ``ENDPOINT_THEO_CO`` cuối tệp), không bảng vai thứ hai.
+  route (``deps.council_document_permissions`` + ``ENDPOINT_BY_FLAG`` cuối tệp), không bảng vai thứ hai.
 
 Xoá bộ: lý do bắt buộc + vết xoá độc lập, cùng giao dịch với lệnh xoá (xoá trên phần mềm KHÔNG
 xoá khỏi bản sao lưu đã có). Tải tệp: nhật ký ghi BỀN (commit) TRƯỚC khi trả bytes; ghi lỗi ⇒
 không trả. Không log dữ liệu cá nhân (danh sách mã, DTO, bytes, lý do xoá) ở bất kỳ nhánh nào
 — chỉ id + số đếm. Lỗi 422 của các route này chỉ vào log ở dạng đã chuẩn hoá
-(``exception_handlers._khong_log_input_422`` / ``_loi_422_an_toan_de_log``).
+(``exception_handlers._no_log_input_422`` / ``_safe_422_error_for_log``).
 """
 import asyncio
 from datetime import date
@@ -71,46 +71,46 @@ from ..schemas.council_document import (
     CouncilSubmissionResolveOut,
     CouncilTemplateOut,
 )
-from ..services import council_candidate_service as doc_hs
-from ..services import council_decision_service as qd_vb
-from ..services import council_decision_submission_service as luot_gui
-from ..services import council_document_render_service as bo_dung
-from ..services import council_document_set_service as bo_vb
-from ..services import council_document_template_service as kho_mau
+from ..services import council_candidate_service as candidate_service
+from ..services import council_decision_service as decision_service
+from ..services import council_decision_submission_service as submission_service
+from ..services import council_document_render_service as render_service
+from ..services import council_document_set_service as set_service
+from ..services import council_document_template_service as template_service
 
 log = structlog.get_logger(__name__)
 
 #: Tiền tố của router (dưới ``/api``) — MỘT nguồn cho router; ``exception_handlers`` khoá
 #: tiền tố đầy đủ ``/api`` + đây bằng test (mọi route của module phải khớp vị từ log 422).
-TIEN_TO = "/admission-config/council-documents"
+ROUTER_PREFIX = "/admission-config/council-documents"
 
-router = APIRouter(prefix=TIEN_TO, tags=["Văn bản Hội đồng tuyển sinh"])
+router = APIRouter(prefix=ROUTER_PREFIX, tags=["Văn bản Hội đồng tuyển sinh"])
 
 # Tệp sinh có dữ liệu cá nhân: không lưu đệm, không gửi referrer, không đoán kiểu.
-_TIEU_DE_TAI = {
+_DOWNLOAD_HEADERS = {
     "Cache-Control": "no-store",
     "Pragma": "no-cache",
     "Referrer-Policy": "no-referrer",
     "X-Content-Type-Options": "nosniff",
 }
-_KIEU_TEP = {
+_FILE_MEDIA_TYPES = {
     "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 }
 
 
-def content_disposition_tai_ve(path: str) -> str:
+def download_content_disposition(path: str) -> str:
     """``attachment`` cho tên = đoạn cuối của ``path``: ``filename=`` ASCII (bỏ dấu, ký tự
     lạ thành ``_``) + ``filename*=UTF-8''…`` (RFC 6266 / 5987) cho tên có dấu. Không có
     CR / LF / nháy kép nào lọt vào tiêu đề."""
-    ten = path.rsplit("/", 1)[-1] or "tep"
+    name = path.rsplit("/", 1)[-1] or "tep"
     ascii_ = "".join(
         c if (c.isascii() and (c.isalnum() or c in "._-")) else "_"
-        for c in bo_dung.khong_dau(ten)
+        for c in render_service.strip_accents(name)
     )
     return "attachment; filename=\"%s\"; filename*=UTF-8''%s" % (
         ascii_ or "tep",
-        quote(ten, safe=""),
+        quote(name, safe=""),
     )
 
 
@@ -132,24 +132,24 @@ async def upload_council_template(
     db: AsyncSession = Depends(database.get_db),
 ):
     # Đọc tối đa trần + 1 byte: tệp lớn hơn bị service từ chối mà không nạp hết vào RAM.
-    noi_dung = await file.read(settings.COUNCIL_TEMPLATE_MAX_BYTES + 1)
-    mau, _ = await kho_mau.tai_mau_len(
+    content = await file.read(settings.COUNCIL_TEMPLATE_MAX_BYTES + 1)
+    template, _ = await template_service.upload_template(
         db,
-        loai=loai,
-        hieu_luc_tu=hieu_luc_tu,
-        noi_dung=noi_dung,
-        nguoi_tai_id=current_user.id,
-        ghi_chu=ghi_chu,
+        kind=loai,
+        effective_from=hieu_luc_tu,
+        content=content,
+        downloader_id=current_user.id,
+        note=ghi_chu,
     )
     await db.commit()
     log.info(
         "council_template_uploaded",
-        template_id=mau.id,
-        loai=mau.loai,
-        kich_thuoc=mau.kich_thuoc,
+        template_id=template.id,
+        loai=template.loai,
+        kich_thuoc=template.kich_thuoc,
         actor=current_user.id,
     )
-    return CouncilTemplateOut.model_validate(mau)
+    return CouncilTemplateOut.model_validate(template)
 
 
 @router.get(
@@ -163,7 +163,7 @@ async def list_council_templates(
     current_user: models.User = deps.CasbinAuth,
     db: AsyncSession = Depends(database.get_db),
 ):
-    return [CouncilTemplateOut.model_validate(m) for m in await kho_mau.liet_ke_mau(db)]
+    return [CouncilTemplateOut.model_validate(m) for m in await template_service.list_templates(db)]
 
 
 # ═══════════════════════════════ bộ văn bản ═════════════════════════════════════════════
@@ -178,45 +178,45 @@ async def create_council_document_set(
     request: Request,
     payload: CouncilSetCreate,
     current_user: models.User = deps.CasbinAuth,
-    duoc_xac_nhan: bool = Depends(deps.get_council_document_confirm_right),
+    can_confirm: bool = Depends(deps.get_council_document_confirm_right),
     db: AsyncSession = Depends(database.get_db),
 ):
     if payload.profile_ids is not None:
         # Vòng giao diện (đặc tả 3.3): dạng id + dấu kiểm trước.
-        bo, _ = await bo_vb.tao_bo_van_ban_theo_id(
+        doc_set, _ = await set_service.create_document_set_by_ids(
             db,
             database.engine,
             profile_ids=payload.profile_ids,
             phien_ban_kiem=payload.phien_ban_kiem,
             academic_year=payload.academic_year,
-            tham_so=payload.tham_so_quyet_dinh,
-            nguoi_tao_id=current_user.id,
-            xac_nhan_trang_thai=payload.xac_nhan_trang_thai,
-            duoc_xac_nhan=duoc_xac_nhan,
+            params=payload.tham_so_quyet_dinh,
+            creator_id=current_user.id,
+            confirm_status=payload.xac_nhan_trang_thai,
+            can_confirm=can_confirm,
         )
     else:
-        bo, _ = await bo_vb.tao_bo_van_ban(
+        doc_set, _ = await set_service.create_document_set(
             db,
             database.engine,
-            ma_ho_so=payload.ma_ho_so,
+            profile_codes=payload.ma_ho_so,
             academic_year=payload.academic_year,
-            tham_so=payload.tham_so_quyet_dinh,
-            nguoi_tao_id=current_user.id,
-            xac_nhan_trang_thai=payload.xac_nhan_trang_thai,
-            duoc_xac_nhan=duoc_xac_nhan,
+            params=payload.tham_so_quyet_dinh,
+            creator_id=current_user.id,
+            confirm_status=payload.xac_nhan_trang_thai,
+            can_confirm=can_confirm,
         )
     await db.commit()
-    xac_nhan = (bo.thong_tin_dung or {}).get("xac_nhan_canh_bao_trang_thai")
+    confirmation = (doc_set.thong_tin_dung or {}).get("xac_nhan_canh_bao_trang_thai")
     log.info(
         "council_document_set_created",
-        set_id=bo.id,
-        so_ho_so=bo.so_ho_so,
-        so_tep=bo.so_tep,
+        set_id=doc_set.id,
+        so_ho_so=doc_set.so_ho_so,
+        so_tep=doc_set.so_tep,
         actor=current_user.id,
         # lượt G — chỉ số đếm theo trạng thái (không mã, không số dòng)
-        xac_nhan_canh_bao=(xac_nhan or {}).get("so_ho_so_theo_trang_thai"),
+        xac_nhan_canh_bao=(confirmation or {}).get("so_ho_so_theo_trang_thai"),
     )
-    return CouncilSetDetailOut.tu_bo_va_tep(bo, await bo_vb.tep_cua_bo(db, bo.id))
+    return CouncilSetDetailOut.from_set_and_files(doc_set, await set_service.set_file(db, doc_set.id))
 
 
 @router.post(
@@ -230,15 +230,15 @@ async def preview_council_document_set(
     payload: CouncilSetPreviewIn,
     current_user: models.User = deps.CasbinAuth,
     scope: deps.CouncilDocumentScope = Depends(deps.get_council_document_scope),
-    duoc_xac_nhan: bool = Depends(deps.get_council_document_confirm_right),
+    can_confirm: bool = Depends(deps.get_council_document_confirm_right),
 ):
-    kq = await bo_vb.kiem_truoc(
+    kq = await set_service.preview(
         database.engine,
         profile_ids=payload.profile_ids,
         academic_year=payload.academic_year,
         tat_ca=scope.tat_ca,
         chi_don_vi=scope.unit_id,
-        duoc_xac_nhan=duoc_xac_nhan,
+        can_confirm=can_confirm,
     )
     # Chỉ số đếm — không id, không họ tên, không dấu.
     log.info(
@@ -266,13 +266,13 @@ async def search_council_profiles(
     _scope: deps.CouncilDocumentScope = Depends(deps.get_council_document_scope),
     db: AsyncSession = Depends(database.get_db),
 ):
-    kq = await doc_hs.tim_ho_so(
+    kq = await candidate_service.search_profiles(
         db,
         current_user=current_user,
         academic_year=payload.academic_year,
-        tu_khoa=payload.tu_khoa,
+        keyword=payload.tu_khoa,
         major_ids=payload.major_ids,
-        trang_thai=payload.trang_thai,
+        status=payload.trang_thai,
         page=payload.page,
         page_size=payload.page_size,
     )
@@ -302,7 +302,7 @@ async def resolve_council_profile_codes(
     current_user: models.User = deps.CasbinAuth,
     scope: deps.CouncilDocumentScope = Depends(deps.get_council_document_scope),
 ):
-    pids, dong_loi = await doc_hs.doi_ma_thanh_id(
+    pids, error_rows = await candidate_service.codes_to_ids(
         database.engine,
         payload.ma_ho_so,
         academic_year=payload.academic_year,
@@ -312,11 +312,11 @@ async def resolve_council_profile_codes(
     log.info(
         "council_profile_codes_resolved",
         so_khop=len(pids),
-        so_dong_loi=len(dong_loi),
+        so_dong_loi=len(error_rows),
         actor=current_user.id,
     )
     return JSONResponse(
-        content=CouncilCodesOut(profile_ids=pids, dong_loi=dong_loi).model_dump(
+        content=CouncilCodesOut(profile_ids=pids, dong_loi=error_rows).model_dump(
             mode="json"
         ),
         headers={"Cache-Control": "no-store"},
@@ -345,15 +345,15 @@ async def list_council_document_sets(
     nguoi_tao_id: Optional[int] = Query(None, ge=1),
     db: AsyncSession = Depends(database.get_db),
 ):
-    ds = await bo_vb.liet_ke_bo_mo_rong(
+    ds = await set_service.list_sets_extended(
         db,
         tat_ca=scope.tat_ca,
         chi_don_vi=scope.unit_id,
-        xem_luot=await _co_quyen_ghi_nhan(request, current_user),
+        show_submission=await _can_record(request, current_user),
         nam_hoc=nam_hoc,
-        nguoi_tao_id=nguoi_tao_id,
-        so_quyet_dinh=so_quyet_dinh,
-        tinh_trang=tinh_trang,
+        creator_id=nguoi_tao_id,
+        decision_number=so_quyet_dinh,
+        state=tinh_trang,
         limit=limit,
         offset=offset,
     )
@@ -374,7 +374,7 @@ async def list_council_document_set_creators(
 ):
     return [
         CouncilSetCreatorOut(**d)
-        for d in await bo_vb.nguoi_tao_bo(
+        for d in await set_service.set_creators(
             db, tat_ca=scope.tat_ca, chi_don_vi=scope.unit_id
         )
     ]
@@ -390,14 +390,14 @@ async def get_council_document_set(
     request: Request,
     current_user: models.User = deps.CasbinAuth,
     scope: deps.CouncilDocumentScope = Depends(deps.get_council_document_scope),
-    bo: models.CouncilDocumentSet = Depends(deps.get_council_document_set_for_user),
+    doc_set: models.CouncilDocumentSet = Depends(deps.get_council_document_set_for_user),
     db: AsyncSession = Depends(database.get_db),
 ):
-    return CouncilSetDetailOut.tu_bo_va_tep(
-        bo,
-        await bo_vb.tep_cua_bo(db, bo.id),
-        await bo_vb.chi_tiet_bo_mo_rong(
-            db, bo.id, xem_luot=await _co_quyen_ghi_nhan(request, current_user)
+    return CouncilSetDetailOut.from_set_and_files(
+        doc_set,
+        await set_service.set_file(db, doc_set.id),
+        await set_service.extended_set_detail(
+            db, doc_set.id, show_submission=await _can_record(request, current_user)
         ),
     )
 
@@ -410,31 +410,31 @@ async def get_council_document_set(
 async def download_council_document_file(
     request: Request,
     current_user: models.User = deps.CasbinAuth,
-    bo: models.CouncilDocumentSet = Depends(deps.get_council_document_set_for_user),
+    doc_set: models.CouncilDocumentSet = Depends(deps.get_council_document_set_for_user),
     thu_tu: int = Path(..., ge=1),
     db: AsyncSession = Depends(database.get_db),
 ):
-    tep = await bo_vb.doc_tep_da_luu(db, bo.id, thu_tu)
+    file = await set_service.read_stored_file(db, doc_set.id, thu_tu)
     # Nhật ký tải (J1 dòng 31) ghi BỀN TRƯỚC khi trả bytes — như giấy báo nhập học
     # (``enrollment_letters.py``): ghi / commit lỗi ⇒ ngoại lệ ⇒ KHÔNG trả bytes.
-    await bo_vb.ghi_nhat_ky_tai(
-        db, set_id=bo.id, thu_tu=thu_tu, tep=tep, nguoi_tai_id=current_user.id
+    await set_service.log_download(
+        db, set_id=doc_set.id, order_no=thu_tu, file=file, downloader_id=current_user.id
     )
     await db.commit()
     log.info(
         "council_document_file_downloaded",
-        set_id=bo.id,
+        set_id=doc_set.id,
         thu_tu=thu_tu,
         actor=current_user.id,
     )
     return Response(
-        content=tep.noi_dung,
-        media_type=_KIEU_TEP.get(
-            tep.path.rsplit(".", 1)[-1].lower(), "application/octet-stream"
+        content=file.noi_dung,
+        media_type=_FILE_MEDIA_TYPES.get(
+            file.path.rsplit(".", 1)[-1].lower(), "application/octet-stream"
         ),
         headers={
-            "Content-Disposition": content_disposition_tai_ve(tep.path),
-            **_TIEU_DE_TAI,
+            "Content-Disposition": download_content_disposition(file.path),
+            **_DOWNLOAD_HEADERS,
         },
     )
 
@@ -447,22 +447,22 @@ async def download_council_document_file(
 async def download_council_document_set_zip(
     request: Request,
     current_user: models.User = deps.CasbinAuth,
-    bo: models.CouncilDocumentSet = Depends(deps.get_council_document_set_for_user),
+    doc_set: models.CouncilDocumentSet = Depends(deps.get_council_document_set_for_user),
     db: AsyncSession = Depends(database.get_db),
 ):
     # Đặc tả 3.6 — quyền + phạm vi Y HỆT tải lẻ. Trước khi trả byte nào: đọc mọi tệp + so sha từng tệp (lệch ⇒ lỗi, không
     # trả) → nén (NGOÀI event loop; nén hỏng ⇒ chưa ghi nhật ký nào) → MỘT dòng nhật ký tải cho MỖI tệp → COMMIT → trả.
-    tep = await bo_vb.doc_ca_bo(db, bo.id)
-    zip_ = await asyncio.to_thread(bo_vb.nen_ca_bo, [t for _, t in tep], bo.tao_luc)
-    for thu_tu, t in tep:
-        await bo_vb.ghi_nhat_ky_tai(
-            db, set_id=bo.id, thu_tu=thu_tu, tep=t, nguoi_tai_id=current_user.id
+    file = await set_service.read_whole_set(db, doc_set.id)
+    zip_ = await asyncio.to_thread(set_service.zip_whole_set, [t for _, t in file], doc_set.tao_luc)
+    for order_no, t in file:
+        await set_service.log_download(
+            db, set_id=doc_set.id, order_no=order_no, file=t, downloader_id=current_user.id
         )
     await db.commit()
     log.info(
         "council_document_set_zip_downloaded",
-        set_id=bo.id,
-        so_tep=len(tep),
+        set_id=doc_set.id,
+        so_tep=len(file),
         actor=current_user.id,
     )
     return Response(
@@ -470,8 +470,8 @@ async def download_council_document_set_zip(
         media_type="application/zip",
         headers={
             # Tên tệp KHÔNG chứa tên người — chỉ id bộ.
-            "Content-Disposition": 'attachment; filename="bo-%d.zip"' % bo.id,
-            **_TIEU_DE_TAI,
+            "Content-Disposition": 'attachment; filename="bo-%d.zip"' % doc_set.id,
+            **_DOWNLOAD_HEADERS,
         },
     )
 
@@ -487,22 +487,22 @@ async def delete_council_document_set(
     request: Request,
     payload: CouncilSetDelete,
     current_user: models.User = deps.CasbinAuth,
-    bo: models.CouncilDocumentSet = Depends(deps.get_council_document_set_for_admin),
+    doc_set: models.CouncilDocumentSet = Depends(deps.get_council_document_set_for_admin),
     db: AsyncSession = Depends(database.get_db),
 ):
-    vet, _ = await bo_vb.xoa_bo_van_ban(
-        db, bo, ly_do=payload.ly_do, nguoi_xoa_id=current_user.id
+    trace, _ = await set_service.delete_document_set(
+        db, doc_set, reason=payload.ly_do, deleter_id=current_user.id
     )
     await db.commit()
     log.info(
         "council_document_set_deleted",
-        set_id=vet.set_id,
-        so_ho_so=vet.so_ho_so,
-        so_tep=vet.so_tep,
-        deletion_id=vet.id,
+        set_id=trace.set_id,
+        so_ho_so=trace.so_ho_so,
+        so_tep=trace.so_tep,
+        deletion_id=trace.id,
         actor=current_user.id,
     )
-    return CouncilSetDeletionOut.model_validate(vet)
+    return CouncilSetDeletionOut.model_validate(trace)
 
 
 @router.get(
@@ -514,21 +514,21 @@ async def delete_council_document_set(
 async def get_council_document_set_input_codes(
     request: Request,
     current_user: models.User = deps.CasbinAuth,
-    bo: models.CouncilDocumentSet = Depends(deps.get_council_document_set_for_admin),
+    doc_set: models.CouncilDocumentSet = Depends(deps.get_council_document_set_for_admin),
     db: AsyncSession = Depends(database.get_db),
 ):
-    ma = await bo_vb.ma_ho_so_dau_vao(db, bo.id)
+    code = await set_service.input_profile_codes(db, doc_set.id)
     log.info(  # KHÔNG log mã — chỉ id bộ + số đếm
         "council_document_input_codes_viewed",
-        set_id=bo.id,
-        so_ho_so=len(ma),
+        set_id=doc_set.id,
+        so_ho_so=len(code),
         actor=current_user.id,
     )
     return JSONResponse(
         content=CouncilSetInputCodesOut(
-            set_id=bo.id, so_ho_so=len(ma), ma_ho_so=ma
+            set_id=doc_set.id, so_ho_so=len(code), ma_ho_so=code
         ).model_dump(),
-        headers=dict(_TIEU_DE_TAI),
+        headers=dict(_DOWNLOAD_HEADERS),
     )
 
 
@@ -547,11 +547,11 @@ async def list_council_document_download_log(
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(database.get_db),
 ):
-    ds = await bo_vb.liet_ke_nhat_ky_tai(db, set_id=set_id, limit=limit, offset=offset)
-    ten = await bo_vb.ten_nguoi_dung(db, [d.nguoi_tai_id for d in ds])
+    ds = await set_service.list_download_log(db, set_id=set_id, limit=limit, offset=offset)
+    name = await set_service.user_names(db, [d.nguoi_tai_id for d in ds])
     return [
         CouncilDownloadLogOut.model_validate(d).model_copy(
-            update={"nguoi_tai_ten": ten.get(d.nguoi_tai_id)}
+            update={"nguoi_tai_ten": name.get(d.nguoi_tai_id)}
         )
         for d in ds
     ]
@@ -571,11 +571,11 @@ async def list_council_document_set_deletions(
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(database.get_db),
 ):
-    ds = await bo_vb.liet_ke_vet_xoa(db, limit=limit, offset=offset)
-    ten = await bo_vb.ten_nguoi_dung(db, [d.nguoi_xoa_id for d in ds])
+    ds = await set_service.list_deletion_traces(db, limit=limit, offset=offset)
+    name = await set_service.user_names(db, [d.nguoi_xoa_id for d in ds])
     return [
         CouncilSetDeletionOut.model_validate(d).model_copy(
-            update={"nguoi_xoa_ten": ten.get(d.nguoi_xoa_id)}
+            update={"nguoi_xoa_ten": name.get(d.nguoi_xoa_id)}
         )
         for d in ds
     ]
@@ -586,33 +586,33 @@ async def list_council_document_set_deletions(
 # (trực tiếp hoặc qua ``get_council_document_set_for_admin`` / ``get_council_decision_for_admin`` /
 # ``get_council_decision_hold_for_admin``). Route ghi khai trong ``ADMISSION_WRITE_ROUTES`` (đóng băng ⇒
 # 503). Log chỉ id + số đếm — không CCCD, không lý do. Bản scan đọc tối đa trần + 1 byte.
-def _qd_ghi_out(qd, so_lieu=None, canh_bao=None, *, goc=None, ma_luot_gui=None, lap_lai=False) -> CouncilDecisionWriteOut:
+def _recorded_decision_out(decision, figures=None, warnings=None, *, root=None, submission_code=None, lap_lai=False) -> CouncilDecisionWriteOut:
     return CouncilDecisionWriteOut(
-        **CouncilDecisionOut.model_validate(qd).model_dump(),
-        so_lieu=so_lieu,
-        canh_bao_vuot_chi_tieu=canh_bao or [],
-        goc=goc,
-        ma_luot_gui=ma_luot_gui,
+        **CouncilDecisionOut.model_validate(decision).model_dump(),
+        so_lieu=figures,
+        canh_bao_vuot_chi_tieu=warnings or [],
+        goc=root,
+        ma_luot_gui=submission_code,
         lap_lai=lap_lai,
     )
 
 
-async def _doc_scan(scan: UploadFile) -> bytes:
+async def _read_scan_upload(scan: UploadFile) -> bytes:
     return await scan.read(settings.COUNCIL_DECISION_SCAN_MAX_BYTES + 1)
 
 
-def _json_xac_nhan(gia_tri: Optional[str]):
+def _confirmation_json(value: Optional[str]):
     """Trường form ``xac_nhan_trang_thai`` (JSON ``{loại: số}``) — sai dạng ⇒ 400 qua service."""
     import json
 
-    if gia_tri is None or gia_tri == "":
+    if value is None or value == "":
         return None
     # Codex 42 (câu 4): vượt trần độ dài ⇒ "không đọc được" — giữ JSON hợp lệ dưới trần xa ngưỡng đệ quy (ngưỡng phụ thuộc
     # bản dựng / ngăn xếp ⇒ MSW không chép được; xem CONFIRMATION_JSON_MAX_CHARS). ``len`` = số ký tự (code point) như MSW.
-    if len(gia_tri) > qd_vb.CONFIRMATION_JSON_MAX_CHARS:
+    if len(value) > decision_service.CONFIRMATION_JSON_MAX_CHARS:
         return "<khong-doc-duoc>"
     try:
-        return json.loads(gia_tri)
+        return json.loads(value)
     # Review max PR #724 (dưới ngưỡng): JSON lồng quá sâu ⇒ ``RecursionError`` (trước đây 500) — cùng đường "không đọc
     # được" ⇒ 400 qua service.
     except (ValueError, RecursionError):
@@ -649,46 +649,46 @@ async def create_council_decision(
     ma_luot_gui: str = Form(..., pattern=r"^[0-9a-fA-F-]{36}$"),
     db: AsyncSession = Depends(database.get_db),
 ):
-    qd, canh_bao, lap_lai = await qd_vb.ghi_nhan_quyet_dinh(
+    decision, warnings, lap_lai = await decision_service.record_decision(
         db,
         set_id=set_id,
-        loai=loai,
-        goc_id=goc_id,
-        so_quyet_dinh=so_quyet_dinh,
-        ngay_ky=ngay_ky,
-        tham_so_giay={
+        kind=loai,
+        root_id=goc_id,
+        decision_number=so_quyet_dinh,
+        signing_date=ngay_ky,
+        paper_params={
             "so_bien_ban": so_bien_ban,
             "ngay_bien_ban": ngay_bien_ban,
             "dot_so": dot_so,
             "dot_thang": dot_thang,
         },
-        xac_nhan_so_ho_so=xac_nhan_so_ho_so,
-        xac_nhan_khop_ban_in=xac_nhan_khop_ban_in,
-        xac_nhan_trang_thai=_json_xac_nhan(xac_nhan_trang_thai),
-        ghi_chu_mau=ghi_chu_mau,
-        scan=await _doc_scan(scan),
-        nguoi_id=current_user.id,
-        ma_luot_gui=ma_luot_gui,
+        confirm_profile_count=xac_nhan_so_ho_so,
+        confirm_printed_copy_match=xac_nhan_khop_ban_in,
+        confirm_status=_confirmation_json(xac_nhan_trang_thai),
+        template_note=ghi_chu_mau,
+        scan=await _read_scan_upload(scan),
+        actor_id=current_user.id,
+        submission_code=ma_luot_gui,
     )
-    goc = await qd_vb.tom_tat_goc(db, qd.goc_id)
-    out = _qd_ghi_out(qd, canh_bao=canh_bao, goc=goc, ma_luot_gui=ma_luot_gui, lap_lai=lap_lai)
+    root = await decision_service.root_summary(db, decision.goc_id)
+    out = _recorded_decision_out(decision, warnings=warnings, root=root, submission_code=ma_luot_gui, lap_lai=lap_lai)
     await db.commit()  # gửi lặp: không có gì để ghi — kết thúc giao dịch NGAY (F272)
     if lap_lai:
         response.status_code = 200
     log.info(
         "council_decision_recorded",
-        decision_id=qd.id,
-        set_id=qd.set_id,
-        so_ho_so=qd.so_ho_so,
+        decision_id=decision.id,
+        set_id=decision.set_id,
+        so_ho_so=decision.so_ho_so,
         actor=current_user.id,
-        so_o_vuot_chi_tieu=len(canh_bao),
+        so_o_vuot_chi_tieu=len(warnings),
         lap_lai=lap_lai,
     )
     return out
 
 
 # ═══════════════════════════════ lượt gửi ghi nhận (vòng giao diện — đặc tả bản 2 mục 3.7) ═══════════
-def _luot_out(x) -> CouncilSubmissionOut:
+def _submission_out(x) -> CouncilSubmissionOut:
     return CouncilSubmissionOut(
         ma=str(x.ma),
         trang_thai=x.trang_thai,
@@ -708,14 +708,14 @@ def _luot_out(x) -> CouncilSubmissionOut:
 async def open_council_decision_submission(
     request: Request,
     current_user: models.User = deps.CasbinAuth,
-    bo: models.CouncilDocumentSet = Depends(deps.get_council_document_set_for_admin),
+    doc_set: models.CouncilDocumentSet = Depends(deps.get_council_document_set_for_admin),
     db: AsyncSession = Depends(database.get_db),
 ):
-    luot = await luot_gui.mo_luot(db, set_id=bo.id, nguoi_id=current_user.id)
-    ma = str(luot.ma)
+    submission = await submission_service.open_submission(db, set_id=doc_set.id, actor_id=current_user.id)
+    code = str(submission.ma)
     await db.commit()  # commit RỒI mới trả mã (3.7.2)
-    log.info("council_submission_opened", set_id=bo.id, actor=current_user.id)
-    return CouncilSubmissionOpenOut(ma=ma)
+    log.info("council_submission_opened", set_id=doc_set.id, actor=current_user.id)
+    return CouncilSubmissionOpenOut(ma=code)
 
 
 @router.get(
@@ -727,10 +727,10 @@ async def open_council_decision_submission(
 async def list_council_decision_submissions(
     request: Request,
     current_user: models.User = deps.CasbinAuth,
-    bo: models.CouncilDocumentSet = Depends(deps.get_council_document_set_for_admin),
+    doc_set: models.CouncilDocumentSet = Depends(deps.get_council_document_set_for_admin),
     db: AsyncSession = Depends(database.get_db),
 ):
-    return [_luot_out(x) for x in await luot_gui.luot_cua_bo(db, bo.id)]
+    return [_submission_out(x) for x in await submission_service.set_submission(db, doc_set.id)]
 
 
 @router.post(
@@ -746,24 +746,24 @@ async def resolve_council_decision_submission(
     _scope: deps.CouncilDocumentScope = Depends(deps.require_council_document_admin),
     db: AsyncSession = Depends(database.get_db),
 ):
-    ma_uuid = luot_gui.kiem_ma_luot(ma)
+    code_uuid = submission_service.check_submission_code(ma)
     try:
-        ket_qua, qd_id = await luot_gui.phan_xu(db, ma_uuid)
-    except luot_gui.LuotDangXuLy:
+        result, decision_id = await submission_service.adjudicate(db, code_uuid)
+    except submission_service.SubmissionProcessingError:
         await db.rollback()  # giao dịch đã hỏng (55P03) — ROLLBACK trước khi trả (3.7.4)
-        return CouncilSubmissionResolveOut(ket_qua=luot_gui.DANG_XU_LY)
+        return CouncilSubmissionResolveOut(ket_qua=submission_service.PROCESSING)
     quyet_dinh = None
-    if ket_qua == luot_gui.DA_GHI:
-        qd = await qd_vb.chi_tiet_qd_ghi(db, qd_id)
-        quyet_dinh = _qd_ghi_out(
-            qd,
-            canh_bao=await qd_vb.canh_bao_da_luu(db, qd_id, "ghi_nhan"),
-            goc=await qd_vb.tom_tat_goc(db, qd.goc_id),
-            ma_luot_gui=str(ma_uuid),
+    if result == submission_service.RECORDED:
+        decision = await decision_service.recorded_decision_detail(db, decision_id)
+        quyet_dinh = _recorded_decision_out(
+            decision,
+            warnings=await decision_service.stored_warnings(db, decision_id, "ghi_nhan"),
+            root=await decision_service.root_summary(db, decision.goc_id),
+            submission_code=str(code_uuid),
         )
     await db.commit()  # chỉ kết luận SAU commit
-    log.info("council_submission_resolved", ket_qua=ket_qua, actor=current_user.id)
-    return CouncilSubmissionResolveOut(ket_qua=ket_qua, quyet_dinh=quyet_dinh)
+    log.info("council_submission_resolved", ket_qua=result, actor=current_user.id)
+    return CouncilSubmissionResolveOut(ket_qua=result, quyet_dinh=quyet_dinh)
 
 
 @router.get(
@@ -779,7 +779,7 @@ async def list_council_decisions(
     set_id: Optional[int] = Query(None, ge=1),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
-    # Vòng giao diện: lọc ở máy chủ, đúng tập CHECK của bảng (CHECK_QD_LOAI / CHECK_QD_TRANG_THAI).
+    # Vòng giao diện: lọc ở máy chủ, đúng tập CHECK của bảng (CHECK_DECISION_KIND / CHECK_DECISION_STATUS).
     loai: Optional[str] = Query(
         None, pattern=r"^(trung_tuyen|bo_sung|dieu_chinh|van_ban_huy)$"
     ),
@@ -790,8 +790,8 @@ async def list_council_decisions(
 ):
     from ..repositories.council_decision_repository import CouncilDecisionRepository
 
-    ds = await CouncilDecisionRepository(db).danh_sach_qd(
-        set_id=set_id, limit=limit, offset=offset, loai=loai, trang_thai=trang_thai
+    ds = await CouncilDecisionRepository(db).list_decisions(
+        set_id=set_id, limit=limit, offset=offset, kind=loai, status=trang_thai
     )
     return [CouncilDecisionOut.model_validate(d) for d in ds]
 
@@ -805,19 +805,19 @@ async def list_council_decisions(
 async def get_council_decision(
     request: Request,
     current_user: models.User = deps.CasbinAuth,
-    qd: models.CouncilDecision = Depends(deps.get_council_decision_for_admin),
+    decision: models.CouncilDecision = Depends(deps.get_council_decision_for_admin),
     db: AsyncSession = Depends(database.get_db),
 ):
-    qd, dong, scan, su_kien = await qd_vb.chi_tiet_qd(db, qd.id)
+    decision, row, scan, event = await decision_service.decision_detail(db, decision.id)
     return CouncilDecisionDetailOut(
-        **CouncilDecisionOut.model_validate(qd).model_dump(),
-        dong=[CouncilDecisionRowOut.model_validate(d) for d in dong],
+        **CouncilDecisionOut.model_validate(decision).model_dump(),
+        dong=[CouncilDecisionRowOut.model_validate(d) for d in row],
         scan=(
             None
             if scan is None
             else {"sha256": scan.sha256, "kich_thuoc": scan.kich_thuoc, "kieu": scan.kieu}
         ),
-        su_kien=[CouncilEventOut.model_validate(e) for e in su_kien],
+        su_kien=[CouncilEventOut.model_validate(e) for e in event],
     )
 
 
@@ -829,21 +829,21 @@ async def get_council_decision(
 async def download_council_decision_scan(
     request: Request,
     current_user: models.User = deps.CasbinAuth,
-    qd: models.CouncilDecision = Depends(deps.get_council_decision_for_admin),
+    decision: models.CouncilDecision = Depends(deps.get_council_decision_for_admin),
     db: AsyncSession = Depends(database.get_db),
 ):
-    s = await qd_vb.doc_scan(db, qd.id)
-    await qd_vb.ghi_tai_scan(db, s, current_user.id)
+    s = await decision_service.read_scan(db, decision.id)
+    await decision_service.log_scan_download(db, s, current_user.id)
     await db.commit()
-    log.info("council_decision_scan_downloaded", decision_id=qd.id, actor=current_user.id)
+    log.info("council_decision_scan_downloaded", decision_id=decision.id, actor=current_user.id)
     return Response(
         content=bytes(s.noi_dung),
         media_type=s.kieu,
         headers={
-            "Content-Disposition": content_disposition_tai_ve(
-                "QuyetDinh-%d-scan.pdf" % qd.id
+            "Content-Disposition": download_content_disposition(
+                "QuyetDinh-%d-scan.pdf" % decision.id
             ),
-            **_TIEU_DE_TAI,
+            **_DOWNLOAD_HEADERS,
         },
     )
 
@@ -858,26 +858,26 @@ async def cancel_council_decision_record(
     request: Request,
     payload: CouncilDecisionCancelIn,
     current_user: models.User = deps.CasbinAuth,
-    qd: models.CouncilDecision = Depends(deps.get_council_decision_for_admin),
+    decision: models.CouncilDecision = Depends(deps.get_council_decision_for_admin),
     db: AsyncSession = Depends(database.get_db),
 ):
-    qd, so_lieu, canh_bao = await qd_vb.huy_ghi_nhan(
+    decision, figures, warnings = await decision_service.revoke_record(
         db,
-        qd.id,
-        ly_do=payload.ly_do,
+        decision.id,
+        reason=payload.ly_do,
         so_go_lai=payload.so_go_lai,
-        xac_nhan=payload.xac_nhan,
-        nguoi_id=current_user.id,
+        confirmation=payload.xac_nhan,
+        actor_id=current_user.id,
     )
     await db.commit()
     log.info(
         "council_decision_record_cancelled",
-        decision_id=qd.id,
+        decision_id=decision.id,
         actor=current_user.id,
-        **{k: v for k, v in so_lieu.items() if isinstance(v, int)},
-        so_o_vuot_chi_tieu=len(canh_bao),
+        **{k: v for k, v in figures.items() if isinstance(v, int)},
+        so_o_vuot_chi_tieu=len(warnings),
     )
-    return _qd_ghi_out(qd, so_lieu, canh_bao=canh_bao)
+    return _recorded_decision_out(decision, figures, warnings=warnings)
 
 
 @router.post(
@@ -890,29 +890,29 @@ async def cancel_council_decision_record(
 async def revoke_council_decision(
     request: Request,
     current_user: models.User = deps.CasbinAuth,
-    qd: models.CouncilDecision = Depends(deps.get_council_decision_for_admin),
+    decision: models.CouncilDecision = Depends(deps.get_council_decision_for_admin),
     so_quyet_dinh: str = Form(..., pattern=r"^[0-9]{1,6}$"),
     ngay_ky: date = Form(...),
     scan: UploadFile = File(...),
     db: AsyncSession = Depends(database.get_db),
 ):
-    h, so_lieu = await qd_vb.huy_hieu_luc(
+    h, figures = await decision_service.cancel_effect(
         db,
-        qd.id,
-        so_quyet_dinh=so_quyet_dinh,
-        ngay_ky=ngay_ky,
-        scan=await _doc_scan(scan),
-        nguoi_id=current_user.id,
+        decision.id,
+        decision_number=so_quyet_dinh,
+        signing_date=ngay_ky,
+        scan=await _read_scan_upload(scan),
+        actor_id=current_user.id,
     )
     await db.commit()
     log.info(
         "council_decision_revoked",
-        decision_id=qd.id,
+        decision_id=decision.id,
         revoking_id=h.id,
         actor=current_user.id,
-        so_muc_cho_moi=so_lieu.get("so_muc_cho_moi"),
+        so_muc_cho_moi=figures.get("so_muc_cho_moi"),
     )
-    return _qd_ghi_out(h, so_lieu)
+    return _recorded_decision_out(h, figures)
 
 
 @router.post(
@@ -926,29 +926,29 @@ async def create_council_adjustment_set(
     request: Request,
     payload: CouncilSetCreate,
     current_user: models.User = deps.CasbinAuth,
-    qd: models.CouncilDecision = Depends(deps.get_council_decision_for_admin),
+    decision: models.CouncilDecision = Depends(deps.get_council_decision_for_admin),
     db: AsyncSession = Depends(database.get_db),
 ):
-    bo, _ = await bo_vb.tao_bo_dieu_chinh(
+    doc_set, _ = await set_service.create_adjustment_set(
         db,
         database.engine,
-        qd.id,
-        ma_ho_so=payload.ma_ho_so,
+        decision.id,
+        profile_codes=payload.ma_ho_so,
         academic_year=payload.academic_year,
-        tham_so=payload.tham_so_quyet_dinh,
-        nguoi_tao_id=current_user.id,
-        xac_nhan_trang_thai=payload.xac_nhan_trang_thai,
-        duoc_xac_nhan=True,  # route CHỈ admin (lớp phụ ở deps) — admin được xác nhận
+        params=payload.tham_so_quyet_dinh,
+        creator_id=current_user.id,
+        confirm_status=payload.xac_nhan_trang_thai,
+        can_confirm=True,  # route CHỈ admin (lớp phụ ở deps) — admin được xác nhận
     )
     await db.commit()
     log.info(
         "council_adjustment_set_created",
-        set_id=bo.id,
-        goc_id=qd.id,
-        so_ho_so=bo.so_ho_so,
+        set_id=doc_set.id,
+        goc_id=decision.id,
+        so_ho_so=doc_set.so_ho_so,
         actor=current_user.id,
     )
-    return CouncilSetDetailOut.tu_bo_va_tep(bo, await bo_vb.tep_cua_bo(db, bo.id))
+    return CouncilSetDetailOut.from_set_and_files(doc_set, await set_service.set_file(db, doc_set.id))
 
 
 @router.post(
@@ -961,10 +961,10 @@ async def create_council_adjustment_set(
 async def create_council_decision_adjustment(
     request: Request,
     current_user: models.User = deps.CasbinAuth,
-    qd: models.CouncilDecision = Depends(deps.get_council_decision_for_admin),
+    decision: models.CouncilDecision = Depends(deps.get_council_decision_for_admin),
     so_quyet_dinh: str = Form(..., pattern=r"^[0-9]{1,6}$"),
     ngay_ky: date = Form(...),
-    bo_dong: List[int] = Form([]),
+    removed_row_ids: List[int] = Form([]),
     set_id: Optional[int] = Form(None, ge=1),
     xac_nhan_so_ho_so: Optional[int] = Form(None, ge=1),
     xac_nhan_khop_ban_in: bool = Form(False),
@@ -973,29 +973,29 @@ async def create_council_decision_adjustment(
     scan: UploadFile = File(...),
     db: AsyncSession = Depends(database.get_db),
 ):
-    dc, canh_bao = await qd_vb.ghi_nhan_dieu_chinh(
+    dc, warnings = await decision_service.record_adjustment_decision(
         db,
-        qd.id,
-        so_quyet_dinh=so_quyet_dinh,
-        ngay_ky=ngay_ky,
-        bo_dong=bo_dong,
+        decision.id,
+        decision_number=so_quyet_dinh,
+        signing_date=ngay_ky,
+        removed_row_ids=removed_row_ids,
         set_id=set_id,
-        xac_nhan_so_ho_so=xac_nhan_so_ho_so,
-        xac_nhan_khop_ban_in=xac_nhan_khop_ban_in,
-        xac_nhan_trang_thai=_json_xac_nhan(xac_nhan_trang_thai),
-        ghi_chu_mau=ghi_chu_mau,
-        scan=await _doc_scan(scan),
-        nguoi_id=current_user.id,
+        confirm_profile_count=xac_nhan_so_ho_so,
+        confirm_printed_copy_match=xac_nhan_khop_ban_in,
+        confirm_status=_confirmation_json(xac_nhan_trang_thai),
+        template_note=ghi_chu_mau,
+        scan=await _read_scan_upload(scan),
+        actor_id=current_user.id,
     )
     await db.commit()
     log.info(
         "council_decision_adjusted",
         decision_id=dc.id,
-        goc_id=qd.id,
-        so_dong_bo=len(bo_dong),
+        goc_id=decision.id,
+        so_dong_bo=len(removed_row_ids),
         actor=current_user.id,
     )
-    return _qd_ghi_out(dc, canh_bao=canh_bao)
+    return _recorded_decision_out(dc, warnings=warnings)
 
 
 @router.post(
@@ -1009,29 +1009,29 @@ async def resign_council_document_set(
     request: Request,
     payload: CouncilResignIn,
     current_user: models.User = deps.CasbinAuth,
-    bo: models.CouncilDocumentSet = Depends(deps.get_council_document_set_for_admin),
+    doc_set: models.CouncilDocumentSet = Depends(deps.get_council_document_set_for_admin),
     db: AsyncSession = Depends(database.get_db),
 ):
-    moi, _ = await bo_vb.tao_bo_dung_lai_ban_ky(
+    new_set, _ = await set_service.create_signed_copy_rebuild_set(
         db,
         database.engine,
-        bo,
-        so_quyet_dinh=payload.so_quyet_dinh,
-        ngay_ky=payload.ngay_ky,
-        dong_sua_tay=payload.dong_sua_tay,
-        ly_do=payload.ly_do,
-        xac_nhan_dong_khac=payload.xac_nhan_dong_khac,
-        nguoi_tao_id=current_user.id,
+        doc_set,
+        decision_number=payload.so_quyet_dinh,
+        signing_date=payload.ngay_ky,
+        manual_edit_rows=payload.dong_sua_tay,
+        reason=payload.ly_do,
+        confirm_other_rows=payload.xac_nhan_dong_khac,
+        creator_id=current_user.id,
     )
     await db.commit()
     log.info(
         "council_set_resigned",
-        set_id=moi.id,
-        tu_set_id=bo.id,
+        set_id=new_set.id,
+        tu_set_id=doc_set.id,
         so_dong_sua_tay=len(payload.dong_sua_tay),
         actor=current_user.id,
     )
-    return CouncilSetDetailOut.tu_bo_va_tep(moi, await bo_vb.tep_cua_bo(db, moi.id))
+    return CouncilSetDetailOut.from_set_and_files(new_set, await set_service.set_file(db, new_set.id))
 
 
 @router.get(
@@ -1042,10 +1042,10 @@ async def resign_council_document_set(
 async def compare_council_document_set(
     request: Request,
     current_user: models.User = deps.CasbinAuth,
-    bo: models.CouncilDocumentSet = Depends(deps.get_council_document_set_for_admin),
+    doc_set: models.CouncilDocumentSet = Depends(deps.get_council_document_set_for_admin),
     db: AsyncSession = Depends(database.get_db),
 ):
-    out = await bo_vb.so_voi_hien_tai(db, database.engine, bo)
+    out = await set_service.compare_with_current(db, database.engine, doc_set)
     return JSONResponse(content=out, headers={"Cache-Control": "no-store"})
 
 
@@ -1068,8 +1068,8 @@ async def list_council_decision_holds(
 ):
     from ..repositories.council_decision_repository import CouncilDecisionRepository
 
-    ds = await CouncilDecisionRepository(db).danh_sach_muc_cho(
-        trang_thai=trang_thai, limit=limit, offset=offset
+    ds = await CouncilDecisionRepository(db).list_holds(
+        status=trang_thai, limit=limit, offset=offset
     )
     return [
         CouncilHoldOut(
@@ -1099,11 +1099,11 @@ async def release_council_decision_hold(
     request: Request,
     payload: CouncilHoldReleaseIn,
     current_user: models.User = deps.CasbinAuth,
-    muc: models.CouncilDecisionHold = Depends(deps.get_council_decision_hold_for_admin),
+    item: models.CouncilDecisionHold = Depends(deps.get_council_decision_hold_for_admin),
     db: AsyncSession = Depends(database.get_db),
 ):
-    h, _ = await qd_vb.cho_xet_lai(
-        db, muc.id, ly_do=payload.ly_do, nguoi_id=current_user.id
+    h, _ = await decision_service.review_hold_again(
+        db, item.id, reason=payload.ly_do, actor_id=current_user.id
     )
     await db.commit()
     log.info("council_decision_hold_released", hold_id=h.id, actor=current_user.id)
@@ -1128,7 +1128,7 @@ async def list_council_document_events(
 ):
     from ..repositories.council_decision_repository import CouncilDecisionRepository
 
-    ds = await CouncilDecisionRepository(db).danh_sach_su_kien(
+    ds = await CouncilDecisionRepository(db).list_events(
         set_id=set_id, decision_id=decision_id, limit=limit, offset=offset
     )
     return [CouncilEventOut.model_validate(e) for e in ds]
@@ -1147,27 +1147,27 @@ async def get_council_document_permissions(
 ):
     """Casbin: admin (wildcard) + manager (template + migration ``hdts20261105``); vai khác
     403 — giao diện coi 403 ở đây là "mọi cờ tắt". Không log gì ngoài log chung."""
-    quyen = await deps.quyen_van_ban_hoi_dong(request, current_user, ENDPOINT_THEO_CO)
+    permissions = await deps.council_document_permissions(request, current_user, ENDPOINT_BY_FLAG)
     return CouncilDocumentPermissionsOut(
-        permissions=CouncilDocumentPermissions(**quyen)
+        permissions=CouncilDocumentPermissions(**permissions)
     )
 
 
-async def _co_quyen_ghi_nhan(request: Request, current_user: models.User) -> bool:
+async def _can_record(request: Request, current_user: models.User) -> bool:
     """§5.8 (Codex lần 18): ``luot_gui_cho`` (mã lượt gửi đang chờ) chỉ cho người có quyền GHI NHẬN — trả lời bằng ĐÚNG
     cờ ``ghi_nhan_qd`` do CÙNG hàm tính cờ của ``GET /quyen`` (cổng thật của route ghi nhận), không suy từ phạm vi admin:
     phạm vi dữ liệu không phải quyền thao tác. Dòng policy ngoài mẫu route ⇒ mọi cờ tắt ⇒ không lộ mã (fail-closed)."""
     # Review max PR #724 (R14): chỉ tính cờ cần dùng (cùng hàm, cùng luật với ``GET /quyen``).
-    quyen = await deps.quyen_van_ban_hoi_dong(
-        request, current_user, ENDPOINT_THEO_CO, only_flag="ghi_nhan_qd"
+    permissions = await deps.council_document_permissions(
+        request, current_user, ENDPOINT_BY_FLAG, only_flag="ghi_nhan_qd"
     )
-    return quyen["ghi_nhan_qd"] is True
+    return permissions["ghi_nhan_qd"] is True
 
 
 #: Cờ ↔ HÀM xử lý của ĐÚNG MỘT route (phương thức + đường đọc từ bảng route thật của app, không
 #: viết lại ở đây). Thêm route mới vào module ⇒ thêm cờ (test
 #: ``test_moi_route_cua_module_co_dung_mot_co`` đỏ nếu quên).
-ENDPOINT_THEO_CO = {
+ENDPOINT_BY_FLAG = {
     "xem_mau": list_council_templates,
     "tai_mau_len": upload_council_template,
     "xem_danh_sach_bo": list_council_document_sets,

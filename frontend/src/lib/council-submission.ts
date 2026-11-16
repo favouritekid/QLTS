@@ -9,7 +9,7 @@
  *   3. Chỉ một vài mã trạng thái HTTP được coi là máy chủ ĐÃ TỪ CHỐI dứt khoát (yêu cầu bị chặn trước khi ghi);
  *      mọi mã khác ⇒ "chưa xác định" (thiên về an toàn: người dùng bấm "Kiểm tra trên máy chủ").
  *
- * ⚠️ Không có `console.*`, không storage: mã lượt chỉ ở bộ nhớ (xem `useGhiNhanQuyetDinh`).
+ * ⚠️ Không có `console.*`, không storage: mã lượt chỉ ở bộ nhớ (xem `useRecordDecision`).
  */
 import { councilErrorCode } from "@/lib/api/council-documents"
 import { readApiError } from "@/lib/error-handler"
@@ -20,9 +20,9 @@ import type {
 } from "@/lib/zod/council-documents"
 
 // ── kết quả phân xử ──────────────────────────────────────────────────────────
-export type KetQuaPhanXu =
+export type AdjudicationResult =
   /** máy chủ báo ĐÃ ghi, kèm DTO văn bản (khung kết quả chỉ vẽ từ DTO này) */
-  | { kieu: "da_ghi"; quyetDinh: CouncilDecisionWrite }
+  | { kieu: "da_ghi"; decision: CouncilDecisionWrite }
   /** máy chủ báo ĐÃ ghi nhưng KHÔNG kèm DTO (sai hợp đồng) — vẫn là "đã ghi", không có chi tiết để vẽ */
   | { kieu: "da_ghi_thieu_chi_tiet" }
   /** lượt đã bị chặn: chắc chắn CHƯA có văn bản, và gửi muộn sẽ bị từ chối */
@@ -32,11 +32,11 @@ export type KetQuaPhanXu =
   /** `ket_qua` lạ — không suy */
   | { kieu: "van_chua_ro" }
 
-export function giaiNghiaPhanXu(out: CouncilSubmissionResolve): KetQuaPhanXu {
+export function explainAdjudication(out: CouncilSubmissionResolve): AdjudicationResult {
   switch (out.ket_qua) {
     case "da_ghi":
       return out.quyet_dinh
-        ? { kieu: "da_ghi", quyetDinh: out.quyet_dinh }
+        ? { kieu: "da_ghi", decision: out.quyet_dinh }
         : { kieu: "da_ghi_thieu_chi_tiet" }
     case "chua_ghi_da_chan":
       return { kieu: "chua_ghi_da_chan" }
@@ -48,19 +48,19 @@ export function giaiNghiaPhanXu(out: CouncilSubmissionResolve): KetQuaPhanXu {
 }
 
 // ── lỗi khi GỬI ghi nhận ─────────────────────────────────────────────────────
-export type LoaiLoiGui = "bi_tu_choi" | "chua_xac_dinh"
+export type SubmissionErrorKind = "bi_tu_choi" | "chua_xac_dinh"
 
 /** Mã HTTP mà máy chủ / lớp trước nó trả khi yêu cầu bị chặn TRƯỚC khi ghi bất cứ gì. */
-const TU_CHOI_DUT_KHOAT: ReadonlySet<number> = new Set([400, 403, 409, 413, 422, 429])
+const HARD_REJECT_STATUSES: ReadonlySet<number> = new Set([400, 403, 409, 413, 422, 429])
 
-export function phanLoaiLoiGui(error: unknown): LoaiLoiGui {
+export function classifySubmissionError(error: unknown): SubmissionErrorKind {
   const e = readApiError(error)
   if (!e.isAxios || !e.hasResponse || e.status === undefined) return "chua_xac_dinh"
   if (e.frozen) return "bi_tu_choi" // đóng băng tuyển sinh chặn từ middleware, trước handler
-  return TU_CHOI_DUT_KHOAT.has(e.status) ? "bi_tu_choi" : "chua_xac_dinh"
+  return HARD_REJECT_STATUSES.has(e.status) ? "bi_tu_choi" : "chua_xac_dinh"
 }
 
-export type HuongXuLyLoiGui =
+export type SubmissionErrorHandling =
   /** lượt vẫn `cho_gui`: sửa biểu mẫu rồi gửi lại CÙNG mã */
   | "sua_va_gui_lai"
   /** lượt đã bị chặn: cần mở lượt MỚI trước lần gửi sau */
@@ -70,9 +70,9 @@ export type HuongXuLyLoiGui =
   /** lượt không hợp lệ với bộ này: đọc lại trạng thái bộ */
   | "tai_lai_bo"
 
-/** Chỉ gọi khi `phanLoaiLoiGui(error) === "bi_tu_choi"`. */
-export function huongXuLyLoiGui(error: unknown): HuongXuLyLoiGui {
-  switch (councilErrorCode(error).maLoi) {
+/** Chỉ gọi khi `classifySubmissionError(error) === "bi_tu_choi"`. */
+export function submissionErrorHandling(error: unknown): SubmissionErrorHandling {
+  switch (councilErrorCode(error).errorCode) {
     case "luot_da_chan":
       return "mo_luot_moi"
     case "luot_da_dung_noi_dung_khac":
@@ -86,12 +86,12 @@ export function huongXuLyLoiGui(error: unknown): HuongXuLyLoiGui {
 
 // ── trạng thái các lượt của bộ (khôi phục sau tải lại trang) ──────────────────
 /** Lượt đang chờ (kết quả chưa rõ) — `trang_thai` đúng bằng `cho_gui`. Lạ ⇒ không coi là chờ (không suy). */
-export function luotDangCho(ds: readonly CouncilSubmission[]): CouncilSubmission | undefined {
+export function pendingSubmission(ds: readonly CouncilSubmission[]): CouncilSubmission | undefined {
   return ds.find((x) => x.trang_thai === "cho_gui")
 }
 
 /** Lượt đã ghi mới nhất (có `decision_id`). */
-export function luotDaGhi(ds: readonly CouncilSubmission[]): CouncilSubmission | undefined {
+export function recordedSubmission(ds: readonly CouncilSubmission[]): CouncilSubmission | undefined {
   const co = ds.filter((x) => x.trang_thai === "da_ghi" && x.decision_id != null)
   return co.length === 0
     ? undefined
@@ -100,4 +100,4 @@ export function luotDaGhi(ds: readonly CouncilSubmission[]): CouncilSubmission |
 
 // ── nhãn hiển thị ────────────────────────────────────────────────────────────
 /** Nhãn khi lượt chưa rõ. KHÔNG bao giờ chứa "chưa ghi nhận" (đặc tả 5.6.1: nhãn đó nói sai khi lượt chưa rõ). */
-export const NHAN_CHUA_XAC_DINH = "Chưa xác định"
+export const UNDETERMINED_LABEL = "Chưa xác định"

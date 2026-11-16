@@ -7,7 +7,7 @@ route của module) với từng vai: admin · quản lý có đơn vị · qu�
 kế toán. Hành vi thật đo bằng chính route (bộ trong phạm vi người gọi; route ghi gọi với đầu vào
 bị service từ chối SAU các cổng — 400 — nên không ghi gì). Vai không có dòng Casbin cho ``/quyen``
 (cán bộ, kế toán) nhận 403 ở route cờ ⇒ giao diện coi là "mọi cờ tắt"; với các vai ấy phép tính
-cờ còn được gọi THẲNG (``deps.quyen_van_ban_hoi_dong``) và cũng phải khớp hành vi.
+cờ còn được gọi THẲNG (``deps.council_document_permissions``) và cũng phải khớp hành vi.
 
 Hai kịch bản Casbin GIẢ (enforcer của app bị thay ``enforce``): Casbin CHO quản lý mọi route của
 module ⇒ cờ vẫn theo lớp phụ chỉ-admin / phạm vi; Casbin TỪ CHỐI admin ⇒ mọi cờ tắt. Cổng lạ
@@ -345,7 +345,7 @@ async def _co_goi_thang(ten):
         ).scalar_one()
         nguoi = await db.get(models.User, uid)
         yeu_cau = Request({"type": "http", "app": fastapi_app, "headers": []})
-        return await deps.quyen_van_ban_hoi_dong(yeu_cau, nguoi, rt.ENDPOINT_THEO_CO)
+        return await deps.council_document_permissions(yeu_cau, nguoi, rt.ENDPOINT_BY_FLAG)
 
 
 # ═══════════════════════════ hợp đồng: mỗi route của module đúng một cờ ════════════════
@@ -361,9 +361,9 @@ def test_moi_route_cua_module_co_dung_mot_co():
     # mỗi hàm đúng MỘT route — 10 (E2–F) + 13 (lượt I, ghi nhận Quyết định đã ký) + 3 (vòng giao diện: lượt gửi) +
     # 3 (vòng giao diện: kiểm trước, đổi mã, tìm hồ sơ) + 2 (vòng giao diện: tải cả bộ, người tạo bộ)
     assert len(con_lai) == len(set(con_lai)) == 31
-    assert set(rt.ENDPOINT_THEO_CO.values()) == set(con_lai)
-    assert len(set(rt.ENDPOINT_THEO_CO.values())) == len(rt.ENDPOINT_THEO_CO)
-    assert tuple(rt.ENDPOINT_THEO_CO) == CO  # trường schema = khoá bảng cờ, cùng thứ tự
+    assert set(rt.ENDPOINT_BY_FLAG.values()) == set(con_lai)
+    assert len(set(rt.ENDPOINT_BY_FLAG.values())) == len(rt.ENDPOINT_BY_FLAG)
+    assert tuple(rt.ENDPOINT_BY_FLAG) == CO  # trường schema = khoá bảng cờ, cùng thứ tự
     assert all(len(r.methods) == 1 for r in route)
 
 
@@ -446,16 +446,16 @@ async def test_casbin_cho_quan_ly_moi_route_thi_co_van_theo_lop_phu(
 @pytest.mark.parametrize("duong", ["danh_sach", "chi_tiet"])
 async def test_danh_sach_va_chi_tiet_bo_chi_tinh_mot_co(client, tk, ba_bo, monkeypatch, duong):
     # Review max PR #724 (R14): GET /sets và GET /sets/{id} chỉ cần cờ ``ghi_nhan_qd`` ⇒ tính ĐÚNG MỘT cờ — trước đây cả
-    # bảng cờ (~31 lần hỏi Casbin đồng bộ trên event loop mỗi request). Đếm ``duong_mau_cua_route``: chỉ phép tính cờ
+    # bảng cờ (~31 lần hỏi Casbin đồng bộ trên event loop mỗi request). Đếm ``route_pattern_path``: chỉ phép tính cờ
     # gọi hàm này, MỘT lần cho mỗi cờ có cổng Casbin.
     dem = []
-    goc = deps.duong_mau_cua_route
+    goc = deps.route_pattern_path
 
     def dem_goi(path):
         dem.append(path)
         return goc(path)
 
-    monkeypatch.setattr(deps, "duong_mau_cua_route", dem_goi)
+    monkeypatch.setattr(deps, "route_pattern_path", dem_goi)
     h = await tk("admin")
     url = P + "/sets" if duong == "danh_sach" else P + "/sets/%d" % ba_bo["u1"][0]
     r = await client.get(url, headers=h)
@@ -487,7 +487,7 @@ async def test_cong_la_trong_cay_dependency_thi_co_tat(client, tk, monkeypatch):
     # dù admin gọi được mọi route (fail-closed khi phép tính cờ không hiểu cổng của route).
     h = await tk("admin")
     assert all((await _co_qua_http(client, h)).values())  # đối chứng: admin mọi cờ bật
-    monkeypatch.setattr(deps, "_KHONG_PHAI_CONG_VAN_BAN_HOI_DONG", frozenset())
+    monkeypatch.setattr(deps, "_NON_COUNCIL_DOCUMENT_GATES", frozenset())
     assert not any((await _co_qua_http(client, h)).values())
 
 

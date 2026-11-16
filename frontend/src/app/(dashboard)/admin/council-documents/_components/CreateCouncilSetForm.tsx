@@ -19,14 +19,14 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { useCreateCouncilSet } from "@/hooks/admin/useCouncilDocuments"
 import { councilSetGateFromError } from "@/lib/api/council-documents"
-import { THAM_SO_TRONG, dongNhapThanhDanhSach, thamSoGui, type ThamSoNhap } from "@/lib/council-params"
+import { EMPTY_PARAMS, parseRowsToList, submitParams, type InputParams } from "@/lib/council-params"
 import type { CouncilSetGate } from "@/lib/zod/council-documents"
 
 import { CouncilErrorAlert } from "./CouncilErrorAlert"
-import { nhanTrangThai } from "./hien-thi"
+import { statusLabel } from "./display"
 
 // Một nguồn ở `@/lib/council-params` (bước 1 mới cũng dùng); re-export để nơi đang import từ tệp này không đổi.
-export { dongNhapThanhDanhSach }
+export { parseRowsToList }
 
 /**
  * Tạo bộ văn bản. Danh sách mã chỉ sống trong state của component này (bộ nhớ)
@@ -35,50 +35,50 @@ export { dongNhapThanhDanhSach }
  */
 export function CreateCouncilSetForm({ canOpenDetail }: { canOpenDetail: boolean }) {
   const router = useRouter()
-  const tao = useCreateCouncilSet()
-  const [vanBan, setVanBan] = useState("")
-  const [namHoc, setNamHoc] = useState("")
-  const [thamSo, setThamSo] = useState<ThamSoNhap>(THAM_SO_TRONG)
-  const [moThamSo, setMoThamSo] = useState(false)
+  const create = useCreateCouncilSet()
+  const [document, setDocument] = useState("")
+  const [academicYear, setAcademicYear] = useState("")
+  const [params, setParams] = useState<InputParams>(EMPTY_PARAMS)
+  const [paramsOpen, setParamsOpen] = useState(false)
   // Lượt G: cổng của máy chủ báo hồ sơ ở mức cảnh báo VÀ nói người gọi được xác nhận ⇒ mở hộp
   // xác nhận với ĐÚNG số đếm máy chủ trả (chỉ số đếm theo trạng thái — không mã hồ sơ).
-  const [choXacNhan, setChoXacNhan] = useState<CouncilSetGate | null>(null)
-  const lePhai = useRef<HTMLDivElement>(null)
+  const [awaitingConfirm, setAwaitingConfirm] = useState<CouncilSetGate | null>(null)
+  const rightPane = useRef<HTMLDivElement>(null)
 
-  const danhSach = useMemo(() => dongNhapThanhDanhSach(vanBan), [vanBan])
-  const soDong = Math.max(1, vanBan.split(/\r?\n/).length)
-  const namHocSo = /^\d{4}$/.test(namHoc.trim()) ? Number(namHoc.trim()) : null
-  const coMa = danhSach.some((d) => d.trim() !== "")
-  const guiDuoc = coMa && namHocSo !== null && !tao.isPending
+  const list = useMemo(() => parseRowsToList(document), [document])
+  const rowCount = Math.max(1, document.split(/\r?\n/).length)
+  const academicYearNumber = /^\d{4}$/.test(academicYear.trim()) ? Number(academicYear.trim()) : null
+  const hasCode = list.some((d) => d.trim() !== "")
+  const submittable = hasCode && academicYearNumber !== null && !create.isPending
 
-  const gui = (xacNhan?: Record<string, number>) => {
-    if (!guiDuoc || namHocSo === null) return
-    const ts = thamSoGui(thamSo)
-    tao.mutate(
+  const gui = (confirm?: Record<string, number>) => {
+    if (!submittable || academicYearNumber === null) return
+    const ts = submitParams(params)
+    create.mutate(
       {
-        ma_ho_so: danhSach,
-        academic_year: namHocSo,
+        ma_ho_so: list,
+        academic_year: academicYearNumber,
         ...(ts ? { tham_so_quyet_dinh: ts } : {}),
-        ...(xacNhan ? { xac_nhan_trang_thai: xacNhan } : {}),
+        ...(confirm ? { xac_nhan_trang_thai: confirm } : {}),
       },
       {
-        onSuccess: (bo) => {
-          setVanBan("")
-          toast.success(`Đã dựng bộ văn bản #${bo.id}: ${bo.so_ho_so} hồ sơ, ${bo.so_tep} tệp.`)
-          if (canOpenDetail) router.push(`/admin/council-documents/${bo.id}`)
+        onSuccess: (docSet) => {
+          setDocument("")
+          toast.success(`Đã dựng bộ văn bản #${docSet.id}: ${docSet.so_ho_so} hồ sơ, ${docSet.so_tep} tệp.`)
+          if (canOpenDetail) router.push(`/admin/council-documents/${docSet.id}`)
         },
-        onError: (loi) => {
-          const g = councilSetGateFromError(loi)
+        onError: (error) => {
+          const g = councilSetGateFromError(error)
           if (g && g.chan.length === 0 && g.can_admin_xac_nhan && g.nguoi_goi_duoc_xac_nhan) {
-            setChoXacNhan(g)
+            setAwaitingConfirm(g)
           }
         },
       },
     )
   }
 
-  const doiThamSo = (k: keyof ThamSoNhap) => (e: ChangeEvent<HTMLInputElement>) =>
-    setThamSo((t) => ({ ...t, [k]: e.target.value }))
+  const changeParams = (k: keyof InputParams) => (e: ChangeEvent<HTMLInputElement>) =>
+    setParams((t) => ({ ...t, [k]: e.target.value }))
 
   return (
     <form
@@ -94,13 +94,13 @@ export function CreateCouncilSetForm({ canOpenDetail }: { canOpenDetail: boolean
         <Label htmlFor="council-ma-ho-so">Danh sách mã hồ sơ (số CCCD) — mỗi dòng một mã, đúng thứ tự</Label>
         <div className="flex rounded-md border border-input bg-background font-mono text-sm leading-5">
           <div
-            ref={lePhai}
+            ref={rightPane}
             aria-hidden="true"
             className="select-none overflow-hidden border-r px-2 py-1.5 text-right text-muted-foreground"
             style={{ maxHeight: "20rem" }}
             data-testid="ma-ho-so-gutter"
           >
-            {Array.from({ length: soDong }, (_, i) => (
+            {Array.from({ length: rowCount }, (_, i) => (
               <div key={i}>{i + 1}</div>
             ))}
           </div>
@@ -114,17 +114,17 @@ export function CreateCouncilSetForm({ canOpenDetail }: { canOpenDetail: boolean
             autoComplete="off"
             autoCorrect="off"
             autoCapitalize="off"
-            value={vanBan}
-            disabled={tao.isPending}
-            onChange={(e) => setVanBan(e.target.value)}
+            value={document}
+            disabled={create.isPending}
+            onChange={(e) => setDocument(e.target.value)}
             onScroll={(e) => {
-              if (lePhai.current) lePhai.current.scrollTop = e.currentTarget.scrollTop
+              if (rightPane.current) rightPane.current.scrollTop = e.currentTarget.scrollTop
             }}
           />
         </div>
         <p className="text-xs text-muted-foreground">
           Máy chủ báo lỗi theo SỐ DÒNG (đếm từ 1, kể cả dòng trống ở giữa; dòng trống ở cuối được bỏ). Số
-          dòng sẽ gửi: {danhSach.length}.
+          dòng sẽ gửi: {list.length}.
         </p>
       </div>
 
@@ -135,9 +135,9 @@ export function CreateCouncilSetForm({ canOpenDetail }: { canOpenDetail: boolean
           data-testid="nam-hoc-input"
           inputMode="numeric"
           placeholder="vd 2026"
-          value={namHoc}
-          disabled={tao.isPending}
-          onChange={(e) => setNamHoc(e.target.value)}
+          value={academicYear}
+          disabled={create.isPending}
+          onChange={(e) => setAcademicYear(e.target.value)}
         />
       </div>
 
@@ -146,46 +146,46 @@ export function CreateCouncilSetForm({ canOpenDetail }: { canOpenDetail: boolean
           type="button"
           variant="ghost"
           size="sm"
-          onClick={() => setMoThamSo((m) => !m)}
-          aria-expanded={moThamSo}
+          onClick={() => setParamsOpen((m) => !m)}
+          aria-expanded={paramsOpen}
           data-testid="tham-so-toggle"
         >
-          {moThamSo ? "Ẩn" : "Thêm"} tham số Quyết định (tuỳ chọn)
+          {paramsOpen ? "Ẩn" : "Thêm"} tham số Quyết định (tuỳ chọn)
         </Button>
-        {moThamSo ? (
+        {paramsOpen ? (
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3" data-testid="tham-so-fields">
             <div className="space-y-1">
               <Label htmlFor="ts-so-qd">Số Quyết định</Label>
-              <Input id="ts-so-qd" inputMode="numeric" value={thamSo.so_quyet_dinh} onChange={doiThamSo("so_quyet_dinh")} disabled={tao.isPending} />
+              <Input id="ts-so-qd" inputMode="numeric" value={params.so_quyet_dinh} onChange={changeParams("so_quyet_dinh")} disabled={create.isPending} />
             </div>
             <div className="space-y-1">
               <Label htmlFor="ts-ngay-qd">Ngày Quyết định</Label>
-              <Input id="ts-ngay-qd" type="date" value={thamSo.ngay_quyet_dinh} onChange={doiThamSo("ngay_quyet_dinh")} disabled={tao.isPending} />
+              <Input id="ts-ngay-qd" type="date" value={params.ngay_quyet_dinh} onChange={changeParams("ngay_quyet_dinh")} disabled={create.isPending} />
             </div>
             <div className="space-y-1">
               <Label htmlFor="ts-dot-so">Đợt số</Label>
-              <Input id="ts-dot-so" inputMode="numeric" value={thamSo.dot_so} onChange={doiThamSo("dot_so")} disabled={tao.isPending} />
+              <Input id="ts-dot-so" inputMode="numeric" value={params.dot_so} onChange={changeParams("dot_so")} disabled={create.isPending} />
             </div>
             <div className="space-y-1">
               <Label htmlFor="ts-dot-thang">Tháng của đợt</Label>
-              <Input id="ts-dot-thang" inputMode="numeric" value={thamSo.dot_thang} onChange={doiThamSo("dot_thang")} disabled={tao.isPending} />
+              <Input id="ts-dot-thang" inputMode="numeric" value={params.dot_thang} onChange={changeParams("dot_thang")} disabled={create.isPending} />
             </div>
             <div className="space-y-1">
               <Label htmlFor="ts-so-bb">Số Biên bản</Label>
-              <Input id="ts-so-bb" inputMode="numeric" value={thamSo.so_bien_ban} onChange={doiThamSo("so_bien_ban")} disabled={tao.isPending} />
+              <Input id="ts-so-bb" inputMode="numeric" value={params.so_bien_ban} onChange={changeParams("so_bien_ban")} disabled={create.isPending} />
             </div>
             <div className="space-y-1">
               <Label htmlFor="ts-ngay-bb">Ngày Biên bản</Label>
-              <Input id="ts-ngay-bb" type="date" value={thamSo.ngay_bien_ban} onChange={doiThamSo("ngay_bien_ban")} disabled={tao.isPending} />
+              <Input id="ts-ngay-bb" type="date" value={params.ngay_bien_ban} onChange={changeParams("ngay_bien_ban")} disabled={create.isPending} />
             </div>
           </div>
         ) : null}
       </div>
 
-      <CouncilErrorAlert error={tao.error} testId="create-set-error" />
+      <CouncilErrorAlert error={create.error} testId="create-set-error" />
 
-      <Button type="submit" disabled={!guiDuoc} data-testid="create-set-submit">
-        {tao.isPending ? (
+      <Button type="submit" disabled={!submittable} data-testid="create-set-submit">
+        {create.isPending ? (
           <>
             <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Đang dựng bộ văn bản…
           </>
@@ -194,7 +194,7 @@ export function CreateCouncilSetForm({ canOpenDetail }: { canOpenDetail: boolean
         )}
       </Button>
 
-      <AlertDialog open={choXacNhan !== null} onOpenChange={(o) => !o && setChoXacNhan(null)}>
+      <AlertDialog open={awaitingConfirm !== null} onOpenChange={(o) => !o && setAwaitingConfirm(null)}>
         <AlertDialogContent data-testid="xac-nhan-trang-thai-dialog">
           <AlertDialogHeader>
             <AlertDialogTitle>Xác nhận dựng bộ có hồ sơ ở trạng thái cần cảnh báo</AlertDialogTitle>
@@ -205,9 +205,9 @@ export function CreateCouncilSetForm({ canOpenDetail }: { canOpenDetail: boolean
             </AlertDialogDescription>
           </AlertDialogHeader>
           <ul className="list-disc space-y-1 pl-5 text-sm" data-testid="xac-nhan-trang-thai-dem">
-            {Object.entries(choXacNhan?.canh_bao.so_ho_so_theo_trang_thai ?? {}).map(([s, n]) => (
+            {Object.entries(awaitingConfirm?.canh_bao.so_ho_so_theo_trang_thai ?? {}).map(([s, n]) => (
               <li key={s}>
-                {`${nhanTrangThai(s)}: ${n} hồ sơ — dòng ${(choXacNhan?.canh_bao.dong_theo_trang_thai[s] ?? []).join(", ")}`}
+                {`${statusLabel(s)}: ${n} hồ sơ — dòng ${(awaitingConfirm?.canh_bao.dong_theo_trang_thai[s] ?? []).join(", ")}`}
               </li>
             ))}
           </ul>
@@ -215,11 +215,11 @@ export function CreateCouncilSetForm({ canOpenDetail }: { canOpenDetail: boolean
             <AlertDialogCancel data-testid="xac-nhan-trang-thai-huy">Huỷ</AlertDialogCancel>
             <Button
               data-testid="xac-nhan-trang-thai-dong-y"
-              disabled={tao.isPending}
+              disabled={create.isPending}
               onClick={() => {
-                const dem = choXacNhan?.canh_bao.so_ho_so_theo_trang_thai
-                setChoXacNhan(null)
-                if (dem) gui(dem)
+                const count = awaitingConfirm?.canh_bao.so_ho_so_theo_trang_thai
+                setAwaitingConfirm(null)
+                if (count) gui(count)
               }}
             >
               Xác nhận và dựng bộ

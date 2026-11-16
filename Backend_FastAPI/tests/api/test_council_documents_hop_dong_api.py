@@ -146,7 +146,7 @@ def test_template_va_migration_theo_ngu_phap_policy():
             r.path
             for r in fastapi_app.routes
             if isinstance(r, APIRoute)
-            and r.endpoint in set(rt.ENDPOINT_THEO_CO.values())
+            and r.endpoint in set(rt.ENDPOINT_BY_FLAG.values())
         }
     )
     mo_hinh = Path(__file__).resolve().parents[2] / "auth_model.conf"
@@ -168,9 +168,9 @@ def test_template_va_migration_theo_ngu_phap_policy():
     assert so_cua_template >= 100 and len(doi_tuong) > so_cua_template, "phép đo rỗng"
     assert "/*" in doi_tuong  # dòng admin rộng nhất có mặt
     assert [
-        (x, deps.ly_do_policy_ngoai_hop_dong(x, duong, ham_khop))
+        (x, deps.policy_outside_contract_reason(x, duong, ham_khop))
         for x in doi_tuong
-        if deps.ly_do_policy_ngoai_hop_dong(x, duong, ham_khop) is not None
+        if deps.policy_outside_contract_reason(x, duong, ham_khop) is not None
     ] == []
 
 

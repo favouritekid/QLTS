@@ -40,13 +40,13 @@ from tests.api.test_council_decision_profile_gates_api import (  # noqa: F401 �
 pytestmark = pytest.mark.integration
 
 HAM_DEM = (
-    "dem_theo_nganh_nam",
-    "dem_theo_thong_tin_hoc_vu",
-    "dem_theo_duong_xet",
-    "dem_da_trung_tuyen_theo_duong_xet",
+    "count_by_offering_year",
+    "count_by_academic_info",
+    "count_by_path",
+    "count_admitted_by_path",
 )
 _DANG_DEM = contextvars.ContextVar("f260_dang_dem", default=False)
-#: Câu có Phần A — điều kiện "hồ sơ KHÔNG có dòng hiệu lực" (``khong_co_dong_hieu_luc``) biên dịch thành
+#: Câu có Phần A — điều kiện "hồ sơ KHÔNG có dòng hiệu lực" (``no_effective_row``) biên dịch thành
 #: ``NOT (EXISTS (SELECT …))``; câu Phần B và câu cảnh báo thiếu khoá không có.
 DAU_PHAN_A = "NOT (EXISTS"
 
@@ -108,19 +108,19 @@ async def _em_chiem_cho_ca_bon_noi(hs):
 
 
 async def _dem_bon_noi(db, ten, o):
-    if ten == "dem_theo_nganh_nam":
-        return await qos.dem_theo_nganh_nam(db, offering_id=o["off"], academic_year=2026)
-    if ten == "dem_theo_thong_tin_hoc_vu":
-        return await qos.dem_theo_thong_tin_hoc_vu(db, academic_info_id=o["ai"])
-    if ten == "dem_theo_duong_xet":
-        return await qos.dem_theo_duong_xet(db, admission_path_id=o["path"])
-    return (await qos.dem_da_trung_tuyen_theo_duong_xet(db, [o["path"]]))[o["path"]]
+    if ten == "count_by_offering_year":
+        return await qos.count_by_offering_year(db, offering_id=o["off"], academic_year=2026)
+    if ten == "count_by_academic_info":
+        return await qos.count_by_academic_info(db, academic_info_id=o["ai"])
+    if ten == "count_by_path":
+        return await qos.count_by_path(db, admission_path_id=o["path"])
+    return (await qos.count_admitted_by_path(db, [o["path"]]))[o["path"]]
 
 
 async def _huy_hieu_luc_phien_khac(qd_id, nguoi):
     async with AsyncSessionLocal() as db2:
-        h, _ = await qd_vb.huy_hieu_luc(
-            db2, qd_id, so_quyet_dinh="701", ngay_ky=qd._ngay(), scan=qd.PDF, nguoi_id=nguoi
+        h, _ = await qd_vb.cancel_effect(
+            db2, qd_id, decision_number="701", signing_date=qd._ngay(), scan=qd.PDF, actor_id=nguoi
         )
         await db2.commit()
         return h.id
@@ -129,27 +129,27 @@ async def _huy_hieu_luc_phien_khac(qd_id, nguoi):
 async def _ghi_nhan_phien_khac(set_id, nguoi):
     # Vòng giao diện (lượt gửi — đặc tả bản 2 mục 3.7): xin mã lượt ở phiên RIÊNG và commit trước (như route mở lượt),
     # rồi mới ghi nhận bằng mã ấy.
-    from app.services import council_decision_submission_service as luot_gui
+    from app.services import council_decision_submission_service as submission_service
 
     async with AsyncSessionLocal() as db1:
-        ma = str((await luot_gui.mo_luot(db1, set_id=set_id, nguoi_id=nguoi)).ma)
+        ma = str((await submission_service.open_submission(db1, set_id=set_id, actor_id=nguoi)).ma)
         await db1.commit()
     async with AsyncSessionLocal() as db2:
-        x, _, _ = await qd_vb.ghi_nhan_quyet_dinh(
+        x, _, _ = await qd_vb.record_decision(
             db2,
             set_id=set_id,
-            loai="trung_tuyen",
-            goc_id=None,
-            so_quyet_dinh="501",
-            ngay_ky=qd._ngay(),
-            tham_so_giay={},
-            xac_nhan_so_ho_so=1,
-            xac_nhan_khop_ban_in=True,
-            xac_nhan_trang_thai=None,
-            ghi_chu_mau=None,
+            kind="trung_tuyen",
+            root_id=None,
+            decision_number="501",
+            signing_date=qd._ngay(),
+            paper_params={},
+            confirm_profile_count=1,
+            confirm_printed_copy_match=True,
+            confirm_status=None,
+            template_note=None,
             scan=qd.PDF,
-            nguoi_id=nguoi,
-            ma_luot_gui=ma,
+            actor_id=nguoi,
+            submission_code=ma,
         )
         await db2.commit()
         return x.id
@@ -218,7 +218,7 @@ async def test_phe_duyet_cu_khong_duyet_vuot_khi_huy_hieu_luc_chen_giua(  # noqa
         p=p2,
     )
     async with AsyncSessionLocal() as db:
-        assert await _dem_bon_noi(db, "dem_theo_nganh_nam", o) == 1
+        assert await _dem_bon_noi(db, "count_by_offering_year", o) == 1
 
     async def chen():
         await _huy_hieu_luc_phien_khac(x["id"], nguoi)
@@ -230,6 +230,6 @@ async def test_phe_duyet_cu_khong_duyet_vuot_khi_huy_hieu_luc_chen_giua(  # noqa
     assert trang["da_chen"], "phép đo không hợp lệ: Phê duyệt cũ không chạy câu Phần A nào"
     assert await _dong_hieu_luc(p1) == 0, "phép đo không hợp lệ: huỷ hiệu lực không commit"
     async with AsyncSessionLocal() as db:
-        da_dung = await _dem_bon_noi(db, "dem_theo_nganh_nam", o)
+        da_dung = await _dem_bon_noi(db, "count_by_offering_year", o)
     assert r.status_code == 400 and "Vượt chỉ tiêu" in str(r.json()), (r.status_code, r.text, da_dung)
     assert (await _ban(p2))[0] == "submitted" and da_dung == 1, ((await _ban(p2))[0], da_dung)

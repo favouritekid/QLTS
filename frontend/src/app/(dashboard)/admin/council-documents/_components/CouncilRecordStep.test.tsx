@@ -1,6 +1,6 @@
 /**
  * Văn bản Hội đồng — bước 6 "Ghi nhận" ở mức GIAO DIỆN (đặc tả 5.6, 5.6.1, 3.8). Giao thức lượt gửi đã có test riêng ở
- * `hooks/admin/useGhiNhanQuyetDinh.test.tsx`; ở đây khoá điều NGƯỜI DÙNG THẤY:
+ * `hooks/admin/useRecordDecision.test.tsx`; ở đây khoá điều NGƯỜI DÙNG THẤY:
  *   • ô đã in trên bộ khoá đúng giá trị in; nút Ghi nhận chỉ mở khi đủ điều kiện;
  *   • khung kết quả vẽ CHỈ từ DTO máy chủ (không từ ô nhập); cảnh báo vượt chỉ tiêu theo K-4;
  *   • lượt chưa rõ ⇒ MỌI chỗ nói "Chưa xác định", KHÔNG có "chưa ghi nhận", KHÔNG có nút gửi lại; kể cả khi máy chủ đang
@@ -157,7 +157,7 @@ function ve(buoc: "ghi-nhan" | null = "ghi-nhan") {
   qcHienTai = qc
   return render(
     <QueryClientProvider client={qc}>
-      <CouncilSetDetailClient setId={7} buocBanDau={buoc} />
+      <CouncilSetDetailClient setId={7} initialStep={buoc} />
     </QueryClientProvider>,
   )
 }
@@ -838,7 +838,7 @@ describe("bộ đã có Quyết định + Huỷ ghi nhận", () => {
 const maGui = () => formGui.map((f) => f.get("ma_luot_gui"))
 
 // ── F276 (Codex lần 18): ghi nhận → huỷ ghi nhận → ghi nhận LẠI, KHÔNG tải lại trang ─────────────────────────────────────
-// Bộ điều khiển là hook THẬT (`useGhiNhanQuyetDinh`) nối qua `CouncilSetDetailClient` → `CouncilRecordStep` →
+// Bộ điều khiển là hook THẬT (`useRecordDecision`) nối qua `CouncilSetDetailClient` → `CouncilRecordStep` →
 // `CouncilRecordResult` → `CouncilCancelDialog`; máy chủ là MSW CÓ TRẠNG THÁI (không mock hook). Lỗi cũ: sau khi huỷ, giao diện
 // chỉ đổi trạng thái về biểu mẫu mà GIỮ mã của lượt đã `da_ghi` ⇒ gửi lại cùng mã ⇒ máy chủ (luỹ đẳng) trả lại đúng văn bản ĐÃ
 // HUỶ; khác nội dung thì 409.

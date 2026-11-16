@@ -35,7 +35,7 @@ from app.models.council_document import (
 )
 from app.repositories import council_candidate_repository as kho_doc
 from app.services import council_candidate_service as doc
-from app.services import council_document_render_service as bo_dung
+from app.services import council_document_render_service as render_service
 from app.services import council_document_set_service as bo_vb
 from app.services import council_document_template_service as kho_mau
 from app.services import council_set_gate_service as cong
@@ -76,7 +76,7 @@ DUNG_DUOC = [
     "xa_chi_con_het_hieu_luc",
     "nut_xa_het_hieu_luc_dan_toc_la",
 ]
-TS = bo_dung.DecisionParams(
+TS = render_service.DecisionParams(
     so_quyet_dinh="99", ngay_quyet_dinh=date(2026, 9, 8), dot_so="1", dot_thang=9
 )
 
@@ -90,12 +90,12 @@ async def hs(setup_test_database):
 async def _tai_ba_mau(db, hs, ngay=date(2026, 1, 1), mau=None):
     out = {}
     for loai, b in (mau or MAU_GIA).items():
-        out[loai], _ = await kho_mau.tai_mau_len(
+        out[loai], _ = await kho_mau.upload_template(
             db,
-            loai=loai,
-            hieu_luc_tu=ngay,
-            noi_dung=b,
-            nguoi_tai_id=hs["_danh_muc"]["nguoi"],
+            kind=loai,
+            effective_from=ngay,
+            content=b,
+            downloader_id=hs["_danh_muc"]["nguoi"],
         )
     return out
 
@@ -127,7 +127,7 @@ async def test_tai_mau_hop_le_luu_bytes_sha_kich_thuoc(hs):
             .scalars()
             .all()
         )
-        assert [m.loai for m in ds] == list(bo_dung.LOAI_MAU)
+        assert [m.loai for m in ds] == list(render_service.TEMPLATE_KINDS)
         for m in ds:
             assert "noi_dung" in inspect(m).unloaded  # liệt kê KHÔNG nạp bytes
             b = MAU_GIA[m.loai]
@@ -151,20 +151,20 @@ async def test_mau_trung_loai_va_ngay_hieu_luc_thi_tu_choi(hs):
         await _tai_ba_mau(db, hs)
         await db.commit()
         with pytest.raises(DuplicateResourceError):
-            await kho_mau.tai_mau_len(
+            await kho_mau.upload_template(
                 db,
-                loai="bien_ban",
-                hieu_luc_tu=date(2026, 1, 1),
-                noi_dung=MAU_GIA["bien_ban"],
-                nguoi_tai_id=None,
+                kind="bien_ban",
+                effective_from=date(2026, 1, 1),
+                content=MAU_GIA["bien_ban"],
+                downloader_id=None,
             )
         # Cùng loại, ngày KHÁC ⇒ được (phiên bản mẫu theo ngày ký).
-        await kho_mau.tai_mau_len(
+        await kho_mau.upload_template(
             db,
-            loai="bien_ban",
-            hieu_luc_tu=date(2026, 9, 1),
-            noi_dung=MAU_GIA["bien_ban"],
-            nguoi_tai_id=None,
+            kind="bien_ban",
+            effective_from=date(2026, 9, 1),
+            content=MAU_GIA["bien_ban"],
+            downloader_id=None,
         )
 
 
@@ -196,12 +196,12 @@ def _them_dong_nguoi_mau(b):
 async def test_mau_hong_thi_loi_mien_khong_luu(hs, loai, noi_dung, loi):
     async with AsyncSessionLocal() as db:
         with pytest.raises(loi):
-            await kho_mau.tai_mau_len(
+            await kho_mau.upload_template(
                 db,
-                loai=loai,
-                hieu_luc_tu=date(2026, 1, 1),
-                noi_dung=noi_dung,
-                nguoi_tai_id=None,
+                kind=loai,
+                effective_from=date(2026, 1, 1),
+                content=noi_dung,
+                downloader_id=None,
             )
         await db.commit()
         assert (
@@ -250,7 +250,7 @@ def _noi_doi_kich_thuoc(b, ten_muc, kich_thuoc=100, crc=None):
     return bytes(out)
 
 
-GIOI_HAN_NHO = kho_mau.GioiHanGoi(tep=1024 * 1024, giai_nen=1024 * 1024, so_muc=40)
+GIOI_HAN_NHO = kho_mau.PackageLimits(tep=1024 * 1024, giai_nen=1024 * 1024, so_muc=40)
 
 
 @pytest.mark.parametrize(
@@ -304,18 +304,18 @@ async def test_goi_zip_xau_bi_chan_truoc_python_docx(hs, monkeypatch, ca):
             FileValidationError,
         )
     goi = []
-    goc = bo_dung.kiem_mau
-    monkeypatch.setattr(bo_dung, "kiem_mau", lambda l, x: goi.append(l) or goc(l, x))
+    goc = render_service.check_template
+    monkeypatch.setattr(render_service, "check_template", lambda l, x: goi.append(l) or goc(l, x))
     khop = {"dong_nen_hong": "gói zip hỏng", "ma_hoa": "được mã hoá"}.get(ca)
     async with AsyncSessionLocal() as db:
         with pytest.raises(loi, match=khop):
-            await kho_mau.tai_mau_len(
+            await kho_mau.upload_template(
                 db,
-                loai="bien_ban",
-                hieu_luc_tu=date(2026, 1, 1),
-                noi_dung=b,
-                nguoi_tai_id=None,
-                gioi_han=GIOI_HAN_NHO,
+                kind="bien_ban",
+                effective_from=date(2026, 1, 1),
+                content=b,
+                downloader_id=None,
+                limits=GIOI_HAN_NHO,
             )
     assert goi == []  # python-docx CHƯA được chạm
 
@@ -342,20 +342,20 @@ async def test_kieu_nen_ngoai_danh_sach_bi_chan_luc_tai_len_truoc_khi_giai_nen(
     monkeypatch.setattr(
         zipfile, "_get_decompressor", lambda k: giai_nen.append(k) or goc(k)
     )
-    goc_kiem = bo_dung.kiem_mau
+    goc_kiem = render_service.check_template
     monkeypatch.setattr(
-        bo_dung, "kiem_mau", lambda l, x: goi_docx.append(l) or goc_kiem(l, x)
+        render_service, "check_template", lambda l, x: goi_docx.append(l) or goc_kiem(l, x)
     )
     async with AsyncSessionLocal() as db:
         with pytest.raises(
             FileValidationError, match="kiểu nén ngoài danh sách cho phép"
         ):
-            await kho_mau.tai_mau_len(
+            await kho_mau.upload_template(
                 db,
-                loai="bien_ban",
-                hieu_luc_tu=date(2026, 1, 1),
-                noi_dung=b,
-                nguoi_tai_id=None,
+                kind="bien_ban",
+                effective_from=date(2026, 1, 1),
+                content=b,
+                downloader_id=None,
             )
         await db.commit()
     assert (
@@ -369,20 +369,20 @@ async def test_kieu_nen_ngoai_danh_sach_bi_chan_luc_tai_len_truoc_khi_giai_nen(
 
 
 def test_gioi_han_mac_dinh_doc_tu_cau_hinh_va_mau_gia_qua_duoc():
-    gh = kho_mau.GioiHanGoi.tu_cau_hinh()
+    gh = kho_mau.PackageLimits.from_settings()
     assert (gh.tep, gh.giai_nen, gh.so_muc) == (
         settings.COUNCIL_TEMPLATE_MAX_BYTES,
         settings.COUNCIL_TEMPLATE_MAX_UNCOMPRESSED_BYTES,
         settings.COUNCIL_TEMPLATE_MAX_ZIP_ENTRIES,
     )
     for loai, b in MAU_GIA.items():
-        kho_mau.kiem_goi_mau(b, loai)
-        kho_mau.kiem_goi_mau(b, loai, GIOI_HAN_NHO)
-    assert set(kho_mau.TEN_LOAI) == set(bo_dung.LOAI_MAU)
+        kho_mau.check_template_package(b, loai)
+        kho_mau.check_template_package(b, loai, GIOI_HAN_NHO)
+    assert set(kho_mau.KIND_NAMES) == set(render_service.TEMPLATE_KINDS)
 
 
 # ═══════════════════════════════ K4 — biên giải nén (thuần, không CSDL) ═════════════
-GH_BIEN = kho_mau.GioiHanGoi(tep=4 * 1024 * 1024, giai_nen=200_000, so_muc=40)
+GH_BIEN = kho_mau.PackageLimits(tep=4 * 1024 * 1024, giai_nen=200_000, so_muc=40)
 
 
 @pytest.fixture
@@ -393,7 +393,7 @@ def bo_qua_phan_goi_word(monkeypatch):
     "nhận" chứng minh kiem_goi_mau đi HẾT phép đếm byte và tới bước kiểm phần gói."""
     goi = []
     monkeypatch.setattr(
-        bo_dung, "kiem_cac_phan_goi_word", lambda z, ten: goi.append(ten)
+        render_service, "check_word_package_parts", lambda z, ten: goi.append(ten)
     )
     return goi
 
@@ -417,7 +417,7 @@ def _tong_khai(b):
 def test_bien_giai_nen_dung_bang_gioi_han_thi_nhan(bo_qua_phan_goi_word):
     b = _goi_tong(GH_BIEN.giai_nen)
     assert _tong_khai(b) == GH_BIEN.giai_nen
-    kho_mau.kiem_goi_mau(b, "Biên bản", GH_BIEN)  # đúng bằng giới hạn ⇒ NHẬN
+    kho_mau.check_template_package(b, "Biên bản", GH_BIEN)  # đúng bằng giới hạn ⇒ NHẬN
     assert bo_qua_phan_goi_word == ["Biên bản"]
 
 
@@ -426,7 +426,7 @@ def test_bien_giai_nen_vuot_mot_byte_thi_tu_choi():
     with pytest.raises(
         FileValidationError, match="khai báo %d byte" % (GH_BIEN.giai_nen + 1)
     ):
-        kho_mau.kiem_goi_mau(b, "Biên bản", GH_BIEN)
+        kho_mau.check_template_package(b, "Biên bản", GH_BIEN)
 
 
 def test_tieu_de_noi_doi_noi_dung_that_vuot_mot_byte_thi_tu_choi():
@@ -437,7 +437,7 @@ def test_tieu_de_noi_doi_noi_dung_that_vuot_mot_byte_thi_tu_choi():
     )
     assert _tong_khai(b) == GH_BIEN.giai_nen
     with pytest.raises(FileValidationError, match="gói zip hỏng"):
-        kho_mau.kiem_goi_mau(b, "Biên bản", GH_BIEN)
+        kho_mau.check_template_package(b, "Biên bản", GH_BIEN)
 
 
 def test_zipfile_cat_moi_muc_o_kich_thuoc_khai(bo_qua_phan_goi_word):
@@ -451,7 +451,7 @@ def test_zipfile_cat_moi_muc_o_kich_thuoc_khai(bo_qua_phan_goi_word):
     )
     with zipfile.ZipFile(io.BytesIO(b)) as z, z.open("gia/0.bin") as f:
         assert len(f.read()) == 100
-    kho_mau.kiem_goi_mau(b, "Biên bản", GH_BIEN)  # phần dư không bao giờ được giải nén
+    kho_mau.check_template_package(b, "Biên bản", GH_BIEN)  # phần dư không bao giờ được giải nén
     assert bo_qua_phan_goi_word == ["Biên bản"]
 
 
@@ -468,9 +468,9 @@ def test_dem_giai_nen_that_doc_lap_voi_kich_thuoc_khai(
     )
     if du:
         with pytest.raises(FileValidationError, match="giải nén vượt giới hạn"):
-            kho_mau.kiem_goi_mau(b, "Biên bản", GH_BIEN)
+            kho_mau.check_template_package(b, "Biên bản", GH_BIEN)
     else:
-        kho_mau.kiem_goi_mau(b, "Biên bản", GH_BIEN)
+        kho_mau.check_template_package(b, "Biên bản", GH_BIEN)
 
 
 # ═══════════════════════════════ chọn mẫu theo ngày ký ═══════════════════════════════
@@ -493,17 +493,17 @@ async def test_chon_mau_hieu_luc_lon_nhat_khong_qua_ngay_ky(hs):
             (date(2026, 9, 1), m2),
             (date(2027, 1, 1), m2),
         ):
-            mau, tt = await kho_mau.chon_mau(db, ngay)
+            mau, tt = await kho_mau.pick_templates(db, ngay)
             assert {k: v["id"] for k, v in tt.items()} == {
                 k: v.id for k, v in ky_vong.items()
             }
             assert {
-                k: hashlib.sha256(getattr(mau, k)).hexdigest() for k in bo_dung.LOAI_MAU
+                k: hashlib.sha256(getattr(mau, k)).hexdigest() for k in render_service.TEMPLATE_KINDS
             } == {k: v.sha256 for k, v in ky_vong.items()}
         with pytest.raises(
             BusinessRuleViolation, match="Biên bản, Quyết định, Danh sách xét tuyển"
         ):
-            await kho_mau.chon_mau(db, date(2025, 12, 31))
+            await kho_mau.pick_templates(db, date(2025, 12, 31))
 
 
 async def test_thieu_mot_loai_mau_thi_khong_dung(hs):
@@ -514,18 +514,18 @@ async def test_thieu_mot_loai_mau_thi_khong_dung(hs):
         with pytest.raises(
             BusinessRuleViolation, match="Chưa có mẫu Quyết định hiệu lực"
         ):
-            await kho_mau.chon_mau(db, date(2026, 9, 8))
+            await kho_mau.pick_templates(db, date(2026, 9, 8))
 
 
 def test_ngay_ky_chon_mau_theo_gio_viet_nam():
-    assert bo_vb.ngay_ky_chon_mau(
+    assert bo_vb.signing_date_for_template(
         TS, datetime(2026, 1, 1, tzinfo=timezone.utc)
     ) == date(2026, 9, 8)
-    khong = bo_dung.DecisionParams(so_quyet_dinh="99")
-    assert bo_vb.ngay_ky_chon_mau(
+    khong = render_service.DecisionParams(so_quyet_dinh="99")
+    assert bo_vb.signing_date_for_template(
         khong, datetime(2026, 11, 3, 16, 59, tzinfo=timezone.utc)
     ) == date(2026, 11, 3)
-    assert bo_vb.ngay_ky_chon_mau(
+    assert bo_vb.signing_date_for_template(
         None, datetime(2026, 11, 3, 17, 0, tzinfo=timezone.utc)
     ) == date(2026, 11, 4)
 
@@ -533,26 +533,26 @@ def test_ngay_ky_chon_mau_theo_gio_viet_nam():
 # ═══════════════════════════════ tạo bộ văn bản ══════════════════════════════════════
 async def test_tao_bo_ghi_metadata_va_bytes_nguyen_tung_tep(hs, monkeypatch):
     bat = {}
-    goc = bo_dung.render_council_documents
+    goc = render_service.render_council_documents
 
     def gian(*a, **k):
         bat["kq"] = goc(*a, **k)
         bat["luong"] = threading.get_ident()
         return bat["kq"]
 
-    monkeypatch.setattr(bo_dung, "render_council_documents", gian)
+    monkeypatch.setattr(render_service, "render_council_documents", gian)
     vong_lap = threading.get_ident()
     ma = _ma(hs, DUNG_DUOC)
     async with AsyncSessionLocal() as db:
         da = await _tai_ba_mau(db, hs)
         await db.commit()
-        bo, cb = await bo_vb.tao_bo_van_ban(
+        bo, cb = await bo_vb.create_document_set(
             db,
             csdl.engine,
-            ma_ho_so=ma,
+            profile_codes=ma,
             academic_year=2026,
-            tham_so=TS,
-            nguoi_tao_id=hs["_danh_muc"]["nguoi"],
+            params=TS,
+            creator_id=hs["_danh_muc"]["nguoi"],
         )
         await db.commit()
         assert cb is None
@@ -585,7 +585,7 @@ async def test_tao_bo_ghi_metadata_va_bytes_nguyen_tung_tep(hs, monkeypatch):
         # F212 — phiên bản mã đã dựng: sha256 NỘI DUNG đúng năm tệp nguồn đang nạp.
         assert tt["phien_ban_ma"] == {
             m.__name__: hashlib.sha256(Path(m.__file__).read_bytes()).hexdigest()
-            for m in (bo_dung, kho_mau, doc, kho_doc, bo_vb, cong)
+            for m in (render_service, kho_mau, doc, kho_doc, bo_vb, cong)
         }
         assert tt["giao_dich_doc"] == {
             "transaction_isolation": "repeatable read",
@@ -600,7 +600,7 @@ async def test_tao_bo_ghi_metadata_va_bytes_nguyen_tung_tep(hs, monkeypatch):
             )
         ).one()
         assert hang.ma_ho_so_dau_vao == ma  # ĐÚNG thứ tự đầu vào
-        anh = await doc.doc_ho_so_theo_ma(csdl.engine, ma, academic_year=2026)
+        anh = await doc.read_profiles_by_code(csdl.engine, ma, academic_year=2026)
         assert hang.snapshot_dto == [r.model_dump() for r in anh.rows]
         tep = (
             (
@@ -616,17 +616,17 @@ async def test_tao_bo_ghi_metadata_va_bytes_nguyen_tung_tep(hs, monkeypatch):
         assert [t.path for t in tep] == [f.path for f in kq.files]
         assert all("noi_dung" in inspect(t).unloaded for t in tep)
         for t, f in zip(tep, kq.files):
-            luu = await bo_vb.doc_tep_da_luu(db, b.id, t.thu_tu)
+            luu = await bo_vb.read_stored_file(db, b.id, t.thu_tu)
             assert luu.noi_dung == f.content  # bytes NGUYÊN
             assert luu.sha256 == f.sha256 == t.sha256 and luu.path == t.path == f.path
     # Tải lại KHÔNG dựng lại.
     monkeypatch.setattr(
-        bo_dung, "render_council_documents", lambda *a, **k: pytest.fail("dựng lại")
+        render_service, "render_council_documents", lambda *a, **k: pytest.fail("dựng lại")
     )
     async with AsyncSessionLocal() as db:
-        await bo_vb.doc_tep_da_luu(db, b.id, 1)
+        await bo_vb.read_stored_file(db, b.id, 1)
         with pytest.raises(ResourceNotFoundError):
-            await bo_vb.doc_tep_da_luu(db, b.id, len(kq.files) + 1)
+            await bo_vb.read_stored_file(db, b.id, len(kq.files) + 1)
 
 
 @pytest.mark.parametrize(
@@ -651,31 +651,31 @@ async def test_tao_bo_ghi_metadata_va_bytes_nguyen_tung_tep(hs, monkeypatch):
     ],
 )
 def test_don_vi_cua_bo_tron_null_la_null(don_vi, ky_vong):
-    assert bo_vb.don_vi_cua_bo(don_vi) == ky_vong
+    assert bo_vb.set_unit(don_vi) == ky_vong
 
 
 async def test_don_vi_cua_bo(hs):
-    assert bo_vb.don_vi_cua_bo([3, 3, 3]) == 3
-    assert bo_vb.don_vi_cua_bo([3, 4]) is None
-    assert bo_vb.don_vi_cua_bo([None]) is None and bo_vb.don_vi_cua_bo([]) is None
+    assert bo_vb.set_unit([3, 3, 3]) == 3
+    assert bo_vb.set_unit([3, 4]) is None
+    assert bo_vb.set_unit([None]) is None and bo_vb.set_unit([]) is None
     async with AsyncSessionLocal() as db:
         await _tai_ba_mau(db, hs)
-        bo, _ = await bo_vb.tao_bo_van_ban(
+        bo, _ = await bo_vb.create_document_set(
             db,
             csdl.engine,
-            ma_ho_so=_ma(hs, ["dia_chi_rong", "don_vi_khac"]),
+            profile_codes=_ma(hs, ["dia_chi_rong", "don_vi_khac"]),
             academic_year=2026,
-            tham_so=None,
-            nguoi_tao_id=None,
+            params=None,
+            creator_id=None,
         )
         assert bo.unit_id is None  # hai đơn vị ⇒ chỉ admin
-        bo, _ = await bo_vb.tao_bo_van_ban(
+        bo, _ = await bo_vb.create_document_set(
             db,
             csdl.engine,
-            ma_ho_so=_ma(hs, ["don_vi_khac"]),
+            profile_codes=_ma(hs, ["don_vi_khac"]),
             academic_year=2026,
-            tham_so=None,
-            nguoi_tao_id=None,
+            params=None,
+            creator_id=None,
         )
         assert bo.unit_id == hs["_danh_muc"]["u2"]
 
@@ -685,23 +685,23 @@ async def test_ghi_bo_o_giao_dich_khac_giao_dich_doc(hs, monkeypatch):
     # KHÁC. KHÔNG khoá "giao dịch ghi bắt đầu sau mốc chụp" — qua API, giao dịch của request
     # đã mở từ bước xác thực (ca đo qua đường API: test_council_documents_api.py).
     bat = {}
-    goc = bo_vb.doc_ho_so_theo_ma
+    goc = bo_vb.read_profiles_by_code
 
     async def gian(*a, **k):
         bat["anh"] = await goc(*a, **k)
         return bat["anh"]
 
-    monkeypatch.setattr(bo_vb, "doc_ho_so_theo_ma", gian)
+    monkeypatch.setattr(bo_vb, "read_profiles_by_code", gian)
     async with AsyncSessionLocal() as db:
         await _tai_ba_mau(db, hs)
         await db.commit()
-        bo, _ = await bo_vb.tao_bo_van_ban(
+        bo, _ = await bo_vb.create_document_set(
             db,
             csdl.engine,
-            ma_ho_so=_ma(hs, ["dia_chi_rong"]),
+            profile_codes=_ma(hs, ["dia_chi_rong"]),
             academic_year=2026,
-            tham_so=None,
-            nguoi_tao_id=None,
+            params=None,
+            creator_id=None,
         )
         do = (
             await db.execute(
@@ -752,11 +752,11 @@ async def _dung_loi_buoc(buoc, hs, db, monkeypatch):
     elif buoc == "tham_so":
         return (
             ma,
-            bo_dung.DecisionParams.model_construct(ngay_quyet_dinh="GIA"),
+            render_service.DecisionParams.model_construct(ngay_quyet_dinh="GIA"),
             DataValidationError,
         )
     else:  # "ghi": hàng bộ đã flush, tệp thứ hai TRÙNG đường dẫn ⇒ UNIQUE đổ giữa chừng
-        goc = bo_dung.render_council_documents
+        goc = render_service.render_council_documents
 
         def trung(*a, **k):
             kq = goc(*a, **k)
@@ -764,7 +764,7 @@ async def _dung_loi_buoc(buoc, hs, db, monkeypatch):
             f[1] = dataclasses.replace(f[1], path=f[0].path)
             return dataclasses.replace(kq, files=tuple(f))
 
-        monkeypatch.setattr(bo_dung, "render_council_documents", trung)
+        monkeypatch.setattr(render_service, "render_council_documents", trung)
         loi = ServiceError
     return ma, None, loi
 
@@ -785,13 +785,13 @@ async def test_loi_o_moi_buoc_khong_ghi_gi(hs, monkeypatch, buoc):
     async with AsyncSessionLocal() as db:
         ma, ts, loi = await _dung_loi_buoc(buoc, hs, db, monkeypatch)
         with pytest.raises(loi) as e:
-            await bo_vb.tao_bo_van_ban(
+            await bo_vb.create_document_set(
                 db,
                 csdl.engine,
-                ma_ho_so=ma,
+                profile_codes=ma,
                 academic_year=2026,
-                tham_so=ts,
-                nguoi_tao_id=None,
+                params=ts,
+                creator_id=None,
             )
         assert hs["dia_chi_rong"][0] not in str(e.value)
         assert await _dem(db) == (0, 0)  # ngay trong phiên (SAVEPOINT đã hoàn tác)
@@ -802,22 +802,22 @@ async def test_loi_o_moi_buoc_khong_ghi_gi(hs, monkeypatch, buoc):
 async def test_khong_doc_duoc_ma_nguon_thi_khong_dung(hs, monkeypatch):
     # F212 fail-closed: không biết mã nào dựng ⇒ không dựng, không đọc hồ sơ, không ghi gì.
     goi = []
-    monkeypatch.setattr(bo_vb, "PHIEN_BAN_MA", None)
-    monkeypatch.setattr(bo_vb, "doc_ho_so_theo_ma", lambda *a, **k: goi.append(1))
+    monkeypatch.setattr(bo_vb, "CODE_VERSIONS", None)
+    monkeypatch.setattr(bo_vb, "read_profiles_by_code", lambda *a, **k: goi.append(1))
     async with AsyncSessionLocal() as db:
         await _tai_ba_mau(db, hs)
         with pytest.raises(ServiceError, match="phiên bản"):
-            await bo_vb.tao_bo_van_ban(
+            await bo_vb.create_document_set(
                 db,
                 csdl.engine,
-                ma_ho_so=_ma(hs, ["dia_chi_rong"]),
+                profile_codes=_ma(hs, ["dia_chi_rong"]),
                 academic_year=2026,
-                tham_so=None,
-                nguoi_tao_id=None,
+                params=None,
+                creator_id=None,
             )
     assert goi == [] and await _dem() == (0, 0)
-    monkeypatch.setattr(bo_vb, "MODULE_MA_DUNG", (types.ModuleType("gia_khong_tep"),))
-    assert bo_vb._tinh_phien_ban_ma() is None
+    monkeypatch.setattr(bo_vb, "BUILD_CODE_MODULES", (types.ModuleType("gia_khong_tep"),))
+    assert bo_vb._compute_code_versions() is None
 
 
 # ═══════════════════════════════ ràng buộc toàn vẹn của CSDL ═════════════════════════

@@ -6,7 +6,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { describeCouncilDocumentError } from "@/lib/api/council-documents"
 import type { CouncilSetGate } from "@/lib/zod/council-documents"
 
-import { nhanTrangThai } from "./hien-thi"
+import { statusLabel } from "./display"
 
 /**
  * Danh sách của cổng dựng bộ (lượt G) — y nguyên phản hồi máy chủ: từng lý do chặn kèm SỐ DÒNG,
@@ -14,7 +14,7 @@ import { nhanTrangThai } from "./hien-thi"
  * dòng). Câu "cần admin xác nhận" hiện khi MÁY CHỦ nói người gọi không được xác nhận.
  */
 export function CouncilGateDetail({ gate }: { gate: CouncilSetGate }) {
-  const canhBao = Object.entries(gate.canh_bao.so_ho_so_theo_trang_thai)
+  const warning = Object.entries(gate.canh_bao.so_ho_so_theo_trang_thai)
   return (
     <div className="mt-2 space-y-2 text-sm" data-testid="council-gate">
       {gate.chan.length ? (
@@ -23,19 +23,19 @@ export function CouncilGateDetail({ gate }: { gate: CouncilSetGate }) {
           <ul className="list-disc space-y-1 pl-5">
             {gate.chan.map((c) => (
               <li key={`${c.ma}:${c.trang_thai ?? ""}`} data-testid="gate-chan-item">
-                {`${c.mo_ta}${c.trang_thai ? ` — trạng thái ${nhanTrangThai(c.trang_thai)}` : ""}: ${c.so_ho_so} hồ sơ — dòng ${c.dong.join(", ")}`}
+                {`${c.mo_ta}${c.trang_thai ? ` — trạng thái ${statusLabel(c.trang_thai)}` : ""}: ${c.so_ho_so} hồ sơ — dòng ${c.dong.join(", ")}`}
               </li>
             ))}
           </ul>
         </div>
       ) : null}
-      {canhBao.length ? (
+      {warning.length ? (
         <div>
           <p className="font-medium">Hồ sơ ở trạng thái cần cảnh báo (cần admin xác nhận):</p>
           <ul className="list-disc space-y-1 pl-5">
-            {canhBao.map(([s, n]) => (
+            {warning.map(([s, n]) => (
               <li key={s} data-testid="gate-canh-bao-item">
-                {`${nhanTrangThai(s)}: ${n} hồ sơ — dòng ${(gate.canh_bao.dong_theo_trang_thai[s] ?? []).join(", ")}`}
+                {`${statusLabel(s)}: ${n} hồ sơ — dòng ${(gate.canh_bao.dong_theo_trang_thai[s] ?? []).join(", ")}`}
               </li>
             ))}
           </ul>
@@ -63,17 +63,17 @@ export function CouncilErrorAlert({
   testId?: string
 }) {
   if (!error) return null
-  const loi = describeCouncilDocumentError(error)
+  const described = describeCouncilDocumentError(error)
   return (
     <Alert variant="destructive" data-testid={testId ?? "council-error"} role="alert">
       <AlertCircle className="h-4 w-4" />
-      <AlertTitle>{loi.title}</AlertTitle>
-      {loi.detail ? (
+      <AlertTitle>{described.title}</AlertTitle>
+      {described.detail ? (
         <AlertDescription className="whitespace-pre-line" data-testid="council-error-detail">
-          {loi.detail}
+          {described.detail}
         </AlertDescription>
       ) : null}
-      {loi.gate ? <CouncilGateDetail gate={loi.gate} /> : null}
+      {described.gate ? <CouncilGateDetail gate={described.gate} /> : null}
     </Alert>
   )
 }

@@ -19,12 +19,12 @@ nguồn sentry-sdk 2.22.0 (bản ghim ``requirements.txt``; dòng nguồn: báo 
 * log ⇒ sự kiện (``logentry`` + tham số + ``extra`` của bản ghi) — ``LoggingIntegration(
   event_level=None)``: log ERROR đi vào log của máy chủ (qua bộ che ``log_redaction``), không
   thành sự kiện Sentry;
-* chuỗi truy vấn, header ngoài :data:`TIEU_DE_GIU`, token trong đường dẫn / tên giao dịch, chữ
-  của ngoại lệ — SDK không có tuỳ chọn ⇒ :func:`loc_su_kien` (``before_send`` +
+* chuỗi truy vấn, header ngoài :data:`KEPT_HEADERS`, token trong đường dẫn / tên giao dịch, chữ
+  của ngoại lệ — SDK không có tuỳ chọn ⇒ :func:`filter_event` (``before_send`` +
   ``before_send_transaction``);
 * SPAN của giao dịch (``traces_sample_rate`` > 0): câu SQL / lệnh redis + khoá / URL gọi ra ngoài
-  (``description``), ``http.query`` / ``db.*`` (``data``), ``tags`` — :func:`loc_su_kien` chỉ giữ
-  :data:`TRUONG_SPAN_GIU` (danh sách CHO PHÉP: thời gian, định danh, ``op``, ``status``) của mọi
+  (``description``), ``http.query`` / ``db.*`` (``data``), ``tags`` — :func:`filter_event` chỉ giữ
+  :data:`KEPT_SPAN_FIELDS` (danh sách CHO PHÉP: thời gian, định danh, ``op``, ``status``) của mọi
   span và của span gốc ``contexts.trace`` — giữ được số đo thời gian, bỏ mọi chữ.
 
 Mọi lỗi khởi tạo chỉ in TÊN lớp lỗi (không chữ lỗi — chữ có thể mang DSN).
@@ -37,11 +37,11 @@ from app.core.log_redaction import loai_loi_an_toan, redact_text
 
 #: Header của request được GIỮ trong sự kiện; còn lại bỏ — ``Referer`` mang chuỗi truy vấn của
 #: trang trước, header lạ do trình duyệt / client tự đặt.
-TIEU_DE_GIU = frozenset(
+KEPT_HEADERS = frozenset(
     {"host", "user-agent", "content-type", "content-length", "accept"}
 )
 #: Trường GIỮ của một span (sự kiện transaction: ``spans[]`` và ``contexts.trace``) — còn lại bỏ.
-TRUONG_SPAN_GIU = frozenset(
+KEPT_SPAN_FIELDS = frozenset(
     {
         "trace_id",
         "span_id",
@@ -57,19 +57,19 @@ TRUONG_SPAN_GIU = frozenset(
 )
 
 
-def _loc_span(span: Any) -> Any:
-    """Một span chỉ còn :data:`TRUONG_SPAN_GIU` (không phải dict ⇒ ``None``)."""
+def _filter_span(span: Any) -> Any:
+    """Một span chỉ còn :data:`KEPT_SPAN_FIELDS` (không phải dict ⇒ ``None``)."""
     if not isinstance(span, dict):
         return None
-    return {k: v for k, v in span.items() if k in TRUONG_SPAN_GIU}
+    return {k: v for k, v in span.items() if k in KEPT_SPAN_FIELDS}
 
 
-def _chuoi_ngoai_le(exc: Any) -> List[BaseException]:
+def _exception_chain(exc: Any) -> List[BaseException]:
     """Ngoại lệ gốc + chuỗi ``__cause__`` / ``__context__`` (cùng cách SDK đi chuỗi)."""
     ra: List[BaseException] = []
-    da = set()
-    while isinstance(exc, BaseException) and id(exc) not in da:
-        da.add(id(exc))
+    done = set()
+    while isinstance(exc, BaseException) and id(exc) not in done:
+        done.add(id(exc))
         ra.append(exc)
         if exc.__cause__ is not None:
             exc = exc.__cause__
@@ -80,10 +80,10 @@ def _chuoi_ngoai_le(exc: Any) -> List[BaseException]:
     return ra
 
 
-def loc_su_kien(event: Any, hint: Any) -> Optional[Any]:
+def filter_event(event: Any, hint: Any) -> Optional[Any]:
     """``before_send`` + ``before_send_transaction``: bỏ chuỗi truy vấn, header ngoài danh sách
     giữ; che token trong đường dẫn + tên giao dịch (bộ che của ``log_redaction``); span chỉ còn
-    :data:`TRUONG_SPAN_GIU`; chữ của ngoại
+    :data:`KEPT_SPAN_FIELDS`; chữ của ngoại
     lệ chỉ còn LOẠI + mã số (``loai_loi_an_toan`` — lỗi CSDL ⇒ tóm tắt thuộc tính). Thân request
     và biến cục bộ KHÔNG xử lý ở đây — SDK không thu chúng (tuỳ chọn ở :func:`khoi_tao_sentry`).
     Lỗi trong bộ lọc ⇒ BỎ sự kiện (fail-closed)."""
@@ -91,12 +91,12 @@ def loc_su_kien(event: Any, hint: Any) -> Optional[Any]:
         req = event.get("request")
         if isinstance(req, dict):
             req.pop("query_string", None)
-            tieu_de = req.get("headers")
-            if isinstance(tieu_de, dict):
+            title = req.get("headers")
+            if isinstance(title, dict):
                 req["headers"] = {
                     k: v
-                    for k, v in tieu_de.items()
-                    if isinstance(k, str) and k.lower() in TIEU_DE_GIU
+                    for k, v in title.items()
+                    if isinstance(k, str) and k.lower() in KEPT_HEADERS
                 }
             if isinstance(req.get("url"), str):
                 req["url"] = redact_text(req["url"])
@@ -104,28 +104,28 @@ def loc_su_kien(event: Any, hint: Any) -> Optional[Any]:
             event["transaction"] = redact_text(event["transaction"])
         if isinstance(event.get("spans"), list):
             event["spans"] = [
-                s for s in (_loc_span(x) for x in event["spans"]) if s is not None
+                s for s in (_filter_span(x) for x in event["spans"]) if s is not None
             ]
-        ngu_canh = event.get("contexts")
-        if isinstance(ngu_canh, dict) and "trace" in ngu_canh:
-            ngu_canh["trace"] = _loc_span(ngu_canh["trace"])
-        ngoai_le = event.get("exception")
-        if isinstance(ngoai_le, dict):
+        contexts = event.get("contexts")
+        if isinstance(contexts, dict) and "trace" in contexts:
+            contexts["trace"] = _filter_span(contexts["trace"])
+        exception = event.get("exception")
+        if isinstance(exception, dict):
             exc_info = (hint or {}).get("exc_info")
-            chuoi = _chuoi_ngoai_le(exc_info[1] if exc_info else None)
-            for v in ngoai_le.get("values") or ():
+            chain = _exception_chain(exc_info[1] if exc_info else None)
+            for v in exception.get("values") or ():
                 if isinstance(v, dict) and "value" in v:
-                    doi = next(
-                        (e for e in chuoi if type(e).__name__ == v.get("type")), None
+                    matched = next(
+                        (e for e in chain if type(e).__name__ == v.get("type")), None
                     )
-                    v["value"] = loai_loi_an_toan(doi) if doi is not None else ""
+                    v["value"] = loai_loi_an_toan(matched) if matched is not None else ""
         return event
     except Exception:  # noqa: BLE001 — bộ lọc hỏng ⇒ không gửi gì
         return None
 
 
-def khoi_tao_sentry(
-    dsn: str, moi_truong: str, ty_le_trace: float, *, transport: Any = None
+def init_sentry(
+    dsn: str, environment: str, traces_sample_rate: float, *, transport: Any = None
 ) -> bool:
     """Khởi tạo Sentry khi có ``dsn`` (rỗng ⇒ không làm gì). Trả ``True`` khi đã khởi tạo.
     ``transport`` chỉ dùng trong test (bắt sự kiện, không mạng)."""
@@ -139,22 +139,22 @@ def khoi_tao_sentry(
             "WARNING [sentry_init]: SENTRY_DSN is set but sentry-sdk is not installed."
         )
         return False
-    tuy_chon = dict(
+    options = dict(
         dsn=dsn,
-        environment=moi_truong,
-        traces_sample_rate=ty_le_trace,
+        environment=environment,
+        traces_sample_rate=traces_sample_rate,
         send_default_pii=False,
         max_request_body_size="never",
         include_local_variables=False,
         max_breadcrumbs=0,
         integrations=[LoggingIntegration(event_level=None)],
-        before_send=loc_su_kien,
-        before_send_transaction=loc_su_kien,
+        before_send=filter_event,
+        before_send_transaction=filter_event,
     )
     if transport is not None:
-        tuy_chon["transport"] = transport
+        options["transport"] = transport
     try:
-        sentry_sdk.init(**tuy_chon)
+        sentry_sdk.init(**options)
     except Exception as e:  # noqa: BLE001 — Sentry hỏng không được làm hỏng tiến trình
         print(
             "WARNING [sentry_init]: Failed to initialize Sentry: %s" % type(e).__name__
@@ -162,6 +162,6 @@ def khoi_tao_sentry(
         return False
     print(
         "INFO [sentry_init]: Sentry initialized (env=%s, sample_rate=%s)"
-        % (moi_truong, ty_le_trace)
+        % (environment, traces_sample_rate)
     )
     return True

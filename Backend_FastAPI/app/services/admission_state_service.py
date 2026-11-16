@@ -421,9 +421,9 @@ async def transition(
     #     dấu AppSheet "Đã trúng tuyển theo QĐ số …") KHÔNG sang Nháp / Từ chối / rút (owner C4, C5,
     #     E1; J1 dòng 12) — trừ cạnh chốt rút khi hoàn xong. Khoá hồ sơ trước khi đọc (tuần tự hoá với
     #     ghi nhận). Tầng chủ sở hữu luật; các kiểm sớm trong từng hàm chỉ để báo lỗi sớm.
-    from .council_decision_status_service import kiem_chuyen_trang_thai
+    from .council_decision_status_service import check_status_transition
 
-    await kiem_chuyen_trang_thai(db, profile.id, profile.status, new_status)
+    await check_status_transition(db, profile.id, profile.status, new_status)
 
     # 2. Capture old status BEFORE the write — required for the audit
     #    row and the dispatch payload's ``old_status`` field.

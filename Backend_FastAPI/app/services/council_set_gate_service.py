@@ -3,7 +3,7 @@
 
 Thuần Python (không FastAPI, không CSDL): nhận dữ liệu kiểm ĐÃ ĐỌC trong CÙNG giao dịch chỉ đọc
 của hàm đọc hồ sơ (:func:`app.services.council_candidate_service.doc_ho_so_theo_ma` —
-``AnhChupHoSo.kiem``) và quyết từng dòng: CHẶN / CẢNH BÁO / qua. Không đổi giá trị nào của ảnh
+``ProfileSnapshot.kiem``) và quyết từng dòng: CHẶN / CẢNH BÁO / qua. Không đổi giá trị nào của ảnh
 chụp ngoài ``diem_kv`` (F231 — mức theo năm học, do hàm đọc tra bằng helper của
 ``priority_service``).
 
@@ -43,13 +43,13 @@ của nguyện vọng in, đúng như T6 của app: hàm đọc lấy luật b�
 (override của đường xét, không thì mặc định của phương thức — JSON ``null`` của cột override đọc
 qua ORM thành ``None`` ⇒ rơi về phương thức, như T6) và quyết bằng
 ``priority_service.area_bonus_enabled`` (cùng hàm ``calculate_priority_bonus`` dùng). Luật bật ⇒
-mức theo năm học (F231); tắt hoặc không có luật ⇒ ``DIEM_KV_KHONG_CONG``; không xác định ⇒ CHẶN.
+mức theo năm học (F231); tắt hoặc không có luật ⇒ ``AREA_SCORE_NOT_ADDED``; không xác định ⇒ CHẶN.
 Chỉ điểm KV đổi — điểm đối tượng, trần ưu tiên vẫn theo luật v1 của bộ dựng.
 
 **Lượt H2 (owner 06-11 — điểm đối tượng theo công tắc của đường xét, GIỮ cách tính):** cùng luật ấy,
 công tắc ``apply_object_bonus`` qua ``priority_service.object_bonus_enabled`` (hàm T6 dùng). Bật ⇒ GIỮ
 điểm đối tượng của luật v1 (dân tộc + xã thường trú) và trần 2,75 của bộ dựng; tắt / không có luật ⇒ in
-``DIEM_UT_KHONG_CONG`` (:func:`diem_ut_in`); không xác định ⇒ CHẶN ``khong_xac_dinh_luat_cong_diem_ut``.
+``PRIORITY_SCORE_NOT_ADDED`` (:func:`printed_priority_score`); không xác định ⇒ CHẶN ``khong_xac_dinh_luat_cong_diem_ut``.
 KHÔNG dùng ``max_total_bonus`` của đường xét, KHÔNG cắt tỉ lệ như T6. Mã đối tượng in (``ut_ma``) giữ nguyên.
 
 Lỗi chỉ nêu SỐ DÒNG + mã lý do + trạng thái — không mã hồ sơ, không giá trị dữ liệu.
@@ -64,8 +64,8 @@ from app.utils.exceptions import (
 )
 
 # ═══════════════════════════════ F228 — ba mức trạng thái ═══════════════════════════════
-TRANG_THAI_CHAN = frozenset({"draft", "rejected", "withdrawal_pending", "withdrawn"})
-TRANG_THAI_CANH_BAO = frozenset(
+BLOCKING_STATUSES = frozenset({"draft", "rejected", "withdrawal_pending", "withdrawn"})
+WARNING_STATUSES = frozenset(
     {
         "submitted",
         "resubmitted",
@@ -75,29 +75,29 @@ TRANG_THAI_CANH_BAO = frozenset(
         "result_published",
     }
 )
-TRANG_THAI_KHONG_CANH_BAO = frozenset(
+NON_WARNING_STATUSES = frozenset(
     {"approved", "admitted", "confirmed", "enrolled", "overridden"}
 )
 
-MUC_CHAN = "chan"
-MUC_CANH_BAO = "canh_bao"
-MUC_KHONG = "khong"
+LEVEL_BLOCK = "chan"
+LEVEL_WARNING = "canh_bao"
+LEVEL_NONE = "khong"
 
 
-def muc_trang_thai(status: object) -> str:
+def status_level(status: object) -> str:
     """MỘT nguồn phân mức trạng thái. Chỉ hai tập "cho qua" được liệt kê dương; mọi giá trị
     khác — bốn trạng thái chặn, trạng thái thêm sau này, ``None``, không phải chuỗi — ⇒ CHẶN.
     """
     if isinstance(status, str):
-        if status in TRANG_THAI_KHONG_CANH_BAO:
-            return MUC_KHONG
-        if status in TRANG_THAI_CANH_BAO:
-            return MUC_CANH_BAO
-    return MUC_CHAN
+        if status in NON_WARNING_STATUSES:
+            return LEVEL_NONE
+        if status in WARNING_STATUSES:
+            return LEVEL_WARNING
+    return LEVEL_BLOCK
 
 
 # ═══════════════════════════════ mã lý do chặn (không PII) ══════════════════════════════
-LY_DO: Dict[str, str] = {
+BLOCK_REASONS: Dict[str, str] = {
     # F228
     "trang_thai_chan": "trạng thái hồ sơ không được đưa vào Quyết định trúng tuyển",
     "trang_thai_la": "trạng thái hồ sơ không thuộc tập nào owner đã chốt — chặn",
@@ -203,29 +203,29 @@ LY_DO: Dict[str, str] = {
 
 #: Mã chặn theo TÌNH TRẠNG Quyết định (lượt I) — tách khỏi cổng dữ liệu để đường tái dựng bản ký dùng
 #: riêng (đặc tả mục 3.1 bước 7).
-MA_TINH_TRANG_QD = ("da_co_quyet_dinh", "cho_admin_quyet", "dau_trung_tuyen_appsheet")
+DECISION_STATE_CODES = ("da_co_quyet_dinh", "cho_admin_quyet", "dau_trung_tuyen_appsheet")
 
 # Câu 22 — luật cộng điểm KV của đường xét in (do hàm đọc điền bằng ĐÚNG hàm T6 dùng:
 # ``resolve_effective_bonus_rule`` + ``priority_service.area_bonus_enabled``).
-LUAT_KV_CONG = "cong"  # luật bật ``apply_area_bonus`` ⇒ in mức KV theo năm học
-LUAT_KV_TAT = "tat"  # có luật, ``apply_area_bonus`` tắt ⇒ T6 tính 0 ⇒ in 0
+AREA_RULE_ADD = "cong"  # luật bật ``apply_area_bonus`` ⇒ in mức KV theo năm học
+AREA_RULE_OFF = "tat"  # có luật, ``apply_area_bonus`` tắt ⇒ T6 tính 0 ⇒ in 0
 # không override, phương thức không mặc định ⇒ T6 tính 0
-LUAT_KV_KHONG_CO = "khong_co_luat"
-LUAT_KV_HOP_LE = frozenset({LUAT_KV_CONG, LUAT_KV_TAT, LUAT_KV_KHONG_CO})
-DIEM_KV_KHONG_CONG = "0.00"
+AREA_RULE_NONE = "khong_co_luat"
+VALID_AREA_RULES = frozenset({AREA_RULE_ADD, AREA_RULE_OFF, AREA_RULE_NONE})
+AREA_SCORE_NOT_ADDED = "0.00"
 # Owner 06-11 (lượt H2): công tắc ĐỐI TƯỢNG của cùng luật (``apply_object_bonus`` — hàm đọc điền bằng
 # ``priority_service.object_bonus_enabled``), cùng ba giá trị ``LUAT_KV_*``. Cộng ⇒ GIỮ điểm đối tượng của
 # luật v1 (suy từ dân tộc + xã thường trú; trần 2,75 của bộ dựng); tắt / không có luật ⇒ in "0" (như luật v1
 # in cho người không thuộc diện). KHÔNG dùng ``max_total_bonus``, KHÔNG cắt tỉ lệ như T6.
-DIEM_UT_KHONG_CONG = "0"
+PRIORITY_SCORE_NOT_ADDED = "0"
 
 
 @dataclass(frozen=True)
-class DuLieuKiem:
+class CheckData:
     """Dữ liệu kiểm của MỘT dòng — đọc trong cùng giao dịch chỉ đọc với ảnh chụp.
 
     ``nv_in_id`` / ``hp_*``: đúng nguyện vọng / khoản học phí mà truy vấn ảnh chụp
-    (``SQL_SO_LIEU``) dùng để in (cột phụ của chính truy vấn ấy — không tính lại). ``nv1_id``:
+    (``SQL_PRINT_FIGURES``) dùng để in (cột phụ của chính truy vấn ấy — không tính lại). ``nv1_id``:
     nguyện vọng 1 theo app (``display_order`` rồi ``id``, KHÔNG đòi chuỗi cấu hình đủ).
     ``lg_*``: nguồn của hồ sơ một nguyện vọng kiểu cũ. ``diem_*``: số môn của tổ hợp in lệch
     giữa hai bảng điểm. ``kv_*``: kết quả tra khu vực (F231) do hàm đọc điền."""
@@ -251,11 +251,11 @@ class DuLieuKiem:
     diem_chi_hs: int
     kv_ly_do: Optional[str]
     kv_muc: Optional[str]
-    luat_kv: Optional[str]  # câu 22 — một trong LUAT_KV_HOP_LE; None = không xác định
+    luat_kv: Optional[str]  # câu 22 — một trong VALID_AREA_RULES; None = không xác định
     # lượt H2 — công tắc đối tượng, cùng ba giá trị; None = không xác định
     luat_ut: Optional[str]
     # Lượt I (F230) — khoá đếm của NV in (ghi vào dòng bộ) + tình trạng Quyết định (hàm đọc điền
-    # bằng ``council_decision_status_service.tu_hang`` trên cột ``SQL_COT_TINH_TRANG_QD``).
+    # bằng ``council_decision_status_service.from_row`` trên cột ``SQL_COT_TINH_TRANG_QD``).
     nv_in_ai_id: Optional[int] = None
     nv_in_offering_id: Optional[int] = None
     qd_hieu_luc_id: Optional[int] = None
@@ -268,30 +268,30 @@ class DuLieuKiem:
     duplicate_reference: bool = False
 
 
-def diem_ut_in(luat_ut: Optional[str], diem_ut_v1: str) -> Optional[str]:
-    """Lượt H2 — điểm ĐỐI TƯỢNG in: luật cộng ⇒ GIỮ ``diem_ut_v1`` (luật v1 của bộ xuất); tắt / không có
-    luật ⇒ ``DIEM_UT_KHONG_CONG``; không xác định ⇒ ``None`` (dòng ấy đã bị chặn)."""
-    if luat_ut == LUAT_KV_CONG:
-        return diem_ut_v1
-    if luat_ut in (LUAT_KV_TAT, LUAT_KV_KHONG_CO):
-        return DIEM_UT_KHONG_CONG
+def printed_priority_score(luat_ut: Optional[str], priority_score_v1: str) -> Optional[str]:
+    """Lượt H2 — điểm ĐỐI TƯỢNG in: luật cộng ⇒ GIỮ ``priority_score_v1`` (luật v1 của bộ xuất); tắt / không có
+    luật ⇒ ``PRIORITY_SCORE_NOT_ADDED``; không xác định ⇒ ``None`` (dòng ấy đã bị chặn)."""
+    if luat_ut == AREA_RULE_ADD:
+        return priority_score_v1
+    if luat_ut in (AREA_RULE_OFF, AREA_RULE_NONE):
+        return PRIORITY_SCORE_NOT_ADDED
     return None
 
 
-def diem_kv_in(k: DuLieuKiem) -> Optional[str]:
+def printed_area_score(k: CheckData) -> Optional[str]:
     """Câu 22 — điểm KV IN cho dòng: mức theo năm học (F231) khi luật của đường xét cộng KV;
-    ``DIEM_KV_KHONG_CONG`` khi luật tắt / không có luật (đúng như T6 tính 0); ``None`` khi chưa có
+    ``AREA_SCORE_NOT_ADDED`` khi luật tắt / không có luật (đúng như T6 tính 0); ``None`` khi chưa có
     mức hoặc luật không xác định (dòng ấy đã bị chặn)."""
     if k.kv_muc is None:
         return None
-    if k.luat_kv == LUAT_KV_CONG:
+    if k.luat_kv == AREA_RULE_ADD:
         return k.kv_muc
-    if k.luat_kv in (LUAT_KV_TAT, LUAT_KV_KHONG_CO):
-        return DIEM_KV_KHONG_CONG
+    if k.luat_kv in (AREA_RULE_OFF, AREA_RULE_NONE):
+        return AREA_SCORE_NOT_ADDED
     return None
 
 
-def ly_do_cua_dong(k: DuLieuKiem) -> List[str]:
+def row_block_reason(k: CheckData) -> List[str]:
     """Mã lý do CHẶN của một dòng (F229 + F231; F228 tính riêng theo trạng thái). Rỗng ⇒ dòng
     qua được phần nguồn dữ liệu."""
     out: List[str] = []
@@ -345,9 +345,9 @@ def ly_do_cua_dong(k: DuLieuKiem) -> List[str]:
     if k.kv_ly_do is not None:
         out.append(k.kv_ly_do)
     # Câu 22: đường xét in đã biết (không thì dòng đã bị chặn ở trên) mà luật không xác định.
-    if k.nv_in_path_id is not None and k.luat_kv not in LUAT_KV_HOP_LE:
+    if k.nv_in_path_id is not None and k.luat_kv not in VALID_AREA_RULES:
         out.append("khong_xac_dinh_luat_cong_diem_kv")
-    if k.nv_in_path_id is not None and k.luat_ut not in LUAT_KV_HOP_LE:
+    if k.nv_in_path_id is not None and k.luat_ut not in VALID_AREA_RULES:
         out.append("khong_xac_dinh_luat_cong_diem_ut")
     if k.thieu_ma_ho_so:
         out.append("thieu_ma_ho_so")
@@ -356,15 +356,15 @@ def ly_do_cua_dong(k: DuLieuKiem) -> List[str]:
     return out
 
 
-def ly_do_tinh_trang_qd(
-    k: DuLieuKiem, chuoi_qd_cho_phep: Optional[int] = None
+def decision_state_block_reason(
+    k: CheckData, allowed_decision_chain: Optional[int] = None
 ) -> List[str]:
-    """Mã chặn theo tình trạng Quyết định của MỘT dòng (lượt I). ``chuoi_qd_cho_phep`` = id Quyết
+    """Mã chặn theo tình trạng Quyết định của MỘT dòng (lượt I). ``allowed_decision_chain`` = id Quyết
     định gốc của chuỗi mà bộ ĐIỀU CHỈNH được dựng cho — CHỈ nới đúng một phép: hồ sơ có dòng hiệu lực
     TRONG CHÍNH chuỗi ấy (ca "sửa thông tin em C" — BS §1.3). Dựng bộ xét mới gọi KHÔNG kèm chuỗi."""
     out: List[str] = []
     if k.qd_hieu_luc_id is not None and not (
-        chuoi_qd_cho_phep is not None and k.qd_chuoi_id == chuoi_qd_cho_phep
+        allowed_decision_chain is not None and k.qd_chuoi_id == allowed_decision_chain
     ):
         out.append("da_co_quyet_dinh")
     if k.cho_quyet_id is not None:
@@ -375,7 +375,7 @@ def ly_do_tinh_trang_qd(
 
 
 @dataclass(frozen=True)
-class KetQuaCong:
+class GateResult:
     """Kết quả cổng cho cả danh sách (thứ tự dòng = thứ tự đầu vào, đếm từ 1)."""
 
     trang_thai: Tuple[Optional[str], ...]
@@ -388,129 +388,129 @@ class KetQuaCong:
     luat_ut: Tuple[Optional[str], ...] = ()  # lượt H2 — công tắc đối tượng từng dòng
 
     @staticmethod
-    def _dem(gia_tri: Tuple[Optional[str], ...]) -> Dict[str, int]:
-        dem: Dict[str, int] = {}
-        for s in gia_tri:
-            ten = s if isinstance(s, str) else "(không rõ)"
-            dem[ten] = dem.get(ten, 0) + 1
-        return dict(sorted(dem.items()))
+    def _count(value: Tuple[Optional[str], ...]) -> Dict[str, int]:
+        counts: Dict[str, int] = {}
+        for s in value:
+            name = s if isinstance(s, str) else "(không rõ)"
+            counts[name] = counts.get(name, 0) + 1
+        return dict(sorted(counts.items()))
 
-    def so_theo_luat_kv(self) -> Dict[str, int]:
-        return self._dem(self.luat_kv)
+    def count_by_area_rule(self) -> Dict[str, int]:
+        return self._count(self.luat_kv)
 
-    def so_theo_luat_ut(self) -> Dict[str, int]:
-        return self._dem(self.luat_ut)
+    def count_by_priority_rule(self) -> Dict[str, int]:
+        return self._count(self.luat_ut)
 
-    def so_canh_bao(self) -> Dict[str, int]:
+    def warning_count(self) -> Dict[str, int]:
         return {s: len(d) for s, d in sorted(self.canh_bao.items())}
 
-    def so_theo_trang_thai(self) -> Dict[str, int]:
-        dem: Dict[str, int] = {}
+    def count_by_status(self) -> Dict[str, int]:
+        counts: Dict[str, int] = {}
         for s in self.trang_thai:
-            ten = s if isinstance(s, str) else "(không rõ)"
-            dem[ten] = dem.get(ten, 0) + 1
-        return dict(sorted(dem.items()))
+            name = s if isinstance(s, str) else "(không rõ)"
+            counts[name] = counts.get(name, 0) + 1
+        return dict(sorted(counts.items()))
 
 
-def danh_gia(
-    kiem: Sequence[DuLieuKiem], *, chuoi_qd_cho_phep: Optional[int] = None
-) -> KetQuaCong:
-    """Áp các cổng cho mọi dòng. Không ném lỗi — :func:`kiem_va_xac_nhan` quyết. Dựng bộ XÉT MỚI
-    (``POST /sets``) gọi KHÔNG kèm ``chuoi_qd_cho_phep``; chỉ bộ điều chỉnh truyền chuỗi gốc."""
-    chan: Dict[Tuple[str, Optional[str]], List[int]] = {}
-    canh_bao: Dict[str, List[int]] = {}
-    for k in kiem:
-        muc = muc_trang_thai(k.status)
-        if muc == MUC_CHAN:
-            ma = "trang_thai_chan" if k.status in TRANG_THAI_CHAN else "trang_thai_la"
-            ten = k.status if isinstance(k.status, str) else None
-            chan.setdefault((ma, ten), []).append(k.stt)
-        elif muc == MUC_CANH_BAO:
-            canh_bao.setdefault(k.status, []).append(k.stt)
-        for ma in ly_do_cua_dong(k) + ly_do_tinh_trang_qd(k, chuoi_qd_cho_phep):
-            chan.setdefault((ma, None), []).append(k.stt)
-    return _ket_qua(kiem, chan, canh_bao)
+def evaluate(
+    check: Sequence[CheckData], *, allowed_decision_chain: Optional[int] = None
+) -> GateResult:
+    """Áp các cổng cho mọi dòng. Không ném lỗi — :func:`check_and_confirm` quyết. Dựng bộ XÉT MỚI
+    (``POST /sets``) gọi KHÔNG kèm ``allowed_decision_chain``; chỉ bộ điều chỉnh truyền chuỗi gốc."""
+    blocked: Dict[Tuple[str, Optional[str]], List[int]] = {}
+    warnings: Dict[str, List[int]] = {}
+    for k in check:
+        item = status_level(k.status)
+        if item == LEVEL_BLOCK:
+            code = "trang_thai_chan" if k.status in BLOCKING_STATUSES else "trang_thai_la"
+            name = k.status if isinstance(k.status, str) else None
+            blocked.setdefault((code, name), []).append(k.stt)
+        elif item == LEVEL_WARNING:
+            warnings.setdefault(k.status, []).append(k.stt)
+        for code in row_block_reason(k) + decision_state_block_reason(k, allowed_decision_chain):
+            blocked.setdefault((code, None), []).append(k.stt)
+    return _result(check, blocked, warnings)
 
 
-def danh_gia_dung_lai(kiem: Sequence[DuLieuKiem]) -> KetQuaCong:
+def evaluate_rebuild(check: Sequence[CheckData]) -> GateResult:
     """Cổng của đường TÁI DỰNG BẢN KÝ (lượt I, đặc tả mục 3.1 bước 6 — F245, owner C2 / C3) cho
-    các dòng SỬA TAY: cổng DỮ LIỆU đủ (``ly_do_cua_dong`` — F229, F231, câu 21, câu 22) nhưng KHÔNG
+    các dòng SỬA TAY: cổng DỮ LIỆU đủ (``row_block_reason`` — F229, F231, câu 21, câu 22) nhưng KHÔNG
     cổng trạng thái F228 (trạng thái chỉ được liệt kê — bản ký thắng), trừ trạng thái LẠ (dữ liệu
     hỏng ⇒ chặn). Tình trạng Quyết định kiểm riêng cho MỌI dòng (hàm hỏi). KHÔNG BAO GIỜ dùng cho bộ
-    xét mới — ``tao_bo_van_ban`` gọi :func:`danh_gia`."""
-    chan: Dict[Tuple[str, Optional[str]], List[int]] = {}
-    for k in kiem:
+    xét mới — ``tao_bo_van_ban`` gọi :func:`evaluate`."""
+    blocked: Dict[Tuple[str, Optional[str]], List[int]] = {}
+    for k in check:
         if not (
             isinstance(k.status, str)
             and (
-                k.status in TRANG_THAI_CHAN
-                or k.status in TRANG_THAI_CANH_BAO
-                or k.status in TRANG_THAI_KHONG_CANH_BAO
+                k.status in BLOCKING_STATUSES
+                or k.status in WARNING_STATUSES
+                or k.status in NON_WARNING_STATUSES
             )
         ):
-            ten = k.status if isinstance(k.status, str) else None
-            chan.setdefault(("trang_thai_la", ten), []).append(k.stt)
-        for ma in ly_do_cua_dong(k):
-            chan.setdefault((ma, None), []).append(k.stt)
-    return _ket_qua(kiem, chan, {})
+            name = k.status if isinstance(k.status, str) else None
+            blocked.setdefault(("trang_thai_la", name), []).append(k.stt)
+        for code in row_block_reason(k):
+            blocked.setdefault((code, None), []).append(k.stt)
+    return _result(check, blocked, {})
 
 
-def _ket_qua(kiem, chan, canh_bao) -> KetQuaCong:
-    thu_tu = list(LY_DO)
-    return KetQuaCong(
-        trang_thai=tuple(k.status for k in kiem),
+def _result(check, blocked, warnings) -> GateResult:
+    order_no = list(BLOCK_REASONS)
+    return GateResult(
+        trang_thai=tuple(k.status for k in check),
         chan=tuple(
-            (ma, tt, tuple(sorted(dong)))
-            for (ma, tt), dong in sorted(
-                chan.items(), key=lambda x: (thu_tu.index(x[0][0]), x[0][1] or "")
+            (code, tt, tuple(sorted(row)))
+            for (code, tt), row in sorted(
+                blocked.items(), key=lambda x: (order_no.index(x[0][0]), x[0][1] or "")
             )
         ),
-        canh_bao={s: tuple(sorted(d)) for s, d in sorted(canh_bao.items())},
-        diem_kv=tuple(diem_kv_in(k) for k in kiem),
-        luat_kv=tuple(k.luat_kv for k in kiem),
-        luat_ut=tuple(k.luat_ut for k in kiem),
+        canh_bao={s: tuple(sorted(d)) for s, d in sorted(warnings.items())},
+        diem_kv=tuple(printed_area_score(k) for k in check),
+        luat_kv=tuple(k.luat_kv for k in check),
+        luat_ut=tuple(k.luat_ut for k in check),
     )
 
 
-def _noi_dung_kiem(kq: KetQuaCong, muc: str, duoc_xac_nhan: bool) -> Dict[str, Any]:
+def _check_content(kq: GateResult, item: str, can_confirm: bool) -> Dict[str, Any]:
     """Phần ``public_payload`` (JSON thuần — chỉ số dòng, mã lý do, trạng thái, số đếm)."""
     return {
         "kiem_tra_dung_bo": {
-            "muc": muc,
+            "muc": item,
             "so_dong": len(kq.trang_thai),
             "chan": [
                 {
-                    "ma": ma,
-                    "mo_ta": LY_DO[ma],
+                    "ma": code,
+                    "mo_ta": BLOCK_REASONS[code],
                     "trang_thai": tt,
-                    "so_ho_so": len(dong),
-                    "dong": list(dong),
+                    "so_ho_so": len(row),
+                    "dong": list(row),
                 }
-                for ma, tt, dong in kq.chan
+                for code, tt, row in kq.chan
             ],
             "canh_bao": {
-                "so_ho_so_theo_trang_thai": kq.so_canh_bao(),
+                "so_ho_so_theo_trang_thai": kq.warning_count(),
                 "dong_theo_trang_thai": {s: list(d) for s, d in kq.canh_bao.items()},
             },
             "can_admin_xac_nhan": bool(kq.canh_bao),
-            "nguoi_goi_duoc_xac_nhan": bool(duoc_xac_nhan),
+            "nguoi_goi_duoc_xac_nhan": bool(can_confirm),
         }
     }
 
 
-def kiem_dang_xac_nhan(xac_nhan: object) -> Optional[Dict[str, int]]:
+def check_confirmation_shape(confirmation: object) -> Optional[Dict[str, int]]:
     """``xac_nhan_trang_thai`` của yêu cầu: ``None`` (không xác nhận) hoặc dict KHÔNG rỗng
     {trạng thái thuộc tập CẢNH BÁO: số hồ sơ ≥ 1}. Sai dạng ⇒ ``DataValidationError``.
     """
-    if xac_nhan is None:
+    if confirmation is None:
         return None
-    if not isinstance(xac_nhan, Mapping) or not xac_nhan:
+    if not isinstance(confirmation, Mapping) or not confirmation:
         raise DataValidationError(
             "Xác nhận trạng thái phải là danh sách {trạng thái: số hồ sơ} không rỗng."
         )
     out: Dict[str, int] = {}
-    for s, n in xac_nhan.items():
-        if not isinstance(s, str) or s not in TRANG_THAI_CANH_BAO:
+    for s, n in confirmation.items():
+        if not isinstance(s, str) or s not in WARNING_STATUSES:
             raise DataValidationError(
                 "Xác nhận chỉ áp cho trạng thái thuộc mức cảnh báo."
             )
@@ -520,57 +520,57 @@ def kiem_dang_xac_nhan(xac_nhan: object) -> Optional[Dict[str, int]]:
     return dict(sorted(out.items()))
 
 
-def kiem_quyen_xac_nhan(
-    xac_nhan: Optional[Dict[str, int]], duoc_xac_nhan: bool
+def check_confirm_permission(
+    confirmation: Optional[Dict[str, int]], can_confirm: bool
 ) -> None:
-    """CHỈ admin được gửi xác nhận (owner 05-11). Quyền ``duoc_xac_nhan`` do ``deps.py`` tính
+    """CHỈ admin được gửi xác nhận (owner 05-11). Quyền ``can_confirm`` do ``deps.py`` tính
     (tầng chủ sở hữu); kiểm TRƯỚC khi đọc hồ sơ."""
-    if xac_nhan is not None and duoc_xac_nhan is not True:
+    if confirmation is not None and can_confirm is not True:
         raise PermissionDeniedError(
             detail="Chỉ admin được xác nhận dựng bộ có hồ sơ ở trạng thái cần cảnh báo."
         )
 
 
-def kiem_va_xac_nhan(
-    kq: KetQuaCong,
+def check_and_confirm(
+    kq: GateResult,
     *,
-    xac_nhan: Optional[Dict[str, int]],
-    duoc_xac_nhan: bool,
+    confirmation: Optional[Dict[str, int]],
+    can_confirm: bool,
 ) -> Optional[Dict[str, int]]:
     """Chặn ⇒ ``DataValidationError`` (400, liệt kê từng dòng — xác nhận KHÔNG gỡ được chặn).
     Có cảnh báo mà không xác nhận / xác nhận lệch số đếm hiện tại ⇒ ``ConflictError`` (409, số
     đếm theo trạng thái + số dòng). Trả số đếm ĐÃ xác nhận (để ghi vết) hoặc ``None``.
     """
-    kiem_quyen_xac_nhan(xac_nhan, duoc_xac_nhan)
+    check_confirm_permission(confirmation, can_confirm)
     if kq.chan:
-        so_dong = len({d for _, _, dong in kq.chan for d in dong})
+        row_count = len({d for _, _, row in kq.chan for d in row})
         raise DataValidationError(
             "Không dựng bộ văn bản: %d hồ sơ không đưa được vào văn bản (%d lý do) — xem "
-            "danh sách từng dòng." % (so_dong, len(kq.chan)),
-            public_payload=_noi_dung_kiem(kq, MUC_CHAN, duoc_xac_nhan),
+            "danh sách từng dòng." % (row_count, len(kq.chan)),
+            public_payload=_check_content(kq, LEVEL_BLOCK, can_confirm),
         )
-    dem = kq.so_canh_bao()
-    if not dem:
-        if xac_nhan is not None:
+    counts = kq.warning_count()
+    if not counts:
+        if confirmation is not None:
             raise ConflictError(
                 "Không còn hồ sơ nào cần xác nhận trạng thái — gửi lại không kèm xác nhận.",
-                public_payload=_noi_dung_kiem(kq, "xac_nhan_lech", duoc_xac_nhan),
+                public_payload=_check_content(kq, "xac_nhan_lech", can_confirm),
             )
         return None
-    if xac_nhan is None:
+    if confirmation is None:
         cau = (
             "Có %d hồ sơ ở trạng thái cần cảnh báo — admin phải xác nhận số hồ sơ theo "
-            "từng trạng thái rồi gửi lại." % sum(dem.values())
-            if duoc_xac_nhan
+            "từng trạng thái rồi gửi lại." % sum(counts.values())
+            if can_confirm
             else "Có %d hồ sơ ở trạng thái cần cảnh báo — cần admin xác nhận."
-            % sum(dem.values())
+            % sum(counts.values())
         )
         raise ConflictError(
-            cau, public_payload=_noi_dung_kiem(kq, "can_xac_nhan", duoc_xac_nhan)
+            cau, public_payload=_check_content(kq, "can_xac_nhan", can_confirm)
         )
-    if xac_nhan != dem:
+    if confirmation != counts:
         raise ConflictError(
             "Số hồ sơ theo trạng thái đã khác lúc xác nhận — xem lại rồi xác nhận lại.",
-            public_payload=_noi_dung_kiem(kq, "xac_nhan_lech", duoc_xac_nhan),
+            public_payload=_check_content(kq, "xac_nhan_lech", can_confirm),
         )
-    return dem
+    return counts

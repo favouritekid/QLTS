@@ -15,7 +15,7 @@ import { server } from "@/test/mocks/server"
 import { dap, luatMoLuot } from "@/test/mocks/council-luat-may-chu"
 import { COUNCIL_DOCUMENTS_PREFIX as P } from "@/lib/api/council-documents"
 import { councilDocumentKeys } from "./useCouncilDocuments"
-import { useGhiNhanQuyetDinh, type DuLieuGuiGhiNhan } from "./useGhiNhanQuyetDinh"
+import { useRecordDecision, type RecordSubmissionData } from "./useRecordDecision"
 
 const API = "http://localhost:8000"
 const SET = 5
@@ -43,7 +43,7 @@ function qd(over: Record<string, unknown> = {}) {
   }
 }
 
-function du_lieu(): DuLieuGuiGhiNhan {
+function du_lieu(): RecordSubmissionData {
   return {
     loai: "trung_tuyen",
     so_quyet_dinh: "501",
@@ -129,7 +129,7 @@ function dung(c: Cau): Dem {
 
 function dung_hook() {
   const qc = qcNhuApp()
-  const r = renderHook(() => useGhiNhanQuyetDinh(SET), { wrapper: boc(qc) })
+  const r = renderHook(() => useRecordDecision(SET), { wrapper: boc(qc) })
   return { qc, ...r }
 }
 
@@ -156,11 +156,11 @@ describe("gửi ghi nhận — đường thành công", () => {
     expect(dem.mo).toBe(1)
     expect(dem.gui).toBe(1)
     expect(dem.maTrongForm).toEqual([MA])
-    const t = h.result.current.trangThai
+    const t = h.result.current.status
     expect(t.kieu).toBe("da_ghi")
     if (t.kieu === "da_ghi") {
-      expect(t.quyetDinh?.id).toBe(7)
-      expect(t.quyetDinh?.lap_lai).toBe(false)
+      expect(t.decision?.id).toBe(7)
+      expect(t.decision?.lap_lai).toBe(false)
     }
   })
 
@@ -168,9 +168,9 @@ describe("gửi ghi nhận — đường thành công", () => {
     dung({ gui: () => HttpResponse.json(qd({ lap_lai: true }), { status: 200 }) })
     const h = dung_hook()
     await guiXong(h)
-    const t = h.result.current.trangThai
+    const t = h.result.current.status
     expect(t.kieu).toBe("da_ghi")
-    if (t.kieu === "da_ghi") expect(t.quyetDinh?.lap_lai).toBe(true)
+    if (t.kieu === "da_ghi") expect(t.decision?.lap_lai).toBe(true)
   })
 
   it("chống bấm đúp: hai lần gui đồng thời ⇒ chỉ MỘT lần mở lượt và MỘT lần gửi", async () => {
@@ -199,11 +199,11 @@ describe("gửi ghi nhận — máy chủ TỪ CHỐI dứt khoát", () => {
     })
     const h = dung_hook()
     await guiXong(h)
-    expect(h.result.current.trangThai).toMatchObject({ kieu: "bi_tu_choi", huong: "sua_va_gui_lai" })
+    expect(h.result.current.status).toMatchObject({ kieu: "bi_tu_choi", huong: "sua_va_gui_lai" })
     await guiXong(h)
     expect(dem.mo).toBe(1) // không mở lượt thứ hai
     expect(dem.maTrongForm).toEqual([MA, MA]) // cùng mã
-    expect(h.result.current.trangThai.kieu).toBe("da_ghi")
+    expect(h.result.current.status.kieu).toBe("da_ghi")
   })
 
   it("409 luot_da_chan ⇒ mo_luot_moi; lần gửi sau mở lượt MỚI", async () => {
@@ -220,7 +220,7 @@ describe("gửi ghi nhận — máy chủ TỪ CHỐI dứt khoát", () => {
     })
     const h = dung_hook()
     await guiXong(h)
-    expect(h.result.current.trangThai).toMatchObject({ kieu: "bi_tu_choi", huong: "mo_luot_moi" })
+    expect(h.result.current.status).toMatchObject({ kieu: "bi_tu_choi", huong: "mo_luot_moi" })
     await guiXong(h)
     expect(dem.mo).toBe(2)
     expect(dem.maTrongForm).toEqual([MA, MA_2])
@@ -237,11 +237,11 @@ describe("gửi ghi nhận — máy chủ TỪ CHỐI dứt khoát", () => {
     })
     const h = dung_hook()
     await guiXong(h)
-    expect(h.result.current.trangThai).toMatchObject({ kieu: "bi_tu_choi", huong: "phan_xu" })
+    expect(h.result.current.status).toMatchObject({ kieu: "bi_tu_choi", huong: "phan_xu" })
     await act(async () => {
-      await h.result.current.phanXu()
+      await h.result.current.adjudicate()
     })
-    expect(h.result.current.trangThai.kieu).toBe("da_ghi")
+    expect(h.result.current.status.kieu).toBe("da_ghi")
   })
 })
 
@@ -250,7 +250,7 @@ describe("gửi ghi nhận — KHÔNG RÕ ⇒ luôn 'chưa xác định', không
     dung({ gui: () => HttpResponse.error() })
     const h = dung_hook()
     await guiXong(h)
-    expect(h.result.current.trangThai).toMatchObject({ kieu: "chua_xac_dinh", ma: MA, lyDo: "gui" })
+    expect(h.result.current.status).toMatchObject({ kieu: "chua_xac_dinh", ma: MA, reason: "gui" })
   })
 
   it.each([
@@ -264,14 +264,14 @@ describe("gửi ghi nhận — KHÔNG RÕ ⇒ luôn 'chưa xác định', không
     dung({ gui: tra })
     const h = dung_hook()
     await guiXong(h)
-    expect(h.result.current.trangThai).toMatchObject({ kieu: "chua_xac_dinh", ma: MA })
+    expect(h.result.current.status).toMatchObject({ kieu: "chua_xac_dinh", ma: MA })
   })
 
   it("2xx nhưng thân sai dạng (Zod nổ) ⇒ chua_xac_dinh: máy chủ ĐÃ trả 2xx nên có thể đã ghi", async () => {
     dung({ gui: () => HttpResponse.json({ khong: "dung dang" }, { status: 201 }) })
     const h = dung_hook()
     await guiXong(h)
-    expect(h.result.current.trangThai.kieu).toBe("chua_xac_dinh")
+    expect(h.result.current.status.kieu).toBe("chua_xac_dinh")
   })
 
   it("không có đường 'gửi lại' sau chua_xac_dinh: phanXu dùng mã cũ, không mở lượt mới", async () => {
@@ -279,7 +279,7 @@ describe("gửi ghi nhận — KHÔNG RÕ ⇒ luôn 'chưa xác định', không
     const h = dung_hook()
     await guiXong(h)
     await act(async () => {
-      await h.result.current.phanXu()
+      await h.result.current.adjudicate()
     })
     expect(dem.mo).toBe(1)
     expect(dem.chan).toBe(1)
@@ -291,28 +291,28 @@ describe("phân xử — bốn kết quả", () => {
     const dem = dung({ gui: () => HttpResponse.error(), chan: tra })
     const h = dung_hook()
     await guiXong(h)
-    expect(h.result.current.trangThai.kieu).toBe("chua_xac_dinh")
+    expect(h.result.current.status.kieu).toBe("chua_xac_dinh")
     await act(async () => {
-      await h.result.current.phanXu()
+      await h.result.current.adjudicate()
     })
     return { h, dem }
   }
 
   it("da_ghi + quyet_dinh ⇒ da_ghi kèm DTO", async () => {
     const { h } = await denChuaXacDinh(() => HttpResponse.json({ ket_qua: "da_ghi", quyet_dinh: qd() }))
-    const t = h.result.current.trangThai
+    const t = h.result.current.status
     expect(t.kieu).toBe("da_ghi")
-    if (t.kieu === "da_ghi") expect(t.quyetDinh?.so_quyet_dinh).toBe("501")
+    if (t.kieu === "da_ghi") expect(t.decision?.so_quyet_dinh).toBe("501")
   })
 
   it("da_ghi KHÔNG kèm quyet_dinh ⇒ vẫn da_ghi (chi tiết null), không rơi về 'chưa ghi'", async () => {
     const { h } = await denChuaXacDinh(() => HttpResponse.json({ ket_qua: "da_ghi" }))
-    expect(h.result.current.trangThai).toEqual({ kieu: "da_ghi", quyetDinh: null })
+    expect(h.result.current.status).toEqual({ kieu: "da_ghi", decision: null })
   })
 
   it("chua_ghi_da_chan ⇒ chua_ghi_da_chan (trạng thái DUY NHẤT nói 'chưa ghi'); lần gửi sau mở lượt MỚI", async () => {
     const { h, dem } = await denChuaXacDinh(() => HttpResponse.json({ ket_qua: "chua_ghi_da_chan" }))
-    expect(h.result.current.trangThai.kieu).toBe("chua_ghi_da_chan")
+    expect(h.result.current.status.kieu).toBe("chua_ghi_da_chan")
     server.use(http.post(`${API}${P}/decisions`, () => HttpResponse.json(qd(), { status: 201 })))
     await guiXong(h)
     expect(dem.mo).toBe(2)
@@ -320,12 +320,12 @@ describe("phân xử — bốn kết quả", () => {
 
   it("dang_xu_ly ⇒ vẫn chua_xac_dinh (lyDo dang_xu_ly)", async () => {
     const { h } = await denChuaXacDinh(() => HttpResponse.json({ ket_qua: "dang_xu_ly" }))
-    expect(h.result.current.trangThai).toMatchObject({ kieu: "chua_xac_dinh", lyDo: "dang_xu_ly" })
+    expect(h.result.current.status).toMatchObject({ kieu: "chua_xac_dinh", reason: "dang_xu_ly" })
   })
 
   it("ket_qua LẠ ⇒ chua_xac_dinh (không suy)", async () => {
     const { h } = await denChuaXacDinh(() => HttpResponse.json({ ket_qua: "gia_tri_moi_cua_may_chu" }))
-    expect(h.result.current.trangThai).toMatchObject({ kieu: "chua_xac_dinh", lyDo: "van_chua_ro" })
+    expect(h.result.current.status).toMatchObject({ kieu: "chua_xac_dinh", reason: "van_chua_ro" })
   })
 
   it.each([
@@ -335,13 +335,13 @@ describe("phân xử — bốn kết quả", () => {
     ["200 sai dạng", () => HttpResponse.json({ linh_tinh: 1 })],
   ])("phân xử %s ⇒ chua_xac_dinh (phan_xu_loi), KHÔNG chưa ghi", async (_t, tra) => {
     const { h } = await denChuaXacDinh(tra)
-    expect(h.result.current.trangThai).toMatchObject({ kieu: "chua_xac_dinh", lyDo: "phan_xu_loi" })
+    expect(h.result.current.status).toMatchObject({ kieu: "chua_xac_dinh", reason: "phan_xu_loi" })
   })
 
   it("phân xử lặp khi vẫn chưa rõ: gọi lại được (luỹ đẳng)", async () => {
     const { h, dem } = await denChuaXacDinh(() => HttpResponse.json({ ket_qua: "dang_xu_ly" }))
     await act(async () => {
-      await h.result.current.phanXu()
+      await h.result.current.adjudicate()
     })
     expect(dem.chan).toBe(2)
   })
@@ -361,12 +361,12 @@ describe("phân xử — giờ của lượt được giữ; 'đã chặn' làm 
   ] as const)("Đ2-3: phân xử %s trên lượt khôi phục ⇒ chua_xac_dinh GIỮ `luc` của lượt (cả lần bấm kiểm thứ hai)", async (_ten, tra, lyDo) => {
     dung({ chan: tra })
     const h = dung_hook()
-    act(() => h.result.current.khoiPhuc([luot(MA, "cho_gui", { tao_luc: GIO_LUOT })]))
+    act(() => h.result.current.restore([luot(MA, "cho_gui", { tao_luc: GIO_LUOT })]))
     for (let lan = 0; lan < 2; lan++) {
       await act(async () => {
-        await h.result.current.phanXu()
+        await h.result.current.adjudicate()
       })
-      expect(h.result.current.trangThai).toEqual({ kieu: "chua_xac_dinh", ma: MA, luc: GIO_LUOT, lyDo })
+      expect(h.result.current.status).toEqual({ kieu: "chua_xac_dinh", ma: MA, luc: GIO_LUOT, reason: lyDo })
     }
   })
 
@@ -377,12 +377,12 @@ describe("phân xử — giờ của lượt được giữ; 'đã chặn' làm 
       dung({ gui: () => HttpResponse.error(), chan: () => HttpResponse.json({ ket_qua: "dang_xu_ly" }) })
       const h = dung_hook()
       await guiXong(h)
-      expect(h.result.current.trangThai).toMatchObject({ kieu: "chua_xac_dinh", luc: "2026-03-01T10:00:00.000Z", lyDo: "gui" })
+      expect(h.result.current.status).toMatchObject({ kieu: "chua_xac_dinh", luc: "2026-03-01T10:00:00.000Z", reason: "gui" })
       vi.setSystemTime(new Date("2026-03-01T11:30:00.000Z")) // người dùng bấm kiểm sau 90 phút
       await act(async () => {
-        await h.result.current.phanXu()
+        await h.result.current.adjudicate()
       })
-      expect(h.result.current.trangThai).toMatchObject({ kieu: "chua_xac_dinh", luc: "2026-03-01T10:00:00.000Z", lyDo: "dang_xu_ly" })
+      expect(h.result.current.status).toMatchObject({ kieu: "chua_xac_dinh", luc: "2026-03-01T10:00:00.000Z", reason: "dang_xu_ly" })
     } finally {
       vi.useRealTimers()
     }
@@ -400,18 +400,18 @@ describe("phân xử — giờ của lượt được giữ; 'đã chặn' làm 
       },
     })
     const h = dung_hook()
-    act(() => h.result.current.khoiPhuc([luot(MA, "cho_gui", { tao_luc: GIO_LUOT })]))
+    act(() => h.result.current.restore([luot(MA, "cho_gui", { tao_luc: GIO_LUOT })]))
     let xong: Promise<void> = Promise.resolve()
     act(() => {
-      xong = h.result.current.phanXu()
+      xong = h.result.current.adjudicate()
     })
-    await waitFor(() => expect(h.result.current.trangThai.kieu).toBe("dang_phan_xu"))
-    expect(h.result.current.trangThai).toEqual({ kieu: "dang_phan_xu", ma: MA, luc: GIO_LUOT })
+    await waitFor(() => expect(h.result.current.status.kieu).toBe("dang_phan_xu"))
+    expect(h.result.current.status).toEqual({ kieu: "dang_phan_xu", ma: MA, luc: GIO_LUOT })
     tha()
     await act(async () => {
       await xong
     })
-    expect(h.result.current.trangThai).toMatchObject({ kieu: "chua_xac_dinh", luc: GIO_LUOT })
+    expect(h.result.current.status).toMatchObject({ kieu: "chua_xac_dinh", luc: GIO_LUOT })
   })
 
   it("Đ2-2: chua_ghi_da_chan ⇒ làm mới truy vấn của BỘ và DANH SÁCH LƯỢT (đánh dấu cũ để tải lại theo máy chủ)", async () => {
@@ -422,14 +422,14 @@ describe("phân xử — giờ của lượt được giữ; 'đã chặn' làm 
     const h = dung_hook()
     h.qc.setQueryData(councilDocumentKeys.set(SET), { id: SET })
     h.qc.setQueryData(councilDocumentKeys.submissions(SET), [luot(MA, "cho_gui")])
-    act(() => h.result.current.khoiPhuc([luot(MA, "cho_gui")]))
+    act(() => h.result.current.restore([luot(MA, "cho_gui")]))
     // trước khi phân xử: các truy vấn còn "tươi" (để khẳng định sau không rỗng)
     expect(h.qc.getQueryState(councilDocumentKeys.set(SET))?.isInvalidated).toBe(false)
     expect(h.qc.getQueryState(councilDocumentKeys.submissions(SET))?.isInvalidated).toBe(false)
     await act(async () => {
-      await h.result.current.phanXu()
+      await h.result.current.adjudicate()
     })
-    expect(h.result.current.trangThai.kieu).toBe("chua_ghi_da_chan")
+    expect(h.result.current.status.kieu).toBe("chua_ghi_da_chan")
     expect(h.qc.getQueryState(councilDocumentKeys.set(SET))?.isInvalidated).toBe(true)
     expect(h.qc.getQueryState(councilDocumentKeys.submissions(SET))?.isInvalidated).toBe(true)
   })
@@ -441,7 +441,7 @@ describe("mở lượt", () => {
     const dem = dung({ mo: () => dap(luatMoLuot({ ma: MA_2, tao_luc: "2026-11-11T01:00:00Z" })) ?? HttpResponse.error() })
     const h = dung_hook()
     await guiXong(h)
-    expect(h.result.current.trangThai).toMatchObject({ kieu: "chua_xac_dinh", ma: MA_2, lyDo: "mo_luot" })
+    expect(h.result.current.status).toMatchObject({ kieu: "chua_xac_dinh", ma: MA_2, reason: "mo_luot" })
     expect(dem.gui).toBe(0)
   })
 
@@ -449,7 +449,7 @@ describe("mở lượt", () => {
     const dem = dung({ mo: () => HttpResponse.error(), ds: () => HttpResponse.json([luot(MA_2, "cho_gui")]) })
     const h = dung_hook()
     await guiXong(h)
-    expect(h.result.current.trangThai).toMatchObject({ kieu: "chua_xac_dinh", ma: MA_2 })
+    expect(h.result.current.status).toMatchObject({ kieu: "chua_xac_dinh", ma: MA_2 })
     expect(dem.gui).toBe(0)
   })
 
@@ -457,7 +457,7 @@ describe("mở lượt", () => {
     const dem = dung({ mo: () => HttpResponse.error(), ds: () => HttpResponse.json([luot(MA_2, "da_chan")]) })
     const h = dung_hook()
     await guiXong(h)
-    expect(h.result.current.trangThai.kieu).toBe("loi_mo_luot")
+    expect(h.result.current.status.kieu).toBe("loi_mo_luot")
     expect(dem.gui).toBe(0)
   })
 
@@ -467,7 +467,7 @@ describe("mở lượt", () => {
     })
     const h = dung_hook()
     await guiXong(h)
-    expect(h.result.current.trangThai.kieu).toBe("loi_mo_luot")
+    expect(h.result.current.status.kieu).toBe("loi_mo_luot")
     expect(dem.mo).toBe(1)
     expect(dem.gui).toBe(0)
   })
@@ -476,7 +476,7 @@ describe("mở lượt", () => {
     dung({ mo: () => HttpResponse.json({ detail: "Không có bộ." }, { status: 404 }) })
     const h = dung_hook()
     await guiXong(h)
-    expect(h.result.current.trangThai.kieu).toBe("bo_khong_con")
+    expect(h.result.current.status.kieu).toBe("bo_khong_con")
   })
 })
 
@@ -484,19 +484,19 @@ describe("khôi phục sau tải lại trang", () => {
   it("có lượt cho_gui ⇒ vào thẳng chua_xac_dinh với giờ tạo của lượt, không lưu mã ở đâu ngoài bộ nhớ", async () => {
     const dem = dung({})
     const h = dung_hook()
-    act(() => h.result.current.khoiPhuc([luot(MA, "cho_gui", { tao_luc: "2026-11-11T02:00:00Z" })]))
-    expect(h.result.current.trangThai).toEqual({
+    act(() => h.result.current.restore([luot(MA, "cho_gui", { tao_luc: "2026-11-11T02:00:00Z" })]))
+    expect(h.result.current.status).toEqual({
       kieu: "chua_xac_dinh",
       ma: MA,
       luc: "2026-11-11T02:00:00Z",
-      lyDo: "tai_lai_trang",
+      reason: "tai_lai_trang",
     })
     // nút phân xử dùng đúng mã vừa khôi phục
     server.use(http.post(`${API}${P}/luot-ghi-nhan/${MA}/chan`, () => HttpResponse.json({ ket_qua: "chua_ghi_da_chan" })))
     await act(async () => {
-      await h.result.current.phanXu()
+      await h.result.current.adjudicate()
     })
-    expect(h.result.current.trangThai.kieu).toBe("chua_ghi_da_chan")
+    expect(h.result.current.status.kieu).toBe("chua_ghi_da_chan")
     expect(dem.mo).toBe(0)
     expect(JSON.stringify({ l: { ...localStorage }, s: { ...sessionStorage } }).includes(MA)).toBe(false)
   })
@@ -504,24 +504,24 @@ describe("khôi phục sau tải lại trang", () => {
   it("không có lượt cho_gui (chỉ da_chan / da_ghi) ⇒ giữ nguyên nhap", () => {
     dung({})
     const h = dung_hook()
-    act(() => h.result.current.khoiPhuc([luot(MA, "da_chan"), luot(MA_2, "da_ghi")]))
-    expect(h.result.current.trangThai.kieu).toBe("nhap")
+    act(() => h.result.current.restore([luot(MA, "da_chan"), luot(MA_2, "da_ghi")]))
+    expect(h.result.current.status.kieu).toBe("nhap")
   })
 
   it("trạng thái lạ của lượt KHÔNG bị coi là đang chờ", () => {
     dung({})
     const h = dung_hook()
-    act(() => h.result.current.khoiPhuc([luot(MA, "trang_thai_moi")]))
-    expect(h.result.current.trangThai.kieu).toBe("nhap")
+    act(() => h.result.current.restore([luot(MA, "trang_thai_moi")]))
+    expect(h.result.current.status.kieu).toBe("nhap")
   })
 
   it("không ghi đè khi đang ở trạng thái khác nhap (đã da_ghi)", async () => {
     dung({})
     const h = dung_hook()
     await guiXong(h)
-    expect(h.result.current.trangThai.kieu).toBe("da_ghi")
-    act(() => h.result.current.khoiPhuc([luot(MA_2, "cho_gui")]))
-    expect(h.result.current.trangThai.kieu).toBe("da_ghi")
+    expect(h.result.current.status.kieu).toBe("da_ghi")
+    act(() => h.result.current.restore([luot(MA_2, "cho_gui")]))
+    expect(h.result.current.status.kieu).toBe("da_ghi")
   })
 })
 
@@ -540,9 +540,9 @@ describe("batDauLuotMoiSauHuy — mã lượt cũ bị bỏ SAU huỷ ghi nhận
     const dem = dung({ mo: moHaiLan() })
     const h = dung_hook()
     await guiXong(h)
-    expect(h.result.current.trangThai.kieu).toBe("da_ghi")
-    act(() => h.result.current.batDauLuotMoiSauHuy())
-    expect(h.result.current.trangThai).toEqual({ kieu: "nhap" })
+    expect(h.result.current.status.kieu).toBe("da_ghi")
+    act(() => h.result.current.startNewSubmissionAfterCancel())
+    expect(h.result.current.status).toEqual({ kieu: "nhap" })
     await guiXong(h)
     expect(dem.mo).toBe(2)
     expect(dem.maTrongForm).toEqual([MA, MA_2])
@@ -552,9 +552,9 @@ describe("batDauLuotMoiSauHuy — mã lượt cũ bị bỏ SAU huỷ ghi nhận
     const dem = dung({ mo: moHaiLan() })
     const h = dung_hook()
     await guiXong(h)
-    expect(h.result.current.trangThai.kieu).toBe("da_ghi")
-    act(() => h.result.current.veBieuMau())
-    expect(h.result.current.trangThai).toEqual({ kieu: "nhap" })
+    expect(h.result.current.status.kieu).toBe("da_ghi")
+    act(() => h.result.current.backToForm())
+    expect(h.result.current.status).toEqual({ kieu: "nhap" })
     await guiXong(h)
     expect(dem.mo).toBe(1)
     expect(dem.maTrongForm).toEqual([MA, MA])

@@ -16,20 +16,20 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
-import { coTheDungTuDanhSach, useCouncilDocumentPermissions } from "@/hooks/admin/useCouncilDocuments"
+import { canBuildFromList, useCouncilDocumentPermissions } from "@/hooks/admin/useCouncilDocuments"
 import { useCouncilSelectionStore } from "@/lib/stores/council-selection.store"
 
-export const DUONG_DAN_DUNG_VAN_BAN = "/admin/council-documents/moi"
+export const BUILD_DOCUMENT_PATH = "/admin/council-documents/moi"
 
 /** Một hồ sơ đang chọn: id + NĂM HỌC thật của hồ sơ (`academic_year` của dòng danh sách — máy chủ `083a428d`). */
-export interface HoSoDangChon {
+export interface SelectedProfile {
   id: number
   academic_year?: number | null
 }
 
 interface Props {
   /** hồ sơ đang chọn Ở TRANG NÀY (màn này cố ý xoá lựa chọn khi đổi trang / bộ lọc) */
-  hoSo: readonly HoSoDangChon[]
+  profile: readonly SelectedProfile[]
   disabled?: boolean
 }
 
@@ -37,24 +37,24 @@ interface Props {
  * Năm học CHUNG của các hồ sơ đang chọn, đọc từ chính các dòng (không suy từ bộ lọc): đúng một năm ⇒ dùng; có dòng chưa
  * biết năm, hoặc nhiều năm khác nhau ⇒ KHÔNG dựng (không đoán, không lấy năm của dòng đầu).
  */
-export type NamChung =
+export type CommonYear =
   | { kieu: "trong" }
   | { kieu: "chua_ro" }
   | { kieu: "nhieu_nam" }
-  | { kieu: "chung"; nam: number }
+  | { kieu: "chung"; year: number }
 
-export function namChungCua(hoSo: readonly HoSoDangChon[]): NamChung {
-  if (hoSo.length === 0) return { kieu: "trong" }
-  const nam = new Set<number>()
-  for (const h of hoSo) {
+export function commonYearOf(profile: readonly SelectedProfile[]): CommonYear {
+  if (profile.length === 0) return { kieu: "trong" }
+  const year = new Set<number>()
+  for (const h of profile) {
     if (typeof h.academic_year !== "number") return { kieu: "chua_ro" }
-    nam.add(h.academic_year)
+    year.add(h.academic_year)
   }
-  if (nam.size > 1) return { kieu: "nhieu_nam" }
-  return { kieu: "chung", nam: [...nam][0] }
+  if (year.size > 1) return { kieu: "nhieu_nam" }
+  return { kieu: "chung", year: [...year][0] }
 }
 
-const LY_DO_KHOA: Record<"chua_ro" | "nhieu_nam", string> = {
+const LOCK_REASONS: Record<"chua_ro" | "nhieu_nam", string> = {
   chua_ro: "Chưa biết năm học của một số hồ sơ đang chọn",
   nhieu_nam: "Các hồ sơ đang chọn thuộc nhiều năm học — chọn lại cho cùng một năm học",
 }
@@ -65,40 +65,40 @@ const LY_DO_KHOA: Record<"chua_ro" | "nhieu_nam", string> = {
  * Chỉ ĐẨY id hồ sơ + năm học sang store RIÊNG của trang Hội đồng rồi chuyển trang; KHÔNG giữ lựa chọn qua trang trên
  * màn này (chốt xoá lựa chọn ở `AdmissionsClient` giữ nguyên — màn này có Duyệt / Từ chối hàng loạt).
  *
- * Hiện theo CỜ máy chủ (`tao_bo` + `kiem_truoc` + `tim_ho_so` — `coTheDungTuDanhSach`), không theo vai.
+ * Hiện theo CỜ máy chủ (`tao_bo` + `kiem_truoc` + `tim_ho_so` — `canBuildFromList`), không theo vai.
  *
  * Năm học chung = `academic_year` của CÁC DÒNG đang chọn (máy chủ `083a428d` thêm cột này vào dòng danh sách — đúng đặc
  * 5.1); nhiều năm khác nhau hoặc có dòng chưa rõ năm ⇒ nút khoá, nói lý do.
  */
-export function CouncilHandoffButton({ hoSo, disabled = false }: Props) {
+export function CouncilHandoffButton({ profile, disabled = false }: Props) {
   const router = useRouter()
   const vm = useCouncilDocumentPermissions()
-  const thayThe = useCouncilSelectionStore((s) => s.thayThe)
-  const [hoi, setHoi] = useState(false)
+  const replace = useCouncilSelectionStore((s) => s.replace)
+  const [hoi, setAsking] = useState(false)
 
-  if (vm.state !== "ready" || !coTheDungTuDanhSach(vm.permissions)) return null
+  if (vm.state !== "ready" || !canBuildFromList(vm.permissions)) return null
 
-  const chung = namChungCua(hoSo)
-  const namHoc = chung.kieu === "chung" ? chung.nam : undefined
-  const idHoSo = hoSo.map((h) => h.id)
-  const khoa = disabled || namHoc === undefined
-  const lyDoKhoa = chung.kieu === "chua_ro" || chung.kieu === "nhieu_nam" ? LY_DO_KHOA[chung.kieu] : undefined
+  const common = commonYearOf(profile)
+  const academicYear = common.kieu === "chung" ? common.year : undefined
+  const profileId = profile.map((h) => h.id)
+  const khoa = disabled || academicYear === undefined
+  const lockReason = common.kieu === "chua_ro" || common.kieu === "nhieu_nam" ? LOCK_REASONS[common.kieu] : undefined
 
   const day = () => {
-    if (namHoc === undefined) return
-    thayThe(namHoc, idHoSo)
-    router.push(DUONG_DAN_DUNG_VAN_BAN)
+    if (academicYear === undefined) return
+    replace(academicYear, profileId)
+    router.push(BUILD_DOCUMENT_PATH)
   }
 
-  const bam = () => {
+  const pressed = () => {
     // Trang Hội đồng đang giữ một danh sách KHÁC ⇒ hỏi trước khi ghi đè.
-    const dangGiu = useCouncilSelectionStore.getState()
-    const khac =
-      dangGiu.idHoSo.length > 0 &&
-      (dangGiu.namHoc !== namHoc ||
-        dangGiu.idHoSo.length !== idHoSo.length ||
-        dangGiu.idHoSo.some((id) => !idHoSo.includes(id)))
-    if (khac) setHoi(true)
+    const holding = useCouncilSelectionStore.getState()
+    const other =
+      holding.profileId.length > 0 &&
+      (holding.academicYear !== academicYear ||
+        holding.profileId.length !== profileId.length ||
+        holding.profileId.some((id) => !profileId.includes(id)))
+    if (other) setAsking(true)
     else day()
   }
 
@@ -107,23 +107,23 @@ export function CouncilHandoffButton({ hoSo, disabled = false }: Props) {
       <Button
         variant="ghost"
         size="sm"
-        onClick={bam}
+        onClick={pressed}
         disabled={khoa}
         aria-label="Dựng văn bản Hội đồng"
-        title={lyDoKhoa}
+        title={lockReason}
         className="h-10 touch-manipulation gap-1.5 md:h-8"
         data-testid="dung-van-ban-hoi-dong"
       >
         <FileText className="h-4 w-4" aria-hidden="true" />
         <span className="hidden sm:inline">Dựng văn bản Hội đồng →</span>
       </Button>
-      <AlertDialog open={hoi} onOpenChange={setHoi}>
+      <AlertDialog open={hoi} onOpenChange={setAsking}>
         <AlertDialogContent data-testid="thay-danh-sach-dialog">
           <AlertDialogHeader>
             <AlertDialogTitle>Thay danh sách đang chọn?</AlertDialogTitle>
             <AlertDialogDescription>
-              Trang Hội đồng đang giữ một danh sách hồ sơ khác. Tiếp tục sẽ thay bằng {idHoSo.length} hồ sơ đang chọn ở đây
-              (năm học {namHoc}).
+              Trang Hội đồng đang giữ một danh sách hồ sơ khác. Tiếp tục sẽ thay bằng {profileId.length} hồ sơ đang chọn ở đây
+              (năm học {academicYear}).
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -131,7 +131,7 @@ export function CouncilHandoffButton({ hoSo, disabled = false }: Props) {
             <AlertDialogAction
               data-testid="thay-danh-sach-dong-y"
               onClick={() => {
-                setHoi(false)
+                setAsking(false)
                 day()
               }}
             >

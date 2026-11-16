@@ -83,9 +83,9 @@ def _chi_tiet_an_toan(exc: BaseException) -> str:
     return thay_loi_csdl_trong_chuoi(str(getattr(exc, "detail", "")), exc)
 
 
-def _khong_log_input_422(path: str) -> bool:
+def _no_log_input_422(path: str) -> bool:
     """MỘT vị từ: route mà lỗi 422 chỉ được ghi vào log ở dạng ĐÃ CHUẨN HOÁ
-    (:func:`_loi_422_an_toan_de_log`) — không ``input`` / ``msg`` / ``ctx``, ``loc`` chỉ giữ
+    (:func:`_safe_422_error_for_log`) — không ``input`` / ``msg`` / ``ctx``, ``loc`` chỉ giữ
     phần chứng minh được an toàn.
 
     * Route mang bearer code SMS (path HOẶC body opt-out) — ``input`` có thể là raw code
@@ -103,90 +103,90 @@ def _khong_log_input_422(path: str) -> bool:
 
 
 # Phần tử ĐẦU của ``loc`` do FastAPI đặt (nơi tham số nằm) — tập cố định, không do client.
-_NOI_THAM_SO_422 = frozenset({"body", "query", "path", "header", "cookie"})
+_JOIN_PARAMS_422 = frozenset({"body", "query", "path", "header", "cookie"})
 # Nhãn cố định thay cho mọi phần tử chuỗi của ``loc`` không chứng minh được là tên trường
 # khai trong schema (khoá JSON thừa, khoá của dict, nhãn nhánh union …).
-NHAN_LOC_KHONG_KHAI = "<khong-khai>"
+UNDECLARED_LOC_LABEL = "<khong-khai>"
 
 
-def _ten_khai_cua_kieu(kieu, ra: set, da_xem: set) -> None:
+def _declared_names_of_type(annotation_type, out: set, seen: set) -> None:
     """Gom tên (+ alias) mọi trường của các model Pydantic nằm trong chú thích kiểu ``kieu``
     (đệ quy qua ``Optional`` / ``List`` / ``Dict`` / ``Union`` / model lồng)."""
-    if id(kieu) in da_xem:
+    if id(annotation_type) in seen:
         return
-    da_xem.add(id(kieu))
-    if isinstance(kieu, type) and issubclass(kieu, BaseModel):
-        for ten, f in kieu.model_fields.items():
-            ra.add(ten)
+    seen.add(id(annotation_type))
+    if isinstance(annotation_type, type) and issubclass(annotation_type, BaseModel):
+        for ten, f in annotation_type.model_fields.items():
+            out.add(ten)
             if isinstance(f.alias, str):
-                ra.add(f.alias)
-            _ten_khai_cua_kieu(f.annotation, ra, da_xem)
+                out.add(f.alias)
+            _declared_names_of_type(f.annotation, out, seen)
         return
-    for con in typing.get_args(kieu):
-        _ten_khai_cua_kieu(con, ra, da_xem)
+    for con in typing.get_args(annotation_type):
+        _declared_names_of_type(con, out, seen)
 
 
-def _ten_khai_cua_route(route) -> frozenset:
+def _declared_names_of_route(route) -> frozenset:
     """Tên tham số + tên trường schema mà ROUTE đã khớp khai (body / query / path / header /
     cookie, kể cả của dependency con). Không đọc được ⇒ tập RỖNG (fail-closed: mọi chuỗi
     của ``loc`` thành nhãn cố định)."""
-    ra: set = set()
+    out: set = set()
     try:
         con = [getattr(route, "dependant")]
-        da_xem: set = set()
+        seen: set = set()
         while con:
             d = con.pop()
-            for nhom in (
+            for group in (
                 "path_params",
                 "query_params",
                 "header_params",
                 "cookie_params",
                 "body_params",
             ):
-                for f in getattr(d, nhom, None) or ():
+                for f in getattr(d, group, None) or ():
                     for ten in (getattr(f, "name", None), getattr(f, "alias", None)):
                         if isinstance(ten, str):
-                            ra.add(ten)
-                    _ten_khai_cua_kieu(
+                            out.add(ten)
+                    _declared_names_of_type(
                         getattr(getattr(f, "field_info", None), "annotation", None),
-                        ra,
-                        da_xem,
+                        out,
+                        seen,
                     )
             con.extend(getattr(d, "dependencies", None) or ())
     except Exception:  # noqa: BLE001 — bộ chuẩn hoá log không được làm hỏng request
         return frozenset()
-    return frozenset(ra)
+    return frozenset(out)
 
 
-def _loi_422_an_toan_de_log(errors: list, route) -> list:
+def _safe_422_error_for_log(errors: list, route) -> list:
     """MỘT chỗ chuẩn hoá lỗi 422 trước khi ghi log cho MỌI route của
-    :func:`_khong_log_input_422` (F217). Chỉ giữ thứ CHỨNG MINH được an toàn:
+    :func:`_no_log_input_422` (F217). Chỉ giữ thứ CHỨNG MINH được an toàn:
 
     * ``type`` — mã lỗi do Pydantic / mã nguồn đặt, không lấy từ dữ liệu gửi lên;
     * ``loc`` đã chuẩn hoá — số nguyên (chỉ số phần tử danh sách) giữ nguyên; phần tử ĐẦU
       thuộc tập nơi tham số cố định giữ nguyên; chuỗi khác CHỈ giữ khi là tên trường / tham
-      số khai trong schema của route (:func:`_ten_khai_cua_route`), còn lại thay
-      :data:`NHAN_LOC_KHONG_KHAI` (khoá JSON thừa có thể chính là một CCCD).
+      số khai trong schema của route (:func:`_declared_names_of_route`), còn lại thay
+      :data:`UNDECLARED_LOC_LABEL` (khoá JSON thừa có thể chính là một CCCD).
 
     Bỏ hẳn ``input``, ``msg``, ``ctx``, ``url`` (``msg`` / ``ctx`` có thể nội suy giá trị)."""
-    ten_khai = _ten_khai_cua_route(route) if route is not None else frozenset()
-    ra = []
+    ten_khai = _declared_names_of_route(route) if route is not None else frozenset()
+    out = []
     for e in errors:
         loc = []
         for i, p in enumerate(e.get("loc") or ()):
             if isinstance(p, int) and not isinstance(p, bool):
                 loc.append(p)
             elif isinstance(p, str) and (
-                (i == 0 and p in _NOI_THAM_SO_422) or (i > 0 and p in ten_khai)
+                (i == 0 and p in _JOIN_PARAMS_422) or (i > 0 and p in ten_khai)
             ):
                 loc.append(p)
             else:
-                loc.append(NHAN_LOC_KHONG_KHAI)
+                loc.append(UNDECLARED_LOC_LABEL)
         t = e.get("type")
-        ra.append(
-            {"type": t if isinstance(t, str) else NHAN_LOC_KHONG_KHAI, "loc": loc}
+        out.append(
+            {"type": t if isinstance(t, str) else UNDECLARED_LOC_LABEL, "loc": loc}
         )
-    return ra
+    return out
 
 
 # ============================================================================
@@ -400,8 +400,8 @@ async def pydantic_validation_error_handler(
     # liệu cá nhân, khoá JSON thừa nằm trong 'loc' ⇒ LOG chỉ nhận bản đã chuẩn hoá (vẫn giữ
     # nguyên trong response cho chính người gửi). §11.3, F217.
     log_errors = safe_errors
-    if _khong_log_input_422(request.url.path):
-        log_errors = _loi_422_an_toan_de_log(safe_errors, request.scope.get("route"))
+    if _no_log_input_422(request.url.path):
+        log_errors = _safe_422_error_for_log(safe_errors, request.scope.get("route"))
 
     logger.info(
         f"Request validation error: {len(safe_errors)} errors",
@@ -468,21 +468,21 @@ async def database_error_handler(request: Request, exc: Exception) -> JSONRespon
     (``app.models.council_config_lock_ddl``) thành 409 câu dễ hiểu — trigger là tầng chủ sở hữu bất biến, bắt mọi
     đường ghi (sửa / xoá dòng học vụ, đường xét, xoá dây chuyền). Mọi lỗi CSDL khác: NÉM LẠI nguyên trạng ⇒ đi đúng
     đường cũ (``ServerErrorMiddleware`` → ``generic_exception_handler`` 500 + ném tiếp như trước — test client có
-    ``raise_app_exceptions`` vẫn thấy ngoại lệ). Đọc SQLSTATE bằng thuộc tính (``ma_loi_csdl``), không đọc chữ."""
+    ``raise_app_exceptions`` vẫn thấy ngoại lệ). Đọc SQLSTATE bằng thuộc tính (``db_error_codes``), không đọc chữ."""
     from app.models.council_config_lock_ddl import (
-        SQLSTATE_CAU_HINH_DA_DUNG,
-        THONG_DIEP_CAU_HINH_DA_DUNG,
+        SQLSTATE_CONFIG_IN_USE,
+        MESSAGE_CONFIG_IN_USE,
     )
-    from app.repositories.council_decision_repository import ma_loi_csdl
+    from app.repositories.council_decision_repository import db_error_codes
 
-    if ma_loi_csdl(exc)[0] == SQLSTATE_CAU_HINH_DA_DUNG:
+    if db_error_codes(exc)[0] == SQLSTATE_CONFIG_IN_USE:
         logger.warning(
             "config_row_locked_by_signed_decision",
             extra={"path": _redact_path(request.url.path), "method": request.method},
         )
         return JSONResponse(
             status_code=status.HTTP_409_CONFLICT,
-            content={"detail": THONG_DIEP_CAU_HINH_DA_DUNG, "error_code": "CAU_HINH_DA_DUOC_QUYET_DINH_DUNG"},
+            content={"detail": MESSAGE_CONFIG_IN_USE, "error_code": "CAU_HINH_DA_DUOC_QUYET_DINH_DUNG"},
         )
     raise exc
 

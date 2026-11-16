@@ -31,7 +31,7 @@ function ve(onTiep: (() => void) | null = () => undefined) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
   return render(
     <QueryClientProvider client={qc}>
-      <CouncilCompareStep bo={BO} onQuayLai={() => undefined} onTiep={onTiep} />
+      <CouncilCompareStep docSet={BO} onBack={() => undefined} onNext={onTiep} />
     </QueryClientProvider>,
   )
 }

@@ -3,7 +3,7 @@
 hoặc mang dấu AppSheet (DA — owner 07-11 E1), qua REQUEST THẬT; trạng thái / yêu cầu hoàn / token đo bằng SQL.
 Đặc tả mục 2.4 + 5.5 + 8.1. Mỗi ca một bất biến; đối chứng cùng ca chỉ khác điều kiện được canh.
 
-Tầng chủ sở hữu: ``admission_state_service.transition`` (``kiem_chuyen_trang_thai``); kiểm sớm trong từng hàm
+Tầng chủ sở hữu: ``admission_state_service.transition`` (``check_status_transition``); kiểm sớm trong từng hàm
 và cờ giao diện là lớp phụ. Kiểm kê: mọi chỗ gọi ``transition`` với đích bị khoá đều có ca ở đây.
 """
 import ast
@@ -18,7 +18,7 @@ import app.database as csdl
 from app.database import AsyncSessionLocal
 from app import models
 from app.services import admission_state_service as state_service
-from app.utils.exceptions import QuyetDinhKhoaHoSo
+from app.utils.exceptions import ProfileLockedByDecisionError
 from tests.api import test_council_decisions_api as qd
 from tests.fixtures.hoi_dong_seed import seed_hoi_dong
 
@@ -94,7 +94,7 @@ async def _co_qd(client, ad, hs, nhan, so="501", trang_thai="submitted"):
 #: * ``ly_do`` — em "Yêu cầu bổ sung": dòng 1 của ``revision_reason`` là dấu, các dòng sau là việc cần sửa
 #:   (``:679-681``, hậu kiểm ``:731``);
 #: * ``tu_van`` — em "Đã nộp": ``revision_reason`` RỖNG, dấu CHỈ nằm ở lần tư vấn ``method = 'system'`` (``:642-644``).
-#: Mỗi ca dựng MỘT nguồn (để mỗi nhánh của ``SQL_DAU_APPSHEET`` có ca riêng); em thật dạng (a) có cả hai.
+#: Mỗi ca dựng MỘT nguồn (để mỗi nhánh của ``SQL_APPSHEET_MARK`` có ca riêng); em thật dạng (a) có cả hai.
 DAU_LY_DO = qd.DAU + "\n- GIA bo sung giay to tot nghiep"
 TRANG_THAI_DAU = {"ly_do": "revision_requested", "tu_van": "submitted"}
 
@@ -170,12 +170,12 @@ async def test_tu_choi_le_bi_chan(client, hs, ad, dau):
 async def test_dau_appsheet_chi_ap_ho_so_nam_2026(client, hs, ad):
     # Review max PR #724 (R2, owner 15-11): dấu ở lần tư vấn ``method='system'`` của LEAD không được lan sang hồ sơ
     # năm khác của cùng lead (trước đây chặn mọi thao tác của hồ sơ năm sau, chỉ gỡ được bằng SQL tay).
-    from app.services.council_decision_status_service import mot_ho_so
+    from app.services.council_decision_status_service import single_profile
 
     pid = await _dau(hs, SACH[0], nguon="tu_van")
     await qd._sql("UPDATE admission_profile SET academic_year = 2027 WHERE id = :p", p=pid)
     async with AsyncSessionLocal() as db:
-        tt = await mot_ho_so(db, pid)
+        tt = await single_profile(db, pid)
     assert tt.dau_appsheet is False, tt
 
 
@@ -277,7 +277,7 @@ async def test_link_rut_tao_truoc_qd_bam_sau_van_bi_chan(client, hs, ad):
 async def test_link_rut_cong_khai_409_chi_mot_cau_khong_lo_ma_noi_bo(client, hs, ad):
     # Review max PR #724 (R8): đường CÔNG KHAI magic-link — thân 409 chỉ có ``detail`` (câu cho thí sinh); KHÔNG có
     # mã tình trạng Quyết định / id văn bản / mục chờ / dấu AppSheet / câu hướng tới cán bộ.
-    from app.routers.admissions_magic_link import THONG_DIEP_THI_SINH_QD_KHOA
+    from app.routers.admissions_magic_link import DECISION_LOCK_APPLICANT_MESSAGE
 
     nhan = SACH[0]
     pid = hs[nhan][1]
@@ -297,7 +297,7 @@ async def test_link_rut_cong_khai_409_chi_mot_cau_khong_lo_ma_noi_bo(client, hs,
     )
     assert r.status_code == 409, r.text
     # handler HTTPException chung thêm mã CHUNG ``HTTP_409`` — ngoài hai khoá ấy KHÔNG được có khoá nào khác.
-    assert r.json() == {"detail": THONG_DIEP_THI_SINH_QD_KHOA, "error_code": "HTTP_409"}, r.text
+    assert r.json() == {"detail": DECISION_LOCK_APPLICANT_MESSAGE, "error_code": "HTTP_409"}, r.text
 
 
 async def test_tao_link_rut_bi_chan_va_co_tat(client, hs, ad):
@@ -342,7 +342,7 @@ async def test_chot_rut_khi_hoan_xong_van_cho_em_co_qd(client, hs, ad):
     await qd._sql("UPDATE admission_profile SET status = 'submitted' WHERE id = :p", p=pid)
     async with AsyncSessionLocal() as db:
         p = await db.get(models.AdmissionProfile, pid)
-        with pytest.raises(QuyetDinhKhoaHoSo):
+        with pytest.raises(ProfileLockedByDecisionError):
             await state_service.transition(db, p, "withdrawn", skip_dispatch=True)
         await db.rollback()
 
@@ -465,7 +465,7 @@ async def test_hai_phien_ghi_nhan_va_rut_chi_mot_ket_cuc(client, hs, ad):
 
 
 async def test_hai_phien_ghi_nhan_va_cong_bo_khong_bao_gio_ca_hai(client, hs, ad):
-    # G12 / đặc tả 8.5: công bố theo nguyện vọng khoá hồ sơ (``kiem_xet_moi`` FOR UPDATE) rồi mới đọc tình trạng;
+    # G12 / đặc tả 8.5: công bố theo nguyện vọng khoá hồ sơ (``check_new_admission`` FOR UPDATE) rồi mới đọc tình trạng;
     # ghi nhận khoá bộ → hồ sơ. Bất biến: KHÔNG có kết cục "Quyết định đã ghi VÀ hồ sơ đã bị công bố đổi trạng
     # thái"; không 5xx; 409 của ghi nhận (nếu có) là đòi xác nhận, không phải deadlock.
     nhan = SACH[1]

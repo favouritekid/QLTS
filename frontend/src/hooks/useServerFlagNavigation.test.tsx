@@ -100,6 +100,6 @@ describe("useServerFlagNavigation — mục văn bản Hội đồng theo cờ m
       path.resolve(__dirname, "../components/layouts/dashboard/AppSidebar.tsx"),
       "utf8",
     )
-    expect(src).toMatch(/const navigation = useServerFlagNavigation\(navigationTheoVai\)/)
+    expect(src).toMatch(/const navigation = useServerFlagNavigation\(navigationByRole\)/)
   })
 })

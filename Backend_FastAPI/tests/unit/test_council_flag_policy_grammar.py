@@ -4,7 +4,7 @@ matcher THẬT. Không CSDL, không mạng.
 
 * Hàm khớp lấy từ enforcer dựng bằng ĐÚNG ``auth_model.conf`` của mã (thư viện casbin cài trong
   image) — ``enforcer.fm.get_functions()["keyMatch4"]``, cùng cách ``deps`` lấy lúc tính cờ.
-* Đường route lấy từ bảng route THẬT của app (``ENDPOINT_THEO_CO``).
+* Đường route lấy từ bảng route THẬT của app (``ENDPOINT_BY_FLAG``).
 * Hai chiều Codex nêu: LỌT (dòng phụ thuộc id phải làm tắt cờ) và TẮT NHẦM (dòng không phụ thuộc id
   — kể cả chỉ đổi tên tham số — không được làm tắt cờ).
 * Một ca so quyết định của guard với VÉT CẠN bằng hàm khớp thật trên một tập id rộng hơn tập thử
@@ -52,13 +52,13 @@ DUONG = sorted(
     {
         r.path
         for r in fastapi_app.routes
-        if isinstance(r, APIRoute) and r.endpoint in set(rt.ENDPOINT_THEO_CO.values())
+        if isinstance(r, APIRoute) and r.endpoint in set(rt.ENDPOINT_BY_FLAG.values())
     }
 )
 
 
 def ly_do(doi_tuong):
-    return deps.ly_do_policy_ngoai_hop_dong(doi_tuong, DUONG, HAM_KHOP)
+    return deps.policy_outside_contract_reason(doi_tuong, DUONG, HAM_KHOP)
 
 
 def _yeu_cau():
@@ -66,7 +66,7 @@ def _yeu_cau():
 
 
 def _ngoai_mau(enf):
-    return deps._policy_ngoai_mau_route(_yeu_cau(), enf, rt.ENDPOINT_THEO_CO)
+    return deps._policy_outside_route_pattern(_yeu_cau(), enf, rt.ENDPOINT_BY_FLAG)
 
 
 # ═══════════════════════════ neo: phép đo có nghĩa ═══════════════════════════════════════
@@ -80,7 +80,7 @@ def test_matcher_cua_auth_model_dung_chuoi_ngu_phap_viet_cho():
     # Đổi matcher trong auth_model.conf mà không xét lại ngữ pháp ⇒ đỏ ở đây (và lúc chạy: mọi
     # cờ tắt — ca ``test_matcher_khac_thi_moi_dong_bi_coi_vi_pham``).
     that = ENF.get_model()["m"]["m"].value
-    assert "".join(that.split()) == "".join(deps.MATCHER_CO_VAN_BAN_HOI_DONG.split())
+    assert "".join(that.split()) == "".join(deps.MATCHER_WITH_COUNCIL_DOCUMENTS.split())
 
 
 # Ngữ nghĩa của hàm khớp mà ngữ pháp dựa vào (đo trên thư viện THẬT — đổi phiên bản casbin
@@ -115,7 +115,7 @@ def test_allow_theo_id_cu_the_khac_1_la_phu_thuoc_id():
 
 def test_id_cu_the_ngoai_tap_thu_co_dinh_van_bi_bat():
     # 12345 không thuộc {1, 57, 2147483647}: giá trị thử phải lấy cả từ CHÍNH dòng policy.
-    assert "12345" not in deps.ID_DO_CO_DINH
+    assert "12345" not in deps.FIXED_PROBE_IDS
     assert ly_do(P + "/sets/12345/ma-ho-so") == "phu_thuoc_id"
 
 
@@ -335,13 +335,13 @@ def test_ham_khop_nem_loi_thi_vi_pham():
     def hong(duong, doi_tuong):
         raise RuntimeError("giả: hàm khớp hỏng")
 
-    ly = deps.ly_do_policy_ngoai_hop_dong(P + "/sets/{id}", DUONG, hong)
+    ly = deps.policy_outside_contract_reason(P + "/sets/{id}", DUONG, hong)
     assert ly == "phu_thuoc_id"
 
 
 def test_route_ngoai_dang_chu_tham_so_thi_vi_pham():
     # Bộ chuyển đổi ":path" cho giá trị chứa "/" ⇒ lập luận "ranh giới đoạn cố định" không còn.
     assert (
-        deps.ly_do_policy_ngoai_hop_dong("/*", ["/x/{p:path}"], HAM_KHOP)
+        deps.policy_outside_contract_reason("/*", ["/x/{p:path}"], HAM_KHOP)
         == "route_ngoai_ngu_phap"
     )

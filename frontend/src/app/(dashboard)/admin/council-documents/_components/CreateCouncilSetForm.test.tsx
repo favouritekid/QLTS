@@ -12,7 +12,7 @@ import { server } from "@/test/mocks/server"
 import { dap, luatTaoBo } from "@/test/mocks/council-luat-may-chu"
 import { COUNCIL_DOCUMENTS_PREFIX as P } from "@/lib/api/council-documents"
 
-import { CreateCouncilSetForm, dongNhapThanhDanhSach } from "./CreateCouncilSetForm"
+import { CreateCouncilSetForm, parseRowsToList } from "./CreateCouncilSetForm"
 
 const { push } = vi.hoisted(() => ({ push: vi.fn() }))
 vi.mock("next/navigation", () => ({
@@ -92,13 +92,13 @@ beforeEach(() => {
 
 describe("dongNhapThanhDanhSach — giữ thứ tự VÀ số dòng", () => {
   it("giữ dòng trống ở giữa, bỏ dòng trống ở CUỐI, không tự sửa mã", () => {
-    expect(dongNhapThanhDanhSach(`${MA[0]}\r\n\n ${MA[1]} \n${MA[2]}\n\n  \n`)).toEqual([
+    expect(parseRowsToList(`${MA[0]}\r\n\n ${MA[1]} \n${MA[2]}\n\n  \n`)).toEqual([
       MA[0],
       "",
       ` ${MA[1]} `,
       MA[2],
     ])
-    expect(dongNhapThanhDanhSach("")).toEqual([])
+    expect(parseRowsToList("")).toEqual([])
   })
 })
 

@@ -16,7 +16,7 @@ const TEP = [
   "lib/council-submission.ts",
   "lib/stores/council-selection.store.ts",
   "hooks/admin/useCouncilDocuments.ts",
-  "hooks/admin/useGhiNhanQuyetDinh.ts",
+  "hooks/admin/useRecordDecision.ts",
   ...fs
     .readdirSync(path.join(SRC, "app/(dashboard)/admin/council-documents/_components"))
     .filter((t) => /\.(ts|tsx)$/.test(t) && !/\.test\.tsx?$/.test(t))
@@ -52,7 +52,7 @@ describe("module văn bản Hội đồng — không cách viết làm rò danh 
     expect(TEP.length).toBeGreaterThanOrEqual(30)
     for (const bat_buoc of [
       "lib/stores/council-selection.store.ts",
-      "hooks/admin/useGhiNhanQuyetDinh.ts",
+      "hooks/admin/useRecordDecision.ts",
       "app/(dashboard)/admin/council-documents/_components/CouncilNewSetClient.tsx",
       "app/(dashboard)/admissions/_components/CouncilHandoffButton.tsx",
     ]) {
@@ -77,8 +77,8 @@ describe("URL chỉ mang setId và tên bước (đặc tả 5, luật chung)", 
 
   it("trang [setId] chỉ đọc khoá `buoc` và kiểm theo danh sách đóng (không chuyển nguyên searchParams xuống)", () => {
     const m = ma(TRANG_BO)
-    // `docBuoc` (`_components/buoc.ts`) kiểm theo danh sách đóng `BUOC_HOP_LE`; page.tsx của Next không được export tên lạ
-    expect(m).toMatch(/\bdocBuoc\b/)
+    // `readStep` (`_components/steps.ts`) kiểm theo danh sách đóng `VALID_STEPS`; page.tsx của Next không được export tên lạ
+    expect(m).toMatch(/\breadStep\b/)
     // mọi chỗ đọc thuộc tính của searchParams phải là `.buoc`
     const doc = [...m.matchAll(/\bsearchParams\b[^;\n]*?\.(\w+)/g)].map((x) => x[1])
     for (const k of doc) expect(k).toBe("buoc")

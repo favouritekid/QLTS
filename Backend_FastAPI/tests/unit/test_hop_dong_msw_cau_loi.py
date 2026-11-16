@@ -305,8 +305,8 @@ def _dung_luc_chay():
     from app.services import council_document_render_service as dung
 
     return {
-        # council_document_template_service.tai_mau_len :155 — "Loại mẫu không thuộc %s." % " / ".join(bo_dung.LOAI_MAU)
-        "Loại mẫu không thuộc bien_ban / quyet_dinh / danh_sach.": "Loại mẫu không thuộc %s." % " / ".join(dung.LOAI_MAU),
+        # council_document_template_service.tai_mau_len :155 — "Loại mẫu không thuộc %s." % " / ".join(bo_dung.TEMPLATE_KINDS)
+        "Loại mẫu không thuộc bien_ban / quyet_dinh / danh_sach.": "Loại mẫu không thuộc %s." % " / ".join(dung.TEMPLATE_KINDS),
     }
 
 
@@ -404,13 +404,13 @@ def test_ten_loai_trang_thai_va_tran_tu_khoa_msw_bang_may_chu():
     for a, b, c in zip(tu, tu[1:], tu[2:]):
         if a.loai in ("id", "chuoi") and b.gt == ":" and c.loai == "chuoi":
             ten_loai[a.gt] = c.gt
-    assert ten_loai == dict(mau.TEN_LOAI), (ten_loai, dict(mau.TEN_LOAI))
+    assert ten_loai == dict(mau.KIND_NAMES), (ten_loai, dict(mau.KIND_NAMES))
 
     trang_thai = {x.gt for x in _hang_ts(src, "TRANG_THAI_HO_SO") if x.loai == "chuoi"}
-    assert trang_thai == set(ung_vien._trang_thai_hop_le()), sorted(trang_thai ^ set(ung_vien._trang_thai_hop_le()))
+    assert trang_thai == set(ung_vien._valid_statuses()), sorted(trang_thai ^ set(ung_vien._valid_statuses()))
 
     tran = _hang_ts(src, "TU_KHOA_TOI_DA")
-    assert tran.loai == "id" and tran.gt == str(ung_vien.TU_KHOA_TOI_DA), (tran.gt, ung_vien.TU_KHOA_TOI_DA)
+    assert tran.loai == "id" and tran.gt == str(ung_vien.MAX_KEYWORD_LENGTH), (tran.gt, ung_vien.MAX_KEYWORD_LENGTH)
 
 
 # ── tự kiểm bộ tách từ (mỗi hạn chế của phép so cũ một ca) ──────────────────────────────────────────────────────────

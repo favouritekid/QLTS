@@ -133,20 +133,20 @@ async def test_kiem_truoc_dong_bi_chan_mang_ma_va_cau_cua_cong(client, hs, ad):
     kq = await _kiem_ok(client, ad, _pids(hs, SACH + ["khong_khu_vuc"]))
     dong = {d["profile_id"]: d for d in kq["dong"]}[hs["khong_khu_vuc"][1]]
     assert dong["muc"] == "bi_chan" and dong["ly_do"]
-    assert all(x["cau"] == cong.LY_DO[x["ma"]] for x in dong["ly_do"])
+    assert all(x["cau"] == cong.BLOCK_REASONS[x["ma"]] for x in dong["ly_do"])
     assert kq["tom_tat"]["bi_chan"] == 1
 
 
 @pytest.mark.parametrize("cccd", [None, ""], ids=["null", "chuoi_rong"])
 async def test_kiem_truoc_cccd_trong_chi_chan_dong_ay(client, hs, ad, cccd):
-    # Review max PR #724 (R5) — trước đây CCCD trống làm _thanh_dto ném ⇒ CẢ bản xem trước 400. Nay: 200, đúng
+    # Review max PR #724 (R5) — trước đây CCCD trống làm _to_dto ném ⇒ CẢ bản xem trước 400. Nay: 200, đúng
     # dòng ấy bị chặn mã ``thieu_ma_ho_so`` (câu thật của cổng), các dòng khác không mang mã ấy.
     pid = hs["dia_chi_rong"][1]
     await _sql("UPDATE admission_profile SET citizen_id = :c WHERE id = :p", c=cccd, p=pid)
     kq = await _kiem_ok(client, ad, _pids(hs))
     dong = {d["profile_id"]: d for d in kq["dong"]}
     ma = {x["ma"]: x["cau"] for x in dong[pid]["ly_do"]}
-    assert dong[pid]["muc"] == "bi_chan" and ma.get("thieu_ma_ho_so") == cong.LY_DO["thieu_ma_ho_so"], dong[pid]
+    assert dong[pid]["muc"] == "bi_chan" and ma.get("thieu_ma_ho_so") == cong.BLOCK_REASONS["thieu_ma_ho_so"], dong[pid]
     assert all("thieu_ma_ho_so" not in {x["ma"] for x in d["ly_do"]} for p, d in dong.items() if p != pid)
 
 
@@ -189,7 +189,7 @@ async def test_kiem_truoc_tham_chieu_trung_chi_chan_dong_ay_id_loc_dung_truoc(cl
     assert kq["khong_tim_thay"] == [1], kq["khong_tim_thay"]
     dong = {d["profile_id"]: d for d in kq["dong"]}
     ma = {x["ma"]: x["cau"] for x in dong[pid]["ly_do"]}
-    assert dong[pid]["muc"] == "bi_chan" and ma.get("tham_chieu_trung") == cong.LY_DO["tham_chieu_trung"], dong[pid]
+    assert dong[pid]["muc"] == "bi_chan" and ma.get("tham_chieu_trung") == cong.BLOCK_REASONS["tham_chieu_trung"], dong[pid]
     assert all("tham_chieu_trung" not in {x["ma"] for x in d["ly_do"]} for p, d in dong.items() if p != pid)
     r = await _dung(client, ad, [d["profile_id"] for d in kq["dong"]], kq["phien_ban_kiem"])
     assert r.status_code == 400 and r.json()["kiem_tra_dung_bo"]["muc"] == "chan", r.text
@@ -360,7 +360,7 @@ async def test_thu_tu_gui_khac_thu_tu_chuan_409(client, hs, ad):
     kq = await _kiem_ok(client, ad, _pids(hs))
     thu_tu = [d["profile_id"] for d in kq["dong"]]
     r = await _dung(client, ad, [thu_tu[1], thu_tu[0], thu_tu[2]], kq["phien_ban_kiem"])
-    assert r.status_code == 409 and _ma_loi(r) == bo_vb.MA_LOI_DOI_TU_LUC_KIEM, r.text
+    assert r.status_code == 409 and _ma_loi(r) == bo_vb.CHANGED_SINCE_CHECK_ERROR_CODE, r.text
     assert await _so_bo() == 0
 
 
@@ -372,13 +372,13 @@ async def test_doi_ho_giu_ten_sau_kiem_truoc_409(client, hs, ad):
         "UPDATE admission_profile SET full_name = 'Zzz ' || full_name WHERE id = :p", p=thu_tu[0]
     )
     r = await _dung(client, ad, thu_tu, kq["phien_ban_kiem"])
-    assert r.status_code == 409 and _ma_loi(r) == bo_vb.MA_LOI_DOI_TU_LUC_KIEM, r.text
+    assert r.status_code == 409 and _ma_loi(r) == bo_vb.CHANGED_SINCE_CHECK_ERROR_CODE, r.text
     assert await _so_bo() == 0
 
 
 async def test_doi_truong_ngoai_anh_chup_van_dung_duoc(client, hs, ad):
     # pbk_doi_truong_ngoai_anh (đối chứng): ``admission_profile.updated_at`` không thuộc ``CandidateRowV1`` /
-    # ``DuLieuKiem`` ⇒ dấu không đổi ⇒ dựng được.
+    # ``CheckData`` ⇒ dấu không đổi ⇒ dựng được.
     kq = await _kiem_ok(client, ad, _pids(hs))
     thu_tu = [d["profile_id"] for d in kq["dong"]]
     await _sql(
@@ -393,7 +393,7 @@ async def test_doi_khoa_hmac_thi_dau_cu_409(client, hs, ad, monkeypatch):
     kq = await _kiem_ok(client, ad, _pids(hs))
     monkeypatch.setattr(bo_vb.settings, "SECRET_KEY", "khoa-da-xoay-cho-test")
     r = await _dung(client, ad, [d["profile_id"] for d in kq["dong"]], kq["phien_ban_kiem"])
-    assert r.status_code == 409 and _ma_loi(r) == bo_vb.MA_LOI_DOI_TU_LUC_KIEM, r.text
+    assert r.status_code == 409 and _ma_loi(r) == bo_vb.CHANGED_SINCE_CHECK_ERROR_CODE, r.text
 
 
 async def test_dung_theo_id_doc_ho_so_dung_mot_lan(client, hs, ad, monkeypatch):
@@ -408,10 +408,10 @@ async def test_dung_theo_id_doc_ho_so_dung_mot_lan(client, hs, ad, monkeypatch):
 
         return g
 
-    monkeypatch.setattr(bo_vb._ham_doc, "doc_ho_so_theo_id", boc("theo_id", bo_vb._ham_doc.doc_ho_so_theo_id))
-    monkeypatch.setattr(bo_vb, "doc_ho_so_theo_ma", boc("theo_ma", bo_vb.doc_ho_so_theo_ma))
+    monkeypatch.setattr(bo_vb._candidate_service, "read_profiles_by_id", boc("theo_id", bo_vb._candidate_service.read_profiles_by_id))
+    monkeypatch.setattr(bo_vb, "read_profiles_by_code", boc("theo_ma", bo_vb.read_profiles_by_code))
     monkeypatch.setattr(
-        bo_vb._ham_doc, "doc_ho_so_kiem_truoc", boc("kiem_truoc", bo_vb._ham_doc.doc_ho_so_kiem_truoc)
+        bo_vb._candidate_service, "read_profiles_for_preview", boc("kiem_truoc", bo_vb._candidate_service.read_profiles_for_preview)
     )
     r = await _dung(client, ad, [d["profile_id"] for d in kq["dong"]], kq["phien_ban_kiem"])
     assert r.status_code == 201, r.text

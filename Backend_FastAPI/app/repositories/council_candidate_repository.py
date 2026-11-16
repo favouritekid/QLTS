@@ -25,7 +25,7 @@ Khác bộ xuất (có chủ ý, không đổi giá trị nào của một hồ 
   ``admission_service._check_idor_access`` dùng) để tính đơn vị của bộ văn bản.
 * Thêm ba cột phụ (lượt G): ``nv_in_id`` (nguyện vọng truy vấn này in), ``hp_co`` /
   ``hp_nganh_id`` (khoản học phí HK1 nó dùng) — để cổng dựng bộ so với nguồn của luồng
-  (``SQL_KIEM_NGUON``). Không cột DTO nào đổi.
+  (``SQL_CHECK_SOURCE``). Không cột DTO nào đổi.
 
 ``diem_kv`` của ảnh chụp ở đây = luật bộ xuất (mức mới nhất theo ``effective_from``, không theo
 năm) — giữ để khoá bằng bộ xuất. Bộ văn bản KHÔNG in giá trị này: sau cổng dựng bộ,
@@ -40,14 +40,14 @@ from typing import AsyncIterator, Dict, List, Optional, Sequence, Tuple
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
-from app.models.council_document import SQL_COT_TINH_TRANG_QD
+from app.models.council_document import SQL_DECISION_STATE_COLUMNS
 from app.utils.exceptions import ServiceError
 
-MUC_CO_LAP = "repeatable read"
+ISOLATION_LEVEL = "repeatable read"
 
 
 @dataclass(frozen=True)
-class ThongTinGiaoDich:
+class TransactionInfo:
     """Đo NGAY TRONG giao dịch đọc (không suy từ cấu hình)."""
 
     transaction_isolation: str
@@ -57,9 +57,9 @@ class ThongTinGiaoDich:
 
 
 @asynccontextmanager
-async def giao_dich_chi_doc(
+async def read_only_transaction(
     engine: AsyncEngine,
-) -> AsyncIterator["tuple[AsyncConnection, ThongTinGiaoDich]"]:
+) -> AsyncIterator["tuple[AsyncConnection, TransactionInfo]"]:
     """Mở MỘT giao dịch ``REPEATABLE READ READ ONLY`` trên kết nối riêng của ``engine``.
 
     Mức cô lập + chỉ đọc đặt bằng tuỳ chọn của KẾT NỐI ⇒ asyncpg mở giao dịch bằng đúng MỘT
@@ -72,7 +72,7 @@ async def giao_dich_chi_doc(
         await conn.execution_options(
             isolation_level="REPEATABLE READ", postgresql_readonly=True
         )
-        gd = await conn.begin()
+        transaction = await conn.begin()
         try:
             do = (
                 await conn.execute(
@@ -83,9 +83,9 @@ async def giao_dich_chi_doc(
                     )
                 )
             ).one()
-            tt = ThongTinGiaoDich(do.iso, do.ro, do.moc, do.pid)
+            tt = TransactionInfo(do.iso, do.ro, do.moc, do.pid)
             if (
-                tt.transaction_isolation != MUC_CO_LAP
+                tt.transaction_isolation != ISOLATION_LEVEL
                 or tt.transaction_read_only != "on"
             ):
                 raise ServiceError(
@@ -93,13 +93,13 @@ async def giao_dich_chi_doc(
                 )
             yield conn, tt
         finally:
-            await gd.rollback()
+            await transaction.rollback()
 
 
 # Mỗi dòng đầu vào khớp bao nhiêu hồ sơ (CCCD = ``admission_profile.citizen_id``) TRONG
 # NĂM HỌC đã cho. CCCD chỉ UNIQUE theo năm học (``uq_citizen_academic_year``) ⇒ không lọc
 # năm thì một người có hồ sơ ở hai năm "khớp NHIỀU"; người gọi vẫn đòi ĐÚNG MỘT (lớp phụ).
-SQL_PHAN_GIAI_MA = text(
+SQL_RESOLVE_CODES = text(
     """
 SELECT d.stt::int AS stt, count(p.id)::int AS so_khop, min(p.id) AS pid
 FROM unnest(CAST(:ma AS text[])) WITH ORDINALITY AS d(ma, stt)
@@ -111,7 +111,7 @@ ORDER BY d.stt
 )
 
 # Số liệu của các hồ sơ ``:pids`` theo ĐÚNG thứ tự mảng. Tên cột = tên trường DTO.
-SQL_SO_LIEU = text(
+SQL_PRINT_FIGURES = text(
     r"""
 WITH chon AS (
     SELECT x.pid, x.stt
@@ -288,11 +288,11 @@ ORDER BY chon.stt
 
 
 # Dữ liệu cho cổng dựng bộ (lượt G — F228 / F229 / F231), cùng giao dịch chỉ đọc. KHÔNG là
-# nguồn in: chỉ đọc NGUỒN CỦA LUỒNG để so với cái ``SQL_SO_LIEU`` sẽ in (``:nv_in`` = cột
+# nguồn in: chỉ đọc NGUỒN CỦA LUỒNG để so với cái ``SQL_PRINT_FIGURES`` sẽ in (``:nv_in`` = cột
 # ``nv_in_id`` của chính truy vấn ấy, cùng thứ tự ``:pids``).
 #  * ``nv1_id``: nguyện vọng 1 theo app — ``display_order`` rồi ``id`` (như
 #    ``fee_calculation_service.resolve_fee_academic_info`` / ``_validate_eligibility_all_choices``
-#    sắp theo ``display_order``), KHÔNG đòi chuỗi cấu hình đủ (``SQL_SO_LIEU`` thì đòi ⇒ khi
+#    sắp theo ``display_order``), KHÔNG đòi chuỗi cấu hình đủ (``SQL_PRINT_FIGURES`` thì đòi ⇒ khi
 #    NV1 thiếu cấu hình nó in nguyện vọng khác — cổng bắt).
 #  * ``lg_*``: hồ sơ một nguyện vọng kiểu cũ — ngành theo cấu hình hồ sơ ĐÚNG thứ tự nhánh
 #    legacy của ``resolve_fee_academic_info`` (``offering_admission_config`` → academic_info,
@@ -302,7 +302,7 @@ ORDER BY chon.stt
 #  * ``diem_*``: trên các môn của tổ hợp IN — điểm nguyện vọng (``profile_choice_score``) so
 #    với bảng điểm hồ sơ (``profile_subject_score``, nơi ``admission_service.update_profile``
 #    ghi — ``admission_repository.update_profile_scores``).
-SQL_KIEM_NGUON = text(
+SQL_CHECK_SOURCE = text(
     r"""
 WITH chon AS (
     SELECT x.pid, x.nv_in, x.stt
@@ -378,7 +378,7 @@ SELECT
   -- ``council_decision_status_service`` dùng)
   nvi.ai_id AS nv_in_ai_id,
   nvi.offering_id AS nv_in_offering_id,
-  """ + SQL_COT_TINH_TRANG_QD + r"""
+  """ + SQL_DECISION_STATE_COLUMNS + r"""
 FROM chon
 JOIN admission_profile p ON p.id = chon.pid
 LEFT JOIN nv_dem ON nv_dem.pid = p.id
@@ -399,37 +399,37 @@ ORDER BY chon.stt
 )
 
 
-async def doc_kiem_nguon(
+async def read_check_source(
     conn: AsyncConnection, pids: Sequence[int], nv_in: Sequence[Optional[int]]
 ) -> List[dict]:
-    """Dữ liệu kiểm (``SQL_KIEM_NGUON``) theo thứ tự ``pids``; ``nv_in[i]`` = nguyện vọng mà
-    ``SQL_SO_LIEU`` in cho ``pids[i]`` (None nếu không có)."""
+    """Dữ liệu kiểm (``SQL_CHECK_SOURCE``) theo thứ tự ``pids``; ``nv_in[i]`` = nguyện vọng mà
+    ``SQL_PRINT_FIGURES`` in cho ``pids[i]`` (None nếu không có)."""
     return [
         dict(r._mapping)
         for r in (
             await conn.execute(
-                SQL_KIEM_NGUON, {"pids": list(pids), "nv_in": list(nv_in)}
+                SQL_CHECK_SOURCE, {"pids": list(pids), "nv_in": list(nv_in)}
             )
         ).all()
     ]
 
 
-async def phan_giai_ma(
-    conn: AsyncConnection, ma: Sequence[str], academic_year: int
+async def resolve_codes(
+    conn: AsyncConnection, code: Sequence[str], academic_year: int
 ) -> List[tuple]:
     """[(stt, số hồ sơ khớp trong năm học ``academic_year``, id nhỏ nhất)] theo thứ tự đầu
     vào."""
     return [
         tuple(r)
         for r in (
-            await conn.execute(SQL_PHAN_GIAI_MA, {"ma": list(ma), "nam": academic_year})
+            await conn.execute(SQL_RESOLVE_CODES, {"ma": list(code), "nam": academic_year})
         ).all()
     ]
 
 
 #: Vòng giao diện (``kiem-truoc``): năm học + đơn vị (``lead.unit_id`` — CÙNG phép nối ``JOIN lead`` của
-#: ``SQL_SO_LIEU``: hồ sơ không có lead thì ``SQL_SO_LIEU`` cũng không đọc được) của từng id.
-SQL_PHAM_VI_THEO_ID = text(
+#: ``SQL_PRINT_FIGURES``: hồ sơ không có lead thì ``SQL_PRINT_FIGURES`` cũng không đọc được) của từng id.
+SQL_SCOPE_BY_IDS = text(
     """
 SELECT p.id, p.academic_year, l.unit_id
 FROM admission_profile p
@@ -439,19 +439,19 @@ WHERE p.id = ANY(CAST(:ids AS integer[]))
 )
 
 
-async def doc_pham_vi_theo_id(
+async def read_scope_by_ids(
     conn: AsyncConnection, pids: Sequence[int]
 ) -> Dict[int, Tuple[Optional[int], Optional[int]]]:
     """{id hồ sơ: (năm học, đơn vị)} cho các id CÓ hồ sơ (kèm lead); id không có thì vắng."""
     return {
         r[0]: (r[1], r[2])
-        for r in (await conn.execute(SQL_PHAM_VI_THEO_ID, {"ids": list(pids)})).all()
+        for r in (await conn.execute(SQL_SCOPE_BY_IDS, {"ids": list(pids)})).all()
     }
 
 
-async def doc_so_lieu(conn: AsyncConnection, pids: Sequence[int]) -> List[dict]:
+async def read_print_figures(conn: AsyncConnection, pids: Sequence[int]) -> List[dict]:
     """Mỗi hàng = dict cột → giá trị, theo thứ tự ``pids``."""
     return [
         dict(r._mapping)
-        for r in (await conn.execute(SQL_SO_LIEU, {"pids": list(pids)})).all()
+        for r in (await conn.execute(SQL_PRINT_FIGURES, {"pids": list(pids)})).all()
     ]

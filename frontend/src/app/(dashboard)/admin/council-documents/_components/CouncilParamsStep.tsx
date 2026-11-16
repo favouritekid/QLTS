@@ -6,14 +6,14 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { useCouncilSelectionStore } from "@/lib/stores/council-selection.store"
-import type { ThamSoNhap } from "@/lib/council-params"
+import type { InputParams } from "@/lib/council-params"
 import type { CouncilSetPreview } from "@/lib/zod/council-documents"
 
 interface Props {
-  namHoc: number
-  xemTruoc: CouncilSetPreview | undefined
-  onQuayLai: () => void
-  onTiep: () => void
+  academicYear: number
+  preview: CouncilSetPreview | undefined
+  onBack: () => void
+  onNext: () => void
 }
 
 /**
@@ -21,12 +21,12 @@ interface Props {
  * giao diện: hai luật của máy chủ (đợt số + tháng cùng điền / cùng trống; ngày Biên bản không sau ngày Quyết định) chỉ
  * hiện khi MÁY CHỦ trả lỗi lúc dựng.
  */
-export function CouncilParamsStep({ namHoc, xemTruoc, onQuayLai, onTiep }: Props) {
-  const thamSo = useCouncilSelectionStore((s) => s.thamSo)
-  const datThamSo = useCouncilSelectionStore((s) => s.datThamSo)
-  const t = xemTruoc?.tom_tat
+export function CouncilParamsStep({ academicYear, preview, onBack, onNext }: Props) {
+  const params = useCouncilSelectionStore((s) => s.params)
+  const setParams = useCouncilSelectionStore((s) => s.setParams)
+  const t = preview?.tom_tat
 
-  const doi = (k: keyof ThamSoNhap) => (e: ChangeEvent<HTMLInputElement>) => datThamSo({ [k]: e.target.value })
+  const doi = (k: keyof InputParams) => (e: ChangeEvent<HTMLInputElement>) => setParams({ [k]: e.target.value })
 
   return (
     <div className="space-y-4" data-testid="buoc-tham-so">
@@ -37,7 +37,7 @@ export function CouncilParamsStep({ namHoc, xemTruoc, onQuayLai, onTiep }: Props
       <div className="rounded border p-3 text-sm" data-testid="bo-se-dung">
         <div className="font-medium">Bộ sẽ dựng</div>
         <div className="text-muted-foreground">
-          Năm học {namHoc}
+          Năm học {academicYear}
           {t ? ` · ${t.tong} hồ sơ · ${t.so_nhom} nhóm ngành – trình độ` : ""}
         </div>
       </div>
@@ -45,27 +45,27 @@ export function CouncilParamsStep({ namHoc, xemTruoc, onQuayLai, onTiep }: Props
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3" data-testid="tham-so-fields">
         <div className="space-y-1">
           <Label htmlFor="b3-so-qd">Số Quyết định</Label>
-          <Input id="b3-so-qd" inputMode="numeric" value={thamSo.so_quyet_dinh} onChange={doi("so_quyet_dinh")} />
+          <Input id="b3-so-qd" inputMode="numeric" value={params.so_quyet_dinh} onChange={doi("so_quyet_dinh")} />
         </div>
         <div className="space-y-1">
           <Label htmlFor="b3-ngay-qd">Ngày Quyết định</Label>
-          <Input id="b3-ngay-qd" type="date" value={thamSo.ngay_quyet_dinh} onChange={doi("ngay_quyet_dinh")} />
+          <Input id="b3-ngay-qd" type="date" value={params.ngay_quyet_dinh} onChange={doi("ngay_quyet_dinh")} />
         </div>
         <div className="space-y-1">
           <Label htmlFor="b3-dot-so">Đợt số</Label>
-          <Input id="b3-dot-so" inputMode="numeric" value={thamSo.dot_so} onChange={doi("dot_so")} />
+          <Input id="b3-dot-so" inputMode="numeric" value={params.dot_so} onChange={doi("dot_so")} />
         </div>
         <div className="space-y-1">
           <Label htmlFor="b3-dot-thang">Tháng của đợt</Label>
-          <Input id="b3-dot-thang" inputMode="numeric" value={thamSo.dot_thang} onChange={doi("dot_thang")} />
+          <Input id="b3-dot-thang" inputMode="numeric" value={params.dot_thang} onChange={doi("dot_thang")} />
         </div>
         <div className="space-y-1">
           <Label htmlFor="b3-so-bb">Số Biên bản</Label>
-          <Input id="b3-so-bb" inputMode="numeric" value={thamSo.so_bien_ban} onChange={doi("so_bien_ban")} />
+          <Input id="b3-so-bb" inputMode="numeric" value={params.so_bien_ban} onChange={doi("so_bien_ban")} />
         </div>
         <div className="space-y-1">
           <Label htmlFor="b3-ngay-bb">Ngày Biên bản</Label>
-          <Input id="b3-ngay-bb" type="date" value={thamSo.ngay_bien_ban} onChange={doi("ngay_bien_ban")} />
+          <Input id="b3-ngay-bb" type="date" value={params.ngay_bien_ban} onChange={doi("ngay_bien_ban")} />
         </div>
       </div>
 
@@ -81,10 +81,10 @@ export function CouncilParamsStep({ namHoc, xemTruoc, onQuayLai, onTiep }: Props
       </div>
 
       <div className="flex items-center justify-between">
-        <Button type="button" variant="outline" onClick={onQuayLai} data-testid="tham-so-quay-lai">
+        <Button type="button" variant="outline" onClick={onBack} data-testid="tham-so-quay-lai">
           ← Quay lại
         </Button>
-        <Button type="button" onClick={onTiep} data-testid="tham-so-tiep">
+        <Button type="button" onClick={onNext} data-testid="tham-so-tiep">
           Tiếp: Dựng bộ →
         </Button>
       </div>

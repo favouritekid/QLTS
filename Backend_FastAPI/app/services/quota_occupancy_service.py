@@ -5,14 +5,14 @@
 Module NHẸ: chỉ model + SQLAlchemy, KHÔNG import ``admission_service`` (vòng import là lý do bộ máy nguyện
 vọng từng chép tay tập trạng thái chiếm chỗ). ``admission_service``, ``admission_choice_engine_service``,
 ``quota_matrix_service`` đều đếm qua đây; tập trạng thái chiếm chỗ ĐỊNH NGHĨA MỘT LẦN ở đây
-(:data:`TRANG_THAI_CHIEM_CHO`; nơi khác trỏ vào CÙNG đối tượng — kiểm kê AST trong
+(:data:`OCCUPYING_STATUSES`; nơi khác trỏ vào CÙNG đối tượng — kiểm kê AST trong
 ``tests/integration/test_quota_occupancy_db.py``).
 
 Số chỗ đã dùng ở MỘT nơi đếm = **Phần A** + **Phần B**:
 
 * **Phần A** — hồ sơ ở trạng thái chiếm chỗ, đếm ĐÚNG cách hiện có của nơi gọi, CHỈ hồ sơ KHÔNG có dòng
-  Quyết định còn hiệu lực (:func:`khong_co_dong_hieu_luc`).
-* **Phần B** — dòng Quyết định còn hiệu lực (``DIEU_KIEN_DONG_HIEU_LUC`` — một chuỗi với U3) nối DÒNG BỘ
+  Quyết định còn hiệu lực (:func:`no_effective_row`).
+* **Phần B** — dòng Quyết định còn hiệu lực (``EFFECTIVE_ROW_CONDITION`` — một chuỗi với U3) nối DÒNG BỘ
   nguồn (``set_row_id``), đếm theo KHOÁ ĐẾM CHỤP ở dòng bộ (đường xét / thông tin học vụ / ngành + năm học
   của nguyện vọng in lúc dựng bộ) — KHÔNG theo giá trị hiện tại của hồ sơ (ảnh chụp thắng — J1 dòng 6). Hồ
   sơ đã ``withdrawn`` (rút hẳn) trả chỗ (C3); ``withdrawal_pending`` VẪN đếm (J1 dòng 5: chờ hoàn vẫn giữ
@@ -22,7 +22,7 @@ Mỗi hồ sơ đếm ĐÚNG MỘT lần: có dòng hiệu lực ⇒ chỉ ở B
 Phần B vẫn ``count(DISTINCT profile_id)``). ``exclude_profile_id`` loại ở CẢ HAI phần; lọc năm: Phần A theo
 ``admission_profile.academic_year`` (như hôm nay), Phần B theo ``council_document_set_row.academic_year`` —
 năm học của bộ, CHÍNH là năm học của hồ sơ lúc dựng (bộ chỉ nhận hồ sơ của năm học đã chọn —
-``council_candidate_repository.SQL_PHAN_GIAI_MA``).
+``council_candidate_repository.SQL_RESOLVE_CODES``).
 
 MỘT ẢNH CHỤP (F260 — Codex lần 15): mỗi hàm đếm tính Phần A + Phần B trong MỘT câu SQL (:func:`_tong`, hợp
 ``UNION ALL`` ở ma trận). READ COMMITTED chụp ảnh theo TỪNG CÂU ⇒ hai câu riêng cho A và B để một thao tác
@@ -31,13 +31,13 @@ ma trận không khoá) commit chen giữa ⇒ đếm 0 (B→A) hoặc 2 (A→B)
 
 Dòng bộ THIẾU khoá đếm / lệch chuỗi cấu hình: owner chốt 10-11 (Q-J1) — CHẶN tại ba thao tác sinh / khôi phục
 dòng B (ghi nhận, dòng thêm khi điều chỉnh, dòng bật lại khi huỷ ghi nhận) bằng MỘT hàm
-(:func:`kiem_khoa_dem_dong_bo`, 409 nêu số dòng). Bộ đếm vẫn giữ lớp phụ: dòng như vậy (chỉ có khi sửa tay
-CSDL) không khớp nơi cần khoá ấy và mỗi lần đếm gặp thì ghi cảnh báo log (:func:`_bao_thieu_khoa`).
+(:func:`check_lock_and_count_set_rows`, 409 nêu số dòng). Bộ đếm vẫn giữ lớp phụ: dòng như vậy (chỉ có khi sửa tay
+CSDL) không khớp nơi cần khoá ấy và mỗi lần đếm gặp thì ghi cảnh báo log (:func:`_report_missing_lock`).
 
 Khoá — THỨ TỰ CHUẨN cho cả giao dịch (F259): mọi hồ sơ (id tăng dần) TRƯỚC, rồi mọi dòng chỉ tiêu qua
-:func:`khoa_o_chi_tieu` (``offering_academic_info`` id tăng dần MỘT câu, RỒI ``admission_path`` id tăng dần
+:func:`lock_quota_cells` (``offering_academic_info`` id tăng dần MỘT câu, RỒI ``admission_path`` id tăng dần
 MỘT câu). Các hàm đếm KHÔNG khoá. Ghi nhận / điều chỉnh thêm dòng / huỷ ghi nhận bật lại (làm TĂNG Phần B) khoá
-qua :func:`khoa_chi_tieu_cua_dong_bo`; Phê duyệt hàng loạt và công bố nhiều nguyện vọng khoá TRƯỚC mọi dòng chỉ
+qua :func:`lock_quota_of_set_rows`; Phê duyệt hàng loạt và công bố nhiều nguyện vọng khoá TRƯỚC mọi dòng chỉ
 tiêu sẽ dùng (cùng hàm) rồi mới xét — giữ nguyên thứ tự xét nguyện vọng nghiệp vụ.
 """
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
@@ -48,7 +48,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
 from app.models.council_document import (
-    DIEU_KIEN_DONG_HIEU_LUC,
+    EFFECTIVE_ROW_CONDITION,
     CouncilDecisionRow,
     CouncilDocumentSetRow,
 )
@@ -59,7 +59,7 @@ log = structlog.get_logger(__name__)
 #: Trạng thái hồ sơ CHIẾM một chỗ chỉ tiêu (Phần A) — ĐỊNH NGHĨA DUY NHẤT. ``withdrawn`` và các trạng thái
 #: trước duyệt không chiếm chỗ. ``enrolled`` có ``is_dropped`` VẪN chiếm (chỗ đã dùng của năm học không cấp
 #: lại). ``admitted``: bộ máy nguyện vọng (#15/#16).
-TRANG_THAI_CHIEM_CHO: tuple = (
+OCCUPYING_STATUSES: tuple = (
     "approved",
     "overridden",
     "admitted",
@@ -67,15 +67,15 @@ TRANG_THAI_CHIEM_CHO: tuple = (
     "enrolled",
 )
 #: Phần B: hồ sơ ở trạng thái này TRẢ chỗ (rút hẳn — C3). ``withdrawal_pending`` KHÔNG trả (J1 dòng 5).
-TRANG_THAI_TRA_CHO = "withdrawn"
+RELEASED_STATUSES = "withdrawn"
 
 #: F259: PostgreSQL huỷ ĐÚNG MỘT giao dịch của vòng chờ khoá (``deadlock_detected``). Nơi bị chọn huỷ trả câu
 #: cố định dưới đây (409 / lỗi của mục hàng loạt) — MỘT chuỗi cho ghi nhận, Phê duyệt hàng loạt, công bố.
 SQLSTATE_DEADLOCK = "40P01"
-THONG_DIEP_XUNG_DOT = "Xung đột với thao tác khác cùng lúc — thử lại."
+CONFLICT_MESSAGE = "Xung đột với thao tác khác cùng lúc — thử lại."
 
 
-def loi_goc_giao_dich(gd: Any) -> Optional[BaseException]:
+def transaction_root_error(transaction: Any) -> Optional[BaseException]:
     """D.2 (Codex lần 16): chỗ DUY NHẤT đọc thuộc tính RIÊNG ``_rollback_exception`` của SQLAlchemy (ghim 2.0.44) —
     lỗi đã làm giao dịch / savepoint ``gd`` lùi (SQLAlchemy ghi lỗi flush hỏng vào giao dịch cha của lần flush).
     ``gd``: ``SessionTransaction`` đồng bộ, hoặc ``AsyncSessionTransaction`` (lấy ``sync_transaction``). ``None`` khi
@@ -84,84 +84,84 @@ def loi_goc_giao_dich(gd: Any) -> Optional[BaseException]:
 
     Nâng SQLAlchemy ⇒ chạy lại ``tests/integration/test_loi_goc_giao_dich_db.py`` (ca canh thư viện: lỗi flush THẬT
     trong savepoint và trong giao dịch ngoài) TRƯỚC khi dùng."""
-    if gd is None:
+    if transaction is None:
         return None
-    gd = getattr(gd, "sync_transaction", gd)
-    if gd is None or gd.is_active:
+    transaction = getattr(transaction, "sync_transaction", transaction)
+    if transaction is None or transaction.is_active:
         return None
-    return getattr(gd, "_rollback_exception", None)
+    return getattr(transaction, "_rollback_exception", None)
 
 
 # ═══════════════════════════════ hai phần ══════════════════════════════════════════════════
-def khong_co_dong_hieu_luc(profile_id_cot):
+def no_effective_row(profile_id_column):
     """Điều kiện Phần A: hồ sơ (cột id ở câu ngoài) KHÔNG có dòng Quyết định còn hiệu lực. Câu con
-    ``FROM council_decision_row`` ⇒ tên cột của ``DIEU_KIEN_DONG_HIEU_LUC`` (không bí danh) thuộc bảng ấy."""
+    ``FROM council_decision_row`` ⇒ tên cột của ``EFFECTIVE_ROW_CONDITION`` (không bí danh) thuộc bảng ấy."""
     return ~(
         select(CouncilDecisionRow.id)
         .where(
-            CouncilDecisionRow.profile_id == profile_id_cot,
-            text(DIEU_KIEN_DONG_HIEU_LUC),
+            CouncilDecisionRow.profile_id == profile_id_column,
+            text(EFFECTIVE_ROW_CONDITION),
         )
         .exists()
     )
 
 
-def _dong_hieu_luc():
+def _effective_row():
     """Dòng Quyết định còn hiệu lực — câu con riêng (biểu thức một nguồn, cột không bí danh)."""
     return (
         select(CouncilDecisionRow.profile_id, CouncilDecisionRow.set_row_id)
-        .where(text(DIEU_KIEN_DONG_HIEU_LUC))
+        .where(text(EFFECTIVE_ROW_CONDITION))
         .subquery("dong_hl")
     )
 
 
-def _phan_b(cot_nhom, *dieu_kien, exclude_profile_id: Optional[int] = None):
+def _part_b(group_column, *conditions, exclude_profile_id: Optional[int] = None):
     """Phần B: ``count(DISTINCT hồ sơ)`` của dòng hiệu lực nối dòng bộ nguồn (khoá CHỤP), hồ sơ chưa trả
-    chỗ. ``cot_nhom`` (cột của dòng bộ) ⇒ đếm theo nhóm; ``None`` ⇒ một số."""
-    d = _dong_hieu_luc()
+    chỗ. ``group_column`` (cột của dòng bộ) ⇒ đếm theo nhóm; ``None`` ⇒ một số."""
+    d = _effective_row()
     b = CouncilDocumentSetRow
     p = models.AdmissionProfile
-    dem = func.count(distinct(d.c.profile_id))
+    counts = func.count(distinct(d.c.profile_id))
     q = (
-        select(dem) if cot_nhom is None else select(cot_nhom, dem)
+        select(counts) if group_column is None else select(group_column, counts)
     ).select_from(d).join(b, b.id == d.c.set_row_id).join(p, p.id == d.c.profile_id).where(
-        p.status != TRANG_THAI_TRA_CHO, *dieu_kien
+        p.status != RELEASED_STATUSES, *conditions
     )
     if exclude_profile_id is not None:
         q = q.where(d.c.profile_id != exclude_profile_id)
-    if cot_nhom is not None:
-        q = q.group_by(cot_nhom)
+    if group_column is not None:
+        q = q.group_by(group_column)
     return q
 
 
-async def _so(db: AsyncSession, cau) -> int:
+async def _scalar(db: AsyncSession, cau) -> int:
     return int((await db.execute(cau)).scalar_one() or 0)
 
 
-async def _tong(db: AsyncSession, *phan) -> int:
+async def _sum(db: AsyncSession, *part) -> int:
     """F260: cộng các phần đếm (mỗi phần một ``select count``) trong MỘT câu SQL ⇒ MỘT ảnh chụp READ
     COMMITTED cho cả A và B (câu con vô hướng dùng chung ảnh chụp của câu ngoài)."""
-    tong = None
-    for c in phan:
+    total = None
+    for c in part:
         s = func.coalesce(c.scalar_subquery(), 0)
-        tong = s if tong is None else tong + s
-    return int((await db.execute(select(tong))).scalar_one() or 0)
+        total = s if total is None else total + s
+    return int((await db.execute(select(total))).scalar_one() or 0)
 
 
-async def so_dong_hieu_luc_thieu_khoa(db: AsyncSession, cot) -> int:
+async def count_effective_rows_missing_lock(db: AsyncSession, column) -> int:
     """Số dòng Quyết định còn hiệu lực (hồ sơ chưa trả chỗ) mà dòng bộ THIẾU khoá ``cot`` (NULL) — để báo,
     không suy (đặc tả 1.1; câu hỏi owner lượt J)."""
-    return await _so(db, _phan_b(None, cot.is_(None)))
+    return await _scalar(db, _part_b(None, column.is_(None)))
 
 
-async def _bao_thieu_khoa(db: AsyncSession, cot, noi: str) -> None:
-    n = await so_dong_hieu_luc_thieu_khoa(db, cot)
+async def _report_missing_lock(db: AsyncSession, column, where: str) -> None:
+    n = await count_effective_rows_missing_lock(db, column)
     if n:
-        log.warning("quota_phan_b_dong_thieu_khoa_dem", noi=noi, khoa=cot.key, so_dong=n)
+        log.warning("quota_phan_b_dong_thieu_khoa_dem", noi=where, khoa=column.key, so_dong=n)
 
 
 # ═══════════════════════════════ bốn nơi đếm ═══════════════════════════════════════════════
-async def dem_theo_nganh_nam(
+async def count_by_offering_year(
     db: AsyncSession,
     *,
     offering_id: int,
@@ -178,24 +178,24 @@ async def dem_theo_nganh_nam(
         .where(
             models.Lead.offering_id == offering_id,
             ap.academic_year == academic_year,
-            ap.status.in_(TRANG_THAI_CHIEM_CHO),
-            khong_co_dong_hieu_luc(ap.id),
+            ap.status.in_(OCCUPYING_STATUSES),
+            no_effective_row(ap.id),
         )
     )
     if exclude_profile_id is not None:
         a = a.where(ap.id != exclude_profile_id)
-    b = _phan_b(
+    b = _part_b(
         None,
         CouncilDocumentSetRow.offering_id == offering_id,
         CouncilDocumentSetRow.academic_year == academic_year,
         exclude_profile_id=exclude_profile_id,
     )
-    n = await _tong(db, a, b)
-    await _bao_thieu_khoa(db, CouncilDocumentSetRow.offering_id, "nganh_nam")
+    n = await _sum(db, a, b)
+    await _report_missing_lock(db, CouncilDocumentSetRow.offering_id, "nganh_nam")
     return n
 
 
-def _a_nhieu_nv(*dieu_kien, exclude_profile_id: Optional[int]):
+def _part_a_multi_choice(*conditions, exclude_profile_id: Optional[int]):
     """Phần A — nguyện vọng ``admitted`` của hồ sơ chiếm chỗ (bộ máy nguyện vọng), đếm dòng nguyện vọng như
     ``check_choice_admit_capacity`` hôm nay."""
     ap = models.AdmissionProfile
@@ -205,9 +205,9 @@ def _a_nhieu_nv(*dieu_kien, exclude_profile_id: Optional[int]):
         .join(ap, ap.id == c.admission_profile_id)
         .where(
             c.decision == "admitted",
-            ap.status.in_(TRANG_THAI_CHIEM_CHO),
-            khong_co_dong_hieu_luc(ap.id),
-            *dieu_kien,
+            ap.status.in_(OCCUPYING_STATUSES),
+            no_effective_row(ap.id),
+            *conditions,
         )
     )
     if exclude_profile_id is not None:
@@ -215,66 +215,66 @@ def _a_nhieu_nv(*dieu_kien, exclude_profile_id: Optional[int]):
     return q
 
 
-def _a_kieu_cu(dieu_kien_duong_xet, exclude_profile_id: Optional[int]):
+def _part_a_legacy(path_condition, exclude_profile_id: Optional[int]):
     """Phần A — hồ sơ một nguyện vọng kiểu cũ (``uses_choice_engine`` = FALSE) theo
     ``applied_rules->>'admission_path_id'`` (ép kiểu như hôm nay)."""
     ap = models.AdmissionProfile
     q = select(func.count(ap.id)).where(
         ap.uses_choice_engine.is_(False),
-        ap.status.in_(TRANG_THAI_CHIEM_CHO),
-        khong_co_dong_hieu_luc(ap.id),
-        dieu_kien_duong_xet(ap.applied_rules["admission_path_id"].astext.cast(Integer)),
+        ap.status.in_(OCCUPYING_STATUSES),
+        no_effective_row(ap.id),
+        path_condition(ap.applied_rules["admission_path_id"].astext.cast(Integer)),
     )
     if exclude_profile_id is not None:
         q = q.where(ap.id != exclude_profile_id)
     return q
 
 
-async def dem_theo_thong_tin_hoc_vu(
+async def count_by_academic_info(
     db: AsyncSession, *, academic_info_id: int, exclude_profile_id: Optional[int] = None
 ) -> int:
     """Công bố — mức năm (``check_choice_admit_capacity`` Tier 1): Phần A = nguyện vọng trúng trên đường xét
     thuộc ``academic_info_id`` + hồ sơ kiểu cũ có đường xét thuộc nó; Phần B = dòng bộ ``academic_info_id``
     CHỤP."""
     path = models.AdmissionPath
-    a1 = _a_nhieu_nv(
+    a1 = _part_a_multi_choice(
         path.academic_info_id == academic_info_id, exclude_profile_id=exclude_profile_id
     ).join(path, path.id == models.AdmissionProfileChoice.admission_path_id)
-    a2 = _a_kieu_cu(
-        lambda cot: cot.in_(select(path.id).where(path.academic_info_id == academic_info_id)),
+    a2 = _part_a_legacy(
+        lambda column: column.in_(select(path.id).where(path.academic_info_id == academic_info_id)),
         exclude_profile_id,
     )
-    b = _phan_b(
+    b = _part_b(
         None,
         CouncilDocumentSetRow.academic_info_id == academic_info_id,
         exclude_profile_id=exclude_profile_id,
     )
-    n = await _tong(db, a1, a2, b)
-    await _bao_thieu_khoa(db, CouncilDocumentSetRow.academic_info_id, "thong_tin_hoc_vu")
+    n = await _sum(db, a1, a2, b)
+    await _report_missing_lock(db, CouncilDocumentSetRow.academic_info_id, "thong_tin_hoc_vu")
     return n
 
 
-async def dem_theo_duong_xet(
+async def count_by_path(
     db: AsyncSession, *, admission_path_id: int, exclude_profile_id: Optional[int] = None
 ) -> int:
     """Công bố — mức đường xét (``check_choice_admit_capacity`` Tier 2): Phần A = nguyện vọng trúng trên
     đường xét + hồ sơ kiểu cũ trỏ đường xét; Phần B = dòng bộ ``admission_path_id`` CHỤP."""
-    a1 = _a_nhieu_nv(
+    a1 = _part_a_multi_choice(
         models.AdmissionProfileChoice.admission_path_id == admission_path_id,
         exclude_profile_id=exclude_profile_id,
     )
-    a2 = _a_kieu_cu(lambda cot: cot == admission_path_id, exclude_profile_id)
-    b = _phan_b(
+    a2 = _part_a_legacy(lambda column: column == admission_path_id, exclude_profile_id)
+    b = _part_b(
         None,
         CouncilDocumentSetRow.admission_path_id == admission_path_id,
         exclude_profile_id=exclude_profile_id,
     )
-    n = await _tong(db, a1, a2, b)
-    await _bao_thieu_khoa(db, CouncilDocumentSetRow.admission_path_id, "duong_xet")
+    n = await _sum(db, a1, a2, b)
+    await _report_missing_lock(db, CouncilDocumentSetRow.admission_path_id, "duong_xet")
     return n
 
 
-async def dem_da_trung_tuyen_theo_duong_xet(
+async def count_admitted_by_path(
     db: AsyncSession, path_ids: Sequence[int]
 ) -> Dict[int, int]:
     """Cột "approved" của ma trận chỉ tiêu (``quota_matrix_service._compute_funnel_counts``) — {đường xét:
@@ -298,39 +298,39 @@ async def dem_da_trung_tuyen_theo_duong_xet(
         .where(
             c.admission_path_id.in_(ds),
             c.decision == "admitted",
-            ap.status.in_(TRANG_THAI_CHIEM_CHO),
-            khong_co_dong_hieu_luc(ap.id),
+            ap.status.in_(OCCUPYING_STATUSES),
+            no_effective_row(ap.id),
         )
         .group_by(c.admission_path_id)
     )
-    chu = ap.applied_rules["admission_path_id"].astext
+    fill_text = ap.applied_rules["admission_path_id"].astext
     m2 = (
-        select(chu, func.count(ap.id))
+        select(fill_text, func.count(ap.id))
         .where(
             ap.uses_choice_engine.is_(False),
-            chu.in_([str(p) for p in ds]),
-            ap.status.in_(TRANG_THAI_CHIEM_CHO),
-            khong_co_dong_hieu_luc(ap.id),
+            fill_text.in_([str(p) for p in ds]),
+            ap.status.in_(OCCUPYING_STATUSES),
+            no_effective_row(ap.id),
         )
-        .group_by(chu)
+        .group_by(fill_text)
     )
-    b = _phan_b(
+    b = _part_b(
         cast(CouncilDocumentSetRow.admission_path_id, String),
         CouncilDocumentSetRow.admission_path_id.in_(ds),
     )
-    for chu_id, n in (await db.execute(union_all(m1, m2, b))).all():
+    for owner_id, n in (await db.execute(union_all(m1, m2, b))).all():
         try:
-            pid = int(chu_id)
+            pid = int(owner_id)
         except (TypeError, ValueError):
             continue
         if pid in out:
             out[pid] += int(n or 0)
-    await _bao_thieu_khoa(db, CouncilDocumentSetRow.admission_path_id, "ma_tran")
+    await _report_missing_lock(db, CouncilDocumentSetRow.admission_path_id, "ma_tran")
     return out
 
 
 # ═══════════════════════════════ "đã chiếm chỗ chưa" ═══════════════════════════════════════
-async def co_dong_hieu_luc(db: AsyncSession, profile_id: int) -> bool:
+async def has_effective_row(db: AsyncSession, profile_id: int) -> bool:
     return bool(
         (
             await db.execute(
@@ -338,7 +338,7 @@ async def co_dong_hieu_luc(db: AsyncSession, profile_id: int) -> bool:
                     select(CouncilDecisionRow.id)
                     .where(
                         CouncilDecisionRow.profile_id == profile_id,
-                        text(DIEU_KIEN_DONG_HIEU_LUC),
+                        text(EFFECTIVE_ROW_CONDITION),
                     )
                     .exists()
                 )
@@ -347,16 +347,16 @@ async def co_dong_hieu_luc(db: AsyncSession, profile_id: int) -> bool:
     )
 
 
-async def dang_chiem_cho(db: AsyncSession, profile) -> bool:
+async def is_occupying(db: AsyncSession, profile) -> bool:
     """``is_already_occupying`` của Phê duyệt cũ: trạng thái chiếm chỗ HOẶC có dòng Quyết định hiệu lực (em
     đã được đếm ở Phần B — duyệt kiểu cũ cho em ấy không cộng thêm chỗ — đặc tả 5.4)."""
-    if profile.status in TRANG_THAI_CHIEM_CHO:
+    if profile.status in OCCUPYING_STATUSES:
         return True
-    return await co_dong_hieu_luc(db, profile.id)
+    return await has_effective_row(db, profile.id)
 
 
 # ═══════════════════════════════ THỨ TỰ KHOÁ CHUẨN của dòng chỉ tiêu (F259) ═════════════════
-async def khoa_o_chi_tieu(
+async def lock_quota_cells(
     db: AsyncSession, oai_ids: Iterable[Optional[int]], path_ids: Iterable[Optional[int]]
 ) -> None:
     """THỨ TỰ KHOÁ CHUẨN cho MỌI dòng chỉ tiêu một giao dịch sẽ dùng (F259 — Codex lần 15):
@@ -368,24 +368,24 @@ async def khoa_o_chi_tieu(
     if oai:
         t = models.OfferingAcademicInfo
         await db.execute(select(t.id).where(t.id.in_(oai)).order_by(t.id).with_for_update())
-    duong = sorted({int(x) for x in path_ids if x is not None})
-    if duong:
+    paths = sorted({int(x) for x in path_ids if x is not None})
+    if paths:
         t = models.AdmissionPath
-        await db.execute(select(t.id).where(t.id.in_(duong)).order_by(t.id).with_for_update())
+        await db.execute(select(t.id).where(t.id.in_(paths)).order_by(t.id).with_for_update())
 
 
-async def o_chi_tieu_cua_dong_bo(
+async def quota_cells_of_set_rows(
     db: AsyncSession, set_row_ids: Iterable[Optional[int]]
 ) -> Tuple[Set[int], Set[int]]:
     """(id ``offering_academic_info``, id ``admission_path``) mà các dòng bộ chiếm ở Phần B — học vụ theo
     ``academic_info_id`` CHỤP và theo cặp ``offering_id`` + năm CHỤP (phủ cả hai cách Phê duyệt cũ chọn dòng),
-    đường xét theo ``admission_path_id`` CHỤP. MỘT nguồn cho khoá (:func:`khoa_chi_tieu_cua_dong_bo`) và cảnh
+    đường xét theo ``admission_path_id`` CHỤP. MỘT nguồn cho khoá (:func:`lock_quota_of_set_rows`) và cảnh
     báo vượt chỉ tiêu (:func:`canh_bao_vuot_chi_tieu`)."""
     ids = sorted({int(x) for x in set_row_ids if x is not None})
     if not ids:
         return set(), set()
     b = CouncilDocumentSetRow
-    khoa = (
+    lock = (
         await db.execute(
             select(b.academic_info_id, b.offering_id, b.academic_year, b.admission_path_id)
             .where(b.id.in_(ids))
@@ -393,9 +393,9 @@ async def o_chi_tieu_cua_dong_bo(
         )
     ).all()
     oai = models.OfferingAcademicInfo
-    ai_ids = {k.academic_info_id for k in khoa if k.academic_info_id is not None}
+    ai_ids = {k.academic_info_id for k in lock if k.academic_info_id is not None}
     cap = sorted(
-        {(k.offering_id, k.academic_year) for k in khoa if k.offering_id is not None}
+        {(k.offering_id, k.academic_year) for k in lock if k.offering_id is not None}
     )
     if cap:
         ai_ids |= set(
@@ -405,28 +405,28 @@ async def o_chi_tieu_cua_dong_bo(
                 )
             ).scalars()
         )
-    return ai_ids, {k.admission_path_id for k in khoa if k.admission_path_id is not None}
+    return ai_ids, {k.admission_path_id for k in lock if k.admission_path_id is not None}
 
 
-async def khoa_chi_tieu_cua_dong_bo(db: AsyncSession, set_row_ids: Iterable[int]) -> None:
+async def lock_quota_of_set_rows(db: AsyncSession, set_row_ids: Iterable[int]) -> None:
     """``FOR UPDATE`` các dòng chỉ tiêu mà các dòng bộ ``set_row_ids`` sẽ chiếm ở Phần B — qua THỨ TỰ CHUẨN
-    (:func:`khoa_o_chi_tieu`). Gọi SAU khi đã khoá hồ sơ ⇒ ghi nhận và lần đếm của Phê duyệt cũ / công bố
+    (:func:`lock_quota_cells`). Gọi SAU khi đã khoá hồ sơ ⇒ ghi nhận và lần đếm của Phê duyệt cũ / công bố
     tuần tự hoá: lần đếm thấy dòng mới, hoặc ghi nhận chờ lần duyệt commit."""
-    ai_ids, path_ids = await o_chi_tieu_cua_dong_bo(db, set_row_ids)
-    await khoa_o_chi_tieu(db, ai_ids, path_ids)
+    ai_ids, path_ids = await quota_cells_of_set_rows(db, set_row_ids)
+    await lock_quota_cells(db, ai_ids, path_ids)
 
 
 # ═══════════════════════════════ Q-J1 — khoá đếm của dòng bộ (owner 10-11) ════════════════════
 #: Khoá đếm có thể NULL ở dòng bộ mà các hàm đếm thực dùng (``academic_year`` NOT NULL ở CSDL;
 #: ``major_id`` không hàm đếm nào dùng ⇒ không kiểm).
-KHOA_DEM_CO_THE_THIEU = ("admission_path_id", "academic_info_id", "offering_id")
+LOCKS_COUNT_MAY_BE_MISSING = ("admission_path_id", "academic_info_id", "offering_id")
 
 
-async def kiem_khoa_dem_dong_bo(
-    db: AsyncSession, dong: Sequence[Tuple[int, Optional[int]]]
+async def check_lock_and_count_set_rows(
+    db: AsyncSession, row: Sequence[Tuple[int, Optional[int]]]
 ) -> None:
     """Q-J1 (owner chốt 10-11): MỘT hàm kiểm cho ba thao tác sinh / khôi phục dòng Phần B — ghi nhận, dòng
-    THÊM khi điều chỉnh, dòng BẬT LẠI khi huỷ ghi nhận. Gọi DƯỚI khoá (sau :func:`khoa_chi_tieu_cua_dong_bo`),
+    THÊM khi điều chỉnh, dòng BẬT LẠI khi huỷ ghi nhận. Gọi DƯỚI khoá (sau :func:`lock_quota_of_set_rows`),
     TRƯỚC khi ghi. ``dong`` = [(số dòng, id dòng bộ nguồn)].
 
     Chặn (409, nêu SỐ DÒNG — không tên, không CCCD) khi một dòng:
@@ -437,12 +437,12 @@ async def kiem_khoa_dem_dong_bo(
       học vụ không còn / không thuộc ngành + năm chụp — khi ấy các hàm đếm đặt em vào các ô KHÁC nhau.
 
     Owner KHÔNG chọn: 503 toàn hệ, đếm dòng ấy vào mọi ô, chỉ log. Cảnh báo log ở bộ đếm
-    (:func:`_bao_thieu_khoa`) giữ làm lớp phụ."""
+    (:func:`_report_missing_lock`) giữ làm lớp phụ."""
     b = CouncilDocumentSetRow
-    ids = sorted({int(sid) for _, sid in dong if sid is not None})
-    nguon = {}
+    ids = sorted({int(sid) for _, sid in row if sid is not None})
+    source = {}
     if ids:
-        nguon = {
+        source = {
             r.id: r
             for r in (
                 await db.execute(
@@ -453,11 +453,11 @@ async def kiem_khoa_dem_dong_bo(
             ).all()
         }
     t_oai, t_path = models.OfferingAcademicInfo, models.AdmissionPath
-    ai_ids = sorted({r.academic_info_id for r in nguon.values() if r.academic_info_id is not None})
-    path_ids = sorted({r.admission_path_id for r in nguon.values() if r.admission_path_id is not None})
-    hoc_vu = {}
+    ai_ids = sorted({r.academic_info_id for r in source.values() if r.academic_info_id is not None})
+    path_ids = sorted({r.admission_path_id for r in source.values() if r.admission_path_id is not None})
+    academic_infos = {}
     if ai_ids:
-        hoc_vu = {
+        academic_infos = {
             r.id: (r.offering_id, r.academic_year)
             for r in (
                 await db.execute(
@@ -465,9 +465,9 @@ async def kiem_khoa_dem_dong_bo(
                 )
             ).all()
         }
-    duong_xet = {}
+    paths = {}
     if path_ids:
-        duong_xet = {
+        paths = {
             r.id: r.academic_info_id
             for r in (
                 await db.execute(
@@ -475,48 +475,48 @@ async def kiem_khoa_dem_dong_bo(
                 )
             ).all()
         }
-    loi: List[Dict[str, Any]] = []
-    for stt, sid in sorted(dong, key=lambda x: (x[0], x[1] or 0)):
-        r = nguon.get(sid) if sid is not None else None
+    error: List[Dict[str, Any]] = []
+    for stt, sid in sorted(row, key=lambda x: (x[0], x[1] or 0)):
+        r = source.get(sid) if sid is not None else None
         if r is None:
-            loi.append({"dong": stt, "ly_do": "thieu_dong_nguon"})
+            error.append({"dong": stt, "ly_do": "thieu_dong_nguon"})
             continue
-        thieu = [k for k in KHOA_DEM_CO_THE_THIEU if getattr(r, k) is None]
-        if thieu:
-            loi.append({"dong": stt, "ly_do": "thieu_khoa", "khoa": thieu})
+        missing = [k for k in LOCKS_COUNT_MAY_BE_MISSING if getattr(r, k) is None]
+        if missing:
+            error.append({"dong": stt, "ly_do": "thieu_khoa", "khoa": missing})
             continue
         if (
-            duong_xet.get(r.admission_path_id) != r.academic_info_id
-            or hoc_vu.get(r.academic_info_id) != (r.offering_id, r.academic_year)
+            paths.get(r.admission_path_id) != r.academic_info_id
+            or academic_infos.get(r.academic_info_id) != (r.offering_id, r.academic_year)
         ):
-            loi.append({"dong": stt, "ly_do": "lech_chuoi_cau_hinh"})
-    if loi:
+            error.append({"dong": stt, "ly_do": "lech_chuoi_cau_hinh"})
+    if error:
         raise ConflictError(
             "Dòng %s: dòng bộ thiếu khoá đếm chỉ tiêu hoặc lệch chuỗi cấu hình (đường xét → học vụ → "
-            "ngành + năm) — không ghi được; dựng lại bộ cho đúng." % ", ".join(str(x["dong"]) for x in loi),
-            public_payload={"dong_thieu_khoa_dem": loi},
+            "ngành + năm) — không ghi được; dựng lại bộ cho đúng." % ", ".join(str(x["dong"]) for x in error),
+            public_payload={"dong_thieu_khoa_dem": error},
         )
 
 
 # ═══════════════════════════════ N9 — cảnh báo vượt chỉ tiêu (không chặn) ═══════════════════
-async def canh_bao_vuot_chi_tieu(
+async def over_quota_warnings(
     db: AsyncSession, set_row_ids: Iterable[Optional[int]]
 ) -> List[Dict[str, Any]]:
     """N9 (đặc tả 5.3): sau khi ghi (cùng giao dịch, dưới khoá dòng chỉ tiêu), các ô chỉ tiêu mà dòng bộ
-    chiếm (:func:`o_chi_tieu_cua_dong_bo` — cùng nguồn với khoá) bị VƯỢT thì trả cảnh báo; KHÔNG chặn.
+    chiếm (:func:`quota_cells_of_set_rows` — cùng nguồn với khoá) bị VƯỢT thì trả cảnh báo; KHÔNG chặn.
 
     "Vượt" = số đã dùng > chỉ tiêu — ĐÚNG nghĩa sẵn có của phần mềm (Phê duyệt cũ / công bố chặn khi
     ``đã dùng + 1 > chỉ tiêu`` ⇒ bằng chỉ tiêu là ĐẦY, chưa vượt). Chỉ tiêu NULL = không giới hạn ⇒ không xét.
     Số đã dùng đếm qua ĐÚNG các hàm đếm của module (một nguồn): ô ngành (học vụ, chỉ tiêu năm) có HAI cách
-    đếm đang dùng — công bố (:func:`dem_theo_thong_tin_hoc_vu`) và Phê duyệt cũ (:func:`dem_theo_nganh_nam`)
-    — trả cả hai, vượt ở cách nào cũng báo; ô đường xét theo :func:`dem_theo_duong_xet`. Chỉ id + số đếm."""
-    ai_ids, path_ids = await o_chi_tieu_cua_dong_bo(db, set_row_ids)
+    đếm đang dùng — công bố (:func:`count_by_academic_info`) và Phê duyệt cũ (:func:`count_by_offering_year`)
+    — trả cả hai, vượt ở cách nào cũng báo; ô đường xét theo :func:`count_by_path`. Chỉ id + số đếm."""
+    ai_ids, path_ids = await quota_cells_of_set_rows(db, set_row_ids)
     out: List[Dict[str, Any]] = []
     t_oai, t_path = models.OfferingAcademicInfo, models.AdmissionPath
     if ai_ids:
         # Vòng giao diện (đặc tả 3.8): ``nhan`` = tên ngành của học vụ (``major_program.name`` qua
         # ``program_offering``) / tên hiển thị của đường xét — chỉ để hiển thị; thiếu ⇒ None (giao diện hiện mã + id).
-        for o in (
+        for cell in (
             await db.execute(
                 select(
                     t_oai.id,
@@ -532,21 +532,21 @@ async def canh_bao_vuot_chi_tieu(
                 .order_by(t_oai.id)
             )
         ).all():
-            if o.annual_admission_quota is None:
+            if cell.annual_admission_quota is None:
                 continue
-            cong_bo = await dem_theo_thong_tin_hoc_vu(db, academic_info_id=o.id)
-            phe_duyet = await dem_theo_nganh_nam(
-                db, offering_id=o.offering_id, academic_year=o.academic_year
+            publish_count = await count_by_academic_info(db, academic_info_id=cell.id)
+            approved_count = await count_by_offering_year(
+                db, offering_id=cell.offering_id, academic_year=cell.academic_year
             )
-            if max(cong_bo, phe_duyet) > o.annual_admission_quota:
+            if max(publish_count, approved_count) > cell.annual_admission_quota:
                 out.append(
                     {
                         "loai": "nganh",
-                        "academic_info_id": o.id,
-                        "chi_tieu": o.annual_admission_quota,
-                        "da_dung_cong_bo": cong_bo,
-                        "da_dung_phe_duyet_cu": phe_duyet,
-                        "nhan": o.ten,
+                        "academic_info_id": cell.id,
+                        "chi_tieu": cell.annual_admission_quota,
+                        "da_dung_cong_bo": publish_count,
+                        "da_dung_phe_duyet_cu": approved_count,
+                        "nhan": cell.ten,
                     }
                 )
     if path_ids:
@@ -559,7 +559,7 @@ async def canh_bao_vuot_chi_tieu(
         ).all():
             if p.admit_quota is None:
                 continue
-            n = await dem_theo_duong_xet(db, admission_path_id=p.id)
+            n = await count_by_path(db, admission_path_id=p.id)
             if n > p.admit_quota:
                 out.append(
                     {
