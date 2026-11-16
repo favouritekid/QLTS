@@ -96,25 +96,25 @@ HAM = {
 
 #: hằng mô-đun — băm repr. Khoá = "<nhãn>.<TÊN>"; (mô-đun, tên) để ca bao phủ tra.
 HANG = {
-    "ung_vien.DAI_MA_TOI_DA": (s_ung_vien, "DAI_MA_TOI_DA"),
-    "ung_vien._RE_DINH_DANG_MA": (s_ung_vien, "_RE_DINH_DANG_MA"),
-    "ung_vien._NEU_TOI_DA": (s_ung_vien, "_NEU_TOI_DA"),
-    "ung_vien._CAU_LOI_MA": (s_ung_vien, "_CAU_LOI_MA"),
-    "ung_vien.TU_KHOA_TOI_DA": (s_ung_vien, "TU_KHOA_TOI_DA"),
-    "ung_vien.LOI_MA_KHONG_PHAI_CHUOI": (s_ung_vien, "LOI_MA_KHONG_PHAI_CHUOI"),
-    "ung_vien.LOI_MA_RONG": (s_ung_vien, "LOI_MA_RONG"),
-    "ung_vien.LOI_MA_KY_TU_LA": (s_ung_vien, "LOI_MA_KY_TU_LA"),
-    "ung_vien.LOI_MA_SAI_DINH_DANG": (s_ung_vien, "LOI_MA_SAI_DINH_DANG"),
-    "ung_vien.LOI_MA_TRUNG": (s_ung_vien, "LOI_MA_TRUNG"),
-    "ung_vien.LOI_MA_KHONG_KHOP": (s_ung_vien, "LOI_MA_KHONG_KHOP"),
-    "ung_vien.LOI_MA_NHIEU_HO_SO": (s_ung_vien, "LOI_MA_NHIEU_HO_SO"),
-    "bo.MA_LOI_DOI_TU_LUC_KIEM": (s_bo, "MA_LOI_DOI_TU_LUC_KIEM"),
-    "bo.CAU_DOI_TU_LUC_KIEM": (s_bo, "CAU_DOI_TU_LUC_KIEM"),
-    "qd.TRUONG_THAM_SO_GIAY": (s_qd, "TRUONG_THAM_SO_GIAY"),
+    "ung_vien.DAI_MA_TOI_DA": (s_ung_vien, "MAX_CODE_LENGTH"),
+    "ung_vien._RE_DINH_DANG_MA": (s_ung_vien, "_RE_CODE_FORMAT"),
+    "ung_vien._NEU_TOI_DA": (s_ung_vien, "_MAX_CITED_ROWS"),
+    "ung_vien._CAU_LOI_MA": (s_ung_vien, "_CODE_ERROR_MESSAGES"),
+    "ung_vien.TU_KHOA_TOI_DA": (s_ung_vien, "MAX_KEYWORD_LENGTH"),
+    "ung_vien.LOI_MA_KHONG_PHAI_CHUOI": (s_ung_vien, "CODE_ERROR_NOT_STRING"),
+    "ung_vien.LOI_MA_RONG": (s_ung_vien, "CODE_ERROR_EMPTY"),
+    "ung_vien.LOI_MA_KY_TU_LA": (s_ung_vien, "CODE_ERROR_ODD_CHARACTER"),
+    "ung_vien.LOI_MA_SAI_DINH_DANG": (s_ung_vien, "CODE_ERROR_BAD_FORMAT"),
+    "ung_vien.LOI_MA_TRUNG": (s_ung_vien, "CODE_ERROR_DUPLICATE"),
+    "ung_vien.LOI_MA_KHONG_KHOP": (s_ung_vien, "CODE_ERROR_NO_MATCH"),
+    "ung_vien.LOI_MA_NHIEU_HO_SO": (s_ung_vien, "CODE_ERROR_MULTIPLE_PROFILES"),
+    "bo.MA_LOI_DOI_TU_LUC_KIEM": (s_bo, "CHANGED_SINCE_CHECK_ERROR_CODE"),
+    "bo.CAU_DOI_TU_LUC_KIEM": (s_bo, "CHANGED_SINCE_CHECK_MESSAGE"),
+    "qd.TRUONG_THAM_SO_GIAY": (s_qd, "PAPER_PARAM_FIELDS"),
     "qd.SIGN_DATE_AFTER_TODAY_MESSAGE": (s_qd, "SIGN_DATE_AFTER_TODAY_MESSAGE"),  # review max PR #724 R7
     "qd.CONFIRMATION_JSON_MAX_CHARS": (s_qd, "CONFIRMATION_JSON_MAX_CHARS"),  # Codex 42 câu 4 — MSW TRAN_KY_TU_JSON_XAC_NHAN
-    "mau.TEN_LOAI": (s_mau, "TEN_LOAI"),
-    "model.LY_DO_XOA_TOI_DA": (m_vb, "LY_DO_XOA_TOI_DA"),
+    "mau.TEN_LOAI": (s_mau, "KIND_NAMES"),
+    "model.LY_DO_XOA_TOI_DA": (m_vb, "MAX_DELETE_REASON_LENGTH"),
 }
 
 
@@ -197,37 +197,37 @@ GHIM = {
     "bo.tao_bo_van_ban_theo_id": "5079197c8fe0bfeb",
     "cau_hinh.COUNCIL_DECISION_SCAN_MAX_BYTES": "cb01a688cfdfae4b",  # review max PR #724 R1: 9 MiB — MSW chép cùng lượt
     "cau_hinh.COUNCIL_SET_MAX_PROFILES": "b09d7b699cf5ffdf",
-    "dung.DecisionParams": "fa964ed3e853a34f",  # review max PR #724 R7: số in sẵn không 0 đầu — MSW chép cùng lượt
-    "luot.kiem_ma_luot": "308137227d71b47c",
+    "dung.DecisionParams": "24a1de91e685a8bb",  # review max PR #724 R7: số in sẵn không 0 đầu; Codex 42 F337 "0" nhận — MSW chép cùng lượt
+    "luot.kiem_ma_luot": "069114521e4618bd",
     "mau.TEN_LOAI": "ff27ce4a7da9b1c2",
     "mau.kiem_goi_mau": "6c5b54edfd761661",
     "mau.tai_mau_len": "8b73bdb7e073f6e7",
     "model.LY_DO_XOA_TOI_DA": "40510175845988f1",
     "qd.TRUONG_THAM_SO_GIAY": "742204c74c586740",
     "qd.SIGN_DATE_AFTER_TODAY_MESSAGE": "01cfd96e18cc2e7e",  # MSW chép nguyên câu (luatGhiNhan, kiem_ngay)
-    "qd._bo_qd_hop_le": "4bb5b9edd04eb5b6",
-    "qd._gia_tri_json": "5f4fbf80c0147a7f",
-    "qd._so_chua_dung": "a3830c24b477d7d0",
-    "qd._so_tham_so": "203bc74e40ef9fc6",
-    "qd.ghi_nhan_quyet_dinh": "9d8f98a70898d180",
-    "qd.huy_ghi_nhan": "ca9f7185490424e1",
-    "qd.kiem_ngay": "32acc69c19c328c2",  # review max PR #724 R7: ngày ký không sau hôm nay (giờ VN), câu = hằng nguyên văn — MSW chép cùng lượt
-    "qd.kiem_scan": "ee7b2cb1bf446f2b",
-    "qd.kiem_so_quyet_dinh": "6449b99d90d01950",  # R7 cấm 0 đầu; Codex 42 F337: "0" một chữ số nhận — MSW chép cùng lượt
+    "qd._bo_qd_hop_le": "8233ad0644b78c7d",
+    "qd._gia_tri_json": "2e6e814855b117b3",
+    "qd._so_chua_dung": "2b64bc35e8577a50",
+    "qd._so_tham_so": "f86a51932da886f6",
+    "qd.ghi_nhan_quyet_dinh": "1fb9f6b2a9a84c7b",
+    "qd.huy_ghi_nhan": "2e623b1a543aca5f",
+    "qd.kiem_ngay": "ff50f4a05fb99172",  # review max PR #724 R7: ngày ký không sau hôm nay (giờ VN), câu = hằng nguyên văn — MSW chép cùng lượt
+    "qd.kiem_scan": "a51c3ba6959c9bf3",
+    "qd.kiem_so_quyet_dinh": "8f39ce4aaadd7c7a",  # R7 cấm 0 đầu; Codex 42 F337: "0" một chữ số nhận — MSW chép cùng lượt
     "qd.CONFIRMATION_JSON_MAX_CHARS": "e39eef82f61b21e2",  # Codex 42 câu 4 — MSW TRAN_KY_TU_JSON_XAC_NHAN = 1024
-    "qd.kiem_xac_nhan_trang_thai": "c17156d4d7c11784",
-    "route._doc_scan": "739d65dc50e09692",
-    "route._json_xac_nhan": "1c036558d38fdfdf",  # + RecursionError; Codex 42: vượt trần ký tự ⇒ "không đọc được" — MSW chép cùng lượt (Codex 43: chỉ sửa chú thích)
-    "route.cancel_council_decision_record": "8652360e55420ed5",
-    "route.create_council_decision": "b6a564e00dfe18e9",
-    "route.create_council_document_set": "f14d7ca19acadabe",
-    "route.delete_council_document_set": "43d1c2e1e9a830f9",
-    "route.open_council_decision_submission": "60e4dd887b8d3f92",
-    "route.preview_council_document_set": "8e3538427a620866",
-    "route.resolve_council_decision_submission": "e05bcb1dd1001486",
-    "route.resolve_council_profile_codes": "395206373f6e37e6",
-    "route.search_council_profiles": "48917db783154124",
-    "route.upload_council_template": "c225df49a7b87cb0",
+    "qd.kiem_xac_nhan_trang_thai": "0ae641a688355679",
+    "route._doc_scan": "6a2e887efa3934ea",
+    "route._json_xac_nhan": "2ed2c129558bd715",  # + RecursionError; Codex 42: vượt trần ký tự ⇒ "không đọc được" — MSW chép cùng lượt
+    "route.cancel_council_decision_record": "29cf5683136d9159",
+    "route.create_council_decision": "88d1e6b4a73ce80e",
+    "route.create_council_document_set": "17e0f109f8901c23",
+    "route.delete_council_document_set": "dd8794d86af3f7ea",
+    "route.open_council_decision_submission": "1fe073f4ee8bbe9e",
+    "route.preview_council_document_set": "56055899428cbdcb",
+    "route.resolve_council_decision_submission": "da2bdf33f67363bd",
+    "route.resolve_council_profile_codes": "f0c9acb165e23f2f",
+    "route.search_council_profiles": "da54c7d5e1226284",
+    "route.upload_council_template": "c1bd7d3b3b9e08e3",
     "schema.CouncilCodesIn": "b565161d8df6fba8",
     "schema.CouncilDecisionCancelIn": "fa53cae74ae5567c",
     "schema.CouncilProfileSearchIn": "5edfaebdfdaccde2",
