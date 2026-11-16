@@ -6556,3 +6556,31 @@ def test_dot_bien_upstream_keepalive_thi_DO(ca, cu, moi):
     assert van_ban.count(cu) == 1, f"{ca}: neo đột biến phải khớp đúng một lần"
     with pytest.raises(AssertionError):
         _kiem_upstream_tat_keepalive(van_ban.replace(cu, moi, 1))
+
+
+def test_tran_tai_len_hoi_dong_duoi_tran_nginx():
+    """Review max PR #724 (R1, owner 15-11 "hạ trần app xuống 9 MB"): mọi trần tải lên của Văn bản Hội đồng
+    (scan Quyết định, mẫu .docx) — kể cả CẬN TRÊN mà biến môi trường đặt được — phải nhỏ hơn
+    ``client_max_body_size`` NHỎ NHẤT của nginx, chừa phần đầu multipart. Không thì nginx trả 413 HTML trước,
+    câu tiếng Việt của app không bao giờ tới (trước sửa: scan 20 MiB, cận 100 MiB vs nginx 10M).
+    Quét nginx.conf + mọi template: một khối ``location`` hạ trần cũng phải lộ ra ở đây."""
+    import re
+
+    from app.config import Settings
+
+    don_vi = {"": 1, "k": 1024, "m": 1024 ** 2, "g": 1024 ** 3}
+    tran = []
+    for tep in [_THU_MUC_NGINX / "nginx.conf", *sorted((_THU_MUC_NGINX / "templates").glob("*"))]:
+        for m in re.finditer(
+            r"^\s*client_max_body_size\s+([0-9]+)([kKmMgG]?)\s*;", _doc(tep), re.M
+        ):
+            tran.append(int(m.group(1)) * don_vi[m.group(2).lower()])
+    assert tran, "không thấy client_max_body_size nào trong nginx/"
+    tran_nginx = min(tran)
+    du_phong_multipart = 512 * 1024
+    for ten in ("COUNCIL_DECISION_SCAN_MAX_BYTES", "COUNCIL_TEMPLATE_MAX_BYTES"):
+        truong = Settings.model_fields[ten]
+        can_tren = [m.le for m in truong.metadata if getattr(m, "le", None) is not None]
+        assert len(can_tren) == 1, (ten, truong.metadata)
+        assert can_tren[0] + du_phong_multipart <= tran_nginx, (ten, can_tren[0], tran_nginx)
+        assert truong.default <= can_tren[0], (ten, truong.default)

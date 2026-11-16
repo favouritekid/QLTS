@@ -1,0 +1,512 @@
+# -*- coding: utf-8 -*-
+"""Cổng dựng bộ văn bản Hội đồng (lượt G — owner 05-11: F228, F229, F231) — phần THUẦN (không
+CSDL): ba mức trạng thái phủ ĐỦ 15 trạng thái của app, luật từng dòng, luật xác nhận.
+
+Mỗi ca "một lý do" vi phạm ĐÚNG MỘT bất biến trên một dòng SẠCH (CLAUDE.md §3); ca CSDL thật ở
+``tests/integration/test_council_set_gate_db.py``, ca qua API ở
+``tests/api/test_council_documents_gate_api.py``.
+"""
+import dataclasses
+import re
+
+import pytest
+
+from app.models.admission import AdmissionProfile
+from app.services import council_set_gate_service as cong
+from app.services.admission_state_machine import ALLOWED_TRANSITIONS, AdmissionStatus
+from app.utils.exceptions import (
+    ConflictError,
+    DataValidationError,
+    PermissionDeniedError,
+)
+
+pytestmark = pytest.mark.unit
+
+
+def _trang_thai_cua_check():
+    """15 trạng thái đọc từ CHÍNH chuỗi CHECK ``ck_admission_profile_status`` của model."""
+    ck = [
+        c
+        for c in AdmissionProfile.__table__.constraints
+        if getattr(c, "name", None) == "ck_admission_profile_status"
+    ]
+    assert len(ck) == 1
+    return set(re.findall(r"'([a-z_]+)'", str(ck[0].sqltext)))
+
+
+# ═══════════════════════════════ F228 — ba mức phủ đủ 15 trạng thái ═══════════════════════
+def test_ba_muc_dung_nguyen_van_owner_05_11():
+    assert cong.BLOCKING_STATUSES == {
+        "draft",
+        "rejected",
+        "withdrawal_pending",
+        "withdrawn",
+    }
+    assert cong.WARNING_STATUSES == {
+        "submitted",
+        "resubmitted",
+        "reviewing",
+        "revision_requested",
+        "waitlisted",
+        "result_published",
+    }
+    assert cong.NON_WARNING_STATUSES == {
+        "approved",
+        "admitted",
+        "confirmed",
+        "enrolled",
+        "overridden",
+    }
+
+
+def test_ba_muc_roi_nhau_va_phu_dung_15_trang_thai_cua_check_enum_va_bang_chuyen():
+    ba = (
+        cong.BLOCKING_STATUSES,
+        cong.WARNING_STATUSES,
+        cong.NON_WARNING_STATUSES,
+    )
+    hop = set().union(*ba)
+    assert sum(len(t) for t in ba) == len(hop) == 15  # rời nhau
+    tu_check = _trang_thai_cua_check()
+    tu_enum = {s.value for s in AdmissionStatus}
+    tu_bang = {s.value for s in ALLOWED_TRANSITIONS} | {
+        d.value for dich in ALLOWED_TRANSITIONS.values() for d in dich
+    }
+    assert hop == tu_check == tu_enum == tu_bang
+
+
+@pytest.mark.parametrize("s", sorted(cong.BLOCKING_STATUSES))
+def test_muc_chan(s):
+    assert cong.status_level(s) == cong.LEVEL_BLOCK
+
+
+@pytest.mark.parametrize("s", sorted(cong.WARNING_STATUSES))
+def test_muc_canh_bao(s):
+    assert cong.status_level(s) == cong.LEVEL_WARNING
+
+
+@pytest.mark.parametrize("s", sorted(cong.NON_WARNING_STATUSES))
+def test_muc_khong(s):
+    assert cong.status_level(s) == cong.LEVEL_NONE
+
+
+@pytest.mark.parametrize(
+    "s", ["trang_thai_moi_sau_nay", "Approved", " approved", "", None, 1, ["approved"]]
+)
+def test_trang_thai_la_thi_chan_fail_closed(s):
+    assert cong.status_level(s) == cong.LEVEL_BLOCK
+
+
+# ═══════════════════════════════ F229 / F231 — luật từng dòng ═════════════════════════════
+def _sach(**kw):
+    """Một dòng SẠCH của hồ sơ bộ máy nguyện vọng: NV1 id 11 được in, ngành 5, học phí ngành 5,
+    khu vực có mức."""
+    goc = dict(
+        stt=1,
+        status="approved",
+        uses_choice_engine=True,
+        so_nv=2,
+        nv1_id=11,
+        nv_in_id=11,
+        so_nv_trung=0,
+        nv_trung_id=None,
+        hp_co=True,
+        hp_nganh_id=5,
+        nv_in_nganh_id=5,
+        nv_in_path_id=7,
+        nv_in_sg_id=3,
+        lg_nganh_id=None,
+        lg_path_id=None,
+        lg_sg_id=None,
+        diem_ca_hai_khac=0,
+        diem_chi_nv=0,
+        diem_chi_hs=0,
+        kv_ly_do=None,
+        kv_muc="0.75",
+        luat_kv=cong.AREA_RULE_ADD,  # câu 22 (lượt H): đường xét in cộng điểm KV
+        luat_ut=cong.AREA_RULE_ADD,  # lượt H2: đường xét in cộng điểm đối tượng
+    )
+    goc.update(kw)
+    return cong.CheckData(**goc)
+
+
+def _sach_mot_nv(**kw):
+    """Dòng SẠCH của hồ sơ một nguyện vọng kiểu cũ: một dòng nguyện vọng khớp cấu hình hồ sơ."""
+    goc = dict(
+        uses_choice_engine=False,
+        so_nv=1,
+        lg_nganh_id=5,
+        lg_path_id=7,
+        lg_sg_id=3,
+    )
+    goc.update(kw)
+    return _sach(**goc)
+
+
+def test_dong_sach_khong_ly_do():
+    assert cong.row_block_reason(_sach()) == []
+    assert cong.row_block_reason(_sach_mot_nv()) == []
+
+
+@pytest.mark.parametrize(
+    "sua, ma",
+    [
+        (dict(uses_choice_engine=None), "luong_khong_xac_dinh"),
+        (dict(uses_choice_engine=1), "luong_khong_xac_dinh"),  # 1 KHÔNG phải bool
+        (
+            dict(so_nv=0, nv1_id=None, nv_in_id=None, nv_in_nganh_id=None),
+            "nhieu_nv_khong_co_nv",
+        ),
+        (dict(nv_in_id=None, nv_in_nganh_id=None), "nv1_thieu_cau_hinh"),
+        (dict(nv_in_id=12), "nv_in_khac_nv1"),
+        (dict(so_nv_trung=1, nv_trung_id=12), "trung_nv_khac"),
+        (dict(so_nv_trung=2, nv_trung_id=11), "nhieu_nv_trung"),
+        (dict(diem_ca_hai_khac=1), "diem_hai_nguon_khac"),
+        (dict(hp_co=False, hp_nganh_id=None), "thieu_hoc_phi_hk1"),
+        (dict(hp_nganh_id=None), "hoc_phi_chua_gan_nganh"),
+        (dict(hp_nganh_id=6), "hoc_phi_khac_nganh_nv"),
+        (dict(kv_ly_do="thieu_khu_vuc", kv_muc=None), "thieu_khu_vuc"),
+        # Câu 21 (lượt H): mã do hàm đọc điền phải có trong bảng lý do (evaluate sắp theo bảng).
+        (
+            dict(kv_ly_do="khu_vuc_doi_sau_anh_chup", kv_muc=None),
+            "khu_vuc_doi_sau_anh_chup",
+        ),
+        (
+            dict(kv_ly_do="khu_vuc_khong_tinh_lai_duoc", kv_muc=None),
+            "khu_vuc_khong_tinh_lai_duoc",
+        ),
+    ],
+)
+def test_bo_may_nguyen_vong_mot_ly_do(sua, ma):
+    assert cong.row_block_reason(_sach(**sua)) == [ma]
+
+
+def test_nv1_trung_thi_khong_chan():
+    assert cong.row_block_reason(_sach(so_nv_trung=1, nv_trung_id=11)) == []
+
+
+@pytest.mark.parametrize(
+    "sua, ma",
+    [
+        (dict(so_nv=0, nv_in_id=None, nv1_id=None, nv_in_nganh_id=None,
+              nv_in_path_id=None, nv_in_sg_id=None), "mot_nv_khong_co_dong_nguyen_vong"),
+        (dict(so_nv=2), "mot_nv_nhieu_dong_nguyen_vong"),
+        (dict(lg_nganh_id=None), "mot_nv_khong_xac_dinh_nganh"),
+        (dict(lg_path_id=None), "mot_nv_khong_xac_dinh_duong_xet"),
+        (dict(lg_sg_id=None), "mot_nv_khong_xac_dinh_to_hop"),
+        (dict(lg_nganh_id=6), "mot_nv_khac_nganh"),  # học phí = dòng in (5), hồ sơ ghi 6
+        (dict(lg_path_id=8), "mot_nv_khac_duong_xet"),
+        (dict(lg_sg_id=4), "mot_nv_khac_to_hop"),
+        (dict(diem_ca_hai_khac=1), "mot_nv_diem_lech"),
+        (dict(diem_chi_nv=1), "mot_nv_diem_lech"),
+        (dict(diem_chi_hs=1), "mot_nv_diem_lech"),
+    ],
+)  # fmt: skip
+def test_mot_nguyen_vong_mot_ly_do(sua, ma):
+    assert cong.row_block_reason(_sach_mot_nv(**sua)) == [ma]
+
+
+def test_bo_may_nguyen_vong_khong_doi_bang_diem_ho_so_khi_chi_mot_ben():
+    # Bộ máy nguyện vọng: nguồn = điểm nguyện vọng; bảng điểm hồ sơ vắng môn ⇒ KHÔNG lệch.
+    assert cong.row_block_reason(_sach(diem_chi_nv=3)) == []
+    assert cong.row_block_reason(_sach(diem_chi_hs=3)) == []
+
+
+# ═══════════════════════════════ đánh giá cả danh sách + xác nhận ═════════════════════════
+def _ds(*trang_thai):
+    return [
+        _sach(stt=i, status=s, kv_muc="0.%d0" % i) for i, s in enumerate(trang_thai, 1)
+    ]
+
+
+def test_danh_gia_gom_theo_ly_do_va_trang_thai_so_dong_tang_dan():
+    kq = cong.evaluate(
+        _ds("approved", "draft", "submitted", "withdrawn", "submitted", "draft", "lạ")
+    )
+    assert kq.blocks == (
+        ("trang_thai_chan", "draft", (2, 6)),
+        ("trang_thai_chan", "withdrawn", (4,)),
+        ("trang_thai_la", "lạ", (7,)),
+    )
+    assert kq.warnings == {"submitted": (3, 5)}
+    assert kq.warning_count() == {"submitted": 2}
+    assert kq.area_scores == tuple("0.%d0" % i for i in range(1, 8))
+    assert kq.count_by_status() == {
+        "approved": 1,
+        "draft": 2,
+        "lạ": 1,
+        "submitted": 2,
+        "withdrawn": 1,
+    }
+
+
+def test_chan_thi_400_lie_ke_tung_dong_xac_nhan_khong_go_duoc():
+    kq = cong.evaluate(_ds("approved", "draft", "reviewing"))
+    with pytest.raises(DataValidationError) as e:
+        cong.check_and_confirm(kq, confirmation={"reviewing": 1}, can_confirm=True)
+    p = e.value.public_payload["kiem_tra_dung_bo"]
+    assert p["muc"] == "chan" and p["so_dong"] == 3
+    assert p["chan"] == [
+        {
+            "ma": "trang_thai_chan",
+            "mo_ta": cong.BLOCK_REASONS["trang_thai_chan"],
+            "trang_thai": "draft",
+            "so_ho_so": 1,
+            "dong": [2],
+        }
+    ]
+    assert p["canh_bao"]["dong_theo_trang_thai"] == {"reviewing": [3]}
+
+
+def test_canh_bao_khong_xac_nhan_thi_409_kem_so_dem_va_dong():
+    kq = cong.evaluate(_ds("approved", "reviewing", "submitted", "submitted"))
+    for duoc in (True, False):
+        with pytest.raises(ConflictError) as e:
+            cong.check_and_confirm(kq, confirmation=None, can_confirm=duoc)
+        p = e.value.public_payload["kiem_tra_dung_bo"]
+        assert p["muc"] == "can_xac_nhan" and p["chan"] == []
+        assert p["canh_bao"] == {
+            "so_ho_so_theo_trang_thai": {"reviewing": 1, "submitted": 2},
+            "dong_theo_trang_thai": {"reviewing": [2], "submitted": [3, 4]},
+        }
+        assert p["can_admin_xac_nhan"] is True
+        assert p["nguoi_goi_duoc_xac_nhan"] is duoc
+
+
+def test_xac_nhan_dung_so_dem_thi_qua_lech_thi_409():
+    kq = cong.evaluate(_ds("approved", "reviewing", "submitted", "submitted"))
+    dung = {"reviewing": 1, "submitted": 2}
+    assert cong.check_and_confirm(kq, confirmation=dung, can_confirm=True) == dung
+    for lech in ({"reviewing": 1, "submitted": 1}, {"submitted": 2}, {"reviewing": 1}):
+        with pytest.raises(ConflictError) as e:
+            cong.check_and_confirm(kq, confirmation=lech, can_confirm=True)
+        assert e.value.public_payload["kiem_tra_dung_bo"]["muc"] == "xac_nhan_lech"
+
+
+@pytest.mark.parametrize(
+    "lech",
+    [
+        # Cùng TẬP trạng thái, cùng TỔNG, khác PHÂN BỐ — chỉ phép so từng trạng thái bắt được
+        # (kiểm ngược của người điều phối: so tổng + so tập vẫn lọt).
+        {"reviewing": 2, "submitted": 1},
+        # Cùng TỔNG, khác TẬP — so tổng thôi thì lọt (trước đây chỉ ca API bắt).
+        {"reviewing": 3},
+    ],
+    ids=["cung_tap_cung_tong_khac_phan_bo", "cung_tong_khac_tap"],
+)
+def test_xac_nhan_cung_tong_lech_phan_bo_thi_409(lech):
+    kq = cong.evaluate(_ds("approved", "reviewing", "submitted", "submitted"))
+    with pytest.raises(ConflictError) as e:
+        cong.check_and_confirm(kq, confirmation=lech, can_confirm=True)
+    p = e.value.public_payload["kiem_tra_dung_bo"]
+    assert p["muc"] == "xac_nhan_lech"
+    # Phản hồi trả số đếm THẬT để admin xác nhận lại.
+    assert p["canh_bao"]["so_ho_so_theo_trang_thai"] == {"reviewing": 1, "submitted": 2}
+
+
+def test_khong_canh_bao_ma_van_gui_xac_nhan_thi_409():
+    kq = cong.evaluate(_ds("approved", "enrolled"))
+    assert cong.check_and_confirm(kq, confirmation=None, can_confirm=True) is None
+    with pytest.raises(ConflictError):
+        cong.check_and_confirm(kq, confirmation={"submitted": 1}, can_confirm=True)
+
+
+@pytest.mark.parametrize("duoc", [False, None, 1, "True"])
+def test_chi_admin_duoc_gui_xac_nhan(duoc):
+    # Kể cả khi xác nhận ĐÚNG số đếm: người không được xác nhận ⇒ 403 (chỉ ``True`` thật).
+    kq = cong.evaluate(_ds("submitted"))
+    with pytest.raises(PermissionDeniedError):
+        cong.check_and_confirm(kq, confirmation={"submitted": 1}, can_confirm=duoc)
+    with pytest.raises(PermissionDeniedError):
+        cong.check_confirm_permission({"submitted": 1}, duoc)
+    cong.check_confirm_permission(None, duoc)  # không xác nhận ⇒ không cần quyền
+
+
+@pytest.mark.parametrize(
+    "xn",
+    [
+        {},
+        {"approved": 1},
+        {"draft": 1},
+        {"submitted": 0},
+        {"submitted": True},
+        {"submitted": "1"},
+        ["submitted"],
+        "submitted",
+    ],
+)
+def test_xac_nhan_sai_dang_thi_400(xn):
+    with pytest.raises(DataValidationError):
+        cong.check_confirmation_shape(xn)
+
+
+def test_payload_chi_so_dong_ma_ly_do_trang_thai():
+    # Không mã hồ sơ, không giá trị dữ liệu: mọi lá là số / mã lý do / trạng thái / câu cố định.
+    kq = cong.evaluate(
+        [
+            _sach(stt=1, status="draft"),
+            _sach(stt=2, status="submitted", hp_nganh_id=9),
+            dataclasses.replace(_sach(stt=3), kv_ly_do="thieu_khu_vuc", kv_muc=None),
+        ]
+    )
+    with pytest.raises(DataValidationError) as e:
+        cong.check_and_confirm(kq, confirmation=None, can_confirm=True)
+    p = e.value.public_payload["kiem_tra_dung_bo"]
+    assert {c["ma"] for c in p["chan"]} == {
+        "trang_thai_chan",
+        "hoc_phi_khac_nganh_nv",
+        "thieu_khu_vuc",
+    }
+    assert all(
+        set(c) == {"ma", "mo_ta", "trang_thai", "so_ho_so", "dong"} for c in p["chan"]
+    )
+    assert all(c["mo_ta"] == cong.BLOCK_REASONS[c["ma"]] for c in p["chan"])
+    assert not re.search(r"\d{9,}", str(e.value.public_payload) + e.value.detail)
+
+
+# ═══════════════ Câu 22 (owner 06-11) — điểm KV in theo luật cộng điểm của đường xét ═══════════
+def test_luat_cong_kv_thi_in_muc_theo_nam_hoc():
+    assert cong.evaluate([_sach()]).area_scores == ("0.75",)
+
+
+@pytest.mark.parametrize("luat", [cong.AREA_RULE_OFF, cong.AREA_RULE_NONE])
+def test_luat_tat_hoac_khong_co_luat_thi_in_0(luat):
+    kq = cong.evaluate([_sach(luat_kv=luat)])
+    assert kq.blocks == () and kq.area_scores == (cong.AREA_SCORE_NOT_ADDED,)
+
+
+@pytest.mark.parametrize("luat", [None, "la", True])
+def test_luat_khong_xac_dinh_thi_chan(luat):
+    k = _sach(luat_kv=luat)
+    assert cong.row_block_reason(k) == ["khong_xac_dinh_luat_cong_diem_kv"]
+    assert cong.evaluate([k]).area_scores == (None,)
+
+
+def test_dem_so_ho_so_theo_luat_kv():
+    kq = cong.evaluate(
+        [
+            _sach(stt=1),
+            _sach(stt=2, luat_kv=cong.AREA_RULE_OFF),
+            _sach(stt=3, luat_kv=cong.AREA_RULE_OFF),
+        ]
+    )
+    assert kq.count_by_area_rule() == {"cong": 1, "tat": 2}
+
+
+@pytest.mark.parametrize(
+    "luat, mong",
+    [
+        (None, False),
+        ({}, False),
+        ({"apply_area_bonus": False, "apply_object_bonus": True}, False),
+        ({"apply_area_bonus": True, "apply_object_bonus": False}, True),
+    ],
+    ids=["khong_co_luat", "luat_rong", "tat_kv", "bat_kv"],
+)
+def test_area_bonus_enabled_mot_nguon_voi_t6(luat, mong):
+    from app.services.priority_service import area_bonus_enabled
+
+    assert area_bonus_enabled(luat) is mong
+
+
+# ═══════ Lượt H2 (owner 06-11) — điểm ĐỐI TƯỢNG theo công tắc của đường xét, giữ cách tính v1 ═══════
+def test_cong_tac_doi_tuong_bat_thi_giu_diem_v1():
+    assert cong.printed_priority_score(cong.AREA_RULE_ADD, "2.00") == "2.00"
+
+
+@pytest.mark.parametrize("luat", [cong.AREA_RULE_OFF, cong.AREA_RULE_NONE])
+def test_cong_tac_doi_tuong_tat_hoac_khong_co_luat_thi_in_0(luat):
+    assert cong.printed_priority_score(luat, "2.00") == cong.PRIORITY_SCORE_NOT_ADDED == "0"
+
+
+@pytest.mark.parametrize("luat", [None, "la"])
+def test_cong_tac_doi_tuong_khong_xac_dinh_thi_none(luat):
+    assert cong.printed_priority_score(luat, "2.00") is None
+
+
+def test_luat_doi_tuong_khong_xac_dinh_thi_chan():
+    assert cong.row_block_reason(_sach(luat_ut=None)) == [
+        "khong_xac_dinh_luat_cong_diem_ut"
+    ]
+
+
+def test_hai_cong_tac_doc_lap():
+    # Tắt đối tượng không đổi điểm KV in; tắt KV không đổi công tắc đối tượng.
+    kq = cong.evaluate(
+        [
+            _sach(stt=1, luat_ut=cong.AREA_RULE_OFF),
+            _sach(stt=2, luat_kv=cong.AREA_RULE_OFF),
+        ]
+    )
+    assert kq.area_scores == ("0.75", cong.AREA_SCORE_NOT_ADDED)
+    assert kq.priority_rules == (cong.AREA_RULE_OFF, cong.AREA_RULE_ADD)
+
+
+def test_dem_so_ho_so_theo_luat_doi_tuong():
+    kq = cong.evaluate([_sach(stt=1), _sach(stt=2, luat_ut=cong.AREA_RULE_NONE)])
+    assert kq.count_by_priority_rule() == {"cong": 1, "khong_co_luat": 1}
+
+
+@pytest.mark.parametrize(
+    "luat, mong",
+    [
+        (None, False),
+        ({}, False),
+        ({"apply_area_bonus": True, "apply_object_bonus": False}, False),
+        ({"apply_area_bonus": False, "apply_object_bonus": True}, True),
+    ],
+    ids=["khong_co_luat", "luat_rong", "tat_doi_tuong", "bat_doi_tuong"],
+)
+def test_object_bonus_enabled_mot_nguon_voi_t6(luat, mong):
+    from app.services.priority_service import object_bonus_enabled
+
+    assert object_bonus_enabled(luat) is mong
+
+
+@pytest.mark.parametrize(
+    "ten_ham", ["area_bonus_enabled", "object_bonus_enabled"], ids=["kv", "doi_tuong"]
+)
+async def test_t6_goi_dung_helper_cong_tac(monkeypatch, ten_ham):
+    # Nối dây MỘT nguồn: T6 (calculate_priority_bonus) phải hỏi CHÍNH helper mà văn bản dùng. Helper giả trả
+    # False ⇒ T6 không cộng phần ấy dù luật bật (không chạm CSDL: hai phần đều tắt ⇒ không tra mức).
+    from types import SimpleNamespace
+
+    from app.services import priority_service as ps
+
+    goi = []
+
+    def gia(luat):
+        goi.append(luat)
+        return False
+
+    khac = (
+        "object_bonus_enabled"
+        if ten_ham == "area_bonus_enabled"
+        else "area_bonus_enabled"
+    )
+    monkeypatch.setattr(ps, ten_ham, gia)
+    monkeypatch.setattr(ps, khac, lambda luat: False)
+    luat = {"apply_area_bonus": True, "apply_object_bonus": True}
+    kv, dt, _ = await ps.calculate_priority_bonus(
+        None, SimpleNamespace(area_resolution_basis=None), luat, 2026
+    )
+    assert goi == [luat] and (kv, dt) == (0, 0)
+
+
+# Codex 42 F334 — gộp hàng số liệu in mà bảng tham chiếu nhân lên: KHÔNG chọn hàng nào.
+def test_gop_hang_trung_giu_truong_giong_nhau_de_rong_truong_chu_khac_nhau():
+    from app.services.council_candidate_service import _merge_duplicate_rows
+
+    a = {"stt": 3, "pid": 9, "ho": "Họ Giả", "dia_chi": "xã A, tỉnh A", "dan_toc": "Ê Đê"}
+    b = {"stt": 3, "pid": 9, "ho": "Họ Giả", "dia_chi": "xã A, tỉnh B", "dan_toc": "Ê Đê"}
+    gop = _merge_duplicate_rows([a, b])
+    assert gop == {"stt": 3, "pid": 9, "ho": "Họ Giả", "dia_chi": "", "dan_toc": "Ê Đê"}
+    assert _merge_duplicate_rows([b, a]) == gop  # không phụ thuộc thứ tự hàng
+
+
+def test_gop_hang_trung_truong_khong_phai_chu_khac_nhau_thi_dung():
+    from app.services.council_candidate_service import _merge_duplicate_rows
+    from app.utils.exceptions import ServiceError
+
+    with pytest.raises(ServiceError, match="trường không phải chữ"):
+        _merge_duplicate_rows([{"stt": 3, "nv_in_id": 1}, {"stt": 3, "nv_in_id": 2}])

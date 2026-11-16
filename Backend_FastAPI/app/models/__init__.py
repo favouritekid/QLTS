@@ -50,6 +50,24 @@ from .admission_survey_feedback import AdmissionSurveyFeedback
 from .student import Student, StudentDocument
 # Official "Giấy báo nhập học" issuance record (phát từ `submitted` trở đi).
 from .enrollment_letter import EnrollmentLetter
+# Kho mẫu + bộ văn bản Hội đồng tuyển sinh (giai đoạn 1 "Lần xét tuyển").
+from .council_document import (
+    CouncilDecision,
+    CouncilDecisionHold,
+    CouncilDecisionRow,
+    CouncilDecisionScan,
+    CouncilDecisionSubmission,
+    CouncilDocumentDownloadLog,
+    CouncilDocumentEvent,
+    CouncilDocumentSet,
+    CouncilDocumentSetDeletion,
+    CouncilDocumentSetFile,
+    CouncilDocumentSetRow,
+    CouncilDocumentTemplate,
+)
+# K-2 (owner 11-11): trigger khoá cấu hình đã được Quyết định dùng — bản cho create_all() (bản thật: migration
+# hdts20261111). Import để listener after_create được gắn.
+from . import council_config_lock_ddl  # noqa: E402,F401
 
 # Admission Config Domain (Phase 1: Relational admission system)
 from .admission_config import (
@@ -217,6 +235,18 @@ __all__ = [
     "Student",
     "StudentDocument",
     "EnrollmentLetter",
+    "CouncilDocumentTemplate",
+    "CouncilDocumentSet",
+    "CouncilDocumentSetFile",
+    "CouncilDocumentSetDeletion",
+    "CouncilDocumentDownloadLog",
+    "CouncilDocumentSetRow",
+    "CouncilDecision",
+    "CouncilDecisionRow",
+    "CouncilDecisionScan",
+    "CouncilDecisionSubmission",
+    "CouncilDecisionHold",
+    "CouncilDocumentEvent",
     "ProfileSubjectScore",
     "ProfileDocument",
     "DocumentAuditLog",  # Audit trail for document operations

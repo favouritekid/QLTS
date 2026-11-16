@@ -41,6 +41,7 @@ from app.utils.exceptions import (
     BusinessRuleViolation,
     ConflictError,
     PermissionDeniedError,
+    ProfileLockedByDecisionError,
     ResourceNotFoundError,
 )
 
@@ -1355,6 +1356,10 @@ async def untick_priority_object_evidence(
         )
         return await _evidence_response(db, profile_id, current_user)
 
+    except ProfileLockedByDecisionError:
+        # Review max PR #724 (R8): GIỮ error_code + public_payload (handler toàn cục) — gói thành
+        # HTTPException làm giao diện mất mã COUNCIL_DECISION_LOCKS_PROFILE và câu hướng dẫn.
+        raise
     except ConflictError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
     except BusinessRuleViolation as e:

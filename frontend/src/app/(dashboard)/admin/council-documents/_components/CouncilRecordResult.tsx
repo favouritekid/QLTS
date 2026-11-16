@@ -1,0 +1,145 @@
+"use client"
+
+import Link from "next/link"
+import { useState } from "react"
+import { AlertTriangle, CheckCircle2 } from "lucide-react"
+
+import { Button } from "@/components/ui/button"
+import { canBuildFromList } from "@/hooks/admin/useCouncilDocuments"
+import type {
+  CouncilDecision,
+  CouncilDecisionWrite,
+  CouncilDocumentPermissions,
+  CouncilQuotaWarning,
+} from "@/lib/zod/council-documents"
+
+import { CouncilCancelDialog } from "./CouncilCancelDialog"
+import { formatDate, decisionKindLabel, decisionStatusLabel, formatTime } from "./display"
+
+/**
+ * Số chính của một ô chỉ tiêu ngành: MỨC LỚN NHẤT trong hai cách đếm, ghi đúng chữ ấy — KHÔNG gọi là "tổng"
+ * (đặc tả 3.8, Codex G.4 K-4). Chỉ chọn số lớn hơn trong hai số máy chủ trả; thiếu cả hai ⇒ null.
+ */
+export function maxOfTwoCounts(w: Pick<CouncilQuotaWarning, "da_dung_cong_bo" | "da_dung_phe_duyet_cu">): number | null {
+  const used = [w.da_dung_cong_bo, w.da_dung_phe_duyet_cu].filter((x): x is number => typeof x === "number")
+  return used.length === 0 ? null : Math.max(...used)
+}
+
+/** Tên hiển thị của ô vượt: `nhan` do máy chủ trả; thiếu ⇒ mã + id (đặc tả 3.8). */
+function cellName(w: CouncilQuotaWarning): string {
+  if (w.nhan) return w.nhan
+  return w.loai === "nganh" ? `ngành (học vụ #${w.academic_info_id ?? "?"})` : `đường xét (#${w.admission_path_id ?? "?"})`
+}
+
+export function CouncilQuotaWarnings({ warning }: { warning: readonly CouncilQuotaWarning[] }) {
+  if (warning.length === 0) return null
+  return (
+    <div className="space-y-2 rounded border border-warning-500/60 bg-warning-50 p-3 text-sm" role="status" data-testid="canh-bao-chi-tieu">
+      <div className="flex items-center gap-2 font-medium">
+        <AlertTriangle className="h-4 w-4" aria-hidden="true" /> Cảnh báo vượt chỉ tiêu — đã ghi nhận, không chặn. Báo Ban thư ký xem lại.
+      </div>
+      <ul className="space-y-1">
+        {warning.map((w, i) => {
+          const main = w.loai === "nganh" ? maxOfTwoCounts(w) : (w.da_dung ?? null)
+          return (
+            <li key={`${w.loai}-${w.academic_info_id ?? w.admission_path_id ?? i}`} data-testid={`canh-bao-${i}`}>
+              <span className="font-medium">{cellName(w)}</span>: chỉ tiêu {w.chi_tieu}; đã dùng{" "}
+              {w.loai === "nganh" ? "(mức lớn nhất trong hai cách đếm) " : ""}
+              <strong data-testid={`canh-bao-so-chinh-${i}`}>{main ?? "—"}</strong>
+              {w.loai === "nganh" ? (
+                <span className="text-xs text-muted-foreground" data-testid={`canh-bao-chi-tiet-${i}`}>
+                  {" "}
+                  (công bố: {w.da_dung_cong_bo ?? "—"} · Phê duyệt cũ: {w.da_dung_phe_duyet_cu ?? "—"})
+                </span>
+              ) : null}
+            </li>
+          )
+        })}
+      </ul>
+    </div>
+  )
+}
+
+interface Props {
+  /** văn bản đã ghi — đọc từ DTO máy chủ (ghi nhận / phân xử / `GET /decisions`), KHÔNG từ các ô nhập */
+  decision: CouncilDecisionWrite | CouncilDecision
+  setId: number
+  permissions: CouncilDocumentPermissions
+  /** sau khi đã huỷ ghi nhận: cha mở lại biểu mẫu */
+  onCancelled: () => void
+}
+
+function isRecordDto(q: CouncilDecisionWrite | CouncilDecision): q is CouncilDecisionWrite {
+  return "canh_bao_vuot_chi_tieu" in q
+}
+
+/**
+ * Khung kết quả bước 6 (đặc tả 5.6, bản mẫu): loại, số, ngày ký, số hồ sơ, bộ, giờ ghi, gốc nếu bổ sung — CHỈ từ DTO
+ * máy chủ. Biểu mẫu khoá. Cảnh báo vượt chỉ tiêu hiện riêng ("đã ghi nhận, không chặn").
+ */
+export function CouncilRecordResult({ decision, setId, permissions, onCancelled }: Props) {
+  const [cancelOpen, setCancelOpen] = useState(false)
+  const recorded = isRecordDto(decision) ? decision : null
+  const cancelled = decision.trang_thai === "huy_ghi_nhan"
+
+  return (
+    <div className="space-y-3" data-testid="ket-qua-ghi-nhan">
+      <div className="space-y-2 rounded border border-success-500/50 p-4">
+        <div className="flex items-center gap-2 text-base font-semibold">
+          <CheckCircle2 className="h-5 w-5 text-success-600" aria-hidden="true" />
+          {cancelled ? "Văn bản đã huỷ ghi nhận" : "Đã ghi nhận Quyết định"}
+        </div>
+        <p className="text-sm" data-testid="ket-qua-dong">
+          Máy chủ trả: {decisionKindLabel(decision.loai)} số {decision.so_quyet_dinh} · ngày ký {formatDate(decision.ngay_ky)} ·{" "}
+          {decision.so_ho_so} hồ sơ · bộ #{decision.set_id ?? setId} · ghi lúc {formatTime(decision.ghi_nhan_luc)} ·{" "}
+          {decisionStatusLabel(decision.trang_thai)}
+        </p>
+        {recorded?.goc ? (
+          <p className="text-sm" data-testid="ket-qua-goc">
+            Bổ sung cho Quyết định số {recorded.goc.so_quyet_dinh} ngày {formatDate(recorded.goc.ngay_ky)}
+          </p>
+        ) : null}
+        {recorded?.lap_lai ? (
+          <p className="text-sm text-muted-foreground" data-testid="ket-qua-lap-lai">
+            Lượt này đã ghi trước đó — hiển thị văn bản cũ, không ghi lần hai.
+          </p>
+        ) : null}
+        <p className="text-xs text-muted-foreground">
+          Biểu mẫu đã khoá. Thông tin trên lấy từ máy chủ, không lấy từ các ô nhập. Nếu nhập sai: Admin dùng “Huỷ ghi nhận” (ghi lý
+          do) rồi ghi nhận lại.
+        </p>
+      </div>
+
+      {recorded ? <CouncilQuotaWarnings warning={recorded.canh_bao_vuot_chi_tieu} /> : null}
+
+      <div className="flex flex-wrap gap-2">
+        <Button asChild variant="outline" size="sm">
+          <Link href="/admin/council-documents" data-testid="xem-danh-sach-bo">
+            Xem danh sách bộ
+          </Link>
+        </Button>
+        {permissions.huy_ghi_nhan_qd && !cancelled ? (
+          <Button type="button" variant="outline" size="sm" onClick={() => setCancelOpen(true)} data-testid="huy-ghi-nhan-mo">
+            Huỷ ghi nhận…
+          </Button>
+        ) : null}
+        {canBuildFromList(permissions) ? (
+          <Button asChild variant="outline" size="sm">
+            <Link href="/admin/council-documents/moi" data-testid="dung-bo-moi">
+              + Dựng bộ mới
+            </Link>
+          </Button>
+        ) : null}
+      </div>
+
+      <CouncilCancelDialog
+        open={cancelOpen}
+        onOpenChange={setCancelOpen}
+        decisionId={decision.id}
+        kind={decision.loai}
+        decisionNumber={decision.so_quyet_dinh}
+        onDone={onCancelled}
+      />
+    </div>
+  )
+}

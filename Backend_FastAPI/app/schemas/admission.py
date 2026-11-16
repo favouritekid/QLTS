@@ -1512,6 +1512,10 @@ class AdmissionProfileResponse(BaseModel):
             "Chỉ khi đó giấy báo cũ đã hết hiệu lực."
         ),
     )
+    # COMPUTED (transient) — CHỈ route chi tiết ``GET /api/admissions/{id}`` gán (vòng giao diện Văn bản Hội đồng,
+    # đặc tả 3.9): ô "Quyết định trúng tuyển" tính qua ``council_decision_status_service.profile_decision_cell``
+    # (nguồn duy nhất). Route khác ⇒ None (giao diện không hiện ô).
+    quyet_dinh_trung_tuyen: Optional[Dict[str, Any]] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -1627,6 +1631,9 @@ class AdmissionProfileListItem(BaseModel):
     version: int
     status: str
     created_at: datetime
+    # Vòng giao diện Văn bản Hội đồng (đặc tả 5.1): nút "Dựng văn bản Hội đồng" trên thanh hàng loạt cần NĂM HỌC
+    # chung của các hồ sơ đang chọn — cột thật của hồ sơ, không suy từ bộ lọc.
+    academic_year: Optional[int] = None
     lead: Optional[LeadShallowForAdmission] = None
     program_name: Optional[str] = None
     completion_percent: int = 0
@@ -1717,7 +1724,9 @@ class _QuotaBypassMixin(BaseModel):
 
 class BulkApproveItem(_QuotaBypassMixin):
     """Single item in a bulk approve request."""
-    profile_id: int = Field(..., description="Admission profile ID")
+    # Review max PR #724 (R4): khoảng int4 như ``routers/admissions.py`` — vượt int32 ⇒ 422, không làm cả lô 500
+    # ở bước khoá trước lô (``_lock_before_batch_approval`` chạy NGOÀI savepoint từng mục).
+    profile_id: int = Field(..., ge=1, le=2147483647, description="Admission profile ID")
     version: int = Field(..., ge=1, description="Current profile version for optimistic locking")
     # ADM-026: per-item quota bypass. Admin-only enforced at request entry
     # (``require_admin_for_quota_bypass`` in ``deps.py``); service-side check

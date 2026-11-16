@@ -1,0 +1,129 @@
+// src/app/(dashboard)/admissions/[id]/_components/CouncilDecisionCard.tsx
+"use client"
+
+import Link from "next/link"
+
+import { Badge } from "@/components/ui/badge"
+import {
+  formatDate,
+  decisionKindLabel,
+  decisionStatusLabel,
+} from "@/app/(dashboard)/admin/council-documents/_components/display"
+import { useCouncilDocumentPermissions } from "@/hooks/admin/useCouncilDocuments"
+import { councilProfileDecisionSchema } from "@/lib/zod/council-documents"
+
+/** Nhãn tình trạng do MÁY CHỦ tính (đặc tả 3.9); giá trị lạ ⇒ in nguyên (không suy). */
+const STATE_LABELS: Record<string, string> = {
+  co_qd_hieu_luc: "Còn hiệu lực",
+  cho_admin_quyet: "Đang chờ Admin quyết",
+  da_cho_xet_lai: "Đã cho xét lại",
+  chua_co_qd: "Chưa có Quyết định",
+}
+
+/** Review max PR #724 (R13): màu nhãn theo trạng thái VĂN BẢN do máy chủ trả (trước đây chỉ hai màu — "Hết hiệu lực" hiện
+ * nhãn XANH). Trạng thái lạ ⇒ trung tính (không suy). */
+const DECISION_BADGE_VARIANT: Record<string, "success" | "warning" | "error"> = {
+  hieu_luc: "success",
+  het_hieu_luc: "warning",
+  huy_ghi_nhan: "error",
+}
+
+/**
+ * Mã bộ của văn bản. Cán bộ xem được hồ sơ chưa chắc được xem bộ văn bản Hội đồng (cổng RIÊNG của module): chỉ làm LIÊN KẾT khi
+ * máy chủ báo cờ `xem_chi_tiet_bo` (`GET /quyen`; 403 = mọi cờ tắt — hợp đồng hiện có). Đang tải / lỗi / 403 / thiếu cờ ⇒ chỉ
+ * hiện mã bộ dạng chữ (bấm ra chỉ gặp từ chối quyền — F279). Đọc cờ CHỈ khi thật sự có bộ để trỏ tới (component con).
+ */
+function SetCode({ setId }: { setId: number }) {
+  const vm = useCouncilDocumentPermissions()
+  const label = `bộ #${setId}`
+  if (vm.state === "ready" && vm.permissions.xem_chi_tiet_bo) {
+    return (
+      <Link href={`/admin/council-documents/${setId}`} className="underline-offset-2 hover:underline" data-testid="qd-bo-link">
+        {label}
+      </Link>
+    )
+  }
+  return <span data-testid="qd-bo-ma">{label}</span>
+}
+
+/**
+ * Thẻ "Quyết định trúng tuyển" trên trang hồ sơ (đặc tả 5.8, bản mẫu — ba dạng: còn hiệu lực + đã đối chiếu sổ · chỉ dấu
+ * AppSheet · đã huỷ ghi nhận). Mọi chữ lấy từ DTO máy chủ; không suy tình trạng từ chỗ khác.
+ *
+ * Máy chủ `083a428d`: CHỈ `GET /api/admissions/{id}` điền `quyet_dinh_trung_tuyen`; route khác (vd PUT cập nhật hồ sơ) trả `null`.
+ * `null` / vắng / sai dạng ⇒ KHÔNG hiện thẻ (không đoán). `ly_do_huy_ghi_nhan` CHỈ admin có giá trị (người khác: khoá vẫn có, giá trị null).
+ * Hồ sơ chỉ mang dấu AppSheet hiện TÁCH RIÊNG ("chưa đối chiếu"), không trông giống hồ sơ đã đối chiếu.
+ */
+export function CouncilDecisionCard({ value }: { value: unknown }) {
+  const r = councilProfileDecisionSchema.safeParse(value)
+  if (!r.success) return null
+  const d = r.data
+  const document = d.van_ban
+  // Review max PR #724 (R13): văn bản còn hiệu lực nhưng hồ sơ KHÔNG còn tên hiệu lực trong đó (tình trạng do máy chủ tính
+  // ≠ `co_qd_hieu_luc` — vd dòng đã bị văn bản điều chỉnh bỏ) ⇒ nhãn trung tính "Văn bản còn hiệu lực", không để
+  // "Còn hiệu lực" xanh đứng cạnh "Chưa có Quyết định".
+  const activeDocumentWithoutProfile = document?.trang_thai === "hieu_luc" && d.tinh_trang !== "co_qd_hieu_luc"
+  const badgeVariant = activeDocumentWithoutProfile
+    ? "secondary"
+    : (document && DECISION_BADGE_VARIANT[document.trang_thai]) || "secondary"
+  const badgeLabel = document
+    ? activeDocumentWithoutProfile
+      ? "Văn bản còn hiệu lực"
+      : decisionStatusLabel(document.trang_thai)
+    : ""
+
+  return (
+    <section className="mb-4 rounded-lg border bg-card p-4 text-sm" data-testid="the-quyet-dinh-trung-tuyen" aria-label="Quyết định trúng tuyển">
+      <h3 className="mb-2 font-semibold">Quyết định trúng tuyển</h3>
+
+      {document ? (
+        <div className="space-y-1" data-testid="qd-co-van-ban">
+          <div>
+            {decisionKindLabel(document.loai)} số {document.so_quyet_dinh} ngày {formatDate(document.ngay_ky)}
+            {document.set_id !== null ? (
+              <>
+                {" · "}
+                <SetCode setId={document.set_id} />
+              </>
+            ) : null}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant={badgeVariant} data-testid="qd-nhan-trang-thai">
+              {badgeLabel}
+            </Badge>
+            {d.tinh_trang === "co_qd_hieu_luc" ? (
+              <span className="text-xs text-muted-foreground" data-testid="qd-doi-chieu-so">
+                Đã đối chiếu sổ Quyết định
+              </span>
+            ) : (
+              <span className="text-xs text-muted-foreground" data-testid="qd-tinh-trang">
+                {STATE_LABELS[d.tinh_trang] ?? d.tinh_trang}
+              </span>
+            )}
+          </div>
+          {d.ly_do_huy_ghi_nhan ? (
+            <div className="text-xs text-muted-foreground" data-testid="qd-ly-do-huy">
+              Lý do: {d.ly_do_huy_ghi_nhan}
+            </div>
+          ) : null}
+        </div>
+      ) : (
+        <p className="text-muted-foreground" data-testid="qd-chua-co">
+          Chưa có trong sổ Quyết định của phần mềm.
+        </p>
+      )}
+
+      {d.dau_appsheet ? (
+        <div className="mt-3 space-y-1 rounded border border-warning-300 bg-warning-50 p-3" data-testid="qd-dau-appsheet">
+          <div>
+            Dữ liệu nhập từ AppSheet ghi: Quyết định{d.dau_appsheet_so_qd ? ` số ${d.dau_appsheet_so_qd}` : ""}
+          </div>
+          <Badge variant="warning">Chỉ có dấu AppSheet — chưa đối chiếu</Badge>
+          {!document ? (
+            <div className="text-xs text-muted-foreground">Vì có dấu này, hồ sơ bị chặn khi đưa vào bộ mới (xem bước 2).</div>
+          ) : null}
+        </div>
+      ) : null}
+    </section>
+  )
+}

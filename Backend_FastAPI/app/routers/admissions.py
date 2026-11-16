@@ -47,6 +47,7 @@ from types import SimpleNamespace
 from ..services.user_service import emit_data_updated as _emit_realtime_update
 from ..core.events import SystemEvents
 from ..utils.exceptions import (
+    ProfileLockedByDecisionError,
     ResourceNotFoundError,
     BadRequest,
     BusinessRuleViolation,
@@ -703,6 +704,7 @@ async def get_admission_profile(
     profile_id: int,
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = CasbinAuth,
+    view_cancel_reason: bool = Depends(deps.get_council_decision_reason_right),
 ):
     """
     Get AdmissionProfile by ID.
@@ -722,7 +724,14 @@ async def get_admission_profile(
             profile_id=profile_id,
             current_user=current_user,
         )
+        # Vòng giao diện Văn bản Hội đồng (đặc tả 3.9) — SAU kiểm IDOR của ``get_profile``.
+        from ..services.council_decision_status_service import profile_decision_cell
 
+        object.__setattr__(
+            profile,
+            "quyet_dinh_trung_tuyen",
+            await profile_decision_cell(db, profile.id, view_cancel_reason=view_cancel_reason),
+        )
         return profile
 
     except ResourceNotFoundError as e:
@@ -1436,6 +1445,10 @@ async def enroll_student(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
         )
+    except ProfileLockedByDecisionError:
+        # Review max PR #724 (R8): GIỮ error_code + public_payload (handler toàn cục) — gói thành
+        # HTTPException làm giao diện mất mã COUNCIL_DECISION_LOCKS_PROFILE và câu hướng dẫn.
+        raise
     except ConflictError as e:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -1898,6 +1911,10 @@ async def approve_admission(
 
     except BadRequest as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except ProfileLockedByDecisionError:
+        # Review max PR #724 (R8): GIỮ error_code + public_payload (handler toàn cục) — gói thành
+        # HTTPException làm giao diện mất mã COUNCIL_DECISION_LOCKS_PROFILE và câu hướng dẫn.
+        raise
     except ConflictError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
 
@@ -1957,6 +1974,10 @@ async def reject_admission(
 
     except BadRequest as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except ProfileLockedByDecisionError:
+        # Review max PR #724 (R8): GIỮ error_code + public_payload (handler toàn cục) — gói thành
+        # HTTPException làm giao diện mất mã COUNCIL_DECISION_LOCKS_PROFILE và câu hướng dẫn.
+        raise
     except ConflictError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
 
@@ -2007,6 +2028,10 @@ async def request_revision(
 
     except BadRequest as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except ProfileLockedByDecisionError:
+        # Review max PR #724 (R8): GIỮ error_code + public_payload (handler toàn cục) — gói thành
+        # HTTPException làm giao diện mất mã COUNCIL_DECISION_LOCKS_PROFILE và câu hướng dẫn.
+        raise
     except ConflictError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
 
@@ -2069,6 +2094,10 @@ async def resubmit_admission(
 
     except BadRequest as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except ProfileLockedByDecisionError:
+        # Review max PR #724 (R8): GIỮ error_code + public_payload (handler toàn cục) — gói thành
+        # HTTPException làm giao diện mất mã COUNCIL_DECISION_LOCKS_PROFILE và câu hướng dẫn.
+        raise
     except ConflictError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
 
@@ -2132,6 +2161,10 @@ async def minor_correction(
 
         return result
 
+    except ProfileLockedByDecisionError:
+        # Review max PR #724 (R8): GIỮ error_code + public_payload (handler toàn cục) — gói thành
+        # HTTPException làm giao diện mất mã COUNCIL_DECISION_LOCKS_PROFILE và câu hướng dẫn.
+        raise
     except ConflictError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
     except ValidationError as e:
@@ -2234,6 +2267,10 @@ async def override_admission(
 
     except BadRequest as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except ProfileLockedByDecisionError:
+        # Review max PR #724 (R8): GIỮ error_code + public_payload (handler toàn cục) — gói thành
+        # HTTPException làm giao diện mất mã COUNCIL_DECISION_LOCKS_PROFILE và câu hướng dẫn.
+        raise
     except ConflictError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
 
@@ -2301,6 +2338,10 @@ async def withdraw_admission(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     except BadRequest as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except ProfileLockedByDecisionError:
+        # Review max PR #724 (R8): GIỮ error_code + public_payload (handler toàn cục) — gói thành
+        # HTTPException làm giao diện mất mã COUNCIL_DECISION_LOCKS_PROFILE và câu hướng dẫn.
+        raise
     except ConflictError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
 
@@ -2414,6 +2455,10 @@ async def finalize_enrollment(
 
     except BadRequest as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except ProfileLockedByDecisionError:
+        # Review max PR #724 (R8): GIỮ error_code + public_payload (handler toàn cục) — gói thành
+        # HTTPException làm giao diện mất mã COUNCIL_DECISION_LOCKS_PROFILE và câu hướng dẫn.
+        raise
     except ConflictError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
 
@@ -2786,5 +2831,9 @@ async def drop_student(
 
     except BadRequest as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except ProfileLockedByDecisionError:
+        # Review max PR #724 (R8): GIỮ error_code + public_payload (handler toàn cục) — gói thành
+        # HTTPException làm giao diện mất mã COUNCIL_DECISION_LOCKS_PROFILE và câu hướng dẫn.
+        raise
     except ConflictError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))

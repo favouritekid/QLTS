@@ -59,6 +59,8 @@ ADMISSION_ROUTER_MODULES: Final[frozenset[str]] = frozenset(
         "app.routers.admissions_magic_link",
         "app.routers.admission_config",
         "app.routers.admission_paths",
+        # Văn bản Hội đồng (Lần xét tuyển GĐ1) — dưới tiền tố v1 /api/admission-config.
+        "app.routers.council_documents",
         "app.routers.admin_backfill",
         "app.routers.admin_priority_config",
         "app.routers.admin_v2_admission_round",
@@ -157,6 +159,27 @@ FROZEN_PREFIXES: Final[tuple[str, ...]] = (
 # Rà từ bảng route thật của ``fastapi_app`` trên main@0c3031d7 (633 route-method,
 # 347 đường ghi). ĐỪNG sửa tay: chạy lại kiểm kê rồi cập nhật cả khối.
 ADMISSION_WRITE_ROUTES: Final[tuple[tuple[str, str], ...]] = (
+    # Lần xét tuyển GĐ1 (lượt E2): tải mẫu + dựng bộ văn bản Hội đồng — rà tay 03-11.
+    ("POST", "/api/admission-config/council-documents/sets"),
+    # Lượt E3 (owner 04-11, J1 dòng 29): Admin xoá bộ văn bản — rà tay 04-11.
+    ("DELETE", "/api/admission-config/council-documents/sets/{set_id}"),
+    ("POST", "/api/admission-config/council-documents/templates"),
+    # Lượt I (F230): ghi nhận Quyết định đã ký + nhóm chờ + tái dựng bản ký — rà tay 07-11.
+    ("POST", "/api/admission-config/council-documents/decisions"),
+    ("POST", "/api/admission-config/council-documents/decisions/{decision_id}/huy-ghi-nhan"),
+    ("POST", "/api/admission-config/council-documents/decisions/{decision_id}/huy-hieu-luc"),
+    ("POST", "/api/admission-config/council-documents/decisions/{decision_id}/bo-dieu-chinh"),
+    ("POST", "/api/admission-config/council-documents/decisions/{decision_id}/dieu-chinh"),
+    ("POST", "/api/admission-config/council-documents/sets/{set_id}/dung-lai-ban-ky"),
+    ("POST", "/api/admission-config/council-documents/decision-holds/{hold_id}/cho-xet-lai"),
+    # Vòng giao diện GĐ1 (lượt L): lượt gửi ghi nhận — mở lượt + phân xử — rà tay 11-11.
+    ("POST", "/api/admission-config/council-documents/sets/{set_id}/luot-ghi-nhan"),
+    ("POST", "/api/admission-config/council-documents/luot-ghi-nhan/{ma}/chan"),
+    # Vòng giao diện GĐ1: đường chọn hồ sơ — POST CHỈ ĐỌC (thân mang id / mã hồ sơ, không để vào URL) nhưng
+    # cần gạt chặn MỌI phương thức ghi ⇒ đóng băng thì 503, như ``scoring/preview`` — rà tay 11-11.
+    ("POST", "/api/admission-config/council-documents/sets/kiem-truoc"),
+    ("POST", "/api/admission-config/council-documents/sets/doi-ma"),
+    ("POST", "/api/admission-config/council-documents/sets/tim-ho-so"),
     ("POST", "/api/admission-config/criteria"),
     ("DELETE", "/api/admission-config/criteria/{criteria_id}"),
     ("PUT", "/api/admission-config/criteria/{criteria_id}"),
