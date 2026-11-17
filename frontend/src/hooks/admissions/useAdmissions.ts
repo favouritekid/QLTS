@@ -799,55 +799,9 @@ export function useUpdateGraduationProof(id: number) {
   })
 }
 
-export function useVerifyDocument(id: number) {
-  const queryClient = useQueryClient()
-
-  return useMutation({
-    mutationFn: (variables: { docCode: string, format: string }) =>
-      admissionsApi.verifyDocumentFormat(id, variables.docCode, variables.format),
-    onSuccess: (data, variables) => {
-      toast.success("Đã xác nhận tài liệu")
-      queryClient.invalidateQueries({ queryKey: admissionsKeys.detail(id) })
-    },
-    onError: (error: AxiosError<ApiErrorResponse>) => {
-      handleApiError(error, { context: "xác nhận tài liệu" })
-    }
-  })
-}
-
-export function useRejectDocument(id: number) {
-  const queryClient = useQueryClient()
-
-  return useMutation({
-    mutationFn: (variables: { docCode: string, reason: string }) =>
-      admissionsApi.rejectDocument(id, variables.docCode, variables.reason),
-    onSuccess: (data, variables) => {
-      toast.success("Đã từ chối tài liệu")
-      queryClient.invalidateQueries({ queryKey: admissionsKeys.detail(id) })
-    },
-    onError: (error: AxiosError<ApiErrorResponse>) => {
-      handleApiError(error, { context: "từ chối tài liệu" })
-    }
-  })
-}
-
-export function useResetDocument(id: number) {
-  const queryClient = useQueryClient()
-
-  return useMutation({
-    mutationFn: (docCode: string) =>
-      admissionsApi.resetDocument(id, docCode),
-    onSuccess: (updatedProfile, docCode) => {
-      toast.success("Đã hoàn tác tài liệu")
-
-      // Update cache with full profile response
-      queryClient.setQueryData(admissionsKeys.detail(id), updatedProfile)
-    },
-    onError: (error: AxiosError<ApiErrorResponse>) => {
-      handleApiError(error, { context: "hoàn tác tài liệu" })
-    }
-  })
-}
+// GĐ1b: Duyệt / Từ chối / Đặt lại MỘT giấy — `useVerifyDocumentGd1b` / `useRejectDocumentGd1b` / `useResetDocumentGd1b`
+// (`@/hooks/document-review/useDocumentReview`): gửi `expected_row_version`, lý do, cam kết; làm mới chi tiết + danh sách
+// + bộ đếm. Ba hook cũ (không mang phiên bản dòng) đã bị gỡ.
 
 // ============================================
 // BULK ACTION MUTATIONS

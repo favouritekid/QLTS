@@ -3,6 +3,13 @@
  *
  * Section 3.2: Checklist Tài Liệu Bắt Buộc
  * Displays: Table of all mandatory documents with status, format, and submission date
+ *
+ * GĐ1b (đặc tả §5.9, hợp đồng bản 4 §2.4 + bản 5):
+ *  - "Xác nhận kiểm tra" = xem trước + chạy lô cho MỘT hồ sơ (`profile_ids = [id]`) qua `BulkVerifyDialog` — KHÔNG còn
+ *    duyệt song song (`Promise.all`), KHÔNG còn chọn / mặc định hình thức ở đây: lô ghi đúng hình thức lúc nhận, giấy
+ *    thiếu hình thức bị máy chủ loại (`missing_format`) và được liệt kê ở bản xem trước.
+ *  - Từ chối từng giấy qua hộp GĐ1b (`expected_row_version`, cam kết khi `requires_ack`).
+ *  - Nút theo CỜ MÁY CHỦ của giấy đã đọc được định danh (`readGd1bDocument`), không theo vai.
  */
 
 "use client"
@@ -18,19 +25,12 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
-import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
-import { FileText, CheckCircle2, Upload, XCircle, Eye } from "lucide-react"
+import { FileText, CheckCircle2, XCircle, Eye } from "lucide-react"
 import {
   Collapsible,
   CollapsibleContent,
@@ -41,31 +41,12 @@ import { useState } from "react"
 import {
   getDocumentStatusConfig,
   getFormatLabel,
-  DOCUMENT_FORMAT_OPTIONS,
 } from "@/lib/utils/admission-helpers"
-import { useVerifyDocument, useRejectDocument } from "@/hooks/admissions"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
 import { API_BASE_URL } from "@/lib/api/client"
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
-import { Textarea } from "@/components/ui/textarea"
-import { Label } from "@/components/ui/label"
+import { BulkVerifyDialog } from "@/components/document-review/bulk/BulkVerifyDialog"
+import { RejectDocumentDialog } from "@/components/document-review/RejectDocumentDialog"
+import { readGd1bDocument } from "@/lib/document-review/parse-document"
 
 interface DocumentChecklistProps {
   profile: AdmissionProfileResponse
@@ -73,69 +54,18 @@ interface DocumentChecklistProps {
 
 export function DocumentChecklist({ profile }: DocumentChecklistProps) {
   const [isOpen, setIsOpen] = useState(false)
-  const [batchVerifyOpen, setBatchVerifyOpen] = useState(false)
-  const verifyMutation = useVerifyDocument(profile.id)
+  const [batchOpen, setBatchOpen] = useState(false)
 
   const mandatoryDocs = (profile.documents_checklist ?? []).filter(
     (doc) => doc.is_mandatory
   )
 
-  // Track selected format for each document (for bulk review)
-  // Initialize with actual_submission_format or submission_format as default
-  const [selectedFormats, setSelectedFormats] = useState<Record<string, string>>(
-    () => {
-      const initial: Record<string, string> = {}
-      mandatoryDocs.forEach((doc) => {
-        const isPending = doc.status === "uploaded" || doc.status === "paper_submitted"
-        if (isPending) {
-          // Default to actual_submission_format (what user/officer declared),
-          // fallback to submission_format (config requirement),
-          // final fallback to "photo"
-          initial[doc.code] = doc.actual_submission_format || doc.submission_format || "photo"
-        }
-      })
-      return initial
-    }
-  )
-
-  const handleFormatChange = (code: string, format: string) => {
-    setSelectedFormats((prev) => ({
-      ...prev,
-      [code]: format,
-    }))
-  }
-
-  // Get pending documents (ready for bulk verification).
-  // PR #5: intersect status with the backend-computed can_verify flag so
-  // Step 7 doesn't surface the "Xác nhận kiểm tra" button to roles the
-  // /verify-format route would 403 (officer today).
-  const pendingDocs = mandatoryDocs.filter(
-    (doc) =>
-      (doc.status === "uploaded" || doc.status === "paper_submitted") &&
-      doc.can_verify === true
-  )
-
-  // Batch verify all pending documents
-  const handleBatchVerify = async () => {
-    if (pendingDocs.length === 0) return
-    setBatchVerifyOpen(false)
-
-    try {
-      // Verify all documents in parallel using Promise.all
-      await Promise.all(
-        pendingDocs.map((doc) =>
-          verifyMutation.mutateAsync({
-            docCode: doc.code,
-            format: selectedFormats[doc.code] || "photo",
-          })
-        )
-      )
-      // Success handled by React Query cache invalidation
-    } catch (error) {
-      // Error toast already shown by mutation onError
-      console.error("Batch verify failed:", error)
-    }
-  }
+  // "Xác nhận kiểm tra" chỉ hiện khi máy chủ cho duyệt ít nhất một giấy bắt buộc (`can_verify` của giấy đã có định
+  // danh). Giấy nào thật sự vào lô do MÁY CHỦ chọn ở bước xem trước (chỉ giấy bản giấy, chờ xét, có hình thức…).
+  const canStartBatch = mandatoryDocs.some((doc) => {
+    const r = readGd1bDocument(doc)
+    return r.kind === "ok" && r.doc.can_verify
+  })
 
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen}>
@@ -181,29 +111,21 @@ export function DocumentChecklist({ profile }: DocumentChecklistProps) {
               </TableHeader>
               <TableBody>
                 {mandatoryDocs.map((doc) => (
-                  <DocumentRow
-                    key={doc.code}
-                    doc={doc}
-                    profile={profile}
-                    onFormatChange={handleFormatChange}
-                    selectedFormat={selectedFormats[doc.code] || "photo"}
-                  />
+                  <DocumentRow key={doc.code} doc={doc} profile={profile} />
                 ))}
               </TableBody>
             </Table>
 
-            {/* Batch Verify Button */}
-            {pendingDocs.length > 0 && (
+            {/* "Xác nhận kiểm tra" — lô MỘT hồ sơ (xem trước + ô xác nhận + chạy) */}
+            {canStartBatch && (
               <div className="mt-4 flex justify-end">
                 <Button
-                  onClick={() => setBatchVerifyOpen(true)}
-                  disabled={verifyMutation.isPending}
+                  onClick={() => setBatchOpen(true)}
                   className="bg-success-600 hover:bg-success-700"
+                  aria-label="Xác nhận kiểm tra các giấy bản giấy của hồ sơ này"
                 >
                   <CheckCircle2 className="w-4 h-4 mr-2" />
-                  {verifyMutation.isPending
-                    ? "Đang xác nhận\u2026"
-                    : `Xác nhận kiểm tra (${pendingDocs.length})`}
+                  Xác nhận kiểm tra
                 </Button>
               </div>
             )}
@@ -226,22 +148,18 @@ export function DocumentChecklist({ profile }: DocumentChecklistProps) {
           </div>
         )}
 
-        <AlertDialog open={batchVerifyOpen} onOpenChange={setBatchVerifyOpen}>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Xác nhận kiểm tra tài liệu</AlertDialogTitle>
-              <AlertDialogDescription>
-                Xác nhận kiểm tra {pendingDocs.length} tài liệu đang chờ?
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>Hủy</AlertDialogCancel>
-              <AlertDialogAction onClick={handleBatchVerify}>
-                Xác nhận
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
+        {batchOpen && (
+          <BulkVerifyDialog
+            open
+            onOpenChange={(v) => {
+              if (!v) setBatchOpen(false)
+            }}
+            endpoint={{ mode: "batch" }}
+            selection={{ kind: "profiles", profileIds: [profile.id] }}
+            title="Xác nhận kiểm tra giấy của hồ sơ"
+            scopeLabel="hồ sơ này"
+          />
+        )}
       </CollapsibleContent>
     </Collapsible>
   )
@@ -253,37 +171,16 @@ type ChecklistItem = AdmissionProfileResponse["documents_checklist"][number]
 function DocumentRow({
   doc,
   profile,
-  onFormatChange,
-  selectedFormat,
 }: {
   doc: ChecklistItem
   profile: AdmissionProfileResponse
-  onFormatChange: (code: string, format: string) => void
-  selectedFormat: string
 }) {
-  const { code, status } = doc
-  const rejectMutation = useRejectDocument(profile.id)
-  const [rejectDialogOpen, setRejectDialogOpen] = useState(false)
-  const [rejectReason, setRejectReason] = useState("")
-
-  const handleReject = () => {
-    setRejectReason("")
-    setRejectDialogOpen(true)
-  }
-
-  const handleConfirmReject = () => {
-    if (!rejectReason.trim()) return
-    rejectMutation.mutate({ docCode: code, reason: rejectReason })
-    setRejectDialogOpen(false)
-  }
-
-  // Only show inline select for pending documents that the viewer can act on.
-  // PR #5: gate by both status and the backend-computed can_verify flag so
-  // officers (no verify policy) don't see the format picker / reject button.
-  const canVerifyRow = doc.can_verify === true
-  const canRejectRow = doc.can_reject === true
-  const isPending =
-    (status === "uploaded" || status === "paper_submitted") && canVerifyRow
+  const { status } = doc
+  const [rejectOpen, setRejectOpen] = useState(false)
+  // GĐ1b: Từ chối CHỈ theo cờ máy chủ của giấy đã đọc được định danh + phiên bản (bản 5 B1).
+  const read = readGd1bDocument(doc)
+  const gd1b = read.kind === "ok" ? read.doc : null
+  const isAwaitingCheck = status === "uploaded" || status === "paper_submitted"
 
   return (
     <>
@@ -310,24 +207,7 @@ function DocumentRow({
         </TableCell>
 
         <TableCell className="text-center">
-          {isPending ? (
-            // Inline Select for pending documents - Officer can review/correct format
-            <Select
-              value={selectedFormat}
-              onValueChange={(value) => onFormatChange(code, value)}
-            >
-              <SelectTrigger className="w-[180px] h-8">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {DOCUMENT_FORMAT_OPTIONS.map((option) => (
-                  <SelectItem key={option.value} value={option.value}>
-                    {option.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          ) : status === "verified" && doc.verified_format ? (
+          {status === "verified" && doc.verified_format ? (
             // Show verified format as badge
             <Badge
               variant="outline"
@@ -336,13 +216,18 @@ function DocumentRow({
               {getFormatLabel(doc.verified_format)}
             </Badge>
           ) : doc.actual_submission_format ? (
-            // Show user-declared format
+            // Hình thức lúc nhận — lô ghi ĐÚNG hình thức này (không chọn lại ở đây)
             <Badge
               variant="outline"
               className="font-normal border-info-200 bg-info-50 text-info-700"
             >
               {getFormatLabel(doc.actual_submission_format)}
             </Badge>
+          ) : isAwaitingCheck ? (
+            // Không dự phòng "photo": thiếu hình thức lúc nhận ⇒ lô loại giấy này, duyệt từng giấy ở bước Tài liệu
+            <span className="text-xs text-warning-700" data-testid={`thieu-hinh-thuc-${doc.code}`}>
+              Chưa ghi hình thức lúc nhận
+            </span>
           ) : (
             <span className="text-muted-foreground text-sm">-</span>
           )}
@@ -374,10 +259,8 @@ function DocumentRow({
               </TooltipProvider>
             )}
 
-            {/* Reject Button - Only show when backend explicitly grants can_reject
-             * on this row. Status-only gating leaked the button to officers
-             * whose /documents/{code}/reject call would 403. */}
-            {canRejectRow && (doc.status === "uploaded" || doc.status === "paper_submitted" || doc.status === "verified") && (
+            {/* Từ chối — CHỈ khi máy chủ trả can_reject cho giấy đã có định danh */}
+            {gd1b?.can_reject && (
               <TooltipProvider>
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -385,9 +268,8 @@ function DocumentRow({
                       size="icon"
                       variant="ghost"
                       className="h-8 w-8 text-error-600 hover:text-error-700 hover:bg-error-50"
-                      onClick={handleReject}
-                      disabled={rejectMutation.isPending}
-                      aria-label="Từ chối tài liệu"
+                      onClick={() => setRejectOpen(true)}
+                      aria-label={`Từ chối giấy ${doc.label}`}
                     >
                       <XCircle className="h-4 w-4" />
                     </Button>
@@ -400,39 +282,16 @@ function DocumentRow({
         </TableCell>
       </TableRow>
 
-      {/* Reject Reason Dialog */}
-      <Dialog open={rejectDialogOpen} onOpenChange={setRejectDialogOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Từ chối tài liệu</DialogTitle>
-            <DialogDescription>
-              Nhập lý do từ chối tài liệu “{doc.label}”.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2">
-            <Label htmlFor={`reject-reason-${code}`}>Lý do từ chối</Label>
-            <Textarea
-              id={`reject-reason-${code}`}
-              value={rejectReason}
-              onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setRejectReason(e.target.value)}
-              placeholder="Nhập lý do từ chối\u2026"
-              rows={3}
-            />
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setRejectDialogOpen(false)}>
-              Hủy
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={handleConfirmReject}
-              disabled={!rejectReason.trim() || rejectMutation.isPending}
-            >
-              {rejectMutation.isPending ? "Đang từ chối\u2026" : "Từ chối"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {rejectOpen && gd1b && (
+        <RejectDocumentDialog
+          profileId={profile.id}
+          document={gd1b}
+          open
+          onOpenChange={(v) => {
+            if (!v) setRejectOpen(false)
+          }}
+        />
+      )}
     </>
   )
 }

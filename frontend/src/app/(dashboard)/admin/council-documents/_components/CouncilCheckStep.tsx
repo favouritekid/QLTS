@@ -11,7 +11,7 @@ import type { CouncilSetPreview } from "@/lib/zod/council-documents"
 
 import { CouncilErrorAlert } from "./CouncilErrorAlert"
 import { CouncilPreviewSummary } from "./CouncilPreviewSummary"
-import { majorWithLevel, checkItemLabel, statusLabel, formatTime } from "./display"
+import { majorWithLevel, checkItemLabel, checkReasonText, statusLabel, formatTime } from "./display"
 
 interface Props {
   preview: CouncilSetPreview | undefined
@@ -145,7 +145,7 @@ export function CouncilCheckStep({ preview, checking, error, submittedIds, onRec
                     <div className="font-medium">{checkItemLabel(d.muc)}</div>
                     {d.ly_do.map((l) => (
                       <div key={l.ma} className="text-xs" data-testid={`ly-do-${d.profile_id}`}>
-                        {l.cau}
+                        {checkReasonText(l)}
                       </div>
                     ))}
                   </TableCell>

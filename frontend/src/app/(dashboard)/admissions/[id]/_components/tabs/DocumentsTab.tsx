@@ -47,7 +47,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
-import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import {
@@ -69,12 +68,18 @@ import {
   FileText,
   Globe,
   GraduationCap,
+  History,
   Loader2,
   RotateCcw,
   Upload,
   XCircle,
 } from "lucide-react"
 import { PriorityEvidenceUploadCell } from "@/components/documents/PriorityEvidenceUploadCell"
+import { DocumentHistoryDialog } from "@/components/document-review/DocumentHistoryDialog"
+import { DocumentReviewActions } from "@/components/document-review/DocumentReviewActions"
+import { RejectDocumentDialog } from "@/components/document-review/RejectDocumentDialog"
+import { ResetDocumentDialog } from "@/components/document-review/ResetDocumentDialog"
+import { VerifyDocumentDialog } from "@/components/document-review/VerifyDocumentDialog"
 import type {
   AdmissionProfileResponse,
   DocumentItem,
@@ -83,10 +88,10 @@ import {
   useUploadAdmissionDocument,
   useMarkPaperSubmitted,
   useUpdateGraduationProof,
-  useRejectDocument,
-  useResetDocument,
-  useVerifyDocument,
 } from "@/hooks/admissions/useAdmissions"
+import { documentReasonText } from "@/lib/document-review/messages"
+import { explainedBlockReason, readGd1bDocument } from "@/lib/document-review/parse-document"
+import type { Gd1bActionableDocument } from "@/lib/zod/document-review"
 import { useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
@@ -371,11 +376,26 @@ function computeRowState(doc: DocumentItem) {
     (doc.status === "uploaded" || doc.status === "verified")
   const canUpload = doc.can_upload ?? false
   const canMarkPaperSubmitted = doc.can_mark_paper_submitted ?? false
-  const canReject = doc.can_reject ?? false
-  const canReset = doc.can_reset ?? false
-  const canVerify = doc.can_verify ?? false
+  // GĐ1b (hợp đồng bản 5 B1): Duyệt / Từ chối / Đặt lại / Lịch sử chỉ dựng trên giấy đọc được định danh dòng + phiên bản
+  // + cờ máy chủ (`readGd1bDocument`). Giấy chưa có dòng hoặc lệch hợp đồng ⇒ không nút nào (fail-closed).
+  const gd1bRead = readGd1bDocument(doc)
+  const gd1b = gd1bRead.kind === "ok" ? gd1bRead.doc : null
+  const gd1bContractError = gd1bRead.kind === "contract_error" && gd1bRead.claimsAction
+  const canReject = gd1b?.can_reject ?? false
+  const canReset = gd1b?.can_reset ?? false
+  const canVerify = gd1b?.can_verify ?? false
+  const canViewHistory = gd1b?.can_view_history ?? false
+  const verifyBlockReason = gd1b ? explainedBlockReason(gd1b) : null
   const hasAnyAction =
-    hasFile || canUpload || canMarkPaperSubmitted || canReject || canReset || canVerify
+    hasFile ||
+    canUpload ||
+    canMarkPaperSubmitted ||
+    canReject ||
+    canReset ||
+    canVerify ||
+    canViewHistory ||
+    verifyBlockReason !== null ||
+    gd1bContractError
 
   return {
     statusConfig,
@@ -396,6 +416,10 @@ function computeRowState(doc: DocumentItem) {
     canReject,
     canReset,
     canVerify,
+    canViewHistory,
+    gd1b,
+    gd1bContractError,
+    verifyBlockReason,
     hasAnyAction,
     recordedAtFormatted,
     // ADM-031 round 10
@@ -519,15 +543,14 @@ function DocumentDebtBanner({ profile }: { profile: AdmissionProfileResponse }) 
   )
 }
 
+/** Hộp thoại GĐ1b mở từ một dòng giấy. */
+type Gd1bDialogKind = "verify" | "reject" | "reset" | "history"
+
 interface ActionsCellProps {
   doc: DocumentItem
   state: RowState
   isUploading: boolean
   isPaperPending: boolean
-  isResetPending: boolean
-  isCurrentResetTarget: boolean
-  isVerifyPending: boolean
-  isCurrentVerifyTarget: boolean
   isGradPending: boolean
   onView: (documentId: number) => void
   onUpload: (
@@ -541,9 +564,8 @@ interface ActionsCellProps {
     requiredFormat?: string,
   ) => void
   onUpdateGraduationProof: (code: string, label: string) => void
-  onRejectClick: (code: string, label: string) => void
-  onResetClick: (code: string, label: string) => void
-  onVerifyClick: (code: string, format: string) => void
+  /** GĐ1b: mở hộp Duyệt / Từ chối / Đặt lại / Lịch sử cho giấy đã có định danh + phiên bản */
+  onGd1bAction: (kind: Gd1bDialogKind, doc: Gd1bActionableDocument) => void
   alignEnd?: boolean
 }
 
@@ -593,20 +615,15 @@ function DocumentRowActions(props: ActionsCellProps) {
     state,
     isUploading,
     isPaperPending,
-    isResetPending,
-    isCurrentResetTarget,
-    isVerifyPending,
-    isCurrentVerifyTarget,
     isGradPending,
     onView,
     onUpload,
     onPaperSubmit,
     onUpdateGraduationProof,
-    onRejectClick,
-    onResetClick,
-    onVerifyClick,
+    onGd1bAction,
     alignEnd,
   } = props
+  const gd1b = state.gd1b
 
   // PR #13 — "nợ bằng" debt badge (provisional cert still outstanding) +
   // the officer/manager "đã nhận bằng chính thức" action that clears it.
@@ -614,12 +631,8 @@ function DocumentRowActions(props: ActionsCellProps) {
   const canUpdateGraduationKind = doc.can_update_graduation_kind ?? false
   const supplementDueLabel = formatSupplementDue(doc.supplement_due_date)
 
-  // Verify uses the actual / required format as the format claim. The
-  // verify dialog (executive checklist) is the deeper review surface;
-  // here the button is a one-click confirm for officers/managers who
-  // already match required to actual.
-  const verifyFormat =
-    doc.actual_submission_format ?? doc.submission_format ?? "photo"
+  // GĐ1b §4.6 / §7: Duyệt mở hộp chọn hình thức (mặc định = hình thức lúc nhận, KHÔNG dự phòng "photo"; được chọn
+  // khác) + cam kết khi `requires_ack`; mọi lệnh gửi `expected_row_version` = `row_version` đang xem.
 
   if (!state.hasAnyAction && !(state.isPaperOnly && doc.status === "paper_submitted")) {
     return <span className="text-xs text-muted-foreground">—</span>
@@ -634,7 +647,7 @@ function DocumentRowActions(props: ActionsCellProps) {
   // for screen readers; no `title` attribute so SR doesn't double-read.
   const hasCommon = state.hasFile
   const hasOfficerGroup = state.canUpload || state.canMarkPaperSubmitted
-  const hasManagerGroup = state.canVerify || state.canReject || state.canReset
+  const hasManagerGroup = state.canVerify || state.canReject || state.canReset || state.canViewHistory
 
   return (
     <TooltipProvider delayDuration={150}>
@@ -746,48 +759,67 @@ function DocumentRowActions(props: ActionsCellProps) {
           />
         )}
 
-        {/* Manager / review group */}
-        {state.canVerify && (
+        {/* Manager / review group — GĐ1b: CHỈ theo cờ máy chủ của giấy đã đọc được định danh (`state.gd1b`). */}
+        {state.canVerify && gd1b && (
           <IconActionButton
-            ariaLabel="Duyệt tài liệu"
-            tooltip="Duyệt — xác nhận tài liệu hợp lệ"
+            ariaLabel={`Duyệt giấy ${doc.label}`}
+            tooltip={
+              gd1b.requires_ack
+                ? "Duyệt — không rõ người nhận, cần cam kết kèm lý do"
+                : "Duyệt — chọn hình thức đã đối chiếu"
+            }
             className="text-success-700 hover:text-success-800 hover:bg-success-50"
-            disabled={isVerifyPending && isCurrentVerifyTarget}
-            onClick={() => onVerifyClick(doc.code, verifyFormat)}
+            onClick={() => onGd1bAction("verify", gd1b)}
           >
-            {isVerifyPending && isCurrentVerifyTarget ? (
-              <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" />
-            ) : (
-              <Check className="h-4 w-4" />
-            )}
+            <Check className="h-4 w-4" />
           </IconActionButton>
         )}
 
-        {state.canReject && (
+        {state.canReject && gd1b && (
           <IconActionButton
-            ariaLabel="Từ chối tài liệu"
+            ariaLabel={`Từ chối giấy ${doc.label}`}
             tooltip="Từ chối — yêu cầu nộp lại"
             className="text-error-600 hover:text-error-700 hover:bg-error-50"
-            onClick={() => onRejectClick(doc.code, doc.label)}
+            onClick={() => onGd1bAction("reject", gd1b)}
           >
             <Ban className="h-4 w-4" />
           </IconActionButton>
         )}
 
-        {state.canReset && (
+        {state.canReset && gd1b && (
           <IconActionButton
-            ariaLabel="Đặt lại tài liệu về Chưa nộp"
-            tooltip="Đặt lại — đưa về trạng thái Chưa nộp"
+            ariaLabel={`Đặt lại giấy ${doc.label}`}
+            tooltip={
+              gd1b.reset_keeps_evidence
+                ? "Đặt lại — về Chưa nộp (cần lý do); tệp scan được giữ lại"
+                : "Đặt lại — về Chưa nộp (cần lý do)"
+            }
             className="text-warning-600 hover:text-warning-700 hover:bg-warning-50"
-            disabled={isResetPending && isCurrentResetTarget}
-            onClick={() => onResetClick(doc.code, doc.label)}
+            onClick={() => onGd1bAction("reset", gd1b)}
           >
-            {isResetPending && isCurrentResetTarget ? (
-              <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" />
-            ) : (
-              <RotateCcw className="h-4 w-4" />
-            )}
+            <RotateCcw className="h-4 w-4" />
           </IconActionButton>
+        )}
+
+        {state.canViewHistory && gd1b && (
+          <IconActionButton
+            ariaLabel={`Lịch sử giấy ${doc.label}`}
+            tooltip="Lịch sử thao tác của giấy"
+            onClick={() => onGd1bAction("history", gd1b)}
+          >
+            <History className="h-4 w-4" />
+          </IconActionButton>
+        )}
+
+        {state.verifyBlockReason && (
+          <span className="basis-full text-[11px] leading-tight text-muted-foreground" data-testid="ly-do-khoa-duyet">
+            {documentReasonText(state.verifyBlockReason)}
+          </span>
+        )}
+        {state.gd1bContractError && (
+          <span className="basis-full text-[11px] leading-tight text-muted-foreground" data-testid="giay-thieu-dinh-danh">
+            Thiếu định danh giấy từ máy chủ — không thao tác được ở đây.
+          </span>
         )}
       </div>
     </TooltipProvider>
@@ -816,9 +848,18 @@ export function DocumentsTab({ profile }: DocumentsTabProps) {
   const uploadMutation = useUploadAdmissionDocument(profile.id)
   const paperMutation = useMarkPaperSubmitted(profile.id)
   const updateGradMutation = useUpdateGraduationProof(profile.id)
-  const rejectMutation = useRejectDocument(profile.id)
-  const resetMutation = useResetDocument(profile.id)
-  const verifyMutation = useVerifyDocument(profile.id)
+
+  // GĐ1b: MỘT hộp đang mở (Duyệt / Từ chối / Đặt lại / Lịch sử) cho MỘT giấy — các hộp tự gửi `expected_row_version`,
+  // lý do, cam kết, và tự làm mới chi tiết / danh sách / bộ đếm sau thao tác hoặc 409.
+  const [gd1bDialog, setGd1bDialog] = useState<{
+    kind: Gd1bDialogKind
+    doc: Gd1bActionableDocument
+  } | null>(null)
+  const closeGd1bDialog = (open: boolean) => {
+    if (!open) setGd1bDialog(null)
+  }
+  const handleGd1bAction = (kind: Gd1bDialogKind, doc: Gd1bActionableDocument) =>
+    setGd1bDialog({ kind, doc })
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [selectedDocCode, setSelectedDocCode] = useState<string | null>(null)
@@ -844,25 +885,12 @@ export function DocumentsTab({ profile }: DocumentsTabProps) {
   >("")
   const [supplementDue, setSupplementDue] = useState<string>("")
 
-  // Reset/Undo Confirmation Dialog State
-  const [pendingResetDoc, setPendingResetDoc] = useState<{
-    code: string
-    label: string
-  } | null>(null)
-
   // Review F2 — confirm before clearing the "nợ bằng" debt (one-click +
   // irreversible via this flow: the endpoint only accepts official_diploma).
   const [pendingGradUpdate, setPendingGradUpdate] = useState<{
     code: string
     label: string
   } | null>(null)
-
-  // Rejection Dialog State
-  const [rejectItem, setRejectItem] = useState<{
-    code: string
-    label: string
-  } | null>(null)
-  const [rejectReason, setRejectReason] = useState("")
 
   // Upload config
   const uploadConfig = profile.applied_rules.upload_config
@@ -892,6 +920,11 @@ export function DocumentsTab({ profile }: DocumentsTabProps) {
     () => documents.filter((d) => d.is_extra),
     [documents],
   )
+  // X1 (đặc tả §4.2): máy chủ cho Đặt lại giấy ngoài cấu hình ⇒ đổi câu "không thể chỉnh trực tiếp ở đây" — theo cờ.
+  const extraResettable = extraDocs.some((d) => {
+    const r = readGd1bDocument(d)
+    return r.kind === "ok" && r.doc.can_reset
+  })
 
   // Q9 #07 Phase E.4 PR-3 — Eligibility summary footer (spec V3 §III).
   // Strict ``verified`` count (NOT isDocumentRequirementSatisfied which
@@ -1087,28 +1120,6 @@ export function DocumentsTab({ profile }: DocumentsTabProps) {
     setPendingGradUpdate(null)
   }
 
-  const handleRejectClick = (code: string, label: string) => {
-    setRejectItem({ code, label })
-    setRejectReason("")
-  }
-
-  const confirmReject = () => {
-    if (!rejectItem) return
-    if (!rejectReason.trim()) {
-      toast.error("Vui lòng nhập lý do từ chối")
-      return
-    }
-
-    rejectMutation.mutate(
-      { docCode: rejectItem.code, reason: rejectReason },
-      {
-        onSuccess: () => {
-          setRejectItem(null)
-        },
-      },
-    )
-  }
-
   const handleViewDocument = (documentId: number) => {
     // PR2: stream the document through the authed, IDOR-scoped, audited
     // backend endpoint. This is a top-level GET on the same origin, so the
@@ -1119,31 +1130,12 @@ export function DocumentsTab({ profile }: DocumentsTabProps) {
     window.open(url, "_blank", "noopener,noreferrer")
   }
 
-  const handleResetClick = (code: string, label: string) => {
-    setPendingResetDoc({ code, label })
-  }
-
-  const handleResetConfirm = () => {
-    if (pendingResetDoc) {
-      resetMutation.mutate(pendingResetDoc.code)
-    }
-    setPendingResetDoc(null)
-  }
-
-  const handleVerifyClick = (code: string, format: string) => {
-    verifyMutation.mutate({ docCode: code, format })
-  }
-
   // -- Per-row mutation helpers ---------------------------------------------
 
   const isUploadingForCode = (code: string) =>
     uploadMutation.isPending && selectedDocCode === code
   const isPaperPendingForCode = (code: string) =>
     paperMutation.isPending && paperMutation.variables?.docCode === code
-  const isResetPendingForCode = (code: string) =>
-    resetMutation.isPending && resetMutation.variables === code
-  const isVerifyPendingForCode = (code: string) =>
-    verifyMutation.isPending && verifyMutation.variables?.docCode === code
 
   // ============================================================================
   // RENDER
@@ -1456,18 +1448,12 @@ export function DocumentsTab({ profile }: DocumentsTabProps) {
                               state={state}
                               isUploading={isUploadingForCode(doc.code)}
                               isPaperPending={isPaperPendingForCode(doc.code)}
-                              isResetPending={resetMutation.isPending}
-                              isCurrentResetTarget={isResetPendingForCode(doc.code)}
-                              isVerifyPending={verifyMutation.isPending}
-                              isCurrentVerifyTarget={isVerifyPendingForCode(doc.code)}
                               isGradPending={updateGradMutation.isPending}
                               onView={handleViewDocument}
                               onUpload={handleUploadClick}
                               onPaperSubmit={handlePaperSubmit}
                               onUpdateGraduationProof={handleUpdateGraduationProof}
-                              onRejectClick={handleRejectClick}
-                              onResetClick={handleResetClick}
-                              onVerifyClick={handleVerifyClick}
+                              onGd1bAction={handleGd1bAction}
                               alignEnd
                             />
                           </td>
@@ -1644,18 +1630,12 @@ export function DocumentsTab({ profile }: DocumentsTabProps) {
                             state={state}
                             isUploading={isUploadingForCode(doc.code)}
                             isPaperPending={isPaperPendingForCode(doc.code)}
-                            isResetPending={resetMutation.isPending}
-                            isCurrentResetTarget={isResetPendingForCode(doc.code)}
-                            isVerifyPending={verifyMutation.isPending}
-                            isCurrentVerifyTarget={isVerifyPendingForCode(doc.code)}
                             isGradPending={updateGradMutation.isPending}
                             onView={handleViewDocument}
                             onUpload={handleUploadClick}
                             onPaperSubmit={handlePaperSubmit}
                             onUpdateGraduationProof={handleUpdateGraduationProof}
-                            onRejectClick={handleRejectClick}
-                            onResetClick={handleResetClick}
-                            onVerifyClick={handleVerifyClick}
+                            onGd1bAction={handleGd1bAction}
                           />
                         </div>
                       )}
@@ -1799,7 +1779,10 @@ export function DocumentsTab({ profile }: DocumentsTabProps) {
             <CardDescription>
               Đây là các tài liệu thí sinh đã nộp ở phương thức tuyển sinh
               trước đó. Hiện không còn nằm trong yêu cầu hồ sơ. Giữ lại để
-              lưu vết hồ sơ; không thể chỉnh trực tiếp ở đây.
+              lưu vết hồ sơ
+              {extraResettable
+                ? "; Quản lý / Admin có thể Đặt lại giấy (kèm lý do), không duyệt / từ chối ở đây."
+                : "; không thể chỉnh trực tiếp ở đây."}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -1831,15 +1814,19 @@ export function DocumentsTab({ profile }: DocumentsTabProps) {
                         )}
                       </div>
                     </div>
-                    <Badge
-                      className={`${state.statusConfig.color} gap-1 shrink-0`}
-                    >
-                      <StatusIcon
-                        className="h-3 w-3 shrink-0"
-                        aria-hidden="true"
-                      />
-                      {state.statusConfig.label}
-                    </Badge>
+                    <div className="flex flex-col items-end gap-2 shrink-0">
+                      <Badge
+                        className={`${state.statusConfig.color} gap-1 shrink-0`}
+                      >
+                        <StatusIcon
+                          className="h-3 w-3 shrink-0"
+                          aria-hidden="true"
+                        />
+                        {state.statusConfig.label}
+                      </Badge>
+                      {/* X1: Quản lý / Admin CHỈ Đặt lại giấy ngoài cấu hình — nút theo cờ máy chủ */}
+                      <DocumentReviewActions profileId={profile.id} document={doc} />
+                    </div>
                   </li>
                 )
               })}
@@ -2009,81 +1996,45 @@ export function DocumentsTab({ profile }: DocumentsTabProps) {
         </DialogContent>
       </Dialog>
 
-      {/* Rejection Dialog */}
-      <Dialog
-        open={!!rejectItem}
-        onOpenChange={(open) => !open && setRejectItem(null)}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Từ chối tài liệu</DialogTitle>
-            <DialogDescription>
-              Vui lòng nhập lý do từ chối tài liệu{" "}
-              <strong>{rejectItem?.label}</strong>. Học sinh sẽ nhận được thông
-              báo để nộp lại.
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="py-4">
-            <Label htmlFor="reject-reason" className="mb-2 block">
-              Lý do từ chối
-            </Label>
-            <Textarea
-              id="reject-reason"
-              placeholder="VD: Tài liệu mờ, không đúng định dạng…"
-              value={rejectReason}
-              onChange={(e) => setRejectReason(e.target.value)}
-              rows={3}
-              autoFocus
-              spellCheck={false}
-            />
-          </div>
-
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setRejectItem(null)}>
-              Huỷ
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={confirmReject}
-              disabled={rejectMutation.isPending || !rejectReason.trim()}
-            >
-              {rejectMutation.isPending && (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin motion-reduce:animate-none" />
-              )}
-              Xác nhận từ chối
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Reset/Undo Document Confirmation Dialog */}
-      <AlertDialog
-        open={!!pendingResetDoc}
-        onOpenChange={(open) => !open && setPendingResetDoc(null)}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Hoàn tác tài liệu?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Hoàn tác tài liệu &ldquo;{pendingResetDoc?.label}&rdquo;?
-            </AlertDialogDescription>
-            <p className="text-sm text-muted-foreground">
-              Tài liệu sẽ về trạng thái &ldquo;Chưa nộp&rdquo; và file sẽ bị xóa
-              (nếu có).
-            </p>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Hủy</AlertDialogCancel>
-            <AlertDialogAction
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              onClick={handleResetConfirm}
-            >
-              Hoàn tác
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      {/* GĐ1b — hộp Duyệt / Từ chối / Đặt lại / Lịch sử (gửi expected_row_version, lý do, cam kết; 409 VERSION_CHANGED
+          ⇒ đóng + làm mới). Gắn chỉ khi mở ⇒ mỗi lần mở là trạng thái sạch. Lý do KHÔNG lưu vào "lý do gần đây". */}
+      {gd1bDialog?.kind === "verify" && (
+        <VerifyDocumentDialog
+          key={`verify-${gd1bDialog.doc.document_row_id}`}
+          profileId={profile.id}
+          document={gd1bDialog.doc}
+          open
+          onOpenChange={closeGd1bDialog}
+        />
+      )}
+      {gd1bDialog?.kind === "reject" && (
+        <RejectDocumentDialog
+          key={`reject-${gd1bDialog.doc.document_row_id}`}
+          profileId={profile.id}
+          document={gd1bDialog.doc}
+          open
+          onOpenChange={closeGd1bDialog}
+        />
+      )}
+      {gd1bDialog?.kind === "reset" && (
+        <ResetDocumentDialog
+          key={`reset-${gd1bDialog.doc.document_row_id}`}
+          profileId={profile.id}
+          document={gd1bDialog.doc}
+          open
+          onOpenChange={closeGd1bDialog}
+        />
+      )}
+      {gd1bDialog?.kind === "history" && (
+        <DocumentHistoryDialog
+          key={`history-${gd1bDialog.doc.document_row_id}`}
+          profileId={profile.id}
+          documentRowId={gd1bDialog.doc.document_row_id}
+          label={gd1bDialog.doc.label}
+          open
+          onOpenChange={closeGd1bDialog}
+        />
+      )}
 
       {/* Review F2 — confirm before clearing the "nợ bằng" debt. */}
       <AlertDialog
