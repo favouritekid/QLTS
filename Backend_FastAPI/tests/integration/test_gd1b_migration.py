@@ -77,12 +77,33 @@ async def _xoa_db(ten):
 
 
 async def _create_all(ten):
-    """Đúng hàm dựng lược đồ của bộ test (tạo ENUM trước ``create_all``), trỏ vào CSDL dùng một lần ``ten``."""
+    """Đúng hàm dựng lược đồ của bộ test (tạo ENUM trước ``create_all``; ``casbin_rule`` + cột ``template_id`` như
+    conftest — production có bảng này, migration chèn dòng vào đó), trỏ vào CSDL dùng một lần ``ten``."""
     from types import SimpleNamespace
+
+    from casbin_async_sqlalchemy_adapter import Base as CasbinBase
 
     from tests.fixtures.database import init_schema_once
 
-    await init_schema_once(SimpleNamespace(DATABASE_URL=_url(ten, "postgresql+asyncpg")), Base)
+    await init_schema_once(SimpleNamespace(DATABASE_URL=_url(ten, "postgresql+asyncpg")), Base, CasbinBase)
+
+
+async def _casbin_gd1b(k):
+    """(số dòng mang ``template_id`` của migration, tập (v0, v1, v2, v3) PHÂN BIỆT khớp ``CASBIN_POLICIES``)."""
+    m = _migration()
+    so = await k.fetchval("SELECT count(*) FROM casbin_rule WHERE ptype = 'p' AND template_id = $1", m.CASBIN_TEMPLATE_ID)
+    dong = await k.fetch("SELECT DISTINCT v0, v1, v2, v3 FROM casbin_rule WHERE ptype = 'p'")
+    return so, {tuple(r) for r in dong} & set(m.CASBIN_POLICIES)
+
+
+def _migration():
+    import importlib.util
+
+    p = GOC / "alembic" / "versions" / ("%s_bulk_verify_documents.py" % SAU)
+    spec = importlib.util.spec_from_file_location("_gd1b_mig_casbin", p)
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
 
 
 @pytest_asyncio.fixture
@@ -246,10 +267,18 @@ async def test_nang_cap_khoi_phuc_nguoi_tai_dau_tai_bang_chung_va_luoc_do_khop_m
         await _nhat_ky(k, d4, "downloaded", a, giay_truoc=3)
         await _nhat_ky(k, d4, "downloaded", None, giay_truoc=2)
         await k.execute("SET session_replication_role = origin")
+        # Một dòng Casbin của GĐ1b ĐÃ có sẵn (template khác) ⇒ migration không chèn trùng.
+        co_san = _migration().CASBIN_POLICIES[0]
+        await k.execute(
+            "INSERT INTO casbin_rule (ptype, v0, v1, v2, v3, template_id) VALUES ('p', $1, $2, $3, $4, 'khac')", *co_san
+        )
 
         rc, out = await _alembic(ten, "upgrade", SAU)
         assert rc == 0, out[-3000:]
         assert await _phien_ban(k) == SAU
+        so, tap = await _casbin_gd1b(k)
+        assert (so, tap) == (len(_migration().CASBIN_POLICIES) - 1, set(_migration().CASBIN_POLICIES))
+        assert await k.fetchval("SELECT count(*) FROM casbin_rule WHERE v0 = $1 AND v1 = $2 AND v2 = $3", *co_san[:3]) == 1
 
         assert tuple(await _cot(k, d1)) == (a, False, False, 1)
         for d in (d2, d3, d4, d5):
@@ -355,6 +384,7 @@ async def test_ha_cap_con_du_lieu_thi_dung_khong_xoa_gi(csdl_truoc):
         assert "GD1BDataPresent" in out, out[-3000:]
         assert await _phien_ban(k) == SAU
         assert await k.fetchval("SELECT count(*) FROM document_download_log") == 1
+        assert (await _casbin_gd1b(k))[0] == len(_migration().CASBIN_POLICIES)  # dừng ⇒ Casbin cũng còn nguyên
         # Rỗng ⇒ hạ được.
         await k.execute("DELETE FROM document_download_log")
         rc, out = await _alembic(ten, "downgrade", TRUOC)
@@ -362,5 +392,27 @@ async def test_ha_cap_con_du_lieu_thi_dung_khong_xoa_gi(csdl_truoc):
         assert await _phien_ban(k) == TRUOC
         for bang in BANG_MOI:
             assert await k.fetchval("SELECT to_regclass($1)", bang) is None, bang
+        assert await _casbin_gd1b(k) == (0, set())
+    finally:
+        await k.close()
+
+
+async def test_buoc_casbin_hong_thi_ca_nang_cap_rollback_khong_do_dang(csdl_truoc):
+    """Bước Casbin hỏng (ở đây: thiếu bảng ``casbin_rule``) ⇒ KHÔNG còn bảng / cột GĐ1b nào, phiên bản giữ nguyên. Khoá
+    việc bước Casbin nằm TRONG câu ``DO`` chính — ``env.py`` chạy AUTOCOMMIT nên một câu riêng sẽ commit lẻ phần lược đồ."""
+    ten = csdl_truoc
+    k = await asyncpg.connect(_url(ten, "postgresql"))
+    try:
+        await k.execute("DROP TABLE casbin_rule")
+        rc, out = await _alembic(ten, "upgrade", SAU)
+        assert rc != 0
+        assert "sqlstate=42P01" in out, out[-3000:]  # env.py che chữ lỗi, giữ SQLSTATE: bảng không tồn tại
+        assert await _phien_ban(k) == TRUOC
+        for bang in BANG_MOI:
+            assert await k.fetchval("SELECT to_regclass($1)", bang) is None, bang
+        assert await k.fetchval(
+            "SELECT count(*) FROM information_schema.columns WHERE table_name = 'profile_document' "
+            "AND column_name IN ('uploaded_by','uploaded_by_unknown','paper_submitted_by_unknown','row_version')"
+        ) == 0
     finally:
         await k.close()

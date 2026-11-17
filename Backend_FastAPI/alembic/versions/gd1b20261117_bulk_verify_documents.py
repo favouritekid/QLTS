@@ -28,7 +28,8 @@ MỘT câu ``DO`` làm TẤT CẢ (``env.py`` chạy ``AUTOCOMMIT`` ⇒ chỉ m�
 8. trigger ``row_version`` (tạo SAU khi điền ngược để mọi dòng cũ giữ ``row_version = 1``) — câu chép NGUYÊN từ
    ``app/models/admission_config/document_row_version_ddl.py``.
 
-Casbin cho route mới thêm khi route chốt (cùng PR, trước khi xin merge).
+10. Casbin cho route GĐ1b (``CASBIN_POLICIES``, ``template_id`` riêng), chèn ``WHERE NOT EXISTS`` rồi đếm — CŨNG trong câu
+    ``DO`` ấy (câu riêng sẽ commit lẻ dưới AUTOCOMMIT).
 
 ``downgrade``: FAIL-CLOSED — còn dòng ở bảng mới, hoặc cột mới còn giá trị khác mặc định ⇒ DỪNG, không xoá gì, trừ khi đặt
 ``GD1B_DOWNGRADE_DROP_DATA_ENABLED=1`` (cờ CHO PHÉP, mặc định tắt, đúng chữ ``1``).
@@ -56,7 +57,7 @@ _SQLSTATE_LOCK_TIMEOUT = "55P03"
 #: SQLSTATE riêng cho từng điểm dừng (``env.py`` che chữ lỗi CSDL, chỉ giữ SQLSTATE ⇒ người vận hành đọc mã để biết
 #: dừng vì đâu). QLB01 người tải lệch · QLB02 người nhận lệch · QLB03 dấu tải lệch · QLB04 tập giấy bằng chứng đổi
 #: trong lúc nâng cấp · QLB05 giấy đã duyệt có tệp mà không có nhật ký verified · QLB06 dòng bằng chứng lệch ·
-#: QLB07 ``user_activity_log.target_user_id`` không có đúng một khoá ngoại.
+#: QLB07 ``user_activity_log.target_user_id`` không có đúng một khoá ngoại · QLB11 số dòng Casbin GĐ1b sau khi chèn lệch.
 SQLSTATE_NO_VERIFIED_AUDIT = "QLB05"
 SQLSTATE_DOWNGRADE_DATA_PRESENT = "QLB10"
 
@@ -302,6 +303,7 @@ DECLARE
     n_ev_ins bigint;
     n_fk bigint;
     v_fk name;
+    n_casbin bigint;
 BEGIN
     PERFORM set_config('lock_timeout', '{LOCK_TIMEOUT}', true);
     LOCK TABLE profile_document, document_audit_log, user_activity_log IN SHARE ROW EXCLUSIVE MODE;
@@ -434,11 +436,61 @@ BEGIN
     {SQL_FN_ROW_VERSION.strip()};
     {SQL_TRIGGER_ROW_VERSION.strip()};
 
+    -- 10. Casbin cho route GĐ1b (TRONG câu DO này: AUTOCOMMIT ⇒ câu riêng sẽ để lại lược đồ đã đổi mà phiên bản chưa đổi).
+{_casbin_block_sql()};
+
     RAISE NOTICE 'gd1b20261117: co tep % (dien % , khong ro %), ban giay mat nguoi nhan %, dau tai %, bang chung % ',
         n_file_docs, n_filled, n_unknown, n_paper_flagged, n_download_ins, n_ev_ins;
 END
 $gd1b$
 """
+
+
+#: Casbin cho route GĐ1b (bổ sung hợp đồng bản 5 A4) — (v0, v1, v2, v3). Chép CỨNG (migration không phụ thuộc mã ứng dụng
+#: đang đổi); ``tests/api/test_gd1b_tich_hop_dang_ky.py`` khoá bằng ``policy_templates.GD1B_*_OBJECTS``. ``v3`` BẮT BUỘC có
+#: giá trị (NULL làm ``load_policy()`` đổ). Admin qua wildcard; ``eligibility`` không qua Casbin.
+_BULK = (
+    ("/api/admissions/documents/bulk-verify/preview", "POST"),
+    ("/api/admissions/documents/bulk-verify/{batch_id}/execute", "POST"),
+    ("/api/admissions/documents/bulk-verify/{batch_id}", "GET"),
+    ("/api/admissions/documents/bulk-verify/{batch_id}/finalize", "POST"),
+    ("/api/admissions/documents/bulk-verify", "GET"),
+)
+_CROSS = (
+    ("/api/admissions/cross-review/queue", "GET"),
+    ("/api/admissions/cross-review/verify", "POST"),
+    ("/api/admissions/cross-review/reject", "POST"),
+    ("/api/admissions/cross-review/bulk-verify/preview", "POST"),
+    ("/api/admissions/cross-review/bulk-verify/{batch_id}/execute", "POST"),
+    ("/api/admissions/cross-review/bulk-verify/{batch_id}", "GET"),
+    ("/api/admissions/cross-review/bulk-verify/{batch_id}/finalize", "POST"),
+    ("/api/admissions/cross-review/bulk-verify", "GET"),
+)
+CASBIN_POLICIES = (
+    tuple(("role:manager", o, a, "allow") for o, a in _BULK)
+    + tuple(("role:officer", o, a, "allow") for o, a in _CROSS)
+    + tuple(("role:accountant", o, a, "deny") for o, a in _CROSS)
+)
+CASBIN_TEMPLATE_ID = "_gd1b20261117_bulk_verify"
+
+
+def _casbin_block_sql() -> str:
+    """Thân PL/pgSQL (KHÔNG phải câu ``DO`` riêng) — nhúng vào câu ``DO`` của ``_upgrade_sql`` (bước 10), dùng biến
+    ``n_casbin`` khai ở đó. Chèn ``WHERE NOT EXISTS`` rồi đếm; lệch ⇒ ``RAISE`` ⇒ cả câu ``DO`` rollback."""
+    chen = ";\n".join(
+        "    INSERT INTO casbin_rule (ptype, v0, v1, v2, v3, template_id, applied_at) "
+        "SELECT 'p', '{0}', '{1}', '{2}', '{3}', '{t}', now() WHERE NOT EXISTS (SELECT 1 FROM casbin_rule "
+        "WHERE ptype = 'p' AND v0 = '{0}' AND v1 = '{1}' AND v2 = '{2}' AND v3 = '{3}')".format(*p, t=CASBIN_TEMPLATE_ID)
+        for p in CASBIN_POLICIES
+    )
+    dk = " OR ".join("(v0 = '%s' AND v1 = '%s' AND v2 = '%s' AND v3 = '%s')" % p for p in CASBIN_POLICIES)
+    return (
+        "%s;\n"
+        "    SELECT COUNT(DISTINCT (v0, v1, v2, v3)) INTO n_casbin FROM casbin_rule WHERE ptype = 'p' AND (%s);\n"
+        "    IF n_casbin <> %d THEN\n"
+        "        RAISE EXCEPTION 'gd1b20261117: can %% dong casbin, thay %%', %d, n_casbin USING ERRCODE = 'QLB11';\n"
+        "    END IF" % (chen, dk, len(CASBIN_POLICIES), len(CASBIN_POLICIES))
+    )
 
 
 def upgrade() -> None:
@@ -488,6 +540,7 @@ BEGIN
     ALTER TABLE user_activity_log DROP CONSTRAINT user_activity_log_target_user_id_fkey;
     ALTER TABLE user_activity_log ADD CONSTRAINT user_activity_log_target_user_id_fkey
         FOREIGN KEY (target_user_id) REFERENCES "user" (id);
+    DELETE FROM casbin_rule WHERE ptype = 'p' AND template_id = '_gd1b20261117_bulk_verify';
 END
 $gd1b_down$
 """

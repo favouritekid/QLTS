@@ -104,6 +104,29 @@ class PolicyTemplate(TypedDict):
     policies: List[PolicyRule]
 
 
+# GĐ1b (bổ sung hợp đồng bản 5 A4) — MỘT nguồn (đối tượng, phương thức) cho ba template dưới đây. Migration
+# ``gd1b20261117`` chép cứng cùng các dòng (seed production); ``tests/api/test_gd1b_tich_hop_dang_ky.py`` khoá hai bên bằng
+# nhau. ``{batch_id}`` (keyMatch4 ⇒ MỘT đoạn đường) thay vì ``*`` (khớp cả đường sâu hơn). Admin đi qua wildcard;
+# ``/cross-review/grants*`` chỉ Admin (wildcard); ``/cross-review/eligibility`` không qua Casbin.
+GD1B_BULK_VERIFY_OBJECTS = (
+    ("/api/admissions/documents/bulk-verify/preview", "POST"),
+    ("/api/admissions/documents/bulk-verify/{batch_id}/execute", "POST"),
+    ("/api/admissions/documents/bulk-verify/{batch_id}", "GET"),
+    ("/api/admissions/documents/bulk-verify/{batch_id}/finalize", "POST"),
+    ("/api/admissions/documents/bulk-verify", "GET"),
+)
+GD1B_CROSS_REVIEW_OBJECTS = (
+    ("/api/admissions/cross-review/queue", "GET"),
+    ("/api/admissions/cross-review/verify", "POST"),
+    ("/api/admissions/cross-review/reject", "POST"),
+    ("/api/admissions/cross-review/bulk-verify/preview", "POST"),
+    ("/api/admissions/cross-review/bulk-verify/{batch_id}/execute", "POST"),
+    ("/api/admissions/cross-review/bulk-verify/{batch_id}", "GET"),
+    ("/api/admissions/cross-review/bulk-verify/{batch_id}/finalize", "POST"),
+    ("/api/admissions/cross-review/bulk-verify", "GET"),
+)
+
+
 # =============================================================================
 # CORE ROLE TEMPLATES (Based on system defaults)
 # =============================================================================
@@ -215,6 +238,8 @@ OFFICER_TEMPLATE: PolicyTemplate = {
         # OWNER_DOC_MUTATION_STATES + doc non-missing. Manager/admin đã có reset
         # ở template riêng; reset KHÔNG mở verify/reject (vẫn reviewer-only).
         {"subject": "{role}", "object": "/api/admissions/{id}/documents/{doc_code}/reset", "action": "POST"},
+        # GĐ1b — duyệt chéo tạm thời: route mở cho vai Cán bộ; quyền chéo còn hiệu lực + đơn vị kiểm ở deps và lại dưới khoá.
+        *({"subject": "{role}", "object": o, "action": a} for o, a in GD1B_CROSS_REVIEW_OBJECTS),
         # Phase 3 multi-NV read-only (PR-3B). Officer can VIEW result-published
         # profiles + choice list for their assigned unit; mutations stay
         # manager-only per RBAC matrix plan v0.7. Service-layer IDOR
@@ -486,6 +511,8 @@ ACCOUNTANT_TEMPLATE: PolicyTemplate = {
         # The keyMatch4 wildcard covers /api/v2/admissions/{id}/<verb>
         # (single-segment id) per the existing matcher in
         # auth_model.conf.
+        # GĐ1b — duyệt chéo chỉ dành cho Cán bộ có quyền chéo; kế toán kế thừa cán bộ ⇒ deny tường minh.
+        *({"subject": "{role}", "object": o, "action": a, "eft": "deny"} for o, a in GD1B_CROSS_REVIEW_OBJECTS),
         {"subject": "{role}", "object": "/api/v2/admissions/*/claim",             "action": "POST", "eft": "deny"},
         {"subject": "{role}", "object": "/api/v2/admissions/*/request-revision",  "action": "POST", "eft": "deny"},
         {"subject": "{role}", "object": "/api/v2/admissions/*/publish-result",    "action": "POST", "eft": "deny"},
@@ -654,6 +681,8 @@ MANAGER_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/admissions/{id}/documents/{doc_code}/verify-format", "action": "PATCH"},
         {"subject": "{role}", "object": "/api/admissions/{id}/documents/{doc_code}/reject", "action": "POST"},
         {"subject": "{role}", "object": "/api/admissions/{id}/documents/{doc_code}/reset", "action": "POST"},
+        # GĐ1b — lô duyệt giấy (đường hàng loạt của Quản lý); phạm vi đơn vị + người tạo lô kiểm ở deps / dịch vụ.
+        *({"subject": "{role}", "object": o, "action": a} for o, a in GD1B_BULK_VERIFY_OBJECTS),
         # Phase 3 multi-NV transitions (PR-3B). Routes shipped under /api/v2/
         # namespace; counterpart accountant DENY rules already in
         # ACCOUNTANT_TEMPLATE Phase 1 B1 (lines 319-324 above), so manager

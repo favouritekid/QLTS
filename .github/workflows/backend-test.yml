@@ -1375,6 +1375,32 @@ jobs:
               tests/integration/test_council_document_casbin_vong_gd_migration.py
               tests/unit/test_hop_dong_msw_ghim_luat.py
               tests/unit/test_hop_dong_msw_cau_loi.py
+          # GĐ1b — duyệt giấy nhanh (đặc tả bản 3.6; bổ sung hợp đồng bản 5 A4). Hai lát RIÊNG: ca GĐ1b chậm (đo local ~15–18 s
+          # mỗi ca API, tổng ~50 phút một luồng) ⇒ gộp vào một tier có sẵn sẽ vượt trần 75 phút. Trước 18-11 KHÔNG tier nào chứa
+          # `test_gd1b_*` (required check xanh mà không chạy — CLAUDE.md §11). `test_gd1b_lo_tro_giup.py` chỉ là fixture (0 ca).
+          # ⚠️ `test_tham_so_k1_da_do` (Tier 5i) ĐỎ CÓ CHỦ ĐÍCH cho tới khi điền N + lock_timeout đo ở V3 (fail-closed, §13.3).
+          - tier: Tier 5h — GĐ1b lõi + bằng chứng + nối dây
+            tests: >-
+              tests/integration/test_gd1b_migration.py
+              tests/api/test_gd1b_xoa_tai_khoan.py
+              tests/api/test_gd1b_khoa_va_tep.py
+              tests/unit/test_gd1b_xoa_tep_trong_thu_muc_ho_so.py
+              tests/api/test_gd1b_transition.py
+              tests/unit/test_gd1b_config_facts.py
+              tests/integration/test_gd1b_luat_in_v12.py
+              tests/api/test_gd1b_hai_phien.py
+              tests/api/test_gd1b_bang_chung_tai.py
+              tests/api/test_gd1b_bang_chung_xoa.py
+              tests/api/test_gd1b_tich_hop_dang_ky.py
+          - tier: Tier 5i — GĐ1b lô duyệt giấy + duyệt chéo
+            tests: >-
+              tests/unit/test_gd1b_lo_khoa_tu_van.py
+              tests/api/test_gd1b_lo_xem_truoc.py
+              tests/api/test_gd1b_lo_chay.py
+              tests/api/test_gd1b_lo_vong_doi.py
+              tests/api/test_gd1b_lo_danh_sach.py
+              tests/api/test_gd1b_lo_khoa_tu_van_csdl.py
+              tests/api/test_gd1b_cheo_quyen.py
 
     env:
       APP_ENV: test

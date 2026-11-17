@@ -8091,6 +8091,77 @@ async def submit_and_evaluate(
         )
 
 
+# media_type từ allowlist đuôi tệp do MÁY CHỦ kiểm soát (Gap 3 — A05/A03): đuôi đặt từ magic bytes lúc tải lên, không dùng MIME
+# do client gửi. MỘT nguồn cho route tải tệp hiện hành + route tải tệp bằng chứng (GĐ1b, bổ sung hợp đồng bản 5 A3).
+DOWNLOAD_MEDIA_TYPES: Dict[str, str] = {
+    ".pdf": "application/pdf",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+}
+
+
+def download_media_type(abs_path: str) -> str:
+    import os
+
+    return DOWNLOAD_MEDIA_TYPES.get(os.path.splitext(abs_path)[1].lower(), "application/octet-stream")
+
+
+def download_safe_basename(abs_path: str) -> str:
+    """Bỏ CR/LF để tên tệp không chèn được tiêu đề (Starlette vẫn mã hoá Content-Disposition theo RFC)."""
+    import os
+
+    return os.path.basename(abs_path).replace("\r", "").replace("\n", "")
+
+
+async def record_document_download(
+    db: AsyncSession,
+    *,
+    profile_id: int,
+    document_row_id: int,
+    document_type_id: Optional[int],
+    actor_user_id: int,
+    actor_ip: Optional[str],
+    actor_user_agent: Optional[str],
+    extra_data: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Nhật ký tải xuống — MỘT nguồn (CLAUDE.md §7) cho tải tệp hiện hành và tải tệp bằng chứng: dòng ``downloaded`` (Gap 1 —
+    A09) + dấu tải ``document_download_log`` ĐỘC LẬP vòng đời hồ sơ / giấy (GĐ1b K4c, đặc tả 3.6 §4.3), CÙNG giao dịch; chỉ
+    flush — router commit trước khi trả tệp."""
+    from sqlalchemy import select as _select
+
+    from .document_audit_service import DocumentAction, log_document_action
+
+    audit_row = await log_document_action(
+        db=db,
+        profile_document_id=document_row_id,
+        action=DocumentAction.DOWNLOADED,
+        actor_user_id=actor_user_id,
+        ip_address=actor_ip,
+        user_agent=actor_user_agent,
+        **({"extra_data": extra_data} if extra_data is not None else {}),
+    )
+    type_code = None
+    if document_type_id is not None:
+        type_code = (
+            await db.execute(
+                _select(models.ConfigDocumentType.code).where(models.ConfigDocumentType.id == document_type_id)
+            )
+        ).scalar_one_or_none()
+    db.add(
+        models.DocumentDownloadLog(
+            actor_user_id=actor_user_id,
+            profile_id=profile_id,
+            document_row_id=document_row_id,
+            document_type_code=type_code,
+            ip_address=actor_ip,
+            user_agent=actor_user_agent,
+            source_audit_id=getattr(audit_row, "id", None),
+        )
+    )
+    await db.flush()
+
+
 async def get_document_file_for_download(
     db: AsyncSession,
     profile: models.AdmissionProfile,
@@ -8137,55 +8208,19 @@ async def get_document_file_for_download(
         )
         raise ResourceNotFoundError("Document not found")
 
-    # media_type from a server-controlled extension allowlist (Gap 3 —
-    # A05/A03). Extension is set from sniffed magic bytes at upload time, so
-    # it is trustworthy; no persisted/client MIME value is ever used.
-    ext = os.path.splitext(abs_path)[1].lower()
-    media_type = {
-        ".pdf": "application/pdf",
-        ".jpg": "image/jpeg",
-        ".jpeg": "image/jpeg",
-        ".png": "image/png",
-    }.get(ext, "application/octet-stream")
+    media_type = download_media_type(abs_path)
+    safe_basename = download_safe_basename(abs_path)
 
-    # safe_basename: strip CR/LF so the filename can't smuggle header content
-    # (Starlette still applies RFC-compliant Content-Disposition encoding).
-    safe_basename = os.path.basename(abs_path).replace("\r", "").replace("\n", "")
-
-    # Audit (Gap 1 — A09): record who downloaded which document. db.flush is
-    # inside log_document_action; the router commits before streaming.
-    from .document_audit_service import log_document_action, DocumentAction
-    audit_row = await log_document_action(
-        db=db,
-        profile_document_id=doc.id,
-        action=DocumentAction.DOWNLOADED,
+    # Audit (Gap 1 — A09) + dấu tải GĐ1b K4c — helper chung với route tải tệp bằng chứng.
+    await record_document_download(
+        db,
+        profile_id=profile.id,
+        document_row_id=doc.id,
+        document_type_id=doc.document_type_id,
         actor_user_id=actor_user_id,
-        ip_address=actor_ip,
-        user_agent=actor_user_agent,
+        actor_ip=actor_ip,
+        actor_user_agent=actor_user_agent,
     )
-    # GĐ1b K4c (đặc tả bản 3.6 §4.3): dấu tải xuống ĐỘC LẬP vòng đời hồ sơ / giấy, CÙNG giao dịch với dòng nhật ký
-    # ``downloaded`` (router commit trước khi trả tệp). Xoá hồ sơ nháp (CASCADE nhật ký giấy) không làm mất dấu tải.
-    from sqlalchemy import select as _select
-
-    type_code = None
-    if doc.document_type_id is not None:
-        type_code = (
-            await db.execute(
-                _select(models.ConfigDocumentType.code).where(models.ConfigDocumentType.id == doc.document_type_id)
-            )
-        ).scalar_one_or_none()
-    db.add(
-        models.DocumentDownloadLog(
-            actor_user_id=actor_user_id,
-            profile_id=profile.id,
-            document_row_id=doc.id,
-            document_type_code=type_code,
-            ip_address=actor_ip,
-            user_agent=actor_user_agent,
-            source_audit_id=getattr(audit_row, "id", None),
-        )
-    )
-    await db.flush()
 
     return abs_path, safe_basename, media_type
 

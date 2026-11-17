@@ -1,7 +1,7 @@
 """Trợ giúp chung cho test lô duyệt giấy / duyệt chéo GĐ1b (agent lô). KHÔNG có ca kiểm nào ở tệp này.
 
-- ``lo_routers``: gắn TẠM hai router mới vào ứng dụng + thêm dòng Casbin vào enforcer (Claude đăng ký chính thức khi tích
-  hợp — hợp đồng bản 4 §3) + đặt hai tham số chưa đo (N, ``lock_timeout``) bằng monkeypatch.
+- ``lo_routers``: trả ứng dụng THẬT (router + Casbin đã đăng ký ở ``app/main.py`` / ``policy_templates.py`` khi tích hợp) +
+  đặt hai tham số chưa đo (N, ``lock_timeout``) bằng monkeypatch.
 - ``lo_config``: đường xét tự đủ với 3 giấy bản giấy bắt buộc (A, B, D), 1 giấy bản giấy tuỳ chọn (C), 1 giấy tải tệp (U).
 - ``tao_ho_so_cho_xet``: hồ sơ có giấy đã nhận bản giấy (người nhận = cán bộ phụ trách), rồi đưa sang ``submitted``.
 - ``Diem`` / ``boc``: điểm dừng (phiên tới điểm ⇒ báo ``toi`` rồi CHỜ ``di``), dừng ở lần gọi thứ ``lan``.
@@ -31,31 +31,8 @@ ADMISSIONS = "/api/admissions"
 BULK = f"{ADMISSIONS}/documents/bulk-verify"
 CROSS = f"{ADMISSIONS}/cross-review"
 
-#: Dòng Casbin cần thêm (v0, v1, v2, v3) — NỘP cho Claude gắn vào migration ``gd1b20261117`` + ``policy_templates.py``.
-#: Admin qua wildcard ``/*``; ``eligibility`` không qua Casbin (mọi người đã đăng nhập); kế toán kế thừa cán bộ ⇒ deny tường minh.
-CASBIN_LINES = (
-    ("role:manager", "/api/admissions/documents/bulk-verify/preview", "POST", "allow"),
-    ("role:manager", "/api/admissions/documents/bulk-verify/*/execute", "POST", "allow"),
-    ("role:manager", "/api/admissions/documents/bulk-verify/*", "GET", "allow"),
-    ("role:manager", "/api/admissions/documents/bulk-verify/*/finalize", "POST", "allow"),
-    ("role:manager", "/api/admissions/documents/bulk-verify", "GET", "allow"),
-    ("role:officer", "/api/admissions/cross-review/queue", "GET", "allow"),
-    ("role:officer", "/api/admissions/cross-review/verify", "POST", "allow"),
-    ("role:officer", "/api/admissions/cross-review/reject", "POST", "allow"),
-    ("role:officer", "/api/admissions/cross-review/bulk-verify/preview", "POST", "allow"),
-    ("role:officer", "/api/admissions/cross-review/bulk-verify/*/execute", "POST", "allow"),
-    ("role:officer", "/api/admissions/cross-review/bulk-verify/*", "GET", "allow"),
-    ("role:officer", "/api/admissions/cross-review/bulk-verify/*/finalize", "POST", "allow"),
-    ("role:officer", "/api/admissions/cross-review/bulk-verify", "GET", "allow"),
-    ("role:accountant", "/api/admissions/cross-review/queue", "GET", "deny"),
-    ("role:accountant", "/api/admissions/cross-review/verify", "POST", "deny"),
-    ("role:accountant", "/api/admissions/cross-review/reject", "POST", "deny"),
-    ("role:accountant", "/api/admissions/cross-review/bulk-verify/preview", "POST", "deny"),
-    ("role:accountant", "/api/admissions/cross-review/bulk-verify/*/execute", "POST", "deny"),
-    ("role:accountant", "/api/admissions/cross-review/bulk-verify/*", "GET", "deny"),
-    ("role:accountant", "/api/admissions/cross-review/bulk-verify/*/finalize", "POST", "deny"),
-    ("role:accountant", "/api/admissions/cross-review/bulk-verify", "GET", "deny"),
-)
+#: Dòng Casbin của lô / duyệt chéo: MỘT nguồn ở ``app/casbin_config/policy_templates.py`` (``GD1B_*_OBJECTS``) + migration
+#: ``gd1b20261117`` (seed production) — khoá bằng nhau ở ``tests/api/test_gd1b_tich_hop_dang_ky.py``. Test KHÔNG tự thêm dòng.
 
 #: Tham số dùng trong test (số THẬT do Claude điền sau V3 — test không phụ thuộc giá trị cụ thể).
 N_TEST = 50
@@ -64,35 +41,15 @@ LOCK_TIMEOUT_MS_TEST = 3000
 
 @pytest_asyncio.fixture
 async def lo_routers(client, monkeypatch):
+    """Từ khi tích hợp (bổ sung hợp đồng bản 5 A4): router do ``app/main.py`` đăng ký, dòng Casbin do ``policy_templates.py``
+    seed — fixture KHÔNG tự đăng ký / thêm dòng nữa (tự đăng ký thì test xanh cả khi ``main.py`` sai thứ tự hay thiếu dòng
+    Casbin — CLAUDE.md §10). Chỉ đặt hai tham số chưa đo (N, ``lock_timeout``) bằng monkeypatch."""
     from app.main import fastapi_app
-    from app.routers import document_bulk_verify, document_cross_review
     from app.services import document_bulk_verify_service as svc
 
     monkeypatch.setattr(svc, "BULK_VERIFY_MAX_DOCUMENTS", N_TEST)
     monkeypatch.setattr(svc, "BULK_VERIFY_LOCK_TIMEOUT_MS", LOCK_TIMEOUT_MS_TEST)
-    routes = fastapi_app.router.routes
-    n0 = len(routes)
-    fastapi_app.include_router(document_bulk_verify.router, prefix="/api")
-    fastapi_app.include_router(document_cross_review.router, prefix="/api")
-    moi = routes[n0:]
-    del routes[n0:]
-    # THỨ TỰ BẮT BUỘC khi Claude đăng ký ở ``app/main.py``: hai router mới đứng TRƯỚC ``admissions.router`` —
-    # ``POST /api/admissions/{profile_id}/reject`` (router cũ) khớp cả ``/api/admissions/cross-review/reject`` và trả 422.
-    # Fixture đặt đúng thứ tự ấy; ``test_gd1b_lo_khoa_tu_van_csdl.py`` khẳng định route đầu tiên khớp là route mới.
-    vi_tri = next(
-        (i for i, r in enumerate(routes) if getattr(getattr(r, "endpoint", None), "__module__", "") == "app.routers.admissions"),
-        len(routes),
-    )
-    routes[vi_tri:vi_tri] = moi
-    enf = fastapi_app.state.enforcer
-    for line in CASBIN_LINES:
-        await enf.add_policy(*line)  # đã có ⇒ trả False, không lỗi
-    try:
-        yield fastapi_app
-    finally:
-        for r in moi:
-            routes.remove(r)
-        assert len(routes) == n0
+    yield fastapi_app
 
 
 @pytest_asyncio.fixture

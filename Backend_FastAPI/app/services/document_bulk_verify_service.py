@@ -174,10 +174,9 @@ def _doc_rule_facts(profile: models.AdmissionProfile, doc: models.ProfileDocumen
     (``requires_upload`` của giấy ngoài cấu hình suy từ việc có tệp)."""
     code = doc.document_type.code
     applied = profile.applied_rules or {}
-    doc_configs = applied.get("doc_configs", {}) or {}
     mandatory = set(applied.get("mandatory_docs", []) or [])
-    is_extra = code not in doc_configs
-    requires_upload = bool(doc.file_path) if is_extra else bool((doc_configs.get(code) or {}).get("requires_upload", True))
+    # MỘT nguồn với ``transition_document`` + cờ phản hồi hồ sơ (bổ sung hợp đồng bản 5 A3).
+    is_extra, requires_upload = rules.config_facts(applied, code, has_file=bool(doc.file_path))
     facts = rules.DocFacts.from_row(doc, requires_upload=requires_upload, is_extra=is_extra)
     return code, is_extra, (code in mandatory and not is_extra), facts
 

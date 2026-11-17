@@ -51,6 +51,9 @@ from .routers import (
     admin_v2_system_config,  # ✅ #184 PR-1D / phase1_13: admin runtime config
     admin_backfill,  # ✅ #184 Phase 3 PR-3D-B BE-2: admin backfill exception queue (Q-P3-09)
     admissions,  # ✅ NEW: Admission Profile workflow
+    document_bulk_verify,  # GĐ1b: lô duyệt giấy (Quản lý / Admin)
+    document_cross_review,  # GĐ1b: duyệt chéo tạm thời
+    document_evidence,  # GĐ1b: tải tệp bằng chứng duyệt (K5)
     admissions_magic_link,  # ✅ PR-CO-2-BE / PR-3E: multi-action magic-link consume (4 actions)
     admissions_v2,  # ✅ #184 Phase 3 PR-3C Sub-3.3: multi-NV choice-engine endpoints (publish-result T6)
     enrollment_letters,  # ✅ Giấy báo nhập học PDF (official issuance)
@@ -826,6 +829,12 @@ fastapi_app.include_router(collaborators.public_router, prefix="/api")  # ✅ CT
 fastapi_app.include_router(commissions.policy_router, prefix="/api")  # ✅ CTV P2: Commission policies (Admin)
 fastapi_app.include_router(commissions.record_router, prefix="/api")  # ✅ CTV P2: Commission records (Admin)
 fastapi_app.include_router(commissions.ctv_commission_router, prefix="/api")  # ✅ CTV P2: CTV commission view
+# GĐ1b — BA router dưới /api/admissions PHẢI đứng TRƯỚC ``admissions.router``: route cũ có tham số đường dẫn (vd.
+# ``POST /api/admissions/{profile_id}/reject``) khớp luôn ``/api/admissions/cross-review/reject`` và trả 422 (agent lô đo).
+# Khoá bằng ``tests/api/test_gd1b_tich_hop_dang_ky.py`` trên app THẬT (không fixture tự đăng ký).
+fastapi_app.include_router(document_bulk_verify.router, prefix="/api")
+fastapi_app.include_router(document_cross_review.router, prefix="/api")
+fastapi_app.include_router(document_evidence.router, prefix="/api")
 fastapi_app.include_router(admissions.router, prefix="/api")  # ✅ Admission Profile workflow
 fastapi_app.include_router(enrollment_letters.router, prefix="/api")  # ✅ Giấy báo nhập học PDF (official issuance)
 fastapi_app.include_router(admissions_magic_link.router)  # ✅ PR-CO-2-BE / PR-3E: multi-action magic-link (router declares /api/v2/admissions/magic-link prefix)
