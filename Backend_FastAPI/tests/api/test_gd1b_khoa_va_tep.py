@@ -32,9 +32,6 @@ REPO_DOC_WRITERS = {
     "update_document_status",
     "mark_paper_submitted",
     "update_graduation_proof",
-    "confirm_document_format",
-    "reject_document",
-    "reset_document",
 }
 
 
@@ -59,12 +56,24 @@ def test_moi_ham_ghi_giay_khoa_ho_so_truoc_loi_goi_ghi_dau_tien():
                 dong_khoa.append(node.lineno)
         if dong_ghi:
             cac_ham[fn.name] = (min(dong_khoa) if dong_khoa else None, min(dong_ghi))
-    assert set(cac_ham) >= {
-        "upload_document", "mark_paper_submitted", "update_graduation_proof_kind",
-        "confirm_document_format", "reject_document", "reset_document",
-    }, sorted(cac_ham)
+    assert set(cac_ham) >= {"upload_document", "mark_paper_submitted", "update_graduation_proof_kind"}, sorted(cac_ham)
     sai = {ten: v for ten, v in cac_ham.items() if v[0] is None or v[0] > v[1]}
     assert sai == {}, sai
+
+    # Duyệt / từ chối / Đặt lại: nơi DUY NHẤT là transition_document — khoá hồ sơ TRƯỚC câu UPDATE profile_document.
+    src_t = (GOC / "app" / "services" / "document_transition.py").read_text(encoding="utf-8")
+    fn = next(
+        n for n in ast.walk(ast.parse(src_t)) if isinstance(n, ast.AsyncFunctionDef) and n.name == "transition_document"
+    )
+    khoa = [n.lineno for n in ast.walk(fn) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+            and n.func.id == "_lock_profile_for_document_write"]
+    ghi = [n.lineno for n in ast.walk(fn) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+           and n.func.id == "update"]
+    assert khoa and ghi and min(khoa) < min(ghi), (khoa, ghi)
+    # Không hàm dịch vụ nào khác ghi trạng thái duyệt / từ chối / Đặt lại: bộ ghi cũ của repository đã gỡ.
+    repo = (GOC / "app" / "repositories" / "admission_repository.py").read_text(encoding="utf-8")
+    for ten in ("confirm_document_format", "reject_document", "reset_document"):
+        assert f"def {ten}(" not in repo, ten
 
 
 class _BatCau:

@@ -3122,6 +3122,10 @@ def _compute_frontend_fields(
                     # builds the authed download URL. The append blocks below
                     # only expose it when a real file_path exists.
                     "id": doc.id,
+                    # GĐ1b §4.7: định danh dòng giấy + phiên bản cho MỌI giấy (kể cả bản giấy không tệp).
+                    "row_version": doc.row_version,
+                    # Dữ kiện cho luật quyết định (document_review_rules) — dòng THÔ, không cắt theo trạng thái.
+                    "_row": doc,
                     "status": doc.status,
                     "label_from_db": doc.document_type.name,
                     # rejection_reason is the only field that is meaningful
@@ -3188,6 +3192,43 @@ def _compute_frontend_fields(
     from .admission_document_policy import DocumentActionPolicy
     _doc_policy = DocumentActionPolicy.for_(profile, current_user)
 
+    from .document_review_rules import (
+        ACTION_RESET as _RESET,
+        ACTION_REJECT as _REJECT,
+        ACTION_VERIFY as _VERIFY,
+        VIA_SINGLE as _SINGLE,
+        DocFacts as _DocFacts,
+        decide as _decide,
+    )
+
+    def _gd1b_flags(uploaded_doc: dict, doc_status: str, requires_upload: bool, is_extra: bool) -> dict:
+        """GĐ1b §4.7 — cờ máy chủ theo giấy, tính bằng ĐÚNG ``document_review_rules.decide`` mà ``transition_document``
+        dùng dưới khoá (thin client: FE không suy theo vai)."""
+        row = uploaded_doc.get("_row")
+        if row is None:
+            return {
+                "can_verify": False, "can_reject": False, "can_reset": False, "can_view_history": False,
+                "verify_block_reason": None, "requires_ack": False, "reset_requires_reason": False,
+                "reset_keeps_evidence": False,
+            }
+        facts = _DocFacts.from_row(row, requires_upload=requires_upload, is_extra=is_extra)
+        kw = dict(policy=_doc_policy, actor_id=current_user.id, profile_status=profile.status, doc=facts)
+        dv = _decide(_VERIFY, _SINGLE, **kw)
+        dr = _decide(_REJECT, _SINGLE, **kw)
+        ds = _decide(_RESET, _SINGLE, **kw)
+        return {
+            "can_verify": dv.allowed,
+            "can_reject": dr.allowed,
+            "can_reset": ds.allowed,
+            "can_view_history": bool(_doc_policy.ctx.reviewer_scope),
+            "verify_block_reason": None if dv.allowed else dv.block_reason,
+            "requires_ack": bool(
+                (dv.allowed and dv.requires_ack) or (dr.allowed and dr.requires_ack) or (ds.allowed and ds.requires_ack)
+            ),
+            "reset_requires_reason": ds.allowed,
+            "reset_keeps_evidence": bool(ds.allowed and doc_status == "verified" and facts.has_file),
+        }
+
     def _compute_document_permissions(
         doc_status: str,
         requires_upload: bool,
@@ -3250,9 +3291,13 @@ def _compute_frontend_fields(
         _doc_status = uploaded_doc.get("status", "missing")
         _requires_upload = config.get("requires_upload", True)
         _perms = _compute_document_permissions(_doc_status, _requires_upload)
+        _perms.update(_gd1b_flags(uploaded_doc, _doc_status, _requires_upload, False))
 
         documents_checklist.append({
             "code": doc_code,
+            # GĐ1b §4.7: định danh dòng giấy + phiên bản (mọi giấy có dòng). ``document_id`` giữ nghĩa "id để tải tệp".
+            "document_row_id": uploaded_doc.get("id"),
+            "row_version": uploaded_doc.get("row_version"),
             "label": config.get("label") or uploaded_doc.get("label_from_db") or doc_code,
             "is_mandatory": doc_code in _mandatory_set,
             "is_extra": False,
@@ -3300,8 +3345,11 @@ def _compute_frontend_fields(
         # upload happened, otherwise treat as paper-only.
         _requires_upload = bool(uploaded_doc.get("file_path"))
 
+        _extra_flags = _gd1b_flags(uploaded_doc, _doc_status, _requires_upload, True)
         documents_checklist.append({
             "code": extra_code,
+            "document_row_id": uploaded_doc.get("id"),
+            "row_version": uploaded_doc.get("row_version"),
             "label": uploaded_doc.get("label_from_db") or extra_code,
             "is_mandatory": False,
             "is_extra": True,
@@ -3329,14 +3377,11 @@ def _compute_frontend_fields(
             "graduation_proof_kind": uploaded_doc.get("graduation_proof_kind"),
             "supplement_due_date": uploaded_doc.get("supplement_due_date"),
             "can_update_graduation_kind": False,
-            # Extras are read-only: row visible for evidence + audit,
-            # but no action buttons. A future sync-path action will own
-            # the cleanup workflow.
+            # Extras: không tải / duyệt / từ chối / nhận giấy. GĐ1b X1: Quản lý trong phạm vi / Admin ĐẶT LẠI được (có lý
+            # do, nhật ký ``via = extra_cleanup``) — cờ từ cùng luật với cổng ghi.
             "can_upload": False,
-            "can_verify": False,
-            "can_reject": False,
-            "can_reset": False,
             "can_mark_paper_submitted": False,
+            **_extra_flags,
         })
 
     profile.documents_checklist = documents_checklist
@@ -8848,90 +8893,43 @@ async def confirm_document_format(
     doc_code: str,
     format_type: str,
     current_user: models.User,
+    *,
+    expected_row_version: int,
+    reason: Optional[str] = None,
+    unknown_submitter_ack: bool = False,
+    request_meta=None,
 ) -> models.AdmissionProfile:
-    """
-    Confirm physical format of a document and mark as verified.
+    """Duyệt MỘT giấy (nút lẻ) — GĐ1b: lớp mỏng qua ``transition_document(via="single")`` (đặc tả bản 3.6 §4).
 
-    This performs the full verification workflow:
-    1. Updates verified_format (original | certified_copy | photo)
-    2. Sets status to 'verified'
-    3. Records verification timestamp and officer
-    4. Re-computes validation_summary with updated document status
-
-    Args:
-        db: Database session
-        profile_id: AdmissionProfile ID
-        doc_code: Document type code
-        format_type: original | certified_copy | photo
-        current_user: Officer performing verification
-
-    Returns:
-        AdmissionProfile with updated validation_summary
-
-    Raises:
-        ResourceNotFoundError: Document not found
+    Khoá, đọc lại dưới khoá, luật người nhận, phiên bản dòng, nhật ký (``old_status`` thật), tệp bằng chứng: đều ở
+    ``app/services/document_transition.py``. Ở đây chỉ chặn IDOR (404) trước mọi khoá và dựng phản hồi đầy đủ.
     """
     from app.repositories import AdmissionRepository
+    from .document_transition import transition_document
+
     admission_repo = AdmissionRepository(db)
-
-    # 1. Access Check
     profile = await get_profile(db, profile_id, current_user)
-    profile = await _lock_profile_for_document_write(db, profile_id)  # GĐ1b §4.5 luật chung
-
-    # PR #5 guard — same rule matrix as the can_verify flag on documents_checklist.
     existing = await admission_repo.get_document_by_type(profile_id, doc_code)
     if not existing:
         raise ResourceNotFoundError(f"Document code '{doc_code}' not found")
-    _authorize_document_action(
+
+    await transition_document(
+        db,
+        profile_id=profile_id,
+        document_row_id=existing.id,
         action="verify",
-        profile=profile,
-        doc_status=existing.status,
-        doc_code=doc_code,
-        current_user=current_user,
-    )
-
-    # 2. Verify Document Format (full verification)
-    doc = await admission_repo.confirm_document_format(
-        profile_id=profile_id,
-        document_type_code=doc_code,
+        actor_id=current_user.id,
+        via="single",
+        expected_row_version=expected_row_version,
         verified_format=format_type,
-        officer_id=current_user.id,
+        reason=reason,
+        unknown_submitter_ack=unknown_submitter_ack,
+        request_meta=request_meta,
     )
 
-    if not doc:
-        raise ResourceNotFoundError(f"Document code '{doc_code}' not found")
-
-    await db.flush()
-
-    # 3. G2 (ADM-032 partial) — full response contract parity. See
-    # commit message: returning AdmissionProfile from a mutation
-    # without _populate_response_fields leaves permissions /
-    # available_actions / eligibility_status at schema defaults, so
-    # the FE has to refetch via GET to render the row correctly.
+    # G2 (ADM-032 partial) — full response contract parity.
     documents = await admission_repo.get_all_documents(profile_id)
-    await _populate_response_fields(
-        db, profile, current_user, documents=documents
-    )
-
-    # ✅ AUDIT LOG: Track document verification
-    from .document_audit_service import log_document_verification
-    await log_document_verification(
-        db=db,
-        profile_document_id=doc.id,
-        actor_user_id=current_user.id,
-        old_status="uploaded",
-        verified_format=format_type,
-    )
-
-    log.info(
-        "Document verified with audit log",
-        profile_id=profile_id,
-        doc_code=doc_code,
-        verified_format=format_type,
-        officer_id=current_user.id,
-        officer_email=current_user.email,
-    )
-
+    await _populate_response_fields(db, profile, current_user, documents=documents)
     return profile
 
 
@@ -9236,82 +9234,47 @@ async def reject_document(
     doc_code: str,
     reason: str,
     current_user: models.User,
+    *,
+    expected_row_version: int,
+    unknown_submitter_ack: bool = False,
+    request_meta=None,
 ) -> tuple[Dict[str, Any], Any]:
-    """
-    Reject a document with reason.
-    
-    User will need to re-upload or resubmit.
-    Only officers/managers/admins can reject documents.
-    
-    Args:
-        db: Database session
-        profile_id: AdmissionProfile ID
-        doc_code: Document type code
-        reason: Rejection reason (required)
-        current_user: Current authenticated user (must be officer+)
-        
+    """Từ chối MỘT giấy (nút lẻ) — GĐ1b: lớp mỏng qua ``transition_document(via="single")`` (đặc tả bản 3.6 §4).
+
     Returns:
-        Tuple of (updated_doc_item, post_commit_callback)
-        
-    Raises:
-        ResourceNotFoundError: Document not found
-        BadRequest: Reason not provided
+        Tuple of (updated_doc_item, post_commit_callback) — giữ nguyên hợp đồng phản hồi cũ, thêm ``row_version``.
     """
     from app.repositories import AdmissionRepository
-    admission_repo = AdmissionRepository(db)
-    
+    from .document_transition import transition_document
+
     if not reason or not reason.strip():
         raise BadRequest("Rejection reason is required")
-    
-    # Get profile for access check
-    profile = await get_profile(db, profile_id, current_user)
-    profile = await _lock_profile_for_document_write(db, profile_id)  # GĐ1b §4.5 luật chung
-
-    # BR1 (2026-04-29): enrolled-state block delegated to
-    # ``DocumentActionPolicy`` (see ``REVIEWER_DOC_MUTATION_BLOCKED_STATES``).
-    # Single source of truth — same matrix as can_reject on the response.
-
-    # Get document to capture old status
-    doc_before = await admission_repo.get_document_by_type(profile_id, doc_code)
-    old_status = doc_before.status if doc_before else "unknown"
-
-    _authorize_document_action(
-        action="reject",
-        profile=profile,
-        doc_status=old_status,
-        doc_code=doc_code,
-        current_user=current_user,
-    )
-
-    # Reject document
-    doc = await admission_repo.reject_document(
-        profile_id=profile_id,
-        document_type_code=doc_code,
-        officer_id=current_user.id,
-        reason=reason.strip(),
-    )
-
-    if not doc:
+    admission_repo = AdmissionRepository(db)
+    await get_profile(db, profile_id, current_user)
+    existing = await admission_repo.get_document_by_type(profile_id, doc_code)
+    if not existing:
         raise ResourceNotFoundError(f"Document code '{doc_code}' not found in profile documents")
 
-    await db.flush()
-
-    # ✅ AUDIT LOG: Track document rejection
-    from .document_audit_service import log_document_rejection
-    await log_document_rejection(
-        db=db,
-        profile_document_id=doc.id,
-        actor_user_id=current_user.id,
-        old_status=old_status,
+    result = await transition_document(
+        db,
+        profile_id=profile_id,
+        document_row_id=existing.id,
+        action="reject",
+        actor_id=current_user.id,
+        via="single",
+        expected_row_version=expected_row_version,
         reason=reason.strip(),
+        unknown_submitter_ack=unknown_submitter_ack,
+        request_meta=request_meta,
     )
-
     response_data = {
         "code": doc_code,
         "status": "rejected",
-        "rejection_reason": reason.strip(),
-        "rejected_at": doc.rejected_at.isoformat() if doc.rejected_at else None,
+        "rejection_reason": existing.rejection_reason,
+        "rejected_at": existing.rejected_at.isoformat() if existing.rejected_at else None,
         "rejected_by_id": current_user.id,
+        "document_row_id": existing.id,
+        "row_version": result.row_version,
     }
 
     async def _post_commit():
@@ -9319,7 +9282,6 @@ async def reject_document(
             "Document rejected with audit log",
             profile_id=profile_id,
             doc_code=doc_code,
-            reason=reason,
             officer_id=current_user.id,
         )
 
@@ -9331,142 +9293,46 @@ async def reset_document(
     profile_id: int,
     doc_code: str,
     current_user: models.User,
+    *,
+    reason: str,
+    expected_row_version: int,
+    unknown_submitter_ack: bool = False,
+    request_meta=None,
 ) -> tuple[models.AdmissionProfile, Callable]:
-    """
-    Reset a document to 'missing' status (undo submission).
+    """Đặt lại MỘT giấy về ``missing`` — GĐ1b: lớp mỏng qua ``transition_document(via="single")`` (đặc tả bản 3.6 §4.2).
 
-    Use case: User accidentally clicked "Đã nộp" or uploaded wrong file.
-    Allows simple undo without complex audit trail.
-
-    ADM-007: filesystem deletion is deferred to a post-commit
-    callback. The old file stays on disk until the router's
-    ``db.commit()`` settles; if commit fails the file remains on disk
-    and the rolled-back DB still references it, which keeps DB and FS
-    consistent. The caller-side pattern lives in
-    ``app/routers/admissions.py::reset_document_endpoint``.
-
-    Permissions (DocumentActionPolicy = single source of truth):
-    - Officer (owning): reset trên hồ sơ draft / rejected / revision_requested
-      (gỡ submission CỦA CHÍNH MÌNH: uploaded/paper_submitted/rejected;
-      OWNER_DOC_MUTATION_STATES). KHÔNG reset doc đã ``verified`` ("đã duyệt thì
-      không cho chỉnh sửa"); KHÔNG reset khi submitted/resubmitted (đang chờ
-      reviewer) hay approved/enrolled.
-    - Manager (in-scope) / Admin: reset bất kỳ doc non-missing (kể cả verified)
-      trừ hồ sơ enrolled.
-    - verify/reject vẫn reviewer-only (review ≠ sửa nội dung).
-
-    Args:
-        db: Database session
-        profile_id: AdmissionProfile ID
-        doc_code: Document type code
-        current_user: Current authenticated user
+    Luật Đặt lại theo trạng thái giấy (2A′): chưa duyệt ⇒ ai đang có quyền Đặt lại như hiện nay (gồm cả người nhận);
+    ĐÃ duyệt ⇒ chỉ Quản lý trong phạm vi / Admin, khác người nhận; giấy ngoài cấu hình (X1) ⇒ chỉ Quản lý / Admin.
+    Lý do BẮT BUỘC; nhật ký ghi ``before``. Tệp cũ xoá SAU commit trừ khi là bằng chứng (ADM-007 + §4.6b).
 
     Returns:
-        Tuple of:
-          - ``AdmissionProfile`` with updated validation_summary.
-          - ``finalize(committed: bool)`` async callback. When
-            ``committed=True``: delete the previous file (if any).
-            When ``committed=False``: no-op — the service never
-            mutated the filesystem, so there is nothing to undo.
-            Idempotent best-effort.
-
-    Raises:
-        ResourceNotFoundError: Document not found
-        BadRequest: Cannot reset (e.g., profile is enrolled)
+        ``(profile, finalize(committed: bool))`` — giữ hợp đồng cũ với router.
     """
     from app.repositories import AdmissionRepository
+    from .document_transition import transition_document
+
     admission_repo = AdmissionRepository(db)
-
-    # Get profile for access check
     profile = await get_profile(db, profile_id, current_user)
-    profile = await _lock_profile_for_document_write(db, profile_id)  # GĐ1b §4.5 luật chung
-
-    # BR1 (2026-04-29): enrolled-state block delegated to
-    # ``DocumentActionPolicy`` (see ``REVIEWER_DOC_MUTATION_BLOCKED_STATES``).
-    # Single source of truth — same matrix as can_reset on the response.
-
-    # Get document to capture old status and file path before reset
-    doc_before = await admission_repo.get_document_by_type(profile_id, doc_code)
-    old_status = doc_before.status if doc_before else "unknown"
-    old_file_path = doc_before.file_path if doc_before else None
-
-    _authorize_document_action(
-        action="reset",
-        profile=profile,
-        doc_status=old_status,
-        doc_code=doc_code,
-        current_user=current_user,
-    )
-
-    # Reset document
-    doc = await admission_repo.reset_document(
-        profile_id=profile_id,
-        document_type_code=doc_code,
-    )
-
-    if not doc:
+    existing = await admission_repo.get_document_by_type(profile_id, doc_code)
+    if not existing:
         raise ResourceNotFoundError(f"Document code '{doc_code}' not found in profile documents")
 
-    # ✅ AUDIT LOG: Track document reset
-    from .document_audit_service import log_document_reset
-    await log_document_reset(
-        db=db,
-        profile_document_id=doc.id,
-        actor_user_id=current_user.id,
-        old_status=old_status,
-        old_file_path=old_file_path,
-        reason="User requested reset",
-    )
-
-    # ADM-007: defer the file delete to the post-commit callback. If
-    # commit fails the file stays on disk and the rolled-back DB still
-    # references it — DB ↔ FS remain consistent. The deletion only
-    # becomes visible to the world after ``db.commit()`` settles.
-
-    await db.flush()
-
-    # G2 (ADM-032 bundled) — full response contract parity. Mirrors
-    # upload_document / confirm_document_format / mark_paper_submitted
-    # so the mutation response includes permissions / available_actions
-    # etc. Was missed in PR #169 (only 3/4 services switched to
-    # _populate_response_fields).
-    documents = await admission_repo.get_all_documents(profile_id)
-    await _populate_response_fields(
-        db, profile, current_user, documents=documents
-    )
-
-    from .document_file_guard import protected_evidence_paths
-
-    protected_old_paths = await protected_evidence_paths(db, paths=[old_file_path])
-
-    log.info(
-        "Document reset staged (awaiting commit)",
+    result = await transition_document(
+        db,
         profile_id=profile_id,
-        doc_code=doc_code,
-        user_id=current_user.id,
-        old_file_path=old_file_path,
+        document_row_id=existing.id,
+        action="reset",
+        actor_id=current_user.id,
+        via="single",
+        expected_row_version=expected_row_version,
+        reason=reason,
+        unknown_submitter_ack=unknown_submitter_ack,
+        request_meta=request_meta,
     )
 
-    async def finalize(committed: bool) -> None:
-        """ADM-007 reset finalize callback.
-
-        - ``committed=True``: delete the old file if it exists. Best
-          effort — log a warning on failure (storage waste, not a
-          correctness issue).
-        - ``committed=False``: no-op. The service never wrote to the
-          filesystem, so there is nothing to undo.
-
-        Idempotent: ``os.path.exists`` check before unlink.
-        """
-        if not committed:
-            return
-
-        # GĐ1b §4.6b: tệp đang là bằng chứng duyệt thì GIỮ (danh sách chốt trong giao dịch, trước commit).
-        from .document_file_guard import delete_document_file_unless_evidence
-
-        delete_document_file_unless_evidence(old_file_path, protected_old_paths)
-
-    return profile, finalize
+    documents = await admission_repo.get_all_documents(profile_id)
+    await _populate_response_fields(db, profile, current_user, documents=documents)
+    return profile, result.finalize
 
 
 async def _lock_admission_profile_for_write(

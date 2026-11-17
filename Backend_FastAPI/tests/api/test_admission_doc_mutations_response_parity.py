@@ -26,6 +26,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from tests.fixtures.gd1b import phien_ban_giay  # GĐ1b: expected_row_version
 import pytest
 import pytest_asyncio
 from httpx import AsyncClient
@@ -344,7 +345,7 @@ async def test_confirm_document_format_response_matches_get(
     verify_resp = await client.patch(
         f"{ADMISSIONS}/{pid}/documents/{parity_config['upload_doc_code']}/verify-format",
         headers=admin,
-        json={"format": "photo"},
+        json={"format": "photo", "expected_row_version": await phien_ban_giay(pid, parity_config['upload_doc_code'])},
     )
     assert verify_resp.status_code == 200, verify_resp.text
     mutation = verify_resp.json()

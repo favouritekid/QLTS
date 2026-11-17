@@ -110,6 +110,7 @@ def _parse_id_csv(value: Optional[str], field: str) -> Optional[List[int]]:
 # IP (nginx forwards XFF; the previous ``request.client.host`` returned
 # the nginx container IP and collapsed the cap to a prod-wide ceiling).
 from ..core.client_ip import get_client_ip  # noqa: E402
+from ..schemas.document_review import DocumentHistoryResponse  # noqa: E402 — GĐ1b K2
 
 
 # ==============================================================================
@@ -1011,6 +1012,28 @@ async def upload_document(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
+@router.get(
+    "/{profile_id}/documents/{document_row_id}/history",
+    response_model=DocumentHistoryResponse,
+    summary="GĐ1b K2 — per-document history (manager in scope / admin)",
+)
+@limiter.limit(RateLimits.DATA_READ)  # ĐÚNG thứ tự: route ở trên, limiter ở dưới (test_ratelimit_order_guard)
+async def get_document_history_endpoint(
+    request: Request,
+    document_row_id: int,
+    profile: models.AdmissionProfile = Depends(deps.get_admission_for_document_history),
+    db: AsyncSession = Depends(database.get_db),
+):
+    """Lịch sử MỘT giấy theo ``document_row_id`` (có cả giấy bản giấy không tệp) + siêu dữ liệu tệp bằng chứng.
+
+    Đặc tả GĐ1b bản 3.6 §4.7 / §4.6b: Quản lý trong phạm vi / Admin; sai phạm vi, cán bộ (kể cả cán bộ chéo) ⇒ 404.
+    Phản hồi hẹp — không đường dẫn tệp.
+    """
+    from app.services.document_history_service import get_document_history
+
+    return await get_document_history(db, profile.id, document_row_id)
+
+
 @limiter.limit(RateLimits.DATA_READ)
 @router.get(
     "/{profile_id}/documents/{document_id}/download",
@@ -1223,12 +1246,18 @@ async def verify_document_format_endpoint(
     - Full AdmissionProfileResponse with updated validation_summary and document status
     """
     try:
+        from app.services.document_transition import RequestMeta
+
         profile = await admission_service.confirm_document_format(
             db=db,
             profile_id=profile_id,
             doc_code=doc_code,
             format_type=data.format,
             current_user=current_user,
+            expected_row_version=data.expected_row_version,
+            reason=data.reason,
+            unknown_submitter_ack=data.unknown_submitter_ack,
+            request_meta=RequestMeta(get_client_ip(request), request.headers.get("user-agent")),
         )
         await db.commit()
         await db.refresh(profile)
@@ -1275,12 +1304,17 @@ async def reject_document_endpoint(
     - { code, status, rejection_reason, rejected_at, rejected_by_id }
     """
     try:
+        from app.services.document_transition import RequestMeta
+
         result, post_commit = await admission_service.reject_document(
             db=db,
             profile_id=profile_id,
             doc_code=doc_code,
             reason=data.reason,
             current_user=current_user,
+            expected_row_version=data.expected_row_version,
+            unknown_submitter_ack=data.unknown_submitter_ack,
+            request_meta=RequestMeta(get_client_ip(request), request.headers.get("user-agent")),
         )
         await db.commit()
         await post_commit()
@@ -1312,6 +1346,7 @@ async def reset_document_endpoint(
     request: Request,
     profile_id: int,
     doc_code: str,
+    data: schemas.DocumentResetRequest,
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = CasbinAuth,
 ):
@@ -1336,11 +1371,17 @@ async def reset_document_endpoint(
     - Full AdmissionProfileResponse with updated validation_summary
     """
     try:
+        from app.services.document_transition import RequestMeta
+
         profile, finalize = await admission_service.reset_document(
             db=db,
             profile_id=profile_id,
             doc_code=doc_code,
             current_user=current_user,
+            reason=data.reason,
+            expected_row_version=data.expected_row_version,
+            unknown_submitter_ack=data.unknown_submitter_ack,
+            request_meta=RequestMeta(get_client_ip(request), request.headers.get("user-agent")),
         )
         # ADM-007: defer the file delete to ``finalize(True)`` so a
         # commit failure leaves the file (and the rolled-back DB

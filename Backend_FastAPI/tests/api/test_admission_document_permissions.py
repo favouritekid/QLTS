@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from tests.fixtures.gd1b import phien_ban_giay  # GĐ1b: expected_row_version
 import pytest
 import pytest_asyncio
 from httpx import AsyncClient
@@ -276,8 +277,10 @@ async def test_officer_cannot_verify_or_reject_but_can_reset(
 
     # verify-format + reject stay reviewer-only — officer bị từ chối (403/404).
     for route, method, body in [
-        (f"{ADMISSIONS}/{pid}/documents/{target['code']}/verify-format", "PATCH", {"format": "photo"}),
-        (f"{ADMISSIONS}/{pid}/documents/{target['code']}/reject", "POST", {"reason": "officer-not-allowed"}),
+        (f"{ADMISSIONS}/{pid}/documents/{target['code']}/verify-format", "PATCH",
+         {"format": "photo", "expected_row_version": await phien_ban_giay(pid, target['code'])}),
+        (f"{ADMISSIONS}/{pid}/documents/{target['code']}/reject", "POST",
+         {"reason": "officer-not-allowed", "expected_row_version": await phien_ban_giay(pid, target['code'])}),
     ]:
         resp = await client.request(method, route, headers=oh, json=body)
         assert resp.status_code in (403, 404), (
@@ -290,7 +293,8 @@ async def test_officer_cannot_verify_or_reject_but_can_reset(
         "POST",
         f"{ADMISSIONS}/{pid}/documents/{target['code']}/reset",
         headers=oh,
-        json={},
+        # GĐ1b §4.2: Đặt lại BẮT BUỘC lý do + phiên bản dòng đang xem.
+        json={"reason": "Tải nhầm tệp", "expected_row_version": await phien_ban_giay(pid, target['code'])},
     )
     assert reset.status_code in (200, 201), (
         f"officer reset trên hồ sơ draft phải thành công, "
@@ -428,10 +432,12 @@ async def test_extras_are_locked_at_service_layer_not_just_in_response(
         "can_upload",
         "can_verify",
         "can_reject",
-        "can_reset",
         "can_mark_paper_submitted",
     ):
         assert extra[flag] is False, f"extras must clamp {flag}=False, got {extra}"
+    # GĐ1b X1 (owner chốt 17-11): Quản lý trong phạm vi / Admin ĐẶT LẠI được giấy ngoài cấu hình (có lý do, nhật ký
+    # via = extra_cleanup); không duyệt / từ chối.
+    assert extra["can_reset"] is True and extra["reset_requires_reason"] is True, extra
 
     # Service guard: every direct mutation endpoint must reject.
     # Includes both reviewer-side (verify/reject/reset) and
@@ -439,24 +445,6 @@ async def test_extras_are_locked_at_service_layer_not_just_in_response(
     # is symmetric.
     code = target["code"]
     rejection_routes = [
-        (
-            f"{ADMISSIONS}/{pid}/documents/{code}/verify-format",
-            "PATCH",
-            {"format": "photo"},
-            None,
-        ),
-        (
-            f"{ADMISSIONS}/{pid}/documents/{code}/reject",
-            "POST",
-            {"reason": "extras lock contract test"},
-            None,
-        ),
-        (
-            f"{ADMISSIONS}/{pid}/documents/{code}/reset",
-            "POST",
-            {},
-            None,
-        ),
         (
             f"{ADMISSIONS}/{pid}/documents/{code}/paper-submitted",
             "POST",
@@ -474,6 +462,16 @@ async def test_extras_are_locked_at_service_layer_not_just_in_response(
             f"{method} {route} on extra doc: expected 403/404, "
             f"got {resp.status_code}: {resp.text[:200]}"
         )
+
+    # GĐ1b (đặc tả bản 3.6 §4.2): duyệt / từ chối giấy ngoài cấu hình — KHÔNG ai; 409 mã OUTSIDE_CONFIG (lý do rõ cho
+    # người dùng, thay cho 404 cũ: giấy đang hiển thị nên không có gì để che).
+    rv = await phien_ban_giay(pid, code)
+    for route, method, body in (
+        (f"{ADMISSIONS}/{pid}/documents/{code}/verify-format", "PATCH", {"format": "photo", "expected_row_version": rv}),
+        (f"{ADMISSIONS}/{pid}/documents/{code}/reject", "POST", {"reason": "extras lock", "expected_row_version": rv}),
+    ):
+        resp = await client.request(method, route, headers=admin_headers, json=body)
+        assert resp.status_code == 409 and resp.json()["error_code"] == "OUTSIDE_CONFIG", resp.text
 
     # Upload endpoint takes multipart, not JSON — exercise it separately
     # so the service guard is hit before the file-handling path.

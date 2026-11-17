@@ -3190,6 +3190,20 @@ async def get_admission_for_user_read(
     return profile
 
 
+async def get_admission_for_document_history(
+    profile: models.AdmissionProfile = Depends(get_admission_for_user_read),
+    current_user: models.User = Depends(get_current_active_user),
+) -> models.AdmissionProfile:
+    """GĐ1b K2 (đặc tả bản 3.6 §4.7, §4.6b): lịch sử giấy + tệp bằng chứng — CHỈ Quản lý trong phạm vi / Admin.
+
+    Phạm vi hồ sơ qua ``get_admission_for_user_read`` (3 tầng, 404 giả); thêm cổng vai: cán bộ (kể cả cán bộ được cấp
+    duyệt chéo), kế toán ⇒ 404 cùng thân — không lộ hồ sơ tồn tại.
+    """
+    if current_user.role not in (UserRole.ADMIN, UserRole.MANAGER):
+        raise ResourceNotFoundError(detail=f"Admission profile {profile.id} not found")
+    return profile
+
+
 async def get_optional_profile_cultural_for_audience(
     profile_id: Optional[int] = Query(
         None,

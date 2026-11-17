@@ -21,6 +21,7 @@ from __future__ import annotations
 from datetime import datetime
 from unittest.mock import AsyncMock, patch
 
+from tests.fixtures.gd1b import phien_ban_giay  # GĐ1b: expected_row_version
 import pytest
 import pytest_asyncio
 from httpx import AsyncClient
@@ -619,7 +620,8 @@ async def test_reject_clears_graduation_debt(
     rej = await client.post(
         f"{ADMISSIONS}/{pid}/documents/{GRAD_CODE}/reject",
         headers=admin,
-        json={"reason": "Giấy tạm thời không hợp lệ, yêu cầu nộp lại"},
+        json={"reason": "Giấy tạm thời không hợp lệ, yêu cầu nộp lại",
+              "expected_row_version": await phien_ban_giay(pid, GRAD_CODE)},
     )
     assert rej.status_code == 200, rej.text
 
