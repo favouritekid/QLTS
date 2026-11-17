@@ -92,6 +92,7 @@ async def list_bulk_verify_batches(
         cursor=cursor,
         limit=limit,
         review_mode=None,
+        allow_scope_all=True,
     )
 
 

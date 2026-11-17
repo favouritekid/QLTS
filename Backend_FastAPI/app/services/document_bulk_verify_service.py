@@ -169,6 +169,18 @@ def _msg(code: Optional[str]) -> Optional[str]:
     return None if code is None else ITEM_MESSAGES.get(code, code)
 
 
+def _needs_finalize_reason(*, is_creator: bool, viewer_role: Optional[str]) -> bool:
+    """MỘT vị từ cho 422 ``REASON_REQUIRED`` của ``finalize_batch`` VÀ cờ ``finalize_requires_reason`` (hợp đồng bản 5 B4):
+    Admin chốt lô của NGƯỜI KHÁC phải ghi lý do; người tạo (kể cả người tạo là Admin) thì không."""
+    return (not is_creator) and viewer_role == UserRole.ADMIN
+
+
+def _can_view_all_batches(viewer_role: Optional[str], *, allow_scope_all: bool) -> bool:
+    """MỘT vị từ cho 403 của ``scope=all`` VÀ cờ ``can_view_all`` (hợp đồng bản 5 B4): chỉ Admin, chỉ trên đường cho phép
+    ``scope=all`` (đường lô chéo luôn ``False``)."""
+    return allow_scope_all and viewer_role == UserRole.ADMIN
+
+
 def _doc_rule_facts(profile: models.AdmissionProfile, doc: models.ProfileDocument) -> Tuple[str, bool, bool, rules.DocFacts]:
     """(mã giấy, ngoài cấu hình?, bắt buộc?, sự kiện cho ``decide``) — cùng cách tính với ``transition_document``
     (``requires_upload`` của giấy ngoài cấu hình suy từ việc có tệp)."""
@@ -767,6 +779,7 @@ async def _build_view(
             }
         )
     is_creator = row.actor_user_id == viewer_id
+    can_finalize = (is_creator or viewer_role == UserRole.ADMIN) and status == "interrupted_unfinalized"
     return {
         "batch_id": row.batch_id,
         "status": status,
@@ -779,7 +792,9 @@ async def _build_view(
         "counts": {"profiles": len({it.profile_id for it in items}), **counts},
         "items": view_items,
         "can_execute": is_creator and status == "not_started",
-        "can_finalize": (is_creator or viewer_role == UserRole.ADMIN) and status == "interrupted_unfinalized",
+        "can_finalize": can_finalize,
+        # Hợp đồng bản 5 B4 — cùng vị từ với 422 của ``finalize_batch``.
+        "finalize_requires_reason": can_finalize and _needs_finalize_reason(is_creator=is_creator, viewer_role=viewer_role),
     }
 
 
@@ -801,7 +816,7 @@ async def finalize_batch(
     reason = (reason or "").strip() or None
     is_creator = viewer_id == creator_id
     is_admin = viewer_role == UserRole.ADMIN
-    if not is_creator and is_admin and not reason:
+    if _needs_finalize_reason(is_creator=is_creator, viewer_role=viewer_role) and not reason:
         raise BulkVerifyUnprocessable("REASON_REQUIRED", "Admin chốt lô của người khác phải ghi lý do")
 
     # Bước 1 — lối tắt idempotent: chỉ cho trạng thái KẾT THÚC.
@@ -899,8 +914,9 @@ async def list_batches(
     cursor: Optional[str],
     limit: int,
     review_mode: Optional[str],
+    allow_scope_all: bool,
 ) -> Dict[str, Any]:
-    if scope == "all" and viewer_role != UserRole.ADMIN:
+    if scope == "all" and not _can_view_all_batches(viewer_role, allow_scope_all=allow_scope_all):
         raise PermissionDeniedError(detail="Chỉ Admin xem được danh sách lô của mọi người")
     after = _decode_cursor(cursor)
     rows = await repo.list_batches(
@@ -944,4 +960,9 @@ async def list_batches(
             }
         )
     next_cursor = _encode_cursor(plain[-1]["created_at"], plain[-1]["batch_id"]) if has_more and plain else None
-    return {"items": out, "next_cursor": next_cursor}
+    return {
+        "items": out,
+        "next_cursor": next_cursor,
+        # Hợp đồng bản 5 B4 — cùng vị từ với 403 của ``scope=all``.
+        "can_view_all": _can_view_all_batches(viewer_role, allow_scope_all=allow_scope_all),
+    }

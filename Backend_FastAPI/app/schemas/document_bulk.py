@@ -212,6 +212,8 @@ class BatchView(BaseModel):
     items: List[BatchItemView]
     can_execute: bool
     can_finalize: bool
+    #: Hợp đồng bản 5 B4: người gọi là Admin KHÁC người tạo VÀ ``can_finalize`` ⇒ chốt phải kèm ``reason`` (không thì 422).
+    finalize_requires_reason: bool
 
 
 class FinalizeResponse(BaseModel):
@@ -234,6 +236,8 @@ class BatchSummary(BaseModel):
 class BatchListResponse(BaseModel):
     items: List[BatchSummary]
     next_cursor: Optional[str] = None
+    #: Hợp đồng bản 5 B4: người gọi dùng được ``scope=all`` (Admin, đường lô thường); đường lô chéo luôn ``False``.
+    can_view_all: bool
 
 
 # ---------------------------------------------------------------------------------------------------------------------
