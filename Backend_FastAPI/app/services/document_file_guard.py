@@ -48,31 +48,47 @@ async def protected_evidence_paths(
     return frozenset(_norm(p) for p in (await db.execute(stmt)).scalars())
 
 
-def delete_document_file_unless_evidence(path: Optional[str], protected: FrozenSet[str], *, profile_id: int) -> str:
-    """Xoá ``path`` trừ khi nó là tệp bằng chứng. Gọi SAU commit; không bao giờ ném (dọn tệp là best-effort).
-
-    Codex 68: chỉ xoá đường dẫn ĐÃ XÁC THỰC nằm trong ``uploads/admissions/{profile_id}`` (``_resolve_under`` — cùng phép kiểm
-    của tải lên / tải xuống). Đường dẫn trong CSDL sai lệch, có ``..``, tuyệt đối ra ngoài ⇒ KHÔNG xoá, ghi cảnh báo.
-    """
-    if not path:
-        return MISSING
+def _safe_path(path: str, profile_id: int) -> Optional[str]:
+    """Đường dẫn tuyệt đối ĐÃ XÁC THỰC nằm trong ``uploads/admissions/{profile_id}`` (``_resolve_under`` — cùng phép kiểm của
+    tải lên / tải xuống); ngoài thư mục ⇒ None."""
     from app.services.admission_service import _resolve_under
 
-    safe = _resolve_under(f"uploads/admissions/{profile_id}", path)
+    return _resolve_under(f"uploads/admissions/{profile_id}", path)
+
+
+def delete_file_inside_profile_dir(path: Optional[str], *, profile_id: int) -> str:
+    """Xoá tệp CHỈ khi đường dẫn nằm trong thư mục hồ sơ (Codex 68 / 69). Đường dẫn trong CSDL sai lệch, có ``..``, tuyệt đối ra
+    ngoài ⇒ KHÔNG xoá, ghi cảnh báo. Không xét bằng chứng — dùng trực tiếp cho tệp minh chứng ưu tiên (owner 17-11: chỉ thêm
+    phép kiểm đường dẫn, không đổi chính sách giữ / xoá minh chứng). Gọi SAU commit; không bao giờ ném."""
+    if not path:
+        return MISSING
+    safe = _safe_path(path, profile_id)
     if safe is None:
-        log.warning("document file NOT deleted: path outside the profile upload dir", profile_id=profile_id)
+        log.warning("file NOT deleted: path outside the profile upload dir", profile_id=profile_id)
         return REFUSED_OUTSIDE_PROFILE_DIR
-    if _norm(path) in protected or safe in {_resolved(p) for p in protected}:
-        log.info("document file kept: evidence of a verification", file_path=path)
-        return KEPT_EVIDENCE
     try:
         if not os.path.exists(safe):
             return MISSING
         os.remove(safe)
         return DELETED
     except OSError as e:
-        log.warning("document file delete failed", file_path=path, error=str(e))
+        log.warning("file delete failed", file_path=path, error=str(e))
         return FAILED
+
+
+def delete_document_file_unless_evidence(path: Optional[str], protected: FrozenSet[str], *, profile_id: int) -> str:
+    """Xoá tệp giấy thường trừ khi nó là tệp bằng chứng; chỉ trong thư mục hồ sơ (:func:`delete_file_inside_profile_dir`).
+    Gọi SAU commit; không bao giờ ném (dọn tệp là best-effort)."""
+    if not path:
+        return MISSING
+    safe = _safe_path(path, profile_id)
+    if safe is None:
+        log.warning("document file NOT deleted: path outside the profile upload dir", profile_id=profile_id)
+        return REFUSED_OUTSIDE_PROFILE_DIR
+    if _norm(path) in protected or safe in {_resolved(p) for p in protected}:
+        log.info("document file kept: evidence of a verification", file_path=path)
+        return KEPT_EVIDENCE
+    return delete_file_inside_profile_dir(path, profile_id=profile_id)
 
 
 def _resolved(path: str) -> str:

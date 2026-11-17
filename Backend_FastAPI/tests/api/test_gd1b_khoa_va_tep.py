@@ -300,7 +300,11 @@ def test_quet_ma_khong_xoa_tep_giay_thuong_truc_tiep_ngoai_helper():
     cho tệp tạm ``staging_path`` của chính lượt tải; mọi tệp khác đi qua ``document_file_guard``."""
     src = (GOC / "app" / "services" / "admission_service.py").read_text(encoding="utf-8")
     tree = ast.parse(src)
-    ham_giay_thuong = {"upload_document", "reset_document", "delete_profile", "reject_document", "confirm_document_format"}
+    ham_giay_thuong = {
+        "upload_document", "reset_document", "delete_profile", "reject_document", "confirm_document_format",
+        # Codex 69 + owner 17-11: lối tải lại minh chứng ưu tiên cũng chỉ xoá qua helper (kiểm thư mục hồ sơ).
+        "upload_priority_evidence_document",
+    }
     sai = []
     for fn in ast.walk(tree):
         if not isinstance(fn, ast.AsyncFunctionDef) or fn.name not in ham_giay_thuong:

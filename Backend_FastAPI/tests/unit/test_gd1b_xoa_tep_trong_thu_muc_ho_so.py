@@ -8,6 +8,7 @@ from app.services.document_file_guard import (
     DELETED,
     REFUSED_OUTSIDE_PROFILE_DIR,
     delete_document_file_unless_evidence,
+    delete_file_inside_profile_dir,
 )
 
 pytestmark = pytest.mark.unit
@@ -47,4 +48,19 @@ def test_duong_dan_tuyet_doi_ra_ngoai_thi_khong_xoa(cay):
 
 def test_duong_dan_hop_le_trong_thu_muc_ho_so_thi_xoa(cay):
     assert delete_document_file_unless_evidence("uploads/admissions/1/hop-le.pdf", frozenset(), profile_id=1) == DELETED
+    assert not (cay / "uploads/admissions/1/hop-le.pdf").exists()
+
+
+# Codex 69 + owner 17-11 — helper dùng cho tệp minh chứng ưu tiên (không xét bằng chứng): cùng phép kiểm thư mục hồ sơ.
+@pytest.mark.parametrize(
+    "duong_dan",
+    ["uploads/admissions/2/cua-ho-so-khac.pdf", "uploads/admissions/1/../2/cua-ho-so-khac.pdf", "bi-mat.txt"],
+)
+def test_minh_chung_uu_tien_duong_dan_ngoai_thu_muc_ho_so_thi_khong_xoa(cay, duong_dan):
+    assert delete_file_inside_profile_dir(duong_dan, profile_id=1) == REFUSED_OUTSIDE_PROFILE_DIR
+    assert (cay / "uploads/admissions/2/cua-ho-so-khac.pdf").exists() and (cay / "bi-mat.txt").exists()
+
+
+def test_minh_chung_uu_tien_duong_dan_hop_le_thi_xoa(cay):
+    assert delete_file_inside_profile_dir("uploads/admissions/1/hop-le.pdf", profile_id=1) == DELETED
     assert not (cay / "uploads/admissions/1/hop-le.pdf").exists()

@@ -8869,20 +8869,13 @@ async def upload_priority_evidence_document(
             )
             raise
 
-        # Best-effort old file cleanup post-commit
-        if old_file_path and old_file_path != final_path and os.path.exists(old_file_path):
-            try:
-                os.remove(old_file_path)
-                log.info(
-                    "Old priority evidence file deleted post-commit",
-                    old_path=old_file_path,
-                )
-            except OSError as e:
-                log.warning(
-                    "Failed to delete old priority evidence file post-commit",
-                    old_path=old_file_path,
-                    error=str(e),
-                )
+        # Best-effort old file cleanup post-commit.
+        # GĐ1b — Codex 69 + owner 17-11: CHỈ xoá đường dẫn ĐÃ XÁC THỰC nằm trong thư mục hồ sơ (đường dẫn CSDL sai lệch ⇒ không
+        # xoá). KHÔNG đổi chính sách giữ / xoá tệp minh chứng ưu tiên (P1 — việc riêng).
+        if old_file_path and old_file_path != final_path:
+            from .document_file_guard import delete_file_inside_profile_dir
+
+            delete_file_inside_profile_dir(old_file_path, profile_id=profile_id)
 
     return profile, finalize
 
