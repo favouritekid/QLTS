@@ -6,8 +6,9 @@
  *  - `execute` có `retry: false` và KHÔNG hook / effect nào gọi lại nó — mất phản hồi ⇒ thành phần chuyển sang TRA lô
  *    (`useBatch`, chỉ `GET`). Test `BulkVerifyFlow.test.tsx` khoá "đúng một lần gọi execute".
  *  - `batch_id` ghi vào `sessionStorage` NGAY khi nhận phản hồi xem trước (§5.2) — chỉ `batch_id`.
- *  - Lô kết thúc ⇒ làm mới danh sách, bộ đếm, chi tiết các hồ sơ trong lô (thay cho sự kiện socket
- *    `bulk_verify_finished` cho tới khi socket được nối — việc nối nằm ở khung chung, chờ biên bản V4).
+ *  - Lô kết thúc ⇒ làm mới danh sách, bộ đếm, chi tiết các hồ sơ trong lô — cả khi chính tab này thấy lô kết thúc
+ *    (`execute` / tra lô) lẫn khi nhận sự kiện socket `bulk_verify_finished` (bản 6 C2.3, `onBulkVerifyFinished`).
+ *  - Cờ quyền chạy lô (bản 6 C1) đọc từ máy chủ (`useBulkVerifyEligibility`) — lỗi / đang tải ⇒ coi như KHÔNG có quyền.
  */
 import { useSyncExternalStore } from "react"
 import {
@@ -21,10 +22,12 @@ import axios from "axios"
 
 import { useHasMounted } from "@/hooks/useHasMounted"
 import { invalidateAfterDocumentChange } from "@/hooks/document-review/useDocumentReview"
+import { admissionsKeys } from "@/hooks/admissions/useAdmissions"
 import {
   executeBatch,
   finalizeBatch,
   getBatch,
+  getBulkVerifyEligibility,
   listBatches,
   previewBulkVerify,
   type BulkEndpoint,
@@ -37,13 +40,14 @@ import {
   subscribeLastBatchId,
 } from "@/lib/document-review/batch-session"
 import { batchPollInterval, TERMINAL_BATCH_STATUSES } from "@/lib/document-review/messages"
-import type { BatchListScope, BatchView } from "@/lib/zod/document-review"
+import { bulkVerifyFinishedEventSchema, type BatchListScope, type BatchView } from "@/lib/zod/document-review"
 
 // Thành phần lấy kiểu đường lô qua hook (kiến trúc 2.6.2: thành phần không nhập tầng API).
 export type { BulkEndpoint, BulkSelection }
 
 export const bulkVerifyKeys = {
   all: ["document-bulk-verify"] as const,
+  eligibility: () => [...bulkVerifyKeys.all, "eligibility"] as const,
   batches: (mode: BulkEndpoint["mode"]) => [...bulkVerifyKeys.all, mode, "batch"] as const,
   batch: (mode: BulkEndpoint["mode"], batchId: string | null) => [...bulkVerifyKeys.batches(mode), batchId] as const,
   lists: (mode: BulkEndpoint["mode"]) => [...bulkVerifyKeys.all, mode, "list"] as const,
@@ -66,6 +70,61 @@ export function invalidateAfterBatch(queryClient: QueryClient, mode: BulkEndpoin
 function noRetryOn4xx(failureCount: number, error: unknown): boolean {
   if (axios.isAxiosError(error) && error.response && error.response.status < 500) return false
   return failureCount < 2
+}
+
+/**
+ * Bản 6 C1 — cờ quyền chạy lô của chính người gọi (mục thanh bên "Lô duyệt giấy", nút "Duyệt giấy theo bộ lọc hiện tại").
+ * Người dùng: chỉ hiện khi `isSuccess && data.eligible === true`; đang tải / lỗi mạng / 4xx / 5xx ⇒ ẩn (fail-closed).
+ */
+export function useBulkVerifyEligibility(options?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: bulkVerifyKeys.eligibility(),
+    queryFn: getBulkVerifyEligibility,
+    enabled: options?.enabled ?? true,
+    staleTime: 60_000,
+    retry: noRetryOn4xx,
+  })
+}
+
+const isNotAllowed = (e: unknown) =>
+  axios.isAxiosError(e) && (e.response?.status === 403 || e.response?.status === 404)
+
+/**
+ * Bản 6 C2.3 — xử lý sự kiện socket `bulk_verify_finished {batch_id}` (máy chủ phát tới phòng của NGƯỜI TẠO sau commit
+ * cuối). CHỈ làm mới / đọc (GET) — không gửi lại lệnh nào:
+ *  1. danh sách hồ sơ, bộ đếm trạng thái, danh sách lô (cả hai đường), hàng đợi chéo;
+ *  2. bảng tra của chính lô ấy nếu đang mở (cả hai đường);
+ *  3. chi tiết các hồ sơ thuộc lô — `profile_id` lấy từ `GET` lô. Sự kiện không mang đường lô ⇒ đọc đường lô trong
+ *     cache nếu có, không thì thử đường Quản lý / Admin rồi đường chéo (403 / 404 ⇒ đường kia).
+ * Payload sai dạng ⇒ bỏ qua.
+ */
+export async function onBulkVerifyFinished(queryClient: QueryClient, payload: unknown): Promise<void> {
+  const ev = bulkVerifyFinishedEventSchema.safeParse(payload)
+  if (!ev.success) return
+  const batchId = ev.data.batch_id
+
+  void queryClient.invalidateQueries({ queryKey: admissionsKeys.lists() })
+  void queryClient.invalidateQueries({ queryKey: [...admissionsKeys.all, "status-counts"] })
+  void queryClient.invalidateQueries({ queryKey: bulkVerifyKeys.lists("batch") })
+  void queryClient.invalidateQueries({ queryKey: bulkVerifyKeys.lists("cross") })
+  void queryClient.invalidateQueries({ queryKey: CROSS_REVIEW_QUEUE_KEY })
+  void queryClient.invalidateQueries({ queryKey: bulkVerifyKeys.batch("batch", batchId) })
+  void queryClient.invalidateQueries({ queryKey: bulkVerifyKeys.batch("cross", batchId) })
+
+  const modes: BulkEndpoint["mode"][] =
+    queryClient.getQueryData(bulkVerifyKeys.batch("cross", batchId)) !== undefined ? ["cross", "batch"] : ["batch", "cross"]
+  for (const mode of modes) {
+    try {
+      const view = await getBatch({ mode }, batchId)
+      invalidateAfterDocumentChange(
+        queryClient,
+        view.items.map((i) => i.profile_id),
+      )
+      return
+    } catch (e) {
+      if (!isNotAllowed(e)) return // lỗi mạng / 5xx: danh sách + bộ đếm đã làm mới ở trên; không thử thêm
+    }
+  }
 }
 
 export interface PreviewVariables {

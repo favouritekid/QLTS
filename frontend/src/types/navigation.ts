@@ -59,8 +59,17 @@ export interface NavItem {
    * bộ lọc THÔ để không hỏi máy chủ cho vai chắc chắn không có quyền; hiện / ẩn do cờ quyết
    * (`useServerFlagNavigation`).
    */
-  serverFlag?: "council-documents";
+  serverFlag?: ServerNavFlag;
 }
+
+/**
+ * Cờ máy chủ quyết một mục thanh bên (`useServerFlagNavigation`):
+ *  - `council-documents` — `GET /api/admission-config/council-documents/quyen` (ít nhất một cờ bật);
+ *  - `cross-review`      — GĐ1b `GET /api/admissions/cross-review/eligibility` → `eligible`;
+ *  - `document-batches`  — GĐ1b bản 6 C1 `GET /api/admissions/documents/bulk-verify/eligibility` → `eligible`.
+ * Đang tải / lỗi mạng / 4xx / 5xx ⇒ ẩn mục (fail-closed).
+ */
+export type ServerNavFlag = "council-documents" | "cross-review" | "document-batches";
 
 /**
  * Navigation group configuration

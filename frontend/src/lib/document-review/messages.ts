@@ -197,16 +197,14 @@ const int = (v: unknown): number | undefined => (typeof v === "number" && Number
 export function describePreviewError(error: unknown): string {
   const e = readApiError(error)
   if (!e.hasResponse) return "Không kết nối được máy chủ — bản xem trước chưa tạo được, hãy xem trước lại"
-  if (e.errorCode === "TOO_MANY_PROFILES") {
-    const n = int(e.data?.profile_count)
-    const lim = int(e.data?.limit)
-    return `Lựa chọn có ${n ?? "?"} hồ sơ, vượt trần ${lim ?? "?"} hồ sơ / lô — thu hẹp bộ lọc rồi xem trước lại`
+  // 422 trần lô (bản 6 C2.2): câu CỦA MÁY CHỦ (`detail`) + số đếm máy chủ trả; thiếu câu ⇒ câu dựng từ số đếm. Không tự cắt.
+  const tran = (n: number | undefined, lim: number | undefined, donVi: string): string => {
+    const dem = `${n ?? "?"} ${donVi}, trần ${lim ?? "?"} ${donVi} / lô`
+    if (e.detail) return n !== undefined && e.detail.includes(String(n)) ? e.detail : `${e.detail} (${dem})`
+    return `Lựa chọn có ${dem} — thu hẹp bộ lọc rồi xem trước lại`
   }
-  if (e.errorCode === "TOO_MANY_DOCUMENTS") {
-    const n = int(e.data?.document_count)
-    const lim = int(e.data?.limit)
-    return `Lựa chọn có ${n ?? "?"} giấy, vượt trần ${lim ?? "?"} giấy / lô — thu hẹp bộ lọc rồi xem trước lại`
-  }
+  if (e.errorCode === "TOO_MANY_PROFILES") return tran(int(e.data?.profile_count), int(e.data?.limit), "hồ sơ")
+  if (e.errorCode === "TOO_MANY_DOCUMENTS") return tran(int(e.data?.document_count), int(e.data?.limit), "giấy")
   if (e.errorCode === "TOO_MANY_PREVIEWS") return "Đang có lô chuẩn bị chạy — thử lại sau giây lát"
   if (e.status === 403 || e.status === 404) return "Bạn không có quyền duyệt hàng loạt các hồ sơ này"
   if (e.status === 422) return "Yêu cầu xem trước không hợp lệ — kiểm tra lại bộ lọc"

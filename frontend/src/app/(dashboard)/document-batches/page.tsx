@@ -5,7 +5,7 @@ import { DocumentBatchesClient } from "@/components/document-review/bulk/Documen
 
 /**
  * GĐ1b — "Lô duyệt giấy": tra kết quả / chạy / chốt lô duyệt giấy hàng loạt (Quản lý / Admin). Mọi nút theo cờ máy
- * chủ (`can_execute`, `can_finalize`). Trang ĐỨNG RIÊNG — mục thanh bên + nút trên `/admissions` chờ biên bản V4.
+ * chủ (`can_execute`, `can_finalize`). Mục thanh bên "Lô duyệt giấy" hiện theo cờ `bulk-verify/eligibility` (bản 6 C1, C2.1).
  */
 export default function DocumentBatchesPage() {
   return (

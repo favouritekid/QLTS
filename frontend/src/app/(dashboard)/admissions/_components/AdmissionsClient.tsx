@@ -64,6 +64,7 @@ import type { AdmissionListParams, AdmissionListItem, AdmissionsPageLite } from 
 import { getColumns } from "./columns"
 import { AdmissionsBulkActionsBar } from "./AdmissionsBulkActionsBar"
 import { CouncilHandoffButton } from "./CouncilHandoffButton"
+import { BulkVerifyByFilterButton } from "@/components/document-review/bulk/BulkVerifyByFilterButton"
 import { BulkRejectDialog } from "./dialogs/BulkRejectDialog"
 import { BulkAssignDialog } from "./dialogs/BulkAssignDialog"
 import { AdmissionsMetricRail, type MetricItem } from "./AdmissionsMetricRail"
@@ -401,21 +402,25 @@ export function AdmissionsClient({ initialData, initialQueryParams }: Admissions
             </div>
           </div>
 
-          <div className="hidden self-start rounded-full border border-border bg-card p-0.5 sm:inline-flex sm:self-auto">
-            {(["comfortable", "compact"] as const).map((d) => (
-              <button
-                key={d}
-                type="button"
-                onClick={() => handleDensityChange(d)}
-                aria-pressed={density === d}
-                className={cn(
-                  "rounded-full px-3 py-1.5 text-xs font-medium transition-colors",
-                  density === d ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                {d === "comfortable" ? "Thoáng" : "Gọn"}
-              </button>
-            ))}
+          <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
+            {/* GĐ1b (bản 6 C2.2): hiện theo cờ máy chủ `bulk-verify/eligibility`; gửi BỘ LỌC đang áp, không gửi id dòng */}
+            <BulkVerifyByFilterButton filter={apiFilters} />
+            <div className="hidden rounded-full border border-border bg-card p-0.5 sm:inline-flex">
+              {(["comfortable", "compact"] as const).map((d) => (
+                <button
+                  key={d}
+                  type="button"
+                  onClick={() => handleDensityChange(d)}
+                  aria-pressed={density === d}
+                  className={cn(
+                    "rounded-full px-3 py-1.5 text-xs font-medium transition-colors",
+                    density === d ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {d === "comfortable" ? "Thoáng" : "Gọn"}
+                </button>
+              ))}
+            </div>
           </div>
         </header>
 
