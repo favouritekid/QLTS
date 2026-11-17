@@ -11,21 +11,27 @@ sai phạm vi ⇒ 404). Ở đây:
 * tệp không còn trên ổ ⇒ :class:`EvidenceFileMissingError` (410 ``EVIDENCE_FILE_MISSING``) TRƯỚC mọi lệnh ghi: không ghi
   nhật ký tải, lịch sử không đổi. Router đánh dấu ``file_missing`` bằng :func:`mark_evidence_file_missing` trong một giao
   dịch RIÊNG;
-* (hợp đồng bổ sung bản 5 B6) tệp có mặt ⇒ băm sha256 TOÀN tệp bằng ĐÚNG hàm đã băm lúc duyệt
-  (``document_transition._sha256_file`` — một nguồn) rồi so với ``document_evidence_file.sha256``. Khác (kể cả sha đã ghi
-  rỗng — không chứng minh được) ⇒ :class:`EvidenceFileAlteredError` (409 ``EVIDENCE_FILE_ALTERED``) TRƯỚC mọi lệnh ghi:
-  không trả tệp, không đổi ``file_missing``, không ghi nhật ký tải;
+* (hợp đồng bổ sung bản 5 B6) tệp có mặt ⇒ băm sha256 TOÀN BỘ nội dung (cùng thuật toán ``document_transition._sha256_file``
+  dùng lúc duyệt) rồi so với ``document_evidence_file.sha256``. Khác (kể cả sha đã ghi rỗng — không chứng minh được) ⇒
+  :class:`EvidenceFileAlteredError` (409 ``EVIDENCE_FILE_ALTERED``) TRƯỚC mọi lệnh ghi: không trả tệp, không đổi
+  ``file_missing``, không ghi nhật ký tải;
 * tải được ⇒ ghi nhật ký ``downloaded`` + ``document_download_log`` cùng giao dịch, như route tải thường
   (``admission_service.get_document_file_for_download``). Hai bản ghi nhật ký tải được khoá bằng nhau bởi
   ``tests/api/test_gd1b_bang_chung_tai.py::test_tai_bang_chung_ghi_nhat_ky_giong_het_route_tai_thuong``. Dòng đang
   ``file_missing = true`` mà tệp có mặt ĐÚNG băm ⇒ router tắt cờ bằng :func:`clear_evidence_file_missing` trong giao dịch
-  RIÊNG (đối xứng lúc bật) — cờ chỉ tự tắt khi chứng minh được đúng tệp.
+  RIÊNG (đối xứng lúc bật) — cờ chỉ tự tắt khi chứng minh được đúng tệp;
+* QUYẾT ĐỊNH theo B6b (Claude chấp nhận 18-11): ``sha256`` đã ghi RỖNG (dòng điền ngược lúc migration khi tệp đã mất) mà tệp
+  xuất hiện lại ⇒ không có gì để chứng minh ⇒ 409 ``EVIDENCE_FILE_ALTERED``, không trả tệp, cờ GIỮ ``true``. CHECK
+  ``ck_document_evidence_file_sha256_present`` của CSDL cũng cấm tắt cờ khi ``sha256`` rỗng;
+* không có khe giữa lúc băm và lúc trả (Claude 18-11): tệp được ĐỌC MỘT LẦN vào bộ nhớ (trần :data:`EVIDENCE_MAX_BYTES`;
+  vượt trần ⇒ 409, không đọc), băm ĐÚNG các byte ấy và router trả ĐÚNG các byte ấy — không mở lại tệp theo đường dẫn.
 
 Service không commit (router commit), không import FastAPI.
 """
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 from dataclasses import dataclass
 from typing import Optional
@@ -41,6 +47,12 @@ log = structlog.get_logger(__name__)
 
 EVIDENCE_FILE_MISSING = "EVIDENCE_FILE_MISSING"
 EVIDENCE_FILE_ALTERED = "EVIDENCE_FILE_ALTERED"
+
+#: Trần kích thước tệp bằng chứng = trần tải lên của ``admission_service.upload_document`` (biến cục bộ ``MAX_FILE_SIZE``,
+#: không import được). Hai bản khoá bằng nhau bởi
+#: ``tests/api/test_gd1b_bang_chung_toan_ven.py::test_tran_kich_thuoc_bang_chung_bang_tran_tai_len_cua_loi`` (CLAUDE.md §7).
+#: Tệp trên ổ lớn hơn trần không thể là tệp đã tải lên ⇒ coi như đã bị sửa, KHÔNG đọc vào bộ nhớ.
+EVIDENCE_MAX_BYTES = 10 * 1024 * 1024
 
 #: Một thân 404 cho mọi nhánh "không thuộc / không hợp lệ" — không phân biệt giấy không có, bằng chứng của giấy khác,
 #: bằng chứng của hồ sơ khác, đường dẫn sai lệch.
@@ -86,10 +98,26 @@ class EvidenceDownload:
     evidence_id: int
     #: Dòng đang ``file_missing = true`` mà tệp có mặt và ĐÚNG băm ⇒ router tắt cờ trong giao dịch riêng (B6b).
     clear_missing_flag: bool
+    #: ĐÚNG các byte đã băm và đã so với sha256 lúc duyệt — router trả các byte này, không mở lại ``abs_path``.
+    content: bytes
 
 
 def _profile_upload_dir(profile_id: int) -> str:
     return f"uploads/admissions/{profile_id}"
+
+
+def _read_bounded(path: str, limit: int) -> Optional[bytes]:
+    """Đọc tệp MỘT lần, tối đa ``limit + 1`` byte (lớp thứ hai: tệp lớn lên sau phép đo kích thước vẫn không vào trọn bộ
+    nhớ). Vượt ``limit`` ⇒ ``None``."""
+    with open(path, "rb") as f:
+        data = f.read(limit + 1)
+    return None if len(data) > limit else data
+
+
+def _sha256_bytes(data: bytes) -> str:
+    """sha256 của ĐÚNG các byte sẽ trả — cùng thuật toán ``document_transition._sha256_file`` dùng lúc duyệt (băm toàn
+    nội dung tệp)."""
+    return hashlib.sha256(data).hexdigest()
 
 
 async def get_evidence_file_for_download(
@@ -148,10 +176,35 @@ async def get_evidence_file_for_download(
         )
         raise EvidenceFileMissingError(evidence.id)
 
-    # B6a: băm TOÀN tệp (đọc theo khối) bằng đúng hàm đã băm lúc duyệt; chạy ở luồng phụ để không chặn vòng sự kiện.
-    from app.services.document_transition import _sha256_file
+    # Trần kích thước TRƯỚC khi đọc: tệp lớn hơn trần tải lên không thể là tệp đã duyệt ⇒ 409, không đọc vào bộ nhớ.
+    try:
+        size_on_disk = os.path.getsize(abs_path)
+    except FileNotFoundError:
+        raise EvidenceFileMissingError(evidence.id)
+    if size_on_disk > EVIDENCE_MAX_BYTES:
+        log.warning(
+            "evidence download refused: file on disk exceeds the upload size cap",
+            profile_id=profile_id,
+            document_row_id=document_row_id,
+            evidence_id=evidence_id,
+        )
+        raise EvidenceFileAlteredError(evidence.id)
 
-    actual_sha256 = await asyncio.to_thread(_sha256_file, abs_path)
+    # B6a: đọc MỘT lần (luồng phụ), băm TOÀN BỘ đúng các byte ấy, so với sha256 lúc duyệt; trả đúng các byte ấy.
+    try:
+        content = await asyncio.to_thread(_read_bounded, abs_path, EVIDENCE_MAX_BYTES)
+    except FileNotFoundError:
+        # Tệp biến mất giữa phép kiểm có mặt và lúc đọc ⇒ cùng nhánh "tệp mất".
+        raise EvidenceFileMissingError(evidence.id)
+    if content is None:
+        log.warning(
+            "evidence download refused: file grew past the upload size cap while reading",
+            profile_id=profile_id,
+            document_row_id=document_row_id,
+            evidence_id=evidence_id,
+        )
+        raise EvidenceFileAlteredError(evidence.id)
+    actual_sha256 = await asyncio.to_thread(_sha256_bytes, content)
     if actual_sha256 != evidence.sha256:
         log.warning(
             "evidence download refused: file on disk does not match the recorded sha256",
@@ -194,6 +247,7 @@ async def get_evidence_file_for_download(
         media_type=_MEDIA_TYPES.get(ext, "application/octet-stream"),
         evidence_id=evidence.id,
         clear_missing_flag=bool(evidence.file_missing),
+        content=content,
     )
 
 
