@@ -1,6 +1,7 @@
 /**
  * Văn bản Hội đồng — định dạng HIỂN THỊ (không quyết định nghiệp vụ gì).
  */
+import { VERIFIED_FORMAT_INVALID, VERIFIED_FORMAT_INVALID_MESSAGE } from "@/lib/document-review/messages"
 import { getStatusConfig } from "@/lib/status-config"
 
 /** Nhãn trạng thái hồ sơ (chỉ để đọc) + mã gốc của máy chủ — mức chặn / cảnh báo do MÁY CHỦ quyết. */
@@ -70,6 +71,17 @@ const CHECK_ITEM_LABELS: Record<string, string> = {
 /** Nhãn mức do MÁY CHỦ quyết; mã lạ ⇒ in nguyên (không suy mức). */
 export function checkItemLabel(item: string): string {
   return CHECK_ITEM_LABELS[item] ?? item
+}
+
+/**
+ * Câu lý do của cổng — hiện NGUYÊN VĂN `cau` của máy chủ. Riêng mã lỗi dữ liệu MỚI của GĐ1b (luật in v1.2,
+ * `verified_format_invalid`) khi máy chủ chưa có câu (`cau` rỗng hoặc chính là mã — `ROW_DATA_ERROR_REASONS.get(m, m)`)
+ * ⇒ câu tiếng Việt, không để người dùng đọc mã tiếng Anh.
+ */
+export function checkReasonText(reason: { ma: string; cau: string }): string {
+  const cau = reason.cau.trim()
+  if (reason.ma === VERIFIED_FORMAT_INVALID && (cau === "" || cau === reason.ma)) return VERIFIED_FORMAT_INVALID_MESSAGE
+  return reason.cau
 }
 
 // ── tình trạng bộ / văn bản (danh sách bộ, bước 6) ───────────────────────────
