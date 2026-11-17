@@ -1454,6 +1454,7 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         file_path: Optional[str] = None,
         uploaded_at = None,  # datetime or str (for backward compatibility)
         actual_submission_format: Optional[str] = None,
+        uploaded_by: Optional[int] = None,
     ) -> Optional[models.ProfileDocument]:
         """
         Update ProfileDocument status and file metadata.
@@ -1478,6 +1479,10 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         doc.status = status
         if file_path:
             doc.file_path = file_path
+            # GĐ1b §4.3 / I1: tệp mới ⇒ ghi người tải + xoá cờ "không rõ" (kể cả khi thay tệp của giấy đang "không rõ").
+            if uploaded_by is not None:
+                doc.uploaded_by = uploaded_by
+                doc.uploaded_by_unknown = False
         if uploaded_at is not None:
             # Handle both datetime and string (backward compatibility)
             if isinstance(uploaded_at, str):

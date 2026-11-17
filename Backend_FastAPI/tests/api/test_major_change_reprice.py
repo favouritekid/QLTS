@@ -1153,6 +1153,8 @@ async def _upload_doc(profile_id: int, doc_type_id: int) -> None:
                 category="path",
                 status="uploaded",
                 file_path=f"uploads/admissions/{profile_id}/mjc.pdf",
+                # GĐ1b I1: dòng dựng sẵn như dữ liệu cũ — không rõ người tải.
+                uploaded_by_unknown=True,
                 uploaded_at=datetime.now(timezone.utc),
             ))
 

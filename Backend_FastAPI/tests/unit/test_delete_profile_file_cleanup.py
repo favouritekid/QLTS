@@ -4,8 +4,9 @@ into ``delete_profile``.
 Two pure/low-level pieces are pinned here so the riskiest logic is covered
 without a DB:
 
-1. ``_remove_profile_upload_dir`` — best-effort removal of a deleted profile's
-   ``uploads/admissions/{id}/`` directory (docs + staging + the dir). It runs
+1. ``remove_profile_upload_dir_unless_evidence`` (GĐ1b §4.6b, thay ``_remove_profile_upload_dir``) — best-effort
+   removal of a deleted profile's ``uploads/admissions/{id}/`` directory (docs + staging + the dir), từng tệp qua
+   MỘT chỗ hỏi ``delete_document_file_unless_evidence``: tệp bằng chứng duyệt thì GIỮ. It runs
    AFTER the delete commits, so it must NEVER raise — otherwise a successful
    delete becomes a 500 and the router's realtime dispatch is skipped.
 
@@ -16,9 +17,14 @@ import pytest
 
 from app.services.admission_service import (
     _CREATE_MILESTONE_STATUS,
-    _remove_profile_upload_dir,
     _resolve_lead_revert_status,
 )
+from app.services.document_file_guard import remove_profile_upload_dir_unless_evidence
+
+
+def _remove_profile_upload_dir(profile_id):
+    """Như đường xoá hồ sơ khi không có tệp bằng chứng nào (K3-B chặn hồ sơ có bằng chứng)."""
+    remove_profile_upload_dir_unless_evidence(profile_id, frozenset())
 
 pytestmark = pytest.mark.unit
 
@@ -41,15 +47,30 @@ class TestRemoveProfileUploadDir:
         # No uploads/ tree at all → must not raise.
         _remove_profile_upload_dir(999999)
 
-    def test_never_raises_even_if_rmtree_throws(self, monkeypatch):
+    def test_never_raises_even_if_walk_throws(self, monkeypatch):
         # Pins the regression flagged in review: the helper must swallow ANY
         # error (not just OSError) — e.g. a ValueError("embedded null byte").
         def _boom(*args, **kwargs):
             raise ValueError("embedded null byte")
 
-        monkeypatch.setattr("shutil.rmtree", _boom)
+        monkeypatch.setattr("os.walk", _boom)
         # Must not propagate.
         _remove_profile_upload_dir(123)
+
+    def test_tep_bang_chung_duoc_giu_thu_muc_khong_bi_xoa(self, tmp_path, monkeypatch):
+        prof_id = 4343
+        target = tmp_path / "uploads" / "admissions" / str(prof_id)
+        target.mkdir(parents=True)
+        (target / "da-duyet.pdf").write_text("bang chung")
+        (target / "khac.pdf").write_text("x")
+        monkeypatch.chdir(tmp_path)
+
+        remove_profile_upload_dir_unless_evidence(
+            prof_id, frozenset({f"uploads/admissions/{prof_id}/da-duyet.pdf"})
+        )
+
+        assert (target / "da-duyet.pdf").exists()
+        assert not (target / "khac.pdf").exists()
 
 
 class TestResolveLeadRevertStatus:

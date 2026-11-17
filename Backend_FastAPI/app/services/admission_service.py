@@ -8106,7 +8106,7 @@ async def get_document_file_for_download(
     # Audit (Gap 1 — A09): record who downloaded which document. db.flush is
     # inside log_document_action; the router commits before streaming.
     from .document_audit_service import log_document_action, DocumentAction
-    await log_document_action(
+    audit_row = await log_document_action(
         db=db,
         profile_document_id=doc.id,
         action=DocumentAction.DOWNLOADED,
@@ -8114,6 +8114,29 @@ async def get_document_file_for_download(
         ip_address=actor_ip,
         user_agent=actor_user_agent,
     )
+    # GĐ1b K4c (đặc tả bản 3.6 §4.3): dấu tải xuống ĐỘC LẬP vòng đời hồ sơ / giấy, CÙNG giao dịch với dòng nhật ký
+    # ``downloaded`` (router commit trước khi trả tệp). Xoá hồ sơ nháp (CASCADE nhật ký giấy) không làm mất dấu tải.
+    from sqlalchemy import select as _select
+
+    type_code = None
+    if doc.document_type_id is not None:
+        type_code = (
+            await db.execute(
+                _select(models.ConfigDocumentType.code).where(models.ConfigDocumentType.id == doc.document_type_id)
+            )
+        ).scalar_one_or_none()
+    db.add(
+        models.DocumentDownloadLog(
+            actor_user_id=actor_user_id,
+            profile_id=profile.id,
+            document_row_id=doc.id,
+            document_type_code=type_code,
+            ip_address=actor_ip,
+            user_agent=actor_user_agent,
+            source_audit_id=getattr(audit_row, "id", None),
+        )
+    )
+    await db.flush()
 
     return abs_path, safe_basename, media_type
 
@@ -8174,6 +8197,8 @@ async def upload_document(
     admission_repo = AdmissionRepository(db)
 
     profile = await get_profile(db, profile_id, current_user)
+    # GĐ1b §4.5: khoá hồ sơ TRƯỚC khi đọc lại / ghi dòng giấy (trước đây giấy → hồ sơ: ngược thứ tự chung).
+    profile = await _lock_profile_for_document_write(db, profile_id)
 
     # BR1 (2026-04-29): the profile-state guard now lives inside
     # ``DocumentActionPolicy`` (see ``APPLICANT_DOC_MUTATION_STATES``)
@@ -8244,6 +8269,10 @@ async def upload_document(
     # callback can delete it. We do NOT delete it here — that would
     # make the FS change permanent before the DB commit settles.
     old_file_path = doc_record.file_path
+    # GĐ1b §4.6b: chốt danh sách tệp phải GIỮ (bằng chứng duyệt) TRONG giao dịch, trước khi ghi tệp tạm.
+    from .document_file_guard import protected_evidence_paths
+
+    protected_old_paths = await protected_evidence_paths(db, paths=[old_file_path])
 
     # ADM-019: extension is taken from the sniffed content, not from
     # the client-supplied filename, so we never fall back to ".bin" on
@@ -8316,7 +8345,8 @@ async def upload_document(
             status="uploaded",
             file_path=final_path,
             uploaded_at=uploaded_at_dt.isoformat(),
-            actual_submission_format=actual_submission_format
+            actual_submission_format=actual_submission_format,
+            uploaded_by=current_user.id,
         )
 
         profile.updated_at = uploaded_at_dt
@@ -8452,19 +8482,11 @@ async def upload_document(
         # Old-file delete is best-effort: the new file is already in
         # place + DB committed, so a leftover old file is at worst
         # storage waste, not a correctness issue.
-        if old_file_path and old_file_path != final_path and os.path.exists(old_file_path):
-            try:
-                os.remove(old_file_path)
-                log.info(
-                    "Old document file deleted post-commit",
-                    old_path=old_file_path,
-                )
-            except OSError as e:
-                log.warning(
-                    "Failed to delete old file post-commit",
-                    old_path=old_file_path,
-                    error=str(e),
-                )
+        # GĐ1b §4.6b: tệp cũ đang là bằng chứng duyệt thì GIỮ (danh sách chốt trong giao dịch, trước commit).
+        if old_file_path and old_file_path != final_path:
+            from .document_file_guard import delete_document_file_unless_evidence
+
+            delete_document_file_unless_evidence(old_file_path, protected_old_paths)
 
     return profile, finalize
 
@@ -8854,6 +8876,7 @@ async def confirm_document_format(
 
     # 1. Access Check
     profile = await get_profile(db, profile_id, current_user)
+    profile = await _lock_profile_for_document_write(db, profile_id)  # GĐ1b §4.5 luật chung
 
     # PR #5 guard — same rule matrix as the can_verify flag on documents_checklist.
     existing = await admission_repo.get_document_by_type(profile_id, doc_code)
@@ -8948,6 +8971,8 @@ async def mark_paper_submitted(
 
     # Get profile for access check
     profile = await get_profile(db, profile_id, current_user)
+    # GĐ1b §4.5 luật chung: khoá hồ sơ trước khi ghi dòng giấy.
+    profile = await _lock_profile_for_document_write(db, profile_id)
 
     # BR1 (2026-04-29): profile-state guard delegated to
     # ``DocumentActionPolicy`` (see ``APPLICANT_DOC_MUTATION_STATES``).
@@ -9070,6 +9095,8 @@ async def update_graduation_proof_kind(
 
     # get_profile eager-loads documents.document_type + enforces IDOR scope.
     profile = await get_profile(db, profile_id, current_user)
+    # GĐ1b §4.5 luật chung: khoá hồ sơ (+ làm mới các dòng giấy đã nạp) trước khi ghi dòng giấy.
+    profile = await _lock_profile_for_document_write(db, profile_id)
 
     if doc_code != "bang_tot_nghiep_thpt":
         raise BusinessRuleViolation("Chỉ áp dụng cho giấy tốt nghiệp THPT")
@@ -9238,6 +9265,7 @@ async def reject_document(
     
     # Get profile for access check
     profile = await get_profile(db, profile_id, current_user)
+    profile = await _lock_profile_for_document_write(db, profile_id)  # GĐ1b §4.5 luật chung
 
     # BR1 (2026-04-29): enrolled-state block delegated to
     # ``DocumentActionPolicy`` (see ``REVIEWER_DOC_MUTATION_BLOCKED_STATES``).
@@ -9351,6 +9379,7 @@ async def reset_document(
 
     # Get profile for access check
     profile = await get_profile(db, profile_id, current_user)
+    profile = await _lock_profile_for_document_write(db, profile_id)  # GĐ1b §4.5 luật chung
 
     # BR1 (2026-04-29): enrolled-state block delegated to
     # ``DocumentActionPolicy`` (see ``REVIEWER_DOC_MUTATION_BLOCKED_STATES``).
@@ -9406,6 +9435,10 @@ async def reset_document(
         db, profile, current_user, documents=documents
     )
 
+    from .document_file_guard import protected_evidence_paths
+
+    protected_old_paths = await protected_evidence_paths(db, paths=[old_file_path])
+
     log.info(
         "Document reset staged (awaiting commit)",
         profile_id=profile_id,
@@ -9428,22 +9461,10 @@ async def reset_document(
         if not committed:
             return
 
-        if old_file_path:
-            import os
+        # GĐ1b §4.6b: tệp đang là bằng chứng duyệt thì GIỮ (danh sách chốt trong giao dịch, trước commit).
+        from .document_file_guard import delete_document_file_unless_evidence
 
-            if os.path.exists(old_file_path):
-                try:
-                    os.remove(old_file_path)
-                    log.info(
-                        "Document file deleted post-commit during reset",
-                        file_path=old_file_path,
-                    )
-                except OSError as e:
-                    log.warning(
-                        "Failed to delete document file post-commit",
-                        error=str(e),
-                        file_path=old_file_path,
-                    )
+        delete_document_file_unless_evidence(old_file_path, protected_old_paths)
 
     return profile, finalize
 
@@ -9511,6 +9532,32 @@ async def _lock_admission_profile_for_write(
             f"Admission profile {profile_id} not found"
         )
     return locked
+
+
+async def _lock_profile_for_document_write(
+    db: AsyncSession, profile_id: int,
+) -> models.AdmissionProfile:
+    """GĐ1b (đặc tả bản 3.6 §4.5 mục 3) — LUẬT CHUNG: mọi đường ghi giấy thường khoá hồ sơ TRƯỚC lệnh ghi dòng giấy đầu
+    tiên. Thứ tự chung: (lô) → (quyền chéo) → hồ sơ → lead → giấy (id tăng) → người thao tác.
+
+    Khoá hồ sơ (``_lock_admission_profile_for_write``, ``populate_existing``) rồi LÀM MỚI mọi dòng giấy của hồ sơ trong
+    identity map: dòng nạp TRƯỚC khi chờ khoá (``get_profile`` eager-load) có thể đã cũ — ``select`` thường trả lại đúng
+    đối tượng cũ mà không đọc lại cột. ``tests/api/test_gd1b_khoa_va_tep.py`` khẳng định mỗi hàm ghi giấy gọi helper này
+    trước câu ghi ``profile_document`` đầu tiên.
+    """
+    from sqlalchemy import select as _select
+    from sqlalchemy.orm import selectinload as _selectinload
+
+    profile = await _lock_admission_profile_for_write(db, profile_id)
+    # Nạp lại KÈM ``document_type``: ``populate_existing`` làm hết hạn quan hệ không có trong câu ⇒ đọc
+    # ``doc.document_type`` sau đó thành lazy-load ⇒ MissingGreenlet (đo được ở test_pr13_graduation_proof_api).
+    await db.execute(
+        _select(models.ProfileDocument)
+        .where(models.ProfileDocument.profile_id == profile_id)
+        .options(_selectinload(models.ProfileDocument.document_type))
+        .execution_options(populate_existing=True)
+    )
+    return profile
 
 
 async def _perform_enrollment_core(
@@ -12205,32 +12252,41 @@ async def finalize_profile(
     return profile, final_callback
 
 
-def _remove_profile_upload_dir(profile_id: int) -> None:
-    """Best-effort removal of a deleted profile's entire upload directory.
+MESSAGE_PROFILE_HAS_REVIEW_HISTORY = (
+    "Hồ sơ đã có giấy từng được duyệt / từ chối — dùng Rút hồ sơ"
+)
 
-    All of a profile's uploads — path documents, priority-evidence files and
-    the hidden ``.staging.{uuid}`` temp files — live under
-    ``uploads/admissions/{id}/`` and can never escape it (see
-    ``upload_document``). ``profile_document`` rows cascade-delete with the
-    profile, but the files and the now-empty directory are not touched by the
-    DB. ``shutil.rmtree`` drops docs + staging + the directory in one shot
-    (the per-file loop used to leak staging files and the empty dir).
 
-    A leftover file is storage waste, not a correctness issue — and this runs
-    AFTER the delete commits — so EVERY failure is swallowed (post-commit
-    cleanup must never raise and turn a successful delete into a 500).
+async def _assert_profile_has_no_review_history(db: AsyncSession, profile_id: int) -> None:
+    """GĐ1b K3-B (đặc tả bản 3.6 §8) — chặn xoá hồ sơ khi BẤT KỲ giấy thường nào của hồ sơ:
+
+    * dữ liệu hiện hành: ``status IN ('verified','rejected')`` hoặc ``verified_by`` / ``rejected_by`` khác NULL;
+    * nhật ký: có bản ghi ``verified`` / ``rejected``;
+    * có dòng ``document_evidence_file`` (RESTRICT ở CSDL cũng chặn — lớp phòng thủ thêm).
+
+    Hồ sơ nháp CHỈ có nhật ký tải xuống vẫn xoá được (phạm vi K3 không đổi); dấu tải sống ở ``document_download_log``.
+    Tầng chủ sở hữu bất biến: hàm này (dịch vụ). Thư mục tệp xoá qua ``document_file_guard`` (§4.6b).
     """
-    import shutil
+    from sqlalchemy import exists as _exists, or_ as _or, select as _select
 
-    upload_dir = f"uploads/admissions/{profile_id}"
-    try:
-        shutil.rmtree(upload_dir, ignore_errors=True)
-    except Exception as e:  # noqa: BLE001 — best-effort, must never raise
-        log.warning(
-            "Failed to remove profile upload dir post-commit",
-            upload_dir=upload_dir,
-            error=str(e),
-        )
+    pd = models.ProfileDocument
+    current = _exists().where(
+        pd.profile_id == profile_id,
+        pd.category == "path",
+        _or(pd.status.in_(("verified", "rejected")), pd.verified_by.isnot(None), pd.rejected_by.isnot(None)),
+    )
+    logged = _exists().where(
+        models.DocumentAuditLog.profile_document_id == pd.id,
+        pd.profile_id == profile_id,
+        pd.category == "path",
+        models.DocumentAuditLog.action.in_(("verified", "rejected")),
+    )
+    evidence = _exists().where(models.DocumentEvidenceFile.profile_id == profile_id)
+    blocked = (await db.execute(_select(current | logged | evidence))).scalar()
+    if blocked:
+        from app.utils.exceptions import ConflictError as _ConflictError
+
+        raise _ConflictError(MESSAGE_PROFILE_HAS_REVIEW_HISTORY)
 
 
 # Lead consultation status the ``profile_created`` milestone moves a lead to
@@ -12341,6 +12397,10 @@ async def delete_profile(
     # IDOR check
     _check_idor_access(profile, current_user)
 
+    # GĐ1b §4.5 mục 1: hồ sơ → lead (trước đây lead → hồ sơ, ngược thứ tự chung ⇒ có thể bế tắc với đường duyệt
+    # giấy). Khoá hồ sơ rồi đọc lại trạng thái DƯỚI khoá.
+    profile = await _lock_admission_profile_for_write(db, profile_id)
+
     # State check: Only draft profiles can be deleted
     if profile.status != "draft":
         raise BadRequest(
@@ -12371,6 +12431,10 @@ async def delete_profile(
     await db.execute(
         select(models.Lead.id).where(models.Lead.id == lead_id).with_for_update()
     )
+
+    # GĐ1b K3-B (§8): hồ sơ đã có giấy từng được duyệt / từ chối ⇒ 409, dùng Rút hồ sơ. Kiểm SAU khi giữ khoá hồ sơ
+    # (mọi đường ghi giấy thường khoá hồ sơ trước ⇒ không giấy nào đổi giữa chừng).
+    await _assert_profile_has_no_review_history(db, profile_id)
 
     # ==========================================================================
     # LEAD STATUS REVERT (conditional) + deletion consultation record
@@ -12534,9 +12598,18 @@ async def delete_profile(
         user_id=current_user.id,
     )
 
+    # GĐ1b §4.6b: danh sách tệp phải GIỮ chốt TRONG giao dịch (K3-B đã chặn hồ sơ có bằng chứng ⇒ thường rỗng; vẫn
+    # hỏi — phòng thủ thêm, MỘT chỗ hỏi).
+    from .document_file_guard import (
+        protected_evidence_paths,
+        remove_profile_upload_dir_unless_evidence,
+    )
+
+    protected_paths = await protected_evidence_paths(db, profile_id=profile_id)
+
     async def _post_commit_cleanup() -> None:
         # Drop the whole upload dir only after the delete is durably committed.
-        _remove_profile_upload_dir(profile_id)
+        remove_profile_upload_dir_unless_evidence(profile_id, protected_paths)
 
     return True, _post_commit_cleanup, lead_revert_delta
 
@@ -14801,7 +14874,18 @@ async def bulk_assign(
         raise PermissionDeniedError("Only Managers or Admins can assign profiles")
 
     # Verify officer exists
-    officer = await db.get(models.User, officer_id)
+    # GĐ1b §4.3 hệ quả: khoá người đích ``FOR KEY SHARE`` và kiểm còn hoạt động TRƯỚC khi khoá lead — một lệnh xoá
+    # tài khoản đang giữ dòng người đích thì lượt giao chờ, rồi thấy người đích không còn ⇒ 404, không ghi dòng nào.
+    from sqlalchemy import select as _select
+
+    officer = (
+        await db.execute(
+            _select(models.User)
+            .where(models.User.id == officer_id)
+            .with_for_update(read=True, key_share=True)
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
     if not officer:
         raise ResourceNotFoundError("Officer not found")
 
