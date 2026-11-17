@@ -575,7 +575,7 @@ async def test_tao_bo_ghi_metadata_va_bytes_nguyen_tung_tep(hs, monkeypatch):
         assert b.kich_thuoc_tong == sum(len(f.content) for f in kq.files)
         assert b.tham_so_quyet_dinh == TS.model_dump(mode="json")
         tt = b.thong_tin_dung
-        assert tt["luat_render"] == "v1.1" and tt["tep"] == kq.metadata["tep"]
+        assert tt["luat_render"] == "v1.2" and tt["tep"] == kq.metadata["tep"]  # GĐ1b §4.6: luật in v1.2
         assert tt["mau_da_dung"] == {
             k: {"id": v.id, "sha256": v.sha256, "hieu_luc_tu": "2026-01-01"}
             for k, v in da.items()
