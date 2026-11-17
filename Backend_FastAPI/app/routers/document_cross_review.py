@@ -181,7 +181,7 @@ async def execute_cross_bulk_verify(
 
 @router.get("/bulk-verify", response_model=BatchListResponse)
 async def list_cross_bulk_verify_batches(
-    scope: Literal["mine"] = Query("mine"),
+    scope: Literal["mine", "all"] = Query("mine"),  # ``all`` ⇒ 403 (cùng vị từ với cờ ``can_view_all`` = false)
     cursor: Optional[str] = Query(None, max_length=500),
     limit: int = Query(bulk_service.BULK_VERIFY_LIST_PAGE_SIZE, ge=1, le=50),
     db: AsyncSession = Depends(database.get_db),
@@ -195,6 +195,7 @@ async def list_cross_bulk_verify_batches(
         cursor=cursor,
         limit=limit,
         review_mode=bulk_service.REVIEW_MODE_CROSS,
+        allow_scope_all=False,
     )
 
 

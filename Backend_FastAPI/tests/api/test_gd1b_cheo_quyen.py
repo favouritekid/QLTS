@@ -16,6 +16,7 @@ from sqlalchemy import text
 from app import models
 from app.database import AsyncSessionLocal
 from tests.api.test_gd1b_lo_tro_giup import (  # noqa: F401
+    BULK,
     CROSS,
     Diem,
     boc,
@@ -295,3 +296,39 @@ async def test_lo_cheo_quyen_mat_giua_lo_thi_dung_o_ho_so_ke_tiep(
     assert kq[ps[1]["id"]] == {("recorded", None)}
     assert kq[ps[2]["id"]] == {("error", "actor_not_authorized")} and kq[ps[3]["id"]] == {("not_processed", None)}
     assert (await giay(ps[2]["id"], lo_config["codes"]["A"])).status == "paper_submitted"
+
+
+# ---------------------------------------------------------------------------------------------------- cờ máy chủ B4 trên lô chéo
+async def test_lo_cheo_co_chot_can_ly_do_khop_hanh_vi_admin_va_can_bo_tao(
+    client, admin_token_headers, admin_user_in_db, officer_user_in_db, can_bo_cheo, lo_config, lo_routers
+):
+    """Lô chéo (người tạo = cán bộ chéo). Admin xem / chốt qua đường lô thường (mã hiện tại cho Admin xem + chốt MỌI chế độ
+    lô): cờ true ⇔ chốt không lý do 422. Cán bộ tạo xem qua đường chéo: cờ false ⇔ chốt không lý do 200."""
+    p = (await _ho_so(client, admin_token_headers, officer_user_in_db, lo_config))[0]
+    g = (await _cap(client, admin_user_in_db, can_bo_cheo["id"], lo_config["unit_id"], verify=True)).json()["id"]
+    h = await dn(client, can_bo_cheo)
+    r = await client.post(f"{CROSS}/bulk-verify/preview", headers=h, json={"profile_ids": [p["id"]], "grant_id": g})
+    ma = r.json()["batch_id"]
+    await sql("UPDATE document_bulk_batch SET status = 'processing', started_at = now() WHERE batch_id = :b", b=ma)
+    h = await dn(client, admin_user_in_db)
+    v = (await client.get(f"{BULK}/{ma}", headers=h)).json()
+    assert (v["can_finalize"], v["finalize_requires_reason"]) == (True, True), v
+    r = await client.post(f"{BULK}/{ma}/finalize", headers=h, json={})
+    assert r.status_code == 422 and r.json()["error_code"] == "REASON_REQUIRED", r.text
+    h = await dn(client, can_bo_cheo)
+    v = (await client.get(f"{CROSS}/bulk-verify/{ma}", headers=h)).json()
+    assert (v["can_finalize"], v["finalize_requires_reason"]) == (True, False), v
+    r = await client.post(f"{CROSS}/bulk-verify/{ma}/finalize", headers=h, json={})
+    assert r.status_code == 200 and r.json()["finalized_now"] is True, r.text
+
+
+async def test_lo_cheo_can_view_all_luon_false_va_scope_all_403(
+    client, admin_user_in_db, can_bo_cheo, lo_config, lo_routers
+):
+    """Đường lô chéo chỉ có "của tôi": ``can_view_all`` = false ⇔ ``scope=all`` 403."""
+    await _cap(client, admin_user_in_db, can_bo_cheo["id"], lo_config["unit_id"], verify=True)
+    h = await dn(client, can_bo_cheo)
+    r = await client.get(f"{CROSS}/bulk-verify", headers=h)
+    assert r.status_code == 200 and r.json()["can_view_all"] is False, r.text
+    r = await client.get(f"{CROSS}/bulk-verify", headers=h, params={"scope": "all"})
+    assert r.status_code == 403, r.text

@@ -89,3 +89,16 @@ async def test_con_tro_hong_thi_400(client, manager_user_in_db, lo_routers):
     h = await dn(client, manager_user_in_db)
     r = await client.get(BULK, headers=h, params={"cursor": "khong-phai-con-tro"})
     assert r.status_code == 400, r.text
+
+
+async def test_co_can_view_all_khop_scope_all_theo_vai(client, admin_user_in_db, manager_user_in_db, lo_routers):
+    """Hợp đồng bản 5 B4: ``can_view_all`` = true ⇔ ``scope=all`` 200 (Admin); false ⇔ ``scope=all`` 403 (Quản lý)."""
+    await _chen_lo(manager_user_in_db["id"], 1)
+    for nguoi, co, ma_all in ((admin_user_in_db, True, 200), (manager_user_in_db, False, 403)):
+        h = await dn(client, nguoi)
+        r = await client.get(BULK, headers=h)
+        assert r.status_code == 200 and r.json()["can_view_all"] is co, (nguoi["username"], r.text)
+        r = await client.get(BULK, headers=h, params={"scope": "all"})
+        assert r.status_code == ma_all, (nguoi["username"], r.text)
+        if ma_all == 200:
+            assert r.json()["can_view_all"] is True

@@ -402,3 +402,55 @@ async def test_don_ban_xem_truoc_khong_dung_lo_dang_bi_execute_giu(
     assert rb.status_code == 201, rb.text
     assert await dong_lo(y) is None and await dong_lo(z) is not None
     assert ra.status_code == 200 and ra.json()["status"] == "completed", ra.text
+
+
+# ---------------------------------------------------------------------------------------------------- cờ máy chủ B4 (hợp đồng bản 5)
+async def _lo_mat_khoa(client, user, profile_id) -> str:
+    """Lô ``processing`` không ai giữ khoá (người chạy đã chết) ⇒ ``interrupted_unfinalized``, chốt được."""
+    ma = await _xem_truoc(client, user, [profile_id])
+    await sql("UPDATE document_bulk_batch SET status = 'processing', started_at = now() WHERE batch_id = :b", b=ma)
+    return ma
+
+
+async def test_co_chot_can_ly_do_true_khi_admin_khac_nguoi_tao_va_chot_khong_ly_do_that_su_422(
+    client, admin_token_headers, admin_user_in_db, manager_user_in_db, officer_user_in_db, lo_config, lo_routers
+):
+    """``finalize_requires_reason`` = true ⇔ máy chủ THẬT SỰ đòi lý do (422 ``REASON_REQUIRED``, không ghi gì)."""
+    ps = await _ho_so(client, admin_token_headers, officer_user_in_db, lo_config, 1)
+    ma = await _lo_mat_khoa(client, manager_user_in_db, ps[0]["id"])
+    h = await dn(client, admin_user_in_db)
+    v = (await client.get(f"{BULK}/{ma}", headers=h)).json()
+    assert (v["status"], v["can_finalize"], v["finalize_requires_reason"]) == ("interrupted_unfinalized", True, True), v
+    r = await client.post(f"{BULK}/{ma}/finalize", headers=h, json={})
+    assert r.status_code == 422 and r.json()["error_code"] == "REASON_REQUIRED", r.text
+    assert (await dong_lo(ma))["status"] == "processing"
+
+
+async def test_co_chot_can_ly_do_false_voi_nguoi_tao_ke_ca_admin_va_chot_khong_ly_do_200(
+    client, admin_token_headers, admin_user_in_db, manager_user_in_db, officer_user_in_db, lo_config, lo_routers
+):
+    """Người tạo (Quản lý, hoặc Admin tự tạo) ⇒ ``finalize_requires_reason`` = false ⇔ chốt KHÔNG lý do được 200."""
+    ps = await _ho_so(client, admin_token_headers, officer_user_in_db, lo_config, 2)
+    for nguoi, p in ((manager_user_in_db, ps[0]), (admin_user_in_db, ps[1])):
+        ma = await _lo_mat_khoa(client, nguoi, p["id"])
+        h = await dn(client, nguoi)
+        v = (await client.get(f"{BULK}/{ma}", headers=h)).json()
+        assert (v["can_finalize"], v["finalize_requires_reason"]) == (True, False), (nguoi["username"], v)
+        r = await client.post(f"{BULK}/{ma}/finalize", headers=h, json={})
+        assert r.status_code == 200 and r.json()["finalized_now"] is True, (nguoi["username"], r.text)
+        assert r.json()["batch"]["finalize_requires_reason"] is False
+
+
+async def test_co_chot_can_ly_do_false_khi_lo_khong_chot_duoc_ke_ca_voi_admin_khac_nguoi_tao(
+    client, admin_token_headers, admin_user_in_db, manager_user_in_db, officer_user_in_db, lo_config, lo_routers
+):
+    """Vế "VÀ ``can_finalize``": lô chưa chạy / đã xong ⇒ không chốt được ⇒ cờ false, kể cả với Admin khác người tạo."""
+    ps = await _ho_so(client, admin_token_headers, officer_user_in_db, lo_config, 1)
+    chua_chay = await _xem_truoc(client, manager_user_in_db, [ps[0]["id"]])
+    da_xong = await _xem_truoc(client, manager_user_in_db, [ps[0]["id"]])
+    h = await dn(client, manager_user_in_db)
+    assert (await client.post(f"{BULK}/{da_xong}/execute", headers=h, json={"confirmation_text": "x"})).status_code == 200
+    h = await dn(client, admin_user_in_db)
+    for ma, st in ((chua_chay, "not_started"), (da_xong, "completed")):
+        v = (await client.get(f"{BULK}/{ma}", headers=h)).json()
+        assert (v["status"], v["can_finalize"], v["finalize_requires_reason"]) == (st, False, False), v
