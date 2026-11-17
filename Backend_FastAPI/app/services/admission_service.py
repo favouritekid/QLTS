@@ -8531,7 +8531,7 @@ async def upload_document(
         if old_file_path and old_file_path != final_path:
             from .document_file_guard import delete_document_file_unless_evidence
 
-            delete_document_file_unless_evidence(old_file_path, protected_old_paths)
+            delete_document_file_unless_evidence(old_file_path, protected_old_paths, profile_id=profile_id)
 
     return profile, finalize
 

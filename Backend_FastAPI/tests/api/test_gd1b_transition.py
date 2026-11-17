@@ -299,3 +299,29 @@ async def test_lich_su_quan_ly_dung_don_vi_xem_duoc_sai_don_vi_va_can_bo_404(
     assert r.status_code == 404, r.text
     r = await client.get(url, headers=await _dn(client, officer_user_in_db))
     assert r.status_code == 404, r.text
+
+
+# ---------------------------------------------------------------- Codex 68: Đặt lại không xoá tệp ngoài thư mục hồ sơ
+async def test_dat_lai_khong_xoa_tep_ngoai_thu_muc_ho_so_khi_duong_dan_csdl_sai(
+    client, admin_token_headers, admin_user_in_db, officer_user_in_db, parity_config
+):
+    prof = await _create_profile(client, admin_token_headers, officer_user_in_db, parity_config, "dl_ngoai")
+    code = parity_config["upload_doc_code"]
+    d = await _tai(client, officer_user_in_db, prof["id"], code)
+    nan_nhan = f"uploads/admissions/{prof['id'] + 100000}/nan-nhan.pdf"
+    os.makedirs(os.path.dirname(nan_nhan), exist_ok=True)
+    with open(nan_nhan, "wb") as f:
+        f.write(PDF)
+    try:
+        async with AsyncSessionLocal() as s:
+            async with s.begin():
+                await s.execute(text("UPDATE profile_document SET file_path = :p WHERE id = :d"), {"p": nan_nhan, "d": d.id})
+        d = await _giay(prof["id"], code)
+        r = await _dat_lai(client, officer_user_in_db, prof["id"], code, d.row_version, reason="Tải nhầm")
+        assert r.status_code == 200, r.text
+        assert (await _giay(prof["id"], code)).status == "missing"
+        assert os.path.exists(nan_nhan), "tệp ngoài thư mục hồ sơ KHÔNG được xoá"
+    finally:
+        if os.path.exists(nan_nhan):
+            os.remove(nan_nhan)
+            os.rmdir(os.path.dirname(nan_nhan))

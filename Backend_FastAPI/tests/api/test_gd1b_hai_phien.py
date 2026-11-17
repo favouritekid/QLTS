@@ -2,20 +2,25 @@
 hồ sơ trước", §16 V1).
 
 Mỗi người thao tác một ``AsyncClient`` riêng (ứng dụng ưu tiên cookie — dùng chung client sẽ lẫn danh tính). Điểm dừng: bọc
-hàm của lõi để phiên A dừng khi ĐANG GIỮ khoá; đo phiên B bị chặn bằng ``pg_blocking_pids`` từ một kết nối khác; thả A rồi đọc
-kết quả HAI phía. Bế tắc ⇒ một phía 500 (PostgreSQL ``40P01``) ⇒ ca đỏ.
+hàm của lõi để phiên A dừng khi ĐANG GIỮ khoá; thả A rồi đọc kết quả HAI phía. Bế tắc ⇒ một phía 500 (``40P01``) ⇒ ca đỏ.
 
-Kiểm ngược (chạy bằng bộ đột biến, không sửa tệp này): trả ``delete_profile`` / ``upload_document`` về thứ tự cũ ⇒ phép đo thấy
-bế tắc.
+Codex 68: "bị chặn" phải là ĐÚNG phiên B bị ĐÚNG phiên A chặn — không phải "có kết nối nào đó trong CSDL bị chặn". Mỗi yêu cầu
+mang nhãn (``ContextVar`` — ``ASGITransport`` chạy ứng dụng ngay trong task gọi nên nhãn đi theo yêu cầu, kể cả task con của
+middleware); ``before_cursor_execute`` ghi PID máy chủ của MỌI kết nối mà yêu cầu ấy dùng; phép đo hỏi
+``pg_blocking_pids(pid_B)`` có chứa PID của A.
+
+Kiểm ngược (bộ đột biến, không sửa tệp này): ``delete_profile`` về thứ tự cũ ⇒ ``DeadlockDetectedError``; ``upload_document`` về
+thứ tự cũ ⇒ phiên tải lên KHÔNG chờ khoá hồ sơ.
 """
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import time
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select, text
+from sqlalchemy import event, select, text
 
 import app.database as csdl
 from app import models
@@ -29,6 +34,8 @@ from tests.fixtures.constants import AdminURLs, AuthURLs
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 ADMISSIONS = "/api/admissions"
 PDF = b"%PDF-1.4\n% gd1b hai phien\n%%EOF"
+
+_NHAN: contextvars.ContextVar = contextvars.ContextVar("gd1b_hai_phien_nhan", default=None)
 
 
 class _Diem:
@@ -57,20 +64,46 @@ def _boc(monkeypatch, chu, ten, diem):
     monkeypatch.setattr(chu, ten, boc)
 
 
-async def _cho_bi_chan(viec, giay=20.0):
+class _PidTheoNhan:
+    """Ghi PID máy chủ PostgreSQL của mọi kết nối mà yêu cầu mang nhãn ``A`` / ``B`` dùng."""
+
+    def __init__(self):
+        self.pid = {}
+
+    def __enter__(self):
+        event.listen(csdl.engine.sync_engine, "before_cursor_execute", self._ghi)
+        return self
+
+    def __exit__(self, *a):
+        event.remove(csdl.engine.sync_engine, "before_cursor_execute", self._ghi)
+
+    def _ghi(self, conn, cursor, statement, parameters, context, executemany):
+        nhan = _NHAN.get()
+        if nhan:
+            self.pid.setdefault(nhan, set()).add(conn.connection.driver_connection.get_server_pid())
+
+
+async def _goi(nhan, ham):
+    _NHAN.set(nhan)
+    return await ham()
+
+
+async def _bi_chan_boi(viec, ghi: _PidTheoNhan, bi="B", boi="A", giay=20.0):
+    """``"chan"`` khi một kết nối của yêu cầu ``bi`` đang bị một kết nối của yêu cầu ``boi`` chặn (``pg_blocking_pids``);
+    ``"xong"`` nếu ``viec`` kết thúc trước; ``"het_gio"``."""
     het = time.monotonic() + giay
     while time.monotonic() < het:
-        async with csdl.engine.connect() as k:
-            n = (
-                await k.execute(
-                    text(
-                        "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() "
-                        "AND cardinality(pg_blocking_pids(pid)) > 0"
+        bi_pid, boi_pid = set(ghi.pid.get(bi, ())), set(ghi.pid.get(boi, ()))
+        if bi_pid and boi_pid:
+            async with csdl.engine.connect() as k:
+                hang = (
+                    await k.execute(
+                        text("SELECT pid, pg_blocking_pids(pid) FROM pg_stat_activity WHERE pid = ANY(:p)"),
+                        {"p": list(bi_pid)},
                     )
-                )
-            ).scalar_one()
-        if n:
-            return "chan"
+                ).all()
+            if any(set(chan) & boi_pid for _, chan in hang):
+                return "chan"
         if viec.done():
             return "xong"
         await asyncio.sleep(0.1)
@@ -123,15 +156,16 @@ async def test_duyet_giay_song_song_xoa_ho_so_khong_be_tac_ket_qua_tuan_tu(
     ca, ha = await _client(manager_user_in_db)
     cb, hb = await _client(admin_user_in_db)
     try:
-        a = asyncio.create_task(ca.patch(
-            f"{ADMISSIONS}/{prof['id']}/documents/{code}/verify-format", headers=ha,
-            json={"format": "original", "expected_row_version": d.row_version},
-        ))
-        await asyncio.wait_for(diem.toi.wait(), 30)  # A đang GIỮ khoá hồ sơ
-        b = asyncio.create_task(cb.delete(f"{ADMISSIONS}/{prof['id']}", headers=hb))
-        assert await _cho_bi_chan(b) == "chan", "xoá hồ sơ phải CHỜ khoá hồ sơ của phiên duyệt"
-        diem.di.set()
-        ra, rb = await asyncio.gather(a, b)
+        with _PidTheoNhan() as ghi:
+            a = asyncio.create_task(_goi("A", lambda: ca.patch(
+                f"{ADMISSIONS}/{prof['id']}/documents/{code}/verify-format", headers=ha,
+                json={"format": "original", "expected_row_version": d.row_version},
+            )))
+            await asyncio.wait_for(diem.toi.wait(), 30)  # A đang GIỮ khoá hồ sơ
+            b = asyncio.create_task(_goi("B", lambda: cb.delete(f"{ADMISSIONS}/{prof['id']}", headers=hb)))
+            assert await _bi_chan_boi(b, ghi) == "chan", "xoá hồ sơ (B) phải CHỜ khoá hồ sơ mà phiên duyệt (A) giữ"
+            diem.di.set()
+            ra, rb = await asyncio.gather(a, b)
     finally:
         diem.di.set()
         await ca.aclose()
@@ -165,18 +199,19 @@ async def test_dat_lai_song_song_tai_len_cung_giay_khong_be_tac(
     ca, ha = await _client(admin_user_in_db)
     cb, hb = await _client(officer_user_in_db)
     try:
-        a = asyncio.create_task(ca.post(
-            f"{ADMISSIONS}/{prof['id']}/documents/{code}/reset", headers=ha,
-            json={"reason": "Tải nhầm", "expected_row_version": d.row_version},
-        ))
-        await asyncio.wait_for(diem.toi.wait(), 30)
-        b = asyncio.create_task(cb.post(
-            f"{ADMISSIONS}/{prof['id']}/documents/{code}/upload", headers=hb,
-            files={"file": ("b.pdf", PDF, "application/pdf")}, data={"actual_submission_format": "photo"},
-        ))
-        assert await _cho_bi_chan(b) == "chan", "tải lên phải CHỜ khoá hồ sơ (khoá hồ sơ trước khi ghi giấy)"
-        diem.di.set()
-        ra, rb = await asyncio.gather(a, b)
+        with _PidTheoNhan() as ghi:
+            a = asyncio.create_task(_goi("A", lambda: ca.post(
+                f"{ADMISSIONS}/{prof['id']}/documents/{code}/reset", headers=ha,
+                json={"reason": "Tải nhầm", "expected_row_version": d.row_version},
+            )))
+            await asyncio.wait_for(diem.toi.wait(), 30)
+            b = asyncio.create_task(_goi("B", lambda: cb.post(
+                f"{ADMISSIONS}/{prof['id']}/documents/{code}/upload", headers=hb,
+                files={"file": ("b.pdf", PDF, "application/pdf")}, data={"actual_submission_format": "photo"},
+            )))
+            assert await _bi_chan_boi(b, ghi) == "chan", "tải lên (B) phải CHỜ khoá hồ sơ mà phiên Đặt lại (A) giữ"
+            diem.di.set()
+            ra, rb = await asyncio.gather(a, b)
     finally:
         diem.di.set()
         await ca.aclose()
@@ -203,18 +238,19 @@ async def test_duyet_giay_song_song_giao_ho_so_hang_loat_khong_be_tac(
     ca, ha = await _client(manager_user_in_db)
     cb, hb = await _client(admin_user_in_db)
     try:
-        a = asyncio.create_task(ca.patch(
-            f"{ADMISSIONS}/{prof['id']}/documents/{code}/verify-format", headers=ha,
-            json={"format": "original", "expected_row_version": d.row_version},
-        ))
-        await asyncio.wait_for(diem.toi.wait(), 30)
-        b = asyncio.create_task(cb.post(
-            f"{ADMISSIONS}/bulk/assign", headers=hb,
-            json={"profile_ids": [prof["id"]], "officer_id": officer_user_in_db["id"]},
-        ))
-        await _cho_bi_chan(b, giay=5.0)  # có thể không chặn: bulk_assign chỉ giữ lead
-        diem.di.set()
-        ra, rb = await asyncio.gather(a, b)
+        with _PidTheoNhan() as ghi:
+            a = asyncio.create_task(_goi("A", lambda: ca.patch(
+                f"{ADMISSIONS}/{prof['id']}/documents/{code}/verify-format", headers=ha,
+                json={"format": "original", "expected_row_version": d.row_version},
+            )))
+            await asyncio.wait_for(diem.toi.wait(), 30)
+            b = asyncio.create_task(_goi("B", lambda: cb.post(
+                f"{ADMISSIONS}/bulk/assign", headers=hb,
+                json={"profile_ids": [prof["id"]], "officer_id": officer_user_in_db["id"]},
+            )))
+            await _bi_chan_boi(b, ghi, giay=5.0)  # có thể không chặn: bulk_assign chỉ giữ lead
+            diem.di.set()
+            ra, rb = await asyncio.gather(a, b)
     finally:
         diem.di.set()
         await ca.aclose()
@@ -229,28 +265,30 @@ async def test_duyet_giay_song_song_giao_ho_so_hang_loat_khong_be_tac(
 async def test_k4_dang_duyet_thi_xoa_nguoi_thao_tac_cho_roi_409(
     client, monkeypatch, admin_token_headers, admin_user_in_db, manager_user_in_db, officer_user_in_db, parity_config
 ):
+    from app.services import document_audit_service
+
     prof = await _create_profile(client, admin_token_headers, officer_user_in_db, parity_config, "hp_k4a")
     code = parity_config["paper_doc_code"]
     d = await _nhan_giay(officer_user_in_db, prof["id"], code)
     diem = _Diem()
-
-    # Dừng ở log_document_action của dịch vụ nhật ký (sau khi ghi giấy, VẪN giữ mọi khoá, chưa commit).
-    from app.services import document_audit_service
-
+    # Dừng ở log_document_action (sau khi ghi giấy, VẪN giữ mọi khoá — gồm người thao tác FOR SHARE —, chưa commit).
     _boc(monkeypatch, document_audit_service, "log_document_action", diem)
 
     ca, ha = await _client(manager_user_in_db)
     cb, hb = await _client(admin_user_in_db)
     try:
-        a = asyncio.create_task(ca.patch(
-            f"{ADMISSIONS}/{prof['id']}/documents/{code}/verify-format", headers=ha,
-            json={"format": "original", "expected_row_version": d.row_version},
-        ))
-        await asyncio.wait_for(diem.toi.wait(), 30)  # A đã ghi giấy, GIỮ mọi khoá (gồm người thao tác FOR SHARE)
-        b = asyncio.create_task(cb.delete(AdminURLs.USER_DETAIL(manager_user_in_db["id"]), headers=hb))
-        assert await _cho_bi_chan(b) == "chan", "xoá tài khoản phải CHỜ khoá FOR SHARE của phiên đang duyệt"
-        diem.di.set()
-        ra, rb = await asyncio.gather(a, b)
+        with _PidTheoNhan() as ghi:
+            a = asyncio.create_task(_goi("A", lambda: ca.patch(
+                f"{ADMISSIONS}/{prof['id']}/documents/{code}/verify-format", headers=ha,
+                json={"format": "original", "expected_row_version": d.row_version},
+            )))
+            await asyncio.wait_for(diem.toi.wait(), 30)
+            b = asyncio.create_task(_goi("B", lambda: cb.delete(
+                AdminURLs.USER_DETAIL(manager_user_in_db["id"]), headers=hb
+            )))
+            assert await _bi_chan_boi(b, ghi) == "chan", "xoá tài khoản (B) phải CHỜ khoá FOR SHARE của phiên đang duyệt (A)"
+            diem.di.set()
+            ra, rb = await asyncio.gather(a, b)
     finally:
         diem.di.set()
         await ca.aclose()
@@ -273,21 +311,26 @@ async def test_k4_dang_xoa_nguoi_thao_tac_thi_duyet_bi_tu_choi(
     ca, ha = await _client(manager_user_in_db)  # xác thực trước khi bị xoá
     cb, hb = await _client(admin_user_in_db)
     try:
-        b = asyncio.create_task(cb.delete(AdminURLs.USER_DETAIL(manager_user_in_db["id"]), headers=hb))
-        await asyncio.wait_for(diem.toi.wait(), 30)
-        a = asyncio.create_task(ca.patch(
-            f"{ADMISSIONS}/{prof['id']}/documents/{code}/verify-format", headers=ha,
-            json={"format": "original", "expected_row_version": d.row_version},
-        ))
-        tt = await _cho_bi_chan(a)
-        diem.di.set()
-        rb, ra = await asyncio.gather(b, a)
+        with _PidTheoNhan() as ghi:
+            b = asyncio.create_task(_goi("B", lambda: cb.delete(
+                AdminURLs.USER_DETAIL(manager_user_in_db["id"]), headers=hb
+            )))
+            await asyncio.wait_for(diem.toi.wait(), 30)
+            a = asyncio.create_task(_goi("A", lambda: ca.patch(
+                f"{ADMISSIONS}/{prof['id']}/documents/{code}/verify-format", headers=ha,
+                json={"format": "original", "expected_row_version": d.row_version},
+            )))
+            # Lần này phiên DUYỆT (A) là bên bị chặn, bởi phiên XOÁ (B).
+            tt = await _bi_chan_boi(a, ghi, bi="A", boi="B")
+            diem.di.set()
+            rb, ra = await asyncio.gather(b, a)
     finally:
         diem.di.set()
         await ca.aclose()
         await cb.aclose()
+    assert tt == "chan", tt
     assert rb.status_code == 200, rb.text
-    # A tới sau: hoặc bị chặn ở khoá người thao tác rồi thấy dòng đã xoá (409 actor_not_authorized), hoặc bị từ chối ngay ở
-    # xác thực (401) nếu yêu cầu tới sau commit. Không bao giờ 200 / 500.
-    assert ra.status_code in (401, 404, 409), (tt, ra.status_code, ra.text)
+    # A bị chặn rồi thấy người thao tác không còn ⇒ từ chối (409 actor_not_authorized hoặc 401 nếu xác thực lại thất bại).
+    # Không bao giờ 200 / 500.
+    assert ra.status_code in (401, 404, 409), (ra.status_code, ra.text)
     assert (await _giay(prof["id"], code)).status == "paper_submitted"

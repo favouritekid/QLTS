@@ -4,7 +4,7 @@
 Danh sách tệp phải giữ được CHỐT TRONG GIAO DỊCH, trước commit (:func:`protected_evidence_paths`), rồi việc xoá tệp chạy
 SAU commit với đúng danh sách ấy. Tệp minh chứng ưu tiên giữ như nay (P1 — ngoài phạm vi).
 
-Quét mã (``tests/unit/test_gd1b_quet_xoa_tep.py``): các hàm xoá tệp của giấy thường không gọi ``os.remove`` /
+Quét mã (``tests/api/test_gd1b_khoa_va_tep.py::test_quet_ma_khong_xoa_tep_giay_thuong_truc_tiep_ngoai_helper``): các hàm xoá tệp của giấy thường không gọi ``os.remove`` /
 ``os.unlink`` / ``shutil.rmtree`` trực tiếp, trừ tệp tạm ``staging_path`` của chính lượt tải.
 """
 
@@ -25,6 +25,8 @@ DELETED = "deleted"
 KEPT_EVIDENCE = "kept_evidence"
 MISSING = "missing"
 FAILED = "failed"
+#: Codex 68: đường dẫn (từ CSDL) không nằm trong ``uploads/admissions/{profile_id}`` ⇒ KHÔNG xoá (fail closed).
+REFUSED_OUTSIDE_PROFILE_DIR = "refused_outside_profile_dir"
 
 
 def _norm(path: str) -> str:
@@ -46,21 +48,37 @@ async def protected_evidence_paths(
     return frozenset(_norm(p) for p in (await db.execute(stmt)).scalars())
 
 
-def delete_document_file_unless_evidence(path: Optional[str], protected: FrozenSet[str]) -> str:
-    """Xoá ``path`` trừ khi nó là tệp bằng chứng. Gọi SAU commit; không bao giờ ném (dọn tệp là best-effort)."""
+def delete_document_file_unless_evidence(path: Optional[str], protected: FrozenSet[str], *, profile_id: int) -> str:
+    """Xoá ``path`` trừ khi nó là tệp bằng chứng. Gọi SAU commit; không bao giờ ném (dọn tệp là best-effort).
+
+    Codex 68: chỉ xoá đường dẫn ĐÃ XÁC THỰC nằm trong ``uploads/admissions/{profile_id}`` (``_resolve_under`` — cùng phép kiểm
+    của tải lên / tải xuống). Đường dẫn trong CSDL sai lệch, có ``..``, tuyệt đối ra ngoài ⇒ KHÔNG xoá, ghi cảnh báo.
+    """
     if not path:
         return MISSING
-    if _norm(path) in protected:
+    from app.services.admission_service import _resolve_under
+
+    safe = _resolve_under(f"uploads/admissions/{profile_id}", path)
+    if safe is None:
+        log.warning("document file NOT deleted: path outside the profile upload dir", profile_id=profile_id)
+        return REFUSED_OUTSIDE_PROFILE_DIR
+    if _norm(path) in protected or safe in {_resolved(p) for p in protected}:
         log.info("document file kept: evidence of a verification", file_path=path)
         return KEPT_EVIDENCE
     try:
-        if not os.path.exists(path):
+        if not os.path.exists(safe):
             return MISSING
-        os.remove(path)
+        os.remove(safe)
         return DELETED
     except OSError as e:
         log.warning("document file delete failed", file_path=path, error=str(e))
         return FAILED
+
+
+def _resolved(path: str) -> str:
+    from pathlib import Path
+
+    return str(Path(path).resolve(strict=False))
 
 
 def remove_profile_upload_dir_unless_evidence(profile_id: int, protected: FrozenSet[str]) -> None:
@@ -70,7 +88,7 @@ def remove_profile_upload_dir_unless_evidence(profile_id: int, protected: Frozen
     try:
         for root, dirs, files in os.walk(upload_dir, topdown=False):
             for name in files:
-                delete_document_file_unless_evidence(os.path.join(root, name), protected)
+                delete_document_file_unless_evidence(os.path.join(root, name), protected, profile_id=profile_id)
             try:
                 os.rmdir(root)
             except OSError:

@@ -382,7 +382,7 @@ async def transition_document(
 
         async def finalize(committed: bool) -> None:  # noqa: F811
             if committed:
-                delete_document_file_unless_evidence(old_file_path, protected)
+                delete_document_file_unless_evidence(old_file_path, protected, profile_id=profile_id)
 
     log.info(
         "document transition",
