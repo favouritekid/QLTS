@@ -42,6 +42,22 @@ async def _mark_missing_in_own_transaction(db: AsyncSession, *, evidence_id: int
         await db.rollback()
 
 
+async def _clear_missing_in_own_transaction(db: AsyncSession, *, evidence_id: int, profile_id: int) -> None:
+    """Tắt ``file_missing`` trong một giao dịch RIÊNG — chỉ sau khi tệp có mặt, khớp sha256 và nhật ký tải đã commit (hợp
+    đồng bản 5 B6b, đối xứng lúc bật). Best-effort: lỗi ghi cờ không chặn việc trả tệp đã kiểm đúng."""
+    try:
+        await document_evidence_service.clear_evidence_file_missing(db, evidence_id)
+        await db.commit()
+    except Exception as e:  # noqa: BLE001 — cờ là thông tin thêm; tệp đã được chứng minh đúng
+        log.warning(
+            "evidence file_missing flag not cleared",
+            profile_id=profile_id,
+            evidence_id=evidence_id,
+            error=type(e).__name__,
+        )
+        await db.rollback()
+
+
 @router.get(
     "/{profile_id}/documents/{document_row_id}/evidence/{evidence_id}/download",
     summary="GĐ1b — download a verification evidence file (manager in scope / admin)",
@@ -58,8 +74,10 @@ async def download_document_evidence(
     """Tải lại tệp đang gắn với giấy LÚC giấy được duyệt (đường dẫn bất biến, không phải tệp hiện hành của giấy).
 
     Quản lý trong phạm vi / Admin; sai phạm vi, cán bộ, cán bộ chéo ⇒ 404. Bằng chứng không thuộc đúng giấy + hồ sơ ⇒ 404.
-    Tệp không còn ⇒ 410 ``EVIDENCE_FILE_MISSING`` + ``file_missing = true`` (giao dịch riêng), lịch sử không đổi. Tải được ⇒
-    nhật ký ``downloaded`` + ``document_download_log`` commit TRƯỚC khi trả tệp, như route tải thường.
+    Tệp không còn ⇒ 410 ``EVIDENCE_FILE_MISSING`` + ``file_missing = true`` (giao dịch riêng), lịch sử không đổi. Tệp có mặt
+    mà sai sha256 đã ghi ⇒ 409 ``EVIDENCE_FILE_ALTERED`` (handler toàn cục), không trả tệp, không ghi gì. Tải được ⇒ nhật ký
+    ``downloaded`` + ``document_download_log`` commit TRƯỚC khi trả tệp, như route tải thường; dòng đang ``file_missing``
+    ⇒ cờ tắt trong giao dịch riêng.
     """
     # Chụp định danh TRƯỚC mọi rollback (rollback làm hết hạn đối tượng ORM của phiên).
     profile_id = profile.id
@@ -80,6 +98,9 @@ async def download_document_evidence(
         await db.rollback()
         await _mark_missing_in_own_transaction(db, evidence_id=exc.evidence_id, profile_id=profile_id)
         raise
+
+    if found.clear_missing_flag:
+        await _clear_missing_in_own_transaction(db, evidence_id=found.evidence_id, profile_id=profile_id)
 
     return FileResponse(
         found.abs_path,

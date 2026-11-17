@@ -1,5 +1,8 @@
 """GĐ1b §4.6b — tải lại tệp bằng chứng duyệt (hợp đồng API bản 4 §2.3; đặc tả bản 3.6 §4.6b, §9 "Tệp bằng chứng").
 
+Thêm hợp đồng bổ sung bản 5 B6: so sha256 lúc tải (409 ``EVIDENCE_FILE_ALTERED``) + cờ ``file_missing`` tự tắt khi tệp có
+mặt ĐÚNG băm.
+
 Mỗi ca kiểm MỘT bất biến; mỗi cổng có biến thể phá riêng (``kiem-thu-phien-a/ma/gd1b_bc_*.json``). Không trùng ca của
 ``test_gd1b_transition.py`` (ghi sha256 lúc duyệt, tệp mất lúc duyệt, Đặt lại giữ tệp) và ``test_gd1b_khoa_va_tep.py``
 (tải lại giữ tệp cũ, dấu tải của route tải thường).
@@ -387,13 +390,123 @@ async def test_tep_bang_chung_mat_thi_lich_su_khong_doi_khong_ghi_dau_tai(
     assert sau[1] == [], "tệp không còn ⇒ không có lượt tải nào để ghi"
 
 
+# ---------------------------------------------------------------- B6 (hợp đồng bổ sung bản 5): sha256 lúc tải + cờ tự tắt
+def _doi_byte_cuoi(duong_dan: str) -> bytes:
+    """Đổi BYTE CUỐI của tệp trên ổ (đọc → ghi tệp tạm → thay), trả nội dung mới đã đọc lại."""
+    goc = open(duong_dan, "rb").read()
+    moi = goc[:-1] + bytes([goc[-1] ^ 0x01])
+    tam = duong_dan + ".tam"
+    with open(tam, "wb") as f:
+        f.write(moi)
+    os.replace(tam, duong_dan)
+    doc_lai = open(duong_dan, "rb").read()
+    assert doc_lai == moi and doc_lai != goc and len(doc_lai) == len(goc), "HẠ TẦNG: chưa đổi được byte"
+    return moi
+
+
+async def _dat_co_bang_chung(ev_id: int, sql_set: str) -> None:
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            await s.execute(text(f"UPDATE document_evidence_file SET {sql_set} WHERE id = :e"), {"e": ev_id})
+
+
+async def _dem_tai(doc_id: int) -> tuple:
+    """(số dòng ``downloaded``, số dòng ``document_download_log``) của giấy — đọc từ phiên riêng."""
+    async with AsyncSessionLocal() as s:
+        nk = (
+            await s.execute(
+                select(models.DocumentAuditLog.id).where(
+                    models.DocumentAuditLog.profile_document_id == doc_id, models.DocumentAuditLog.action == "downloaded"
+                )
+            )
+        ).all()
+        dau = (
+            await s.execute(select(models.DocumentDownloadLog.id).where(models.DocumentDownloadLog.document_row_id == doc_id))
+        ).all()
+    return len(nk), len(dau)
+
+
+async def test_tep_bang_chung_bi_sua_mot_byte_thi_409_khong_tra_tep_khong_ghi_nhat_ky_co_khong_doi(
+    client, gan_route_bang_chung, admin_token_headers, admin_user_in_db, manager_user_in_db, officer_user_in_db,
+    parity_config,
+):
+    """B6a. Tệp > 1 MiB, đổi byte CUỐI (ngoài khối đọc đầu) ⇒ băm phải là băm TOÀN tệp mới bắt được."""
+    a = PDF + os.urandom((1 << 20) + 64)
+    pid, d, ev, _ = await _ho_so_co_bang_chung(
+        client, admin_user_in_db, officer_user_in_db, parity_config, admin_token_headers, "bc_sua_byte", a
+    )
+    moi = _doi_byte_cuoi(ev.file_path)
+    r = await client.get(_url(pid, d.id, ev.id), headers=await _dn(client, manager_user_in_db))
+    assert r.status_code == 409, r.status_code
+    assert r.json()["error_code"] == "EVIDENCE_FILE_ALTERED"
+    assert moi[-64:] not in r.content and len(r.content) < 4096, "không trả tệp"
+    assert await _dem_tai(d.id) == (0, 0), "không ghi nhật ký tải"
+    (ev_sau,) = await _bang_chung(d.id)
+    assert ev_sau.file_missing is False, "file_missing không đổi"
+
+
+async def test_co_mat_tep_dang_bat_ma_tep_co_mat_dung_noi_dung_thi_200_va_tat_co(
+    client, gan_route_bang_chung, admin_token_headers, admin_user_in_db, manager_user_in_db, officer_user_in_db,
+    parity_config,
+):
+    """B6b. Tệp được khôi phục ĐÚNG nội dung ⇒ trả tệp, cờ về false (commit — đọc lại từ phiên riêng)."""
+    pid, d, ev, a = await _ho_so_co_bang_chung(
+        client, admin_user_in_db, officer_user_in_db, parity_config, admin_token_headers, "bc_tat_co"
+    )
+    await _dat_co_bang_chung(ev.id, "file_missing = true")
+    (ev_bat,) = await _bang_chung(d.id)
+    assert ev_bat.file_missing is True, "tiền đề: cờ đang bật"
+    r = await client.get(_url(pid, d.id, ev.id), headers=await _dn(client, manager_user_in_db))
+    assert r.status_code == 200, r.text
+    assert r.content == a
+    (ev_sau,) = await _bang_chung(d.id)
+    assert ev_sau.file_missing is False
+
+
+async def test_co_mat_tep_dang_bat_ma_tep_co_mat_sai_noi_dung_thi_409_co_van_bat(
+    client, gan_route_bang_chung, admin_token_headers, admin_user_in_db, manager_user_in_db, officer_user_in_db,
+    parity_config,
+):
+    """B6b/B6a. Tệp "khôi phục" SAI nội dung ⇒ 409, cờ VẪN bật (chỉ tự tắt khi chứng minh được đúng tệp)."""
+    pid, d, ev, _ = await _ho_so_co_bang_chung(
+        client, admin_user_in_db, officer_user_in_db, parity_config, admin_token_headers, "bc_sai_khoi_phuc"
+    )
+    await _dat_co_bang_chung(ev.id, "file_missing = true")
+    _doi_byte_cuoi(ev.file_path)
+    r = await client.get(_url(pid, d.id, ev.id), headers=await _dn(client, manager_user_in_db))
+    assert r.status_code == 409, r.status_code
+    assert r.json()["error_code"] == "EVIDENCE_FILE_ALTERED"
+    (ev_sau,) = await _bang_chung(d.id)
+    assert ev_sau.file_missing is True
+
+
+async def test_sha_da_ghi_rong_thi_khong_chung_minh_duoc_409_co_van_bat(
+    client, gan_route_bang_chung, admin_token_headers, admin_user_in_db, manager_user_in_db, officer_user_in_db,
+    parity_config,
+):
+    """Dòng bằng chứng điền ngược lúc migration khi tệp đã mất (sha256 NULL, cờ bật) mà tệp xuất hiện lại ⇒ không có gì để
+    chứng minh ⇒ 409, không trả tệp, cờ VẪN bật."""
+    pid, d, ev, a = await _ho_so_co_bang_chung(
+        client, admin_user_in_db, officer_user_in_db, parity_config, admin_token_headers, "bc_sha_rong"
+    )
+    await _dat_co_bang_chung(ev.id, "file_missing = true, sha256 = NULL")
+    r = await client.get(_url(pid, d.id, ev.id), headers=await _dn(client, manager_user_in_db))
+    assert r.status_code == 409, r.status_code
+    assert r.json()["error_code"] == "EVIDENCE_FILE_ALTERED"
+    assert a not in r.content
+    (ev_sau,) = await _bang_chung(d.id)
+    assert ev_sau.file_missing is True
+
+
 # ---------------------------------------------------------------- nhật ký tải: khoá bằng route tải thường (một nguồn)
 async def test_tai_bang_chung_ghi_nhat_ky_giong_het_route_tai_thuong(
     client, gan_route_bang_chung, admin_token_headers, admin_user_in_db, manager_user_in_db, officer_user_in_db,
     parity_config,
 ):
     """Hai bản ghi nhật ký tải (route tải thường trong ``admission_service`` và route bằng chứng) phải sinh ĐÚNG cùng dòng
-    ``downloaded`` + ``document_download_log`` (trừ id / giờ / ``extra_data.evidence_id``) và cùng tiêu đề phản hồi."""
+    ``downloaded`` + ``document_download_log`` (trừ id / giờ / ``extra_data.evidence_id``) và cùng tiêu đề phản hồi.
+
+    Cũng là ca B6 (d): tải bình thường (tệp có mặt, khớp sha256) vẫn ghi nhật ký như cũ."""
     pid, d, ev, a = await _ho_so_co_bang_chung(
         client, admin_user_in_db, officer_user_in_db, parity_config, admin_token_headers, "bc_nhat_ky"
     )
