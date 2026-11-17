@@ -63,6 +63,12 @@ async def test_giay_da_duyet_thieu_hinh_thuc_da_xac_nhan_thi_dung_dung(hs):
     assert "luật in v1.2" in str(e.value)
 
 
+async def test_ma_verified_format_invalid_co_cau_tieng_viet_cho_ban_xem_truoc():
+    """Bản xem trước lấy câu từ ``ROW_DATA_ERROR_REASONS.get(mã, mã)`` — thiếu câu thì người dùng thấy MÃ thô."""
+    cau = bo_dung.ROW_DATA_ERROR_REASONS.get(bo_dung.ERROR_VERIFIED_FORMAT_INVALID)
+    assert cau and cau != bo_dung.ERROR_VERIFIED_FORMAT_INVALID and "đã duyệt" in cau
+
+
 async def test_giay_chua_duyet_van_in_theo_hinh_thuc_luc_nhan(hs):
     cccd, _ = hs[CA]
     r = await _dong(cccd)

@@ -414,6 +414,9 @@ ROW_DATA_ERROR_REASONS: Dict[str, str] = {
     "du_lieu_chuyen_mon_la": "trình độ chuyên môn không thuộc nhãn đã biết",
     "du_lieu_thieu_ma_nganh": "nhóm ngành của hồ sơ chưa có mã ngành — không dựng được Điều 1 của Quyết định",
     "du_lieu_ma_nganh_mau_thuan": "các hồ sơ cùng ngành, cùng trình độ ghi mã ngành khác nhau",
+    ERROR_VERIFIED_FORMAT_INVALID: (
+        "giấy đã duyệt nhưng chưa ghi hình thức đã xác nhận (hoặc hình thức lạ) — Đặt lại rồi duyệt lại giấy đó"
+    ),
 }
 _TEXT_ERROR_CODES = ("du_lieu_khong_phai_chuoi", "du_lieu_ky_tu_la")
 

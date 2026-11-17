@@ -217,11 +217,16 @@ async def transition_document(
         # §4.5 / §9: lead đổi người tư vấn sang CHÍNH cán bộ chéo giữa chừng ⇒ không duyệt chéo hồ sơ mình phụ trách.
         raise DocumentTransitionConflict(ACTOR_NOT_AUTHORIZED)
 
-    # 6. Quyết định — trạng thái ĐỌC LẠI dưới khoá, cùng luật với cờ máy chủ.
+    # 6a. Phiên bản dòng — TRƯỚC luật quyết định (§5.9, §9 "hai tab"): người gửi một bản đã cũ (lô / tab khác đã xử lý
+    #     giấy) nhận `version_changed` để làm mới, KHÔNG nhận lỗi của trạng thái mới mà họ chưa thấy (`not_pending` ở lô;
+    #     `not_permitted` ⇒ 404 ở nút lẻ, vì `policy.authorize` của nút lẻ phụ thuộc trạng thái). Không lộ gì: tới được đây
+    #     là đã qua cổng phạm vi (`deps`) hoặc quyền chéo dưới khoá, và `row_version` có sẵn trong phản hồi họ đọc được.
+    if doc.row_version != expected_row_version:
+        raise DocumentTransitionConflict(VERSION_CHANGED)
+
+    # 6b. Quyết định — trạng thái ĐỌC LẠI dưới khoá, cùng luật với cờ máy chủ.
     doc_code = doc.document_type.code
-    doc_configs = (profile.applied_rules or {}).get("doc_configs", {}) or {}
-    is_extra = doc_code not in doc_configs
-    requires_upload = bool(doc.file_path) if is_extra else bool((doc_configs.get(doc_code) or {}).get("requires_upload", True))
+    is_extra, requires_upload = rules.config_facts(profile.applied_rules, doc_code, has_file=bool(doc.file_path))
     facts = rules.DocFacts.from_row(doc, requires_upload=requires_upload, is_extra=is_extra)
     policy = DocumentActionPolicy.for_(profile, actor)
     grant_actions = frozenset()
@@ -241,10 +246,6 @@ async def transition_document(
         raise DocumentTransitionConflict(rules.UNKNOWN_SUBMITTER)
     if action in (rules.ACTION_RESET, rules.ACTION_REJECT) and not reason:
         raise ValidationError("Lý do là bắt buộc")
-
-    # 7. Phiên bản dòng.
-    if doc.row_version != expected_row_version:
-        raise DocumentTransitionConflict(VERSION_CHANGED)
 
     now = datetime.now(timezone.utc)
     old_status = doc.status

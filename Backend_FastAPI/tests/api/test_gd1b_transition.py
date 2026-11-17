@@ -148,6 +148,21 @@ async def test_phien_ban_dong_cu_thi_409_khong_ghi(
     assert (await _giay(prof["id"], code)).status == "paper_submitted"
 
 
+async def test_giay_da_xu_ly_o_thao_tac_khac_gui_ban_cu_thi_version_changed_khong_phai_not_pending(
+    client, admin_token_headers, admin_user_in_db, officer_user_in_db, parity_config
+):
+    """§5.9 / §9 "hai tab": tab 1 đã duyệt; tab 2 gửi đúng phiên bản nó đã xem ⇒ VERSION_CHANGED (làm mới), không ghi."""
+    prof = await _create_profile(client, admin_token_headers, officer_user_in_db, parity_config, "rv_hai_tab")
+    code = parity_config["paper_doc_code"]
+    d = await _nhan_giay(client, officer_user_in_db, prof["id"], code)
+    r = await _duyet(client, admin_user_in_db, prof["id"], code, d.row_version)
+    assert r.status_code == 200, r.text
+    so_dong = len(await _nhat_ky(d.id))
+    r = await _duyet(client, admin_user_in_db, prof["id"], code, d.row_version)
+    assert r.status_code == 409 and r.json()["error_code"] == "VERSION_CHANGED", r.text
+    assert len(await _nhat_ky(d.id)) == so_dong
+
+
 # ---------------------------------------------------------------- bằng chứng (§4.6b)
 async def test_duyet_giay_co_tep_ghi_bang_chung_dung_sha256(
     client, admin_token_headers, admin_user_in_db, officer_user_in_db, parity_config

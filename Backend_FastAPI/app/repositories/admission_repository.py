@@ -355,33 +355,21 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         # sort / column never straddle midnight (mirror routers/invoices.py:139).
         today = today or date.today()
 
-        # Base query for filtering
-        base_conditions = []
+        # Base query for filtering — MỘT nguồn điều kiện lọc (GĐ1b A5, CLAUDE.md §7): danh sách, bộ đếm trạng thái
+        # (``get_status_counts``) và bộ chọn hồ sơ của lô duyệt giấy cùng gọi ``_build_base_conditions``. Trước đây danh sách
+        # chép tay cùng các điều kiện ⇒ ba nơi phải giữ khớp bằng mắt. Gồm: lead chưa xoá mềm, phạm vi IDOR, lọc điều phối,
+        # tìm tên, ngành, năm, trình độ (kèm cờ JOIN), học phí, khoảng ngày.
+        base_conditions, needs_program_join = self._build_base_conditions(
+            unit_id=unit_id, assigned_officer_id=assigned_officer_id,
+            search=search, major_ids=major_ids,
+            academic_year=academic_year, degree_level=degree_level,
+            payment_status=payment_status, date_from=date_from, date_to=date_to,
+            assigned_officer_ids=assigned_officer_ids,
+            assigned_reviewer_ids=assigned_reviewer_ids,
+            unassigned=unassigned, today=today,
+        )
 
-        # Exclude profiles whose parent Lead is soft-deleted (Lead.deleted_at set).
-        # Applies to BOTH count and data queries below (both JOIN Lead).
-        base_conditions.append(models.Lead.deleted_at.is_(None))
-
-        # IDOR Filter: Filter at DB level
-        if assigned_officer_id is not None:
-            base_conditions.append(models.Lead.assigned_officer_id == assigned_officer_id)
-        if unit_id is not None:
-            base_conditions.append(models.Lead.unit_id == unit_id)
-
-        # Coordination filters (admin/manager) — narrowing ONLY, layered on top of
-        # the IDOR scope above (service intersects via _resolve_coordination_filters).
-        if assigned_officer_ids:
-            base_conditions.append(
-                models.Lead.assigned_officer_id.in_(assigned_officer_ids)
-            )
-        if unassigned:
-            base_conditions.append(models.Lead.assigned_officer_id.is_(None))
-        if assigned_reviewer_ids:
-            base_conditions.append(
-                models.AdmissionProfile.assigned_reviewer_id.in_(assigned_reviewer_ids)
-            )
-
-        # Multi-status filter (new)
+        # Trạng thái + lead_id: chỉ danh sách có (bộ đếm trạng thái đếm MỌI trạng thái; lô tự giao với trạng thái chờ xét).
         if statuses and len(statuses) > 0:
             base_conditions.append(models.AdmissionProfile.status.in_(statuses))
         # Backward compatibility: single status from filters
@@ -390,35 +378,6 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
 
         if filters.get("lead_id"):
             base_conditions.append(models.AdmissionProfile.lead_id == filters["lead_id"])
-
-        # Search filter: name diacritic-insensitive (f_unaccent) + exact
-        # email/citizen_id. Shared helper keeps list parity with status-counts.
-        if search:
-            base_conditions.append(self._name_search_condition(search))
-
-        # Major/Program filter via ProgramOffering.program_id (MajorProgram ID)
-        # Requires JOIN through Lead → ProgramOffering → MajorProgram
-        if major_ids and len(major_ids) > 0:
-            base_conditions.append(models.ProgramOffering.program_id.in_(major_ids))
-
-        # Academic year filter
-        if academic_year is not None:
-            base_conditions.append(models.AdmissionProfile.academic_year == academic_year)
-
-        # Degree level or major filter requires JOIN through ProgramOffering → MajorProgram
-        needs_program_join = bool(degree_level) or bool(major_ids)
-        if degree_level:
-            base_conditions.append(models.MajorProgram.degree_level == degree_level)
-
-        # Payment status filter (subquery EXISTS pattern - no JOIN needed)
-        if payment_status:
-            self._apply_payment_status_filter(base_conditions, payment_status, today)
-
-        # Date range filter
-        if date_from:
-            base_conditions.append(models.AdmissionProfile.created_at >= date_from)
-        if date_to:
-            base_conditions.append(models.AdmissionProfile.created_at <= date_to)
 
         # Count query
         count_query = (

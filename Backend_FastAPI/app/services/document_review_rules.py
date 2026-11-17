@@ -9,7 +9,7 @@ cùng hàm với trạng thái vừa đọc ⇒ nút giao diện và cổng máy
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import FrozenSet, Optional
+from typing import FrozenSet, Optional, Tuple
 
 from app.services.admission_document_policy import DocumentActionPolicy
 
@@ -34,6 +34,18 @@ OUTSIDE_CONFIG = "outside_config"
 NOT_PENDING = "not_pending"
 CROSS_NO_RESET = "cross_no_reset"
 NOT_RESETTABLE = "not_resettable"
+
+
+def config_facts(applied_rules: Optional[dict], doc_code: str, *, has_file: bool) -> Tuple[bool, bool]:
+    """``(is_extra, requires_upload)`` của MỘT giấy theo ảnh chụp ``applied_rules`` của hồ sơ.
+
+    MỘT nguồn (CLAUDE.md §7) cho ``transition_document`` (dưới khoá), cờ máy chủ của phản hồi hồ sơ và bộ chọn của lô —
+    trước đây ba nơi tự chép. Giấy ngoài cấu hình (đường xét đổi sau khi nộp) không còn cấu hình ⇒ ``requires_upload`` suy
+    từ việc có tệp."""
+    doc_configs = (applied_rules or {}).get("doc_configs") or {}
+    if doc_code not in doc_configs:
+        return True, bool(has_file)
+    return False, bool((doc_configs.get(doc_code) or {}).get("requires_upload", True))
 
 
 @dataclass(frozen=True)

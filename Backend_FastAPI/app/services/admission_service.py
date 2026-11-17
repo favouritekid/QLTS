@@ -3198,6 +3198,7 @@ def _compute_frontend_fields(
         ACTION_VERIFY as _VERIFY,
         VIA_SINGLE as _SINGLE,
         DocFacts as _DocFacts,
+        config_facts as _config_facts,
         decide as _decide,
     )
 
@@ -3291,7 +3292,9 @@ def _compute_frontend_fields(
         _doc_status = uploaded_doc.get("status", "missing")
         _requires_upload = config.get("requires_upload", True)
         _perms = _compute_document_permissions(_doc_status, _requires_upload)
-        _perms.update(_gd1b_flags(uploaded_doc, _doc_status, _requires_upload, False))
+        # Cờ GĐ1b: (is_extra, requires_upload) qua CÙNG helper với ``transition_document`` (một nguồn).
+        _rx, _ru = _config_facts(applied_rules, doc_code, has_file=bool(uploaded_doc.get("file_path")))
+        _perms.update(_gd1b_flags(uploaded_doc, _doc_status, _ru, _rx))
 
         documents_checklist.append({
             "code": doc_code,
@@ -3345,7 +3348,8 @@ def _compute_frontend_fields(
         # upload happened, otherwise treat as paper-only.
         _requires_upload = bool(uploaded_doc.get("file_path"))
 
-        _extra_flags = _gd1b_flags(uploaded_doc, _doc_status, _requires_upload, True)
+        _rx, _ru = _config_facts(applied_rules, extra_code, has_file=bool(uploaded_doc.get("file_path")))
+        _extra_flags = _gd1b_flags(uploaded_doc, _doc_status, _ru, _rx)
         documents_checklist.append({
             "code": extra_code,
             "document_row_id": uploaded_doc.get("id"),
