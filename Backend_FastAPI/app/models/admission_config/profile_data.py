@@ -7,7 +7,7 @@ Replaces JSON fields in AdmissionProfile:
 - documents_checklist → ProfileDocument
 """
 
-from sqlalchemy import CheckConstraint, Column, Date, Index, Integer, String, ForeignKey, Numeric, DateTime, UniqueConstraint, Text, BigInteger, text
+from sqlalchemy import Boolean, CheckConstraint, Column, Date, Index, Integer, String, ForeignKey, Numeric, DateTime, UniqueConstraint, Text, BigInteger, text
 from sqlalchemy.orm import backref, relationship
 from sqlalchemy.dialects.postgresql import JSONB
 from datetime import datetime, timezone
@@ -206,6 +206,38 @@ class ProfileDocument(Base):
         comment="Hạn bổ sung bằng — set khi kind=provisional_cert"
     )
 
+    # GĐ1b (đặc tả bản 3.6 §4.3) — người tải tệp + cờ "không rõ" + phiên bản dòng.
+    # ``uploaded_by`` RESTRICT: người đã tải là "đã từng thao tác" (K4) — không để CSDL tự gán NULL.
+    uploaded_by = Column(
+        Integer,
+        ForeignKey("user.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+        comment="Người tải tệp hiện tại (GĐ1b)"
+    )
+    uploaded_by_unknown = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=text("false"),
+        comment="Giấy có tệp nhưng không khôi phục được người tải (§4.4)"
+    )
+    paper_submitted_by_unknown = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=text("false"),
+        comment="Giấy bản giấy đã nhận nhưng mất người nhận (§4.4 bước 5)"
+    )
+    # Tăng bởi trigger CSDL ở MỌI lệnh UPDATE (``document_row_version_ddl``). Mã ứng dụng KHÔNG tự gán.
+    row_version = Column(
+        Integer,
+        nullable=False,
+        default=1,
+        server_default=text("1"),
+        comment="Phiên bản dòng — trigger tăng ở mỗi UPDATE (GĐ1b)"
+    )
+
     created_at = Column(
         DateTime(timezone=True),
         nullable=False,
@@ -271,6 +303,19 @@ class ProfileDocument(Base):
             "supplement_due_date IS NULL "
             "OR graduation_proof_kind = 'provisional_cert'",
             name="ck_supplement_due_only_provisional",
+        ),
+        # GĐ1b I1 — giấy THƯỜNG có tệp phải biết người tải, hoặc mang cờ "không rõ". Minh chứng ưu tiên không thuộc
+        # phạm vi (F356).
+        CheckConstraint(
+            "category <> 'path' OR file_path IS NULL OR uploaded_by IS NOT NULL OR uploaded_by_unknown",
+            name="ck_profile_document_uploader_known",
+        ),
+        # GĐ1b I2 — giấy THƯỜNG bản giấy (không tệp) đã nhận / đã duyệt phải biết người nhận, hoặc mang cờ "không rõ".
+        CheckConstraint(
+            "category <> 'path' OR file_path IS NOT NULL "
+            "OR status NOT IN ('paper_submitted','verified') "
+            "OR paper_submitted_by IS NOT NULL OR paper_submitted_by_unknown",
+            name="ck_profile_document_receiver_known",
         ),
     )
 

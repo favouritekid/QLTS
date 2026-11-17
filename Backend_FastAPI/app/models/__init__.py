@@ -83,6 +83,11 @@ from .admission_config import (
     ProfileSubjectScore,
     ProfileDocument,
     DocumentAuditLog,  # Audit trail for document operations
+    DocumentBulkBatch,  # GĐ1b
+    DocumentBulkBatchItem,  # GĐ1b
+    DocumentCrossReviewGrant,  # GĐ1b
+    DocumentDownloadLog,  # GĐ1b
+    DocumentEvidenceFile,  # GĐ1b
     AdmissionPath,  # Phase 1: Admission Configuration Console
     PathSubjectGroupConfig,  # Phase 2 v8.2 PR-2D
     PathSubjectGroupItem,  # Phase 2 v8.2 PR-2D
@@ -250,6 +255,11 @@ __all__ = [
     "ProfileSubjectScore",
     "ProfileDocument",
     "DocumentAuditLog",  # Audit trail for document operations
+    "DocumentBulkBatch",
+    "DocumentBulkBatchItem",
+    "DocumentCrossReviewGrant",
+    "DocumentDownloadLog",
+    "DocumentEvidenceFile",
     "AdmissionPath",  # Phase 1: Admission Configuration Console
     # Notification
     "Notification",
