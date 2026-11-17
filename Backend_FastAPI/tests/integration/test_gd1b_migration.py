@@ -47,6 +47,9 @@ GO_GD1B = (
     "ALTER TABLE profile_document DROP CONSTRAINT ck_profile_document_uploader_known, "
     "DROP CONSTRAINT ck_profile_document_receiver_known, DROP COLUMN uploaded_by, DROP COLUMN uploaded_by_unknown, "
     "DROP COLUMN paper_submitted_by_unknown, DROP COLUMN row_version",
+    # Trước GĐ1b: target_user_id KHÔNG khai ondelete (NO ACTION).
+    "ALTER TABLE user_activity_log DROP CONSTRAINT user_activity_log_target_user_id_fkey, "
+    "ADD CONSTRAINT user_activity_log_target_user_id_fkey FOREIGN KEY (target_user_id) REFERENCES \"user\" (id)",
 )
 
 
@@ -168,7 +171,7 @@ async def _cot(k, doc_id):
 
 async def _luoc_do(k):
     """Phần lược đồ GĐ1b: cột, ràng buộc, chỉ mục, trigger, thân hàm."""
-    bang = list(BANG_MOI) + ["profile_document"]
+    bang = list(BANG_MOI) + ["profile_document", "user_activity_log"]
     cot = await k.fetch(
         "SELECT table_name, column_name, data_type, is_nullable, column_default FROM information_schema.columns "
         "WHERE table_schema = 'public' AND table_name = ANY($1) ORDER BY 1, 2",

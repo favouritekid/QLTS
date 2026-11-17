@@ -966,12 +966,18 @@ async def update_profile(
 # --- Hàm Xóa User ---
 
 
-async def delete_user(db: AsyncSession, user_id: int) -> Tuple[None, Callable]:
+async def delete_user(
+    db: AsyncSession, user_id: int, actor_id: Optional[int] = None
+) -> Tuple[None, Callable]:
     """
     Delete a user.
 
     IMPORTANT: This function does NOT commit the transaction.
     Router must call db.commit() and then execute the returned callback.
+
+    GĐ1b K4 (đặc tả bản 3.6 §4.3): đi qua ``assert_user_deletable`` — khoá người bị xoá (+ admin đang hoạt động nếu cần)
+    trong MỘT câu, guard "admin cuối", kiểm MỌI khoá ngoại tới ``user`` CHỈ ĐỌC; không đạt ⇒ 409, không câu ghi nào.
+    Mốc nền V5 (``221a757d``): có ``assignment_log`` / tư vấn ⇒ 500; có lead ⇒ lead bị gỡ âm thầm.
 
     Returns:
         Tuple of (None, post_commit_callback)
@@ -979,8 +985,14 @@ async def delete_user(db: AsyncSession, user_id: int) -> Tuple[None, Callable]:
     try:
         # ✅ SPRINT 5: Use Repository for eager loading
         from app.repositories import UserRepository
+        from app.services.user_deletion_policy import assert_user_deletable
+
         user_repo = UserRepository(db)
-        
+
+        deletable = await assert_user_deletable(db, [user_id], actor_id)
+        if not deletable:
+            raise ResourceNotFoundError(detail=f"User with id {user_id} not found.")
+
         # ✅ FIX MissingGreenlet: Eager load cascade-delete relationships
         # Without this, SQLAlchemy tries to lazy-load during cascade delete,
         # which fails in async mode with "greenlet_spawn has not been called"
@@ -988,19 +1000,6 @@ async def delete_user(db: AsyncSession, user_id: int) -> Tuple[None, Callable]:
 
         if not user_to_delete:
             raise ResourceNotFoundError(detail=f"User with id {user_id} not found.")
-
-        # Safety guard: prevent deletion of the last active admin.
-        # Losing the last admin would lock the system out of administrative access.
-        # count_active_admins_for_update() acquires SELECT FOR UPDATE row locks on
-        # every active admin, so two concurrent delete-admin transactions serialize
-        # on the lock and the second one observes the post-commit count from the
-        # first.
-        if user_to_delete.role == UserRole.ADMIN and user_to_delete.status == "active":
-            active_admin_count = await user_repo.count_active_admins_for_update()
-            if active_admin_count <= 1:
-                raise BusinessRuleViolation(
-                    detail="Cannot delete the last active admin user."
-                )
 
         # Save data for emit before deletion
         deleted_username = user_to_delete.username
@@ -1570,13 +1569,27 @@ async def perform_bulk_action(
         from app.repositories import UserRepository
         user_repo = UserRepository(db)
         
-        # ✅ FIX MissingGreenlet: Eager load cascade-delete relationships for delete action
+        # GĐ1b K4 (§4.3): nhánh xoá KIỂM TRƯỚC mọi câu ghi — ``assert_user_deletable`` khoá + kiểm toàn bộ danh sách;
+        # một người không đạt ⇒ 409 cả lệnh (không gỡ lead, không xoá ai, router không dọn Casbin).
+        skipped_users = []
         if action == "delete":
-            users_to_process = await user_repo.get_users_by_ids_for_delete(user_ids)
+            from app.services.user_deletion_policy import assert_user_deletable
+
+            if admin_user.id in set(user_ids):
+                log.warning(
+                    "Admin attempted to delete self during bulk action, skipping.",
+                    admin_id=admin_user.id,
+                )
+                skipped_users.append(admin_user.id)
+            ids_to_delete = await assert_user_deletable(db, user_ids, admin_user.id)
+            # ✅ FIX MissingGreenlet: Eager load cascade-delete relationships for delete action
+            users_to_process = (
+                await user_repo.get_users_by_ids_for_delete(ids_to_delete) if ids_to_delete else []
+            )
         else:
             users_to_process = await user_repo.get_by_ids(user_ids)
 
-        if not users_to_process:
+        if not users_to_process and not skipped_users:
             log.info(
                 "Bulk action: No users found matching provided IDs.",
                 user_ids=user_ids,
@@ -1591,67 +1604,20 @@ async def perform_bulk_action(
         message = ""
         disconnect_ids: list = []  # status-changed ids the router must force-disconnect
         if action == "delete":
-            # ✅ SPRINT 5: Use Repository for consultation check
-            # Check if any users have consultations (cannot delete)
-            users_with_consultations = await user_repo.count_consultations_by_officers(user_ids)
-
-            if users_with_consultations:
-                user_list = ", ".join(f"User ID {uid} ({count} consultations)"
-                                     for uid, count in users_with_consultations.items())
-                error_msg = f"Cannot delete users with consultations: {user_list}. Please reassign or delete their consultations first."
-                log.warning(
-                    "Bulk delete blocked: Users have consultations",
-                    admin_id=admin_user.id,
-                    users_with_consultations=users_with_consultations,
-                )
-                raise BadRequest(detail=error_msg)
-
-            # Unassign leads from users being deleted (set assigned_officer_id to NULL)
-            # ✅ SPRINT 7: Use LeadRepository
-            from app.repositories import LeadRepository
-            lead_repo = LeadRepository(db)
-            
-            # Direct usage of repository method which handles bulk update efficiently
-            unassigned_count = await lead_repo.unassign_leads_from_officers(user_ids)
-            
-            # Compatibility variable for logging logic below
-            leads_to_unassign = [True] * unassigned_count if unassigned_count > 0 else []
-
-            if unassigned_count > 0:
-                log.info(
-                    "Unassigned leads before bulk delete",
-                    admin_id=admin_user.id,
-                    lead_count=unassigned_count,
-                )
-
-            ids_to_delete = []
-            skipped_users = []
             for user in users_to_process:
-                if user.id == admin_user.id:
-                    log.warning(
-                        "Admin attempted to delete self during bulk action, skipping.",
-                        admin_id=admin_user.id,
-                    )
-                    skipped_users.append(user.id)
-                    continue
-
                 await db.delete(user)  # Mark user for deletion
-                ids_to_delete.append(user.id)
                 processed_count += 1
 
             # Build message with details
             message = f"Successfully deleted {processed_count} users."
             if skipped_users:
                 message += f" Skipped {len(skipped_users)} users (cannot delete self)."
-            if leads_to_unassign:
-                message += f" Unassigned {len(leads_to_unassign)} leads."
 
             log.info(
                 "Admin bulk deleted users",
                 admin_id=admin_user.id,
-                deleted_ids=ids_to_delete,
+                deleted_ids=[u.id for u in users_to_process],
                 skipped_ids=skipped_users,
-                unassigned_leads=len(leads_to_unassign) if leads_to_unassign else 0,
             )
 
         elif action == "change_status":

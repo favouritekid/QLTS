@@ -23,6 +23,8 @@ MỘT câu ``DO`` làm TẤT CẢ (``env.py`` chạy ``AUTOCOMMIT`` ⇒ chỉ m�
    ``DO`` (đọc đĩa, chỉ đọc), truyền vào như một hằng JSON; trong câu ``DO`` đối chiếu lại đúng tập giấy + đường dẫn, lệch ⇒
    ``RAISE``. Giấy ``verified`` có tệp mà KHÔNG có bản ghi nhật ký ``verified`` ⇒ ``RAISE`` (không bịa nhật ký; ghi chú
    ở ``gd1b/KE-HOACH-VIET-MA-GD1B-2026-11-17.md`` — đo trên production trước khi xin GO deploy);
+9. ``user_activity_log.target_user_id`` ⇒ ``ON DELETE SET NULL`` (K4: tài khoản BỊ thao tác không phải "đã từng thao
+   tác"; trước đây ORM tự gán NULL qua ``User.activities_received``) — ``app/services/user_deletion_policy.py``;
 8. trigger ``row_version`` (tạo SAU khi điền ngược để mọi dòng cũ giữ ``row_version = 1``) — câu chép NGUYÊN từ
    ``app/models/admission_config/document_row_version_ddl.py``.
 
@@ -53,7 +55,8 @@ _SQLSTATE_LOCK_TIMEOUT = "55P03"
 
 #: SQLSTATE riêng cho từng điểm dừng (``env.py`` che chữ lỗi CSDL, chỉ giữ SQLSTATE ⇒ người vận hành đọc mã để biết
 #: dừng vì đâu). QLB01 người tải lệch · QLB02 người nhận lệch · QLB03 dấu tải lệch · QLB04 tập giấy bằng chứng đổi
-#: trong lúc nâng cấp · QLB05 giấy đã duyệt có tệp mà không có nhật ký verified · QLB06 dòng bằng chứng lệch.
+#: trong lúc nâng cấp · QLB05 giấy đã duyệt có tệp mà không có nhật ký verified · QLB06 dòng bằng chứng lệch ·
+#: QLB07 ``user_activity_log.target_user_id`` không có đúng một khoá ngoại.
 SQLSTATE_NO_VERIFIED_AUDIT = "QLB05"
 SQLSTATE_DOWNGRADE_DATA_PRESENT = "QLB10"
 
@@ -297,12 +300,31 @@ DECLARE
     n_ev_matched bigint;
     n_ev_no_audit bigint;
     n_ev_ins bigint;
+    n_fk bigint;
+    v_fk name;
 BEGIN
     PERFORM set_config('lock_timeout', '{LOCK_TIMEOUT}', true);
-    LOCK TABLE profile_document, document_audit_log IN SHARE ROW EXCLUSIVE MODE;
+    LOCK TABLE profile_document, document_audit_log, user_activity_log IN SHARE ROW EXCLUSIVE MODE;
 
     -- 1 + 2. Bảng, chỉ mục, cột mới.
     {ddl};
+
+    -- 2b. K4: user_activity_log.target_user_id (tài khoản BỊ thao tác) ⇒ ON DELETE SET NULL. Tên ràng buộc đọc từ
+    --     pg_constraint (không đoán); đúng MỘT khoá ngoại trên cột ấy, khác ⇒ dừng.
+    SELECT count(*) INTO n_fk FROM pg_constraint c
+     WHERE c.conrelid = 'user_activity_log'::regclass AND c.contype = 'f'
+       AND c.conkey = ARRAY[(SELECT attnum FROM pg_attribute
+                              WHERE attrelid = 'user_activity_log'::regclass AND attname = 'target_user_id')]::smallint[];
+    IF n_fk <> 1 THEN
+        RAISE EXCEPTION 'gd1b20261117: user_activity_log.target_user_id co % khoa ngoai', n_fk USING ERRCODE = 'QLB07';
+    END IF;
+    SELECT c.conname INTO v_fk FROM pg_constraint c
+     WHERE c.conrelid = 'user_activity_log'::regclass AND c.contype = 'f'
+       AND c.conkey = ARRAY[(SELECT attnum FROM pg_attribute
+                              WHERE attrelid = 'user_activity_log'::regclass AND attname = 'target_user_id')]::smallint[];
+    EXECUTE format('ALTER TABLE user_activity_log DROP CONSTRAINT %I', v_fk);
+    ALTER TABLE user_activity_log ADD CONSTRAINT user_activity_log_target_user_id_fkey
+        FOREIGN KEY (target_user_id) REFERENCES "user" (id) ON DELETE SET NULL;
 
     -- 3 + 4. Đếm TRƯỚC.
     SELECT count(*) INTO n_file_docs FROM profile_document
@@ -463,6 +485,9 @@ BEGIN
     ALTER TABLE profile_document DROP COLUMN paper_submitted_by_unknown;
     ALTER TABLE profile_document DROP COLUMN uploaded_by_unknown;
     ALTER TABLE profile_document DROP COLUMN uploaded_by;
+    ALTER TABLE user_activity_log DROP CONSTRAINT user_activity_log_target_user_id_fkey;
+    ALTER TABLE user_activity_log ADD CONSTRAINT user_activity_log_target_user_id_fkey
+        FOREIGN KEY (target_user_id) REFERENCES "user" (id);
 END
 $gd1b_down$
 """
