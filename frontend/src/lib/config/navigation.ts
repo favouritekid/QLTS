@@ -9,6 +9,7 @@
  */
 import {
   Activity,
+  ArrowLeftRight,
   BarChart3,
   Bell,
   BellOff,
@@ -24,6 +25,7 @@ import {
   Handshake,
   History,
   LayoutDashboard,
+  ListChecks,
   MapPin,
   MessageSquareText,
   Percent,
@@ -150,6 +152,23 @@ export const navigationConfig: NavigationConfig = {
           href: "/admissions",
           icon: ClipboardCheck,
           roles: [], // Accessible to all roles
+        },
+        {
+          // GĐ1b (đặc tả §7, bản 6 C2.1) — hiện THEO CỜ máy chủ `bulk-verify/eligibility`, KHÔNG theo vai
+          // (`roles: []`): cờ = đúng cổng của bước xem trước lô (Admin; Quản lý có đơn vị).
+          label: "Lô duyệt giấy",
+          href: "/document-batches",
+          icon: ListChecks,
+          roles: [],
+          serverFlag: "document-batches",
+        },
+        {
+          // GĐ1b (đặc tả §6, §7) — chỉ cán bộ đang có quyền duyệt chéo còn hiệu lực (`cross-review/eligibility`).
+          label: "Duyệt chéo",
+          href: "/cross-review",
+          icon: ArrowLeftRight,
+          roles: [],
+          serverFlag: "cross-review",
         },
         {
           label: "Yêu cầu mở lại",

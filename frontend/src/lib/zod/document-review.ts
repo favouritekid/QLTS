@@ -354,6 +354,17 @@ export const batchListSchema = z.object({
 })
 export type BatchList = z.infer<typeof batchListSchema>
 
+/**
+ * Bản 6 C1 — `GET /api/admissions/documents/bulk-verify/eligibility`: cờ của CHÍNH người gọi = đúng các cổng của
+ * `POST …/preview` (Casbin + `require_bulk_verify_reviewer`). Dùng cho mục thanh bên "Lô duyệt giấy" và nút "Duyệt giấy
+ * theo bộ lọc hiện tại" — giao diện không suy theo vai.
+ */
+export const bulkVerifyEligibilitySchema = z.object({ eligible: z.boolean() })
+export type BulkVerifyEligibility = z.infer<typeof bulkVerifyEligibilitySchema>
+
+/** Bản 6 C2.3 — sự kiện socket `bulk_verify_finished` (phát tới `user_room_{user_id}` của người tạo, sau commit cuối). */
+export const bulkVerifyFinishedEventSchema = z.object({ batch_id: batchIdSchema })
+
 export const BATCH_LIST_SCOPES = ["mine", "all"] as const
 export type BatchListScope = (typeof BATCH_LIST_SCOPES)[number]
 

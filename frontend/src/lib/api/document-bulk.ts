@@ -11,6 +11,7 @@ import {
   batchListSchema,
   batchViewSchema,
   bulkPreviewSchema,
+  bulkVerifyEligibilitySchema,
   bulkVerifyPreviewBodySchema,
   crossBulkVerifyPreviewBodySchema,
   executeBatchBodySchema,
@@ -20,6 +21,7 @@ import {
   type BatchListScope,
   type BatchView,
   type BulkPreview,
+  type BulkVerifyEligibility,
   type BulkVerifyFilter,
   type FinalizeBatchResponse,
 } from "@/lib/zod/document-review"
@@ -98,6 +100,12 @@ export async function finalizeBatch(
   const body = finalizeBatchBodySchema.parse(trimmed ? { reason: trimmed } : {})
   const res = await api.post(`${bulkPrefix(endpoint)}/${encodeURIComponent(batchId)}/finalize`, body)
   return finalizeBatchResponseSchema.parse(res.data)
+}
+
+/** Bản 6 C1 — cờ quyền chạy lô (đường Quản lý / Admin) của chính người gọi. Mọi người đã đăng nhập gọi được. */
+export async function getBulkVerifyEligibility(): Promise<BulkVerifyEligibility> {
+  const res = await api.get(`${BULK_VERIFY_PREFIX}/eligibility`)
+  return bulkVerifyEligibilitySchema.parse(res.data)
 }
 
 /** Danh sách lô (cửa sổ hiển thị 30 ngày, 20 / trang, con trỏ). `scope=all` chỉ Admin. */

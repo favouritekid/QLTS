@@ -106,3 +106,18 @@ describe("GĐ1b — bề mặt duyệt giấy /admissions/[id] đã nối", () =
     expect(BE_MAT.filter((t) => mau.test(ma(t)))).toEqual([])
   })
 })
+
+/** Bản 6 C2.2 — nút "Duyệt giấy theo bộ lọc hiện tại" gửi BỘ LỌC đang áp, không bao giờ mang id dòng của trang. */
+describe("GĐ1b — nút duyệt theo bộ lọc: chỉ bộ lọc, không id dòng", () => {
+  it("BulkVerifyByFilterButton + bulk-filter không nhắc tới profile_ids / profileIds", () => {
+    for (const t of ["components/document-review/bulk/BulkVerifyByFilterButton.tsx", "lib/document-review/bulk-filter.ts"]) {
+      expect(ma(t), t).not.toMatch(/profile_?[iI]ds/)
+    }
+  })
+
+  it("AdmissionsClient truyền ĐÚNG apiFilters (bộ lọc đang áp của danh sách) cho nút", () => {
+    expect(ma("app/(dashboard)/admissions/_components/AdmissionsClient.tsx")).toMatch(
+      /<BulkVerifyByFilterButton filter=\{apiFilters\} \/>/,
+    )
+  })
+})

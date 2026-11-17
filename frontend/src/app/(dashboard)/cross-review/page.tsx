@@ -5,8 +5,7 @@ import { CrossReviewClient } from "@/components/document-review/cross/CrossRevie
 
 /**
  * GĐ1b — "Duyệt chéo": hàng đợi giấy bản giấy cán bộ được cấp quyền duyệt / từ chối tạm thời. Hiện theo
- * `eligibility` của máy chủ. Trang ĐỨNG RIÊNG — mục thanh bên (cờ `cross-review` trong `useServerFlagNavigation`) chờ
- * biên bản V4 vì sửa khung chung.
+ * `eligibility` của máy chủ. Mục thanh bên "Duyệt chéo" hiện theo cùng cờ (`serverFlag: "cross-review"`, bản 6 C2.1).
  */
 export default function CrossReviewPage() {
   return (
