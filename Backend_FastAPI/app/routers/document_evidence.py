@@ -6,8 +6,10 @@
 ``admissions.router``. Không Casbin riêng: cổng quyền là dependency ``deps.get_admission_for_document_history`` như route
 lịch sử K2. Chỉ có route GET ⇒ không thuộc danh mục route GHI của cần gạt đóng băng (``admission_freeze``).
 """
+from urllib.parse import quote
+
 from fastapi import APIRouter, Depends, Path, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
 
@@ -24,6 +26,15 @@ router = APIRouter(prefix="/admissions", tags=["Admissions"])
 
 #: Khoá chính int4 — số ngoài khoảng ⇒ 422 thay vì lỗi tràn của asyncpg (500).
 _INT4_MAX = 2_147_483_647
+
+
+def _inline_content_disposition(filename: str) -> str:
+    """Đúng khuôn ``starlette.responses.FileResponse`` dựng cho ``content_disposition_type="inline"`` (route tải thường
+    dùng ``FileResponse``); test ``test_tai_bang_chung_ghi_nhat_ky_giong_het_route_tai_thuong`` so tiêu đề hai route."""
+    quoted = quote(filename)
+    if quoted != filename:
+        return f"inline; filename*=utf-8''{quoted}"
+    return f'inline; filename="{filename}"'
 
 
 async def _mark_missing_in_own_transaction(db: AsyncSession, *, evidence_id: int, profile_id: int) -> None:
@@ -102,12 +113,13 @@ async def download_document_evidence(
     if found.clear_missing_flag:
         await _clear_missing_in_own_transaction(db, evidence_id=found.evidence_id, profile_id=profile_id)
 
-    return FileResponse(
-        found.abs_path,
+    # Trả ĐÚNG các byte đã băm và đã so với sha256 lúc duyệt — không mở lại tệp theo đường dẫn (không có khe giữa lúc băm
+    # và lúc trả).
+    return Response(
+        content=found.content,
         media_type=found.media_type,
-        filename=found.filename,
-        content_disposition_type="inline",
         headers={
+            "Content-Disposition": _inline_content_disposition(found.filename),
             # Tài liệu có dữ liệu cá nhân: không lưu đệm, không lộ referrer, không đoán MIME (như route tải thường).
             "Cache-Control": "private, no-store",
             "Referrer-Policy": "no-referrer",

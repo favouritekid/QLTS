@@ -515,7 +515,7 @@ async def test_tai_bang_chung_ghi_nhat_ky_giong_het_route_tai_thuong(
     r_bc = await client.get(_url(pid, d.id, ev.id), headers=h)
     assert (r_thuong.status_code, r_bc.status_code) == (200, 200), (r_thuong.text, r_bc.text)
     assert r_thuong.content == r_bc.content == a
-    for tieu_de in ("content-type", "cache-control", "referrer-policy", "x-content-type-options"):
+    for tieu_de in ("content-type", "content-disposition", "cache-control", "referrer-policy", "x-content-type-options"):
         assert r_thuong.headers.get(tieu_de) == r_bc.headers.get(tieu_de), tieu_de
 
     async with AsyncSessionLocal() as s:
