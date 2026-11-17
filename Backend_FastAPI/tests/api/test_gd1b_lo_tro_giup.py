@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import itertools
 import time
 from datetime import datetime
 from typing import Dict, Iterable, List, Optional
@@ -69,16 +70,29 @@ async def lo_routers(client, monkeypatch):
 
     monkeypatch.setattr(svc, "BULK_VERIFY_MAX_DOCUMENTS", N_TEST)
     monkeypatch.setattr(svc, "BULK_VERIFY_LOCK_TIMEOUT_MS", LOCK_TIMEOUT_MS_TEST)
-    n0 = len(fastapi_app.router.routes)
+    routes = fastapi_app.router.routes
+    n0 = len(routes)
     fastapi_app.include_router(document_bulk_verify.router, prefix="/api")
     fastapi_app.include_router(document_cross_review.router, prefix="/api")
+    moi = routes[n0:]
+    del routes[n0:]
+    # THỨ TỰ BẮT BUỘC khi Claude đăng ký ở ``app/main.py``: hai router mới đứng TRƯỚC ``admissions.router`` —
+    # ``POST /api/admissions/{profile_id}/reject`` (router cũ) khớp cả ``/api/admissions/cross-review/reject`` và trả 422.
+    # Fixture đặt đúng thứ tự ấy; ``test_gd1b_lo_khoa_tu_van_csdl.py`` khẳng định route đầu tiên khớp là route mới.
+    vi_tri = next(
+        (i for i, r in enumerate(routes) if getattr(getattr(r, "endpoint", None), "__module__", "") == "app.routers.admissions"),
+        len(routes),
+    )
+    routes[vi_tri:vi_tri] = moi
     enf = fastapi_app.state.enforcer
     for line in CASBIN_LINES:
         await enf.add_policy(*line)  # đã có ⇒ trả False, không lỗi
     try:
         yield fastapi_app
     finally:
-        del fastapi_app.router.routes[n0:]
+        for r in moi:
+            routes.remove(r)
+        assert len(routes) == n0
 
 
 @pytest_asyncio.fixture
@@ -154,10 +168,22 @@ async def lo_config(seed_lead_dependencies: dict):
     }
 
 
+#: User-Agent khác nhau ⇒ "thiết bị" khác nhau: đăng nhập lại trên CÙNG thiết bị thu hồi phiên cũ
+#: (``session_service._revoke_previous_sessions_on_device``) ⇒ hai client cùng người phải khác thiết bị.
+_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64; rv:121.0) Gecko/20100101 Firefox/121.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+)
+_UA_LUOT = itertools.cycle(_UA)
+
+
 async def dang_nhap(user: dict):
     from app.main import fastapi_app
 
-    c = AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test")
+    c = AsyncClient(
+        transport=ASGITransport(app=fastapi_app), base_url="http://test", headers={"User-Agent": next(_UA_LUOT)}
+    )
     r = await c.post(AuthURLs.LOGIN, data={"username": user["username"], "password": user["password"]})
     assert r.status_code == 200, r.text
     return c, {"Authorization": f"Bearer {r.cookies.get('access_token')}"}

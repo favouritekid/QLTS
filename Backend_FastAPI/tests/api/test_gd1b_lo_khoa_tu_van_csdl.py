@@ -53,8 +53,9 @@ async def test_ket_noi_L_autocommit_khong_treo_giao_dich_va_nha_het_khoa(setup_t
 
 
 async def test_duong_dan_moi_khong_bi_route_cu_chan(client, lo_routers):
-    """Router mới gắn SAU các router cũ (như Claude sẽ đăng ký): route đầu tiên khớp đầy đủ mỗi đường mới phải là route mới
-    (tham số kiểu ``int`` của route cũ không được nuốt ``documents`` / ``cross-review``)."""
+    """Router mới đặt TRƯỚC ``admissions.router`` (thứ tự Claude phải dùng ở ``app/main.py`` — xem ``lo_routers``): route
+    đầu tiên khớp đầy đủ mỗi đường mới phải là route mới (tham số ``{profile_id}`` của route cũ không được nuốt
+    ``documents`` / ``cross-review``)."""
     from app.routers import document_bulk_verify, document_cross_review
 
     moi = {document_bulk_verify.__name__, document_cross_review.__name__}
@@ -79,12 +80,27 @@ async def test_duong_dan_moi_khong_bi_route_cu_chan(client, lo_routers):
         ("GET", "/api/admissions/cross-review/bulk-verify"),
     ]
     for method, path in duong:
-        scope = {"type": "http", "method": method, "path": path, "root_path": "", "query_string": b"", "headers": []}
-        dau = None
-        for route in lo_routers.router.routes:
-            m, _ = route.matches(scope)
-            if m == Match.FULL:
-                dau = route
-                break
+        dau = _route_dau_tien(lo_routers.router.routes, method, path)
         assert dau is not None, (method, path)
         assert getattr(dau.endpoint, "__module__", None) in moi, (method, path, getattr(dau, "path", None))
+
+
+def _route_dau_tien(routes, method, path):
+    scope = {"type": "http", "method": method, "path": path, "root_path": "", "query_string": b"", "headers": []}
+    for route in routes:
+        m, _ = route.matches(scope)
+        if m == Match.FULL:
+            return route
+    return None
+
+
+async def test_dang_ky_sau_router_cu_thi_tu_choi_cheo_bi_nuot(client, lo_routers):
+    """Lý do của thứ tự bắt buộc: nếu hai router mới đứng SAU ``admissions.router`` thì
+    ``POST /api/admissions/cross-review/reject`` rơi vào ``POST /api/admissions/{profile_id}/reject`` (422)."""
+    from app.routers import document_bulk_verify, document_cross_review
+
+    moi = {document_bulk_verify.__name__, document_cross_review.__name__}
+    cu = [r for r in lo_routers.router.routes if getattr(getattr(r, "endpoint", None), "__module__", "") not in moi]
+    sau = cu + [r for r in lo_routers.router.routes if r not in cu]
+    dau = _route_dau_tien(sau, "POST", "/api/admissions/cross-review/reject")
+    assert getattr(dau.endpoint, "__module__", None) == "app.routers.admissions", getattr(dau, "path", None)

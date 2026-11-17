@@ -75,7 +75,7 @@ async def test_execute_giu_khoa_chua_commit_processing_thi_tra_starting_va_chot_
     ps = await _ho_so(client, admin_token_headers, officer_user_in_db, lo_config, 1)
     ma = await _xem_truoc(client, manager_user_in_db, [ps[0]["id"]])
     diem = Diem()
-    boc(monkeypatch, repo, "try_lock_batch", diem)
+    boc(monkeypatch, repo, "lock_batch_row", diem, truoc=True)  # ĐÃ giữ khoá lô, CHƯA khoá dòng / commit ``processing``
     ca, ha = await dang_nhap(manager_user_in_db)
     cb, hb = await dang_nhap(manager_user_in_db)
     try:
@@ -104,7 +104,7 @@ async def test_huy_execute_o_pha_starting_thi_not_started_roi_chay_lai_cung_ma(
     ps = await _ho_so(client, admin_token_headers, officer_user_in_db, lo_config, 1)
     ma = await _xem_truoc(client, manager_user_in_db, [ps[0]["id"]])
     diem = Diem()
-    boc(monkeypatch, repo, "try_lock_batch", diem)
+    boc(monkeypatch, repo, "lock_batch_row", diem, truoc=True)  # ĐÃ giữ khoá lô, CHƯA khoá dòng / commit ``processing``
     ca, ha = await dang_nhap(manager_user_in_db)
     try:
         a = asyncio.create_task(ca.post(f"{BULK}/{ma}/execute", headers=ha, json={"confirmation_text": "x"}))
@@ -295,7 +295,7 @@ async def test_doi_dong_lo_giua_buoc_0_va_buoc_2_thi_404_preview_gone(
     ps = await _ho_so(client, admin_token_headers, officer_user_in_db, lo_config, 1)
     ma = await _xem_truoc(client, manager_user_in_db, [ps[0]["id"]])
     diem = Diem()
-    boc(monkeypatch, repo, "try_lock_batch", diem)
+    boc(monkeypatch, repo, "lock_batch_row", diem, truoc=True)  # ĐÃ giữ khoá lô, CHƯA khoá dòng / commit ``processing``
     ca, ha = await dang_nhap(manager_user_in_db)
     try:
         a = asyncio.create_task(ca.post(f"{BULK}/{ma}/execute", headers=ha, json={"confirmation_text": "x"}))
@@ -386,7 +386,7 @@ async def test_don_ban_xem_truoc_khong_dung_lo_dang_bi_execute_giu(
     y = await _xem_truoc(client, manager_user_in_db, [ps[0]["id"]])
     z = await _xem_truoc(client, manager_user_in_db, [ps[0]["id"]])
     diem = Diem()
-    boc(monkeypatch, repo, "try_lock_batch", diem)
+    boc(monkeypatch, repo, "lock_batch_row", diem, truoc=True)  # ĐÃ giữ khoá lô, CHƯA khoá dòng / commit ``processing``
     ca, ha = await dang_nhap(manager_user_in_db)
     cb, hb = await dang_nhap(manager_user_in_db)
     try:
