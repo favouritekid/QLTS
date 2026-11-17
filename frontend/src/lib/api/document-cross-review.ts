@@ -7,6 +7,7 @@
  */
 import { api } from "@/lib/api/client"
 import {
+  CROSS_REVIEW_QUEUE_PAGE_SIZE,
   crossReviewActionBodySchema,
   crossReviewActionResponseSchema,
   crossReviewEligibilitySchema,
@@ -16,6 +17,7 @@ import {
   crossReviewGrantSchema,
   crossReviewQueuePageSchema,
   type CrossReviewActionBody,
+  type CrossReviewActionResponse,
   type CrossReviewEligibility,
   type CrossReviewGrant,
   type CrossReviewGrantCreateBody,
@@ -32,24 +34,26 @@ export async function getCrossReviewEligibility(): Promise<CrossReviewEligibilit
   return crossReviewEligibilitySchema.parse(res.data)
 }
 
-export async function getCrossReviewQueue(cursor?: string | null): Promise<CrossReviewQueuePage> {
-  const params: Record<string, string> = {}
-  if (cursor) params.cursor = cursor
-  const res = await api.get(`${P}/queue`, { params })
+/** Hàng đợi hẹp, phân trang theo SỐ TRANG (bản 5 B2). */
+export async function getCrossReviewQueue(
+  page: number,
+  pageSize: number = CROSS_REVIEW_QUEUE_PAGE_SIZE,
+): Promise<CrossReviewQueuePage> {
+  const res = await api.get(`${P}/queue`, { params: { page, page_size: pageSize } })
   return crossReviewQueuePageSchema.parse(res.data)
 }
 
-export async function crossReviewVerify(body: CrossReviewActionBody): Promise<void> {
+export async function crossReviewVerify(body: CrossReviewActionBody): Promise<CrossReviewActionResponse> {
   const data = crossReviewActionBodySchema.parse(body)
   const res = await api.post(`${P}/verify`, data)
-  crossReviewActionResponseSchema.parse(res.data)
+  return crossReviewActionResponseSchema.parse(res.data)
 }
 
-export async function crossReviewReject(body: CrossReviewActionBody): Promise<void> {
+export async function crossReviewReject(body: CrossReviewActionBody): Promise<CrossReviewActionResponse> {
   const data = crossReviewActionBodySchema.parse(body)
   if (!data.reason) throw new Error("Từ chối cần lý do")
   const res = await api.post(`${P}/reject`, data)
-  crossReviewActionResponseSchema.parse(res.data)
+  return crossReviewActionResponseSchema.parse(res.data)
 }
 
 // ── Admin: cấp / thu hồi / xem quyền ──

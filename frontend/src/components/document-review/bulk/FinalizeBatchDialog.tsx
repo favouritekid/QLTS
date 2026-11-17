@@ -1,9 +1,9 @@
 "use client"
 
 /**
- * GĐ1b §5.7 — chốt lô gián đoạn. Chốt KHÔNG ghi giấy nào, chỉ đánh dấu mục chưa chạy là "Chưa xử lý". Lý do: bắt buộc
- * khi Admin chốt lô của người khác — máy chủ quyết (thiếu ⇒ 422 ⇒ hộp báo "Cần nhập lý do"); giao diện không suy vai.
- * Lý do KHÔNG lưu vào storage.
+ * GĐ1b §5.7 — chốt lô gián đoạn. Chốt KHÔNG ghi giấy nào, chỉ đánh dấu mục chưa chạy là "Chưa xử lý".
+ * Lý do BẮT BUỘC khi máy chủ báo `finalize_requires_reason` (bản 5 B4: Admin chốt lô của người khác) — giao diện không
+ * suy theo vai; máy chủ vẫn là chốt (thiếu ⇒ 422 ⇒ "Cần nhập lý do chốt lô"). Lý do KHÔNG lưu vào storage.
  */
 import { useId, useState } from "react"
 
@@ -24,20 +24,25 @@ import { describeFinalizeError } from "@/lib/document-review/messages"
 interface Props {
   endpoint: BulkEndpoint
   batchId: string
+  /** cờ máy chủ `BatchView.finalize_requires_reason` */
+  requiresReason: boolean
   open: boolean
   onOpenChange: (open: boolean) => void
 }
 
-export function FinalizeBatchDialog({ endpoint, batchId, open, onOpenChange }: Props) {
+export function FinalizeBatchDialog({ endpoint, batchId, requiresReason, open, onOpenChange }: Props) {
   const reasonId = useId()
   const [reason, setReason] = useState("")
   const [error, setError] = useState<string | null>(null)
   const finalize = useFinalizeBatch(endpoint)
+  const trimmed = reason.trim()
+  const canSubmit = !finalize.isPending && (!requiresReason || (trimmed.length > 0 && trimmed.length <= 500))
 
   const submit = () => {
+    if (!canSubmit) return
     setError(null)
     finalize.mutate(
-      { batchId, reason: reason.trim() || undefined },
+      { batchId, reason: trimmed || undefined },
       {
         onSuccess: () => onOpenChange(false),
         onError: (e) => setError(describeFinalizeError(e)),
@@ -55,7 +60,9 @@ export function FinalizeBatchDialog({ endpoint, batchId, open, onOpenChange }: P
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-2">
-          <Label htmlFor={reasonId}>Lý do chốt (bắt buộc nếu bạn chốt lô của người khác)</Label>
+          <Label htmlFor={reasonId}>
+            {requiresReason ? "Lý do chốt lô của người khác (bắt buộc)" : "Lý do chốt (không bắt buộc)"}
+          </Label>
           <Textarea
             id={reasonId}
             value={reason}
@@ -75,7 +82,7 @@ export function FinalizeBatchDialog({ endpoint, batchId, open, onOpenChange }: P
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={finalize.isPending}>
             Huỷ
           </Button>
-          <Button onClick={submit} disabled={finalize.isPending}>
+          <Button onClick={submit} disabled={!canSubmit}>
             {finalize.isPending ? "Đang chốt…" : "Chốt lô"}
           </Button>
         </DialogFooter>

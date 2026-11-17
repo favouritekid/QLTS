@@ -4,9 +4,10 @@
  * Nguồn: hợp đồng API bản 4 (sha256 `45b718f6…adad`) §1, §2.1–§2.3; đặc tả bản 3.6 (sha256 `9ef02da2…4e2e`) §4.7, §5, §6.
  * Tên trường tiếng Anh (quy ước owner 17-11). Không dữ liệu cá nhân: phản hồi lô / hàng đợi chéo chỉ mang id.
  *
- * ⚠️ Đặc tả §4.7: `document_row_id` + `row_version` BẮT BUỘC (số) cho phản hồi GĐ1b — KHÔNG `.optional()`,
- * KHÔNG `.nullable()`. Giấy thiếu một trong hai ⇒ parse đỏ ⇒ giao diện KHÔNG dựng nút GĐ1b cho giấy đó (fail-closed),
- * vì mọi thao tác GĐ1b phải gửi lại đúng `expected_row_version`.
+ * ⚠️ `documents_checklist[]` (hợp đồng bản 5 B1): khoá `document_row_id` + `row_version` LUÔN có (không `.optional()`);
+ * giá trị `null` ⇔ giấy chưa có dòng `profile_document`, khi đó mọi cờ thao tác `false`. Kiểm chéo: cờ thao tác bật mà
+ * định danh `null` ⇒ parse ĐỎ (không im lặng). Mọi phản hồi GĐ1b khác (lô, lịch sử, hàng đợi chéo) khai hai trường là số
+ * bắt buộc. Thao tác GĐ1b chỉ dựng trên giấy đã có định danh (`asActionable`).
  */
 import { z } from "zod"
 
@@ -29,7 +30,8 @@ export const DOCUMENT_ROW_STATUSES = ["missing", "uploaded", "verified", "reject
  * Một giấy trong `documents_checklist[]` của phản hồi hồ sơ — phần GĐ1b cần để dựng nút / hộp thoại.
  * Cờ do máy chủ tính bằng ĐÚNG `document_review_rules.decide` mà cổng ghi dùng dưới khoá (thin client).
  */
-export const gd1bDocumentSchema = z.object({
+export const gd1bDocumentSchema = z
+  .object({
   code: z.string().min(1),
   label: z.string(),
   status: z.enum(DOCUMENT_ROW_STATUSES),
@@ -38,9 +40,9 @@ export const gd1bDocumentSchema = z.object({
   document_id: z.number().int().positive().nullable().optional(),
   actual_submission_format: z.string().nullable().optional(),
   verified_format: verifiedFormatSchema.nullable().optional(),
-  // ── GĐ1b §4.7 — bắt buộc ──
-  document_row_id: documentRowIdSchema,
-  row_version: rowVersionSchema,
+  // ── GĐ1b §4.7 + bản 5 B1 — khoá bắt buộc; null ⇔ giấy chưa có dòng ──
+  document_row_id: documentRowIdSchema.nullable(),
+  row_version: rowVersionSchema.nullable(),
   can_verify: z.boolean(),
   can_reject: z.boolean(),
   can_reset: z.boolean(),
@@ -50,8 +52,34 @@ export const gd1bDocumentSchema = z.object({
   requires_ack: z.boolean(),
   reset_requires_reason: z.boolean(),
   reset_keeps_evidence: z.boolean(),
-})
+  })
+  .superRefine((d, ctx) => {
+    if ((d.document_row_id === null) !== (d.row_version === null)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["row_version"],
+        message: "document_row_id và row_version phải cùng có hoặc cùng null",
+      })
+    }
+    const coDinhDanh = d.document_row_id !== null && d.row_version !== null
+    if (!coDinhDanh && (d.can_verify || d.can_reject || d.can_reset || d.can_view_history)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["document_row_id"],
+        message: "Cờ thao tác bật mà giấy chưa có định danh dòng (bản 5 B1)",
+      })
+    }
+  })
 export type Gd1bDocument = z.infer<typeof gd1bDocumentSchema>
+
+/** Giấy ĐÃ có dòng — mọi thao tác GĐ1b cần `document_row_id` + `row_version` là số. */
+export type Gd1bActionableDocument = Gd1bDocument & { document_row_id: number; row_version: number }
+
+/** Giấy chưa có dòng (định danh null — mọi cờ thao tác đã được kiểm là `false`) ⇒ `null`: không dựng thao tác nào. */
+export function asActionable(doc: Gd1bDocument): Gd1bActionableDocument | null {
+  if (doc.document_row_id === null || doc.row_version === null) return null
+  return { ...doc, document_row_id: doc.document_row_id, row_version: doc.row_version }
+}
 
 // ═══════════════════════ Nút lẻ (§1) ═══════════════════════
 
@@ -153,19 +181,21 @@ export type DocumentHistory = z.infer<typeof documentHistorySchema>
  * nhiều giá trị là chuỗi ngăn cách bằng dấu phẩy). Máy chủ dùng lại ĐÚNG hàm lọc của danh sách, giao với tập chờ xét,
  * rồi áp phạm vi Quản lý — giao diện KHÔNG tự lọc.
  */
+export const PAYMENT_STATUS_FILTERS = ["paid", "unpaid", "partial", "no_fee", "overdue"] as const
+/** Khớp `BulkVerifyFilter` (`app/schemas/document_bulk.py`, `extra="forbid"`; bản 5 B2): ngày giờ ISO, `payment_status` enum. */
 export const bulkVerifyFilterSchema = z
   .object({
-    status: z.string().optional(),
-    search: z.string().optional(),
-    major_id: z.string().optional(),
-    academic_year: z.number().int().optional(),
-    degree_level: z.string().optional(),
-    payment_status: z.string().optional(),
+    status: z.string().max(500).optional(),
+    search: z.string().max(200).optional(),
+    major_id: z.string().max(2000).optional(),
+    academic_year: z.number().int().min(1900).max(2999).optional(),
+    degree_level: z.string().max(100).optional(),
+    payment_status: z.enum(PAYMENT_STATUS_FILTERS).optional(),
     date_from: z.string().optional(),
     date_to: z.string().optional(),
-    assigned_officer_id: z.string().optional(),
+    assigned_officer_id: z.string().max(2000).optional(),
     unit_id: z.number().int().positive().optional(),
-    assigned_reviewer_id: z.string().optional(),
+    assigned_reviewer_id: z.string().max(2000).optional(),
     unassigned: z.boolean().optional(),
   })
   .strict()
@@ -187,7 +217,7 @@ export const bulkVerifyPreviewBodySchema = z
   })
 export type BulkVerifyPreviewBody = z.infer<typeof bulkVerifyPreviewBodySchema>
 
-/** Lô chéo: như trên + `grant_id` (= `grant_id_by_action.verify` của hàng đợi). */
+/** Lô chéo (bản 5 B3): CHỈ `profile_ids` (từ hàng đợi chéo) + `grant_id` (= `grant_id_by_action.verify`) — KHÔNG `filter`. */
 export const crossBulkVerifyPreviewBodySchema = z
   .object({
     profile_ids: z.array(z.number().int().positive()).min(1),
@@ -281,6 +311,8 @@ export const batchViewSchema = z.object({
   can_execute: z.boolean(),
   /** người tạo / Admin + `interrupted_unfinalized` — nút "Chốt lô" CHỈ theo cờ này */
   can_finalize: z.boolean(),
+  /** bản 5 B4: Admin khác người tạo và `can_finalize` ⇒ ô lý do chốt BẮT BUỘC (không suy theo vai) */
+  finalize_requires_reason: z.boolean(),
 })
 export type BatchView = z.infer<typeof batchViewSchema>
 
@@ -317,6 +349,8 @@ export type BatchSummary = z.infer<typeof batchSummarySchema>
 export const batchListSchema = z.object({
   items: z.array(batchSummarySchema),
   next_cursor: z.string().nullable(),
+  /** bản 5 B4: người gọi được dùng `scope=all` (Admin) — nút "Tất cả lô" CHỈ theo cờ này */
+  can_view_all: z.boolean(),
 })
 export type BatchList = z.infer<typeof batchListSchema>
 
@@ -357,13 +391,13 @@ export const crossReviewQueueItemSchema = z.object({
 })
 export type CrossReviewQueueItem = z.infer<typeof crossReviewQueueItemSchema>
 
-/**
- * ⚠️ CÂU HỎI MỞ — hợp đồng bản 4 chỉ ghi "phân trang" cho hàng đợi, không ghi hình dạng. Giả định: cùng khuôn con trỏ
- * với "lô của tôi" (`{items, next_cursor}`). Lệch ⇒ sửa ở MỘT chỗ này.
- */
+/** `GET …/cross-review/queue?page=&page_size=` (bản 5 B2, `page_size` ≤ 100) — phân trang theo SỐ TRANG, không con trỏ. */
+export const CROSS_REVIEW_QUEUE_PAGE_SIZE = 20
 export const crossReviewQueuePageSchema = z.object({
   items: z.array(crossReviewQueueItemSchema),
-  next_cursor: z.string().nullable(),
+  page: z.number().int().min(1),
+  page_size: z.number().int().min(1),
+  total_count: countSchema,
 })
 export type CrossReviewQueuePage = z.infer<typeof crossReviewQueuePageSchema>
 
@@ -379,8 +413,15 @@ export const crossReviewActionBodySchema = z
   .strict()
 export type CrossReviewActionBody = z.infer<typeof crossReviewActionBodySchema>
 
-/** ⚠️ CÂU HỎI MỞ — hợp đồng không ghi phản hồi của lệnh chéo; giao diện chỉ cần biết "đã ghi", rồi làm mới hàng đợi. */
-export const crossReviewActionResponseSchema = z.looseObject({})
+/** Phản hồi lệnh chéo (bản 5 B2, `CrossReviewActionResponse`). */
+export const crossReviewActionResponseSchema = z.object({
+  profile_id: z.number().int().positive(),
+  document_row_id: documentRowIdSchema,
+  action: z.string(),
+  new_status: z.string(),
+  row_version: rowVersionSchema,
+})
+export type CrossReviewActionResponse = z.infer<typeof crossReviewActionResponseSchema>
 
 /** Thân cấp quyền (Admin). Trần 14 ngày + "người được cấp là Cán bộ đang hoạt động" do MÁY CHỦ kiểm (422). */
 export const crossReviewGrantCreateBodySchema = z
@@ -401,16 +442,11 @@ export type CrossReviewGrantCreateBody = z.infer<typeof crossReviewGrantCreateBo
 export const crossReviewGrantRevokeBodySchema = z.object({ reason: reasonSchema }).strict()
 export type CrossReviewGrantRevokeBody = z.infer<typeof crossReviewGrantRevokeBodySchema>
 
-/**
- * ⚠️ CÂU HỎI MỞ — hợp đồng không ghi hình dạng một quyền trả về; dựng theo cột của `document_cross_review_grant`
- * (`app/models/admission_config/document_review.py`). Tên người / đơn vị (nếu máy chủ trả) là tuỳ chọn.
- */
+/** `CrossReviewGrantView` (bản 5 B2) — không tên người / đơn vị. `is_active` do máy chủ tính (chưa thu hồi, chưa hết hạn). */
 export const crossReviewGrantSchema = z.object({
   id: z.number().int().positive(),
   grantee_user_id: z.number().int().positive(),
-  grantee_name: z.string().nullable().optional(),
   unit_id: z.number().int().positive(),
-  unit_name: z.string().nullable().optional(),
   allow_verify: z.boolean(),
   allow_reject: z.boolean(),
   granted_by_user_id: z.number().int().positive(),
@@ -419,9 +455,10 @@ export const crossReviewGrantSchema = z.object({
   reason: z.string(),
   revoked_at: z.string().nullable(),
   revoked_by_user_id: z.number().int().positive().nullable(),
+  is_active: z.boolean(),
 })
 export type CrossReviewGrant = z.infer<typeof crossReviewGrantSchema>
 
-/** ⚠️ CÂU HỎI MỞ — giả định danh sách quyền trả `{items}`. */
-export const crossReviewGrantListSchema = z.object({ items: z.array(crossReviewGrantSchema) })
+/** Danh sách quyền = MẢNG TRẦN (bản 5 B2, tối đa 500). */
+export const crossReviewGrantListSchema = z.array(crossReviewGrantSchema)
 export type CrossReviewGrantList = z.infer<typeof crossReviewGrantListSchema>

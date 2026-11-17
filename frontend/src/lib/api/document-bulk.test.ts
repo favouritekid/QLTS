@@ -31,6 +31,7 @@ const VIEW = {
   items: [{ profile_id: 5, document_row_id: 11, document_type_code: "cccd", result: "recorded", reason_code: null, message: null }],
   can_execute: false,
   can_finalize: false,
+  finalize_requires_reason: false,
 }
 
 let than: unknown[] = []
@@ -99,7 +100,7 @@ describe("lô duyệt giấy — API", () => {
     server.use(
       http.get(`${API}/api/admissions/documents/bulk-verify`, ({ request }) => {
         urls.push(request.url)
-        return HttpResponse.json({ items: [], next_cursor: null })
+        return HttpResponse.json({ items: [], next_cursor: null, can_view_all: false })
       }),
     )
     await listBatches({ mode: "batch" }, "mine")

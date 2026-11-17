@@ -233,30 +233,36 @@ export function CrossReviewGrantsClient() {
           </div>
         </div>
         {grants.isLoading && <p className="text-sm text-muted-foreground">Đang tải…</p>}
-        {grants.data && grants.data.items.length === 0 && (
+        {grants.data && grants.data.length === 0 && (
           <p className="text-sm text-muted-foreground">Chưa có quyền nào.</p>
         )}
-        {grants.data && grants.data.items.length > 0 && (
+        {grants.data && grants.data.length > 0 && (
           <ul className="divide-y rounded-md border" data-testid="danh-sach-quyen-cheo">
-            {grants.data.items.map((g) => (
+            {grants.data.map((g) => (
               <li key={g.id} className="flex flex-wrap items-center justify-between gap-2 p-2 text-sm">
                 <div className="space-y-0.5">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="font-medium">Quyền #{g.id}</span>
                     <span>
-                      {g.grantee_name ?? `Người dùng #${g.grantee_user_id}`} · {g.unit_name ?? `đơn vị #${g.unit_id}`}
+                      Người dùng #{g.grantee_user_id} · đơn vị #{g.unit_id}
                     </span>
                     {g.allow_verify && <Badge variant="outline">Duyệt</Badge>}
                     {g.allow_reject && <Badge variant="outline">Từ chối</Badge>}
-                    {g.revoked_at && <Badge variant="secondary">Đã thu hồi</Badge>}
+                    {g.is_active ? (
+                      <Badge variant="success">Còn hiệu lực</Badge>
+                    ) : g.revoked_at ? (
+                      <Badge variant="secondary">Đã thu hồi</Badge>
+                    ) : (
+                      <Badge variant="secondary">Hết hiệu lực</Badge>
+                    )}
                   </div>
                   <div className="text-xs text-muted-foreground">
                     Cấp {formatDateTimeVN(g.granted_at)} · hết hạn {formatDateTimeVN(g.expires_at)}
                     {g.revoked_at ? ` · thu hồi ${formatDateTimeVN(g.revoked_at)}` : ""} · lý do: {g.reason}
                   </div>
                 </div>
-                {!g.revoked_at && (
-                  <Button size="sm" variant="outline" onClick={() => setRevoking(g)}>
+                {g.is_active && (
+                  <Button size="sm" variant="outline" onClick={() => setRevoking(g)} aria-label={`Thu hồi quyền #${g.id}`}>
                     Thu hồi
                   </Button>
                 )}

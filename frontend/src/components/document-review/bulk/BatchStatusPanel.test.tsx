@@ -80,6 +80,28 @@ describe("BatchStatusPanel", () => {
     expect(thanFinalize).toEqual([{}, { reason: "máy chủ khởi động lại giữa lô" }])
   })
 
+  it("bản 5 B4: finalize_requires_reason = true ⇒ ô lý do BẮT BUỘC, nút Chốt khoá tới khi có lý do", async () => {
+    lo(loGia({ status: "interrupted_unfinalized", can_finalize: true, finalize_requires_reason: true }))
+    server.use(
+      http.post(`${P}/${B1}/finalize`, async ({ request }) => {
+        thanFinalize.push(await request.json())
+        return HttpResponse.json({ batch: loGia({ status: "interrupted" }), finalized_now: true })
+      }),
+    )
+    const u = userEvent.setup()
+    renderWithClient(<BatchStatusPanel endpoint={{ mode: "batch" }} batchId={B1} />)
+    await u.click(await screen.findByRole("button", { name: "Chốt lô" }))
+    const hop = await screen.findByRole("dialog")
+    const nut = screen.getAllByRole("button", { name: "Chốt lô" }).at(-1) as HTMLElement
+    expect(screen.getByLabelText(/bắt buộc/)).toBeInTheDocument()
+    expect(nut).toBeDisabled()
+    await u.type(screen.getByLabelText(/Lý do chốt/), "Admin chốt hộ, người tạo nghỉ")
+    expect(nut).toBeEnabled()
+    await u.click(nut)
+    await waitFor(() => expect(hop).not.toBeInTheDocument())
+    expect(thanFinalize).toEqual([{ reason: "Admin chốt hộ, người tạo nghỉ" }])
+  })
+
   it("404 ⇒ 'Bản xem trước không còn — xem trước lại'", async () => {
     server.use(http.get(`${P}/${B1}`, () => HttpResponse.json({ detail: "Not found" }, { status: 404 })))
     renderWithClient(<BatchStatusPanel endpoint={{ mode: "batch" }} batchId={B1} />)

@@ -56,6 +56,17 @@ describe("DocumentReviewActions — nút theo cờ máy chủ", () => {
     expect(screen.getByTestId("giay-thieu-dinh-danh")).toBeInTheDocument()
   })
 
+  it("bản 5 B1: cờ bật mà định danh null ⇒ KHÔNG nút nào + báo thiếu định danh (không im lặng)", () => {
+    renderWithClient(
+      <DocumentReviewActions
+        profileId={5}
+        document={giayGia({ document_row_id: null, row_version: null, can_reset: true })}
+      />,
+    )
+    expect(screen.queryAllByRole("button")).toHaveLength(0)
+    expect(screen.getByTestId("giay-thieu-dinh-danh")).toBeInTheDocument()
+  })
+
   it("giấy chưa có dòng (định danh null, mọi cờ tắt) ⇒ im lặng", () => {
     const { container } = renderWithClient(
       <DocumentReviewActions profileId={5} document={giayGia({ document_row_id: null, row_version: null })} />,

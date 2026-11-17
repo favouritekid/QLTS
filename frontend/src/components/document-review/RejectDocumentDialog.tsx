@@ -18,14 +18,14 @@ import {
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { useRejectDocumentGd1b } from "@/hooks/document-review/useDocumentReview"
-import type { Gd1bDocument } from "@/lib/zod/document-review"
+import type { Gd1bActionableDocument } from "@/lib/zod/document-review"
 
 import { UnknownSubmitterAckFields } from "./UnknownSubmitterAckFields"
 import { useDocumentActionFeedback } from "./useDocumentActionFeedback"
 
 interface Props {
   profileId: number
-  document: Gd1bDocument
+  document: Gd1bActionableDocument
   open: boolean
   onOpenChange: (open: boolean) => void
 }

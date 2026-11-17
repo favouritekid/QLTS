@@ -8,16 +8,15 @@ import userEvent from "@testing-library/user-event"
 import { http, HttpResponse } from "msw"
 
 import { server } from "@/test/mocks/server"
-import { gd1bDocumentSchema } from "@/lib/zod/document-review"
 
 import { VerifyDocumentDialog } from "./VerifyDocumentDialog"
-import { API, giayGia, renderWithClient } from "./test-helpers"
+import { API, giayThaoTac, renderWithClient } from "./test-helpers"
 
 const URL_VERIFY = `${API}/api/admissions/5/documents/hoc_ba_thpt/verify-format`
 let than: unknown[] = []
 
 function hop(over: Record<string, unknown> = {}) {
-  const doc = gd1bDocumentSchema.parse(giayGia({ can_verify: true, ...over }))
+  const doc = giayThaoTac({ can_verify: true, ...over })
   const onOpenChange = vi.fn()
   renderWithClient(<VerifyDocumentDialog profileId={5} document={doc} open onOpenChange={onOpenChange} />)
   return { onOpenChange }

@@ -5,7 +5,12 @@
 import { describe, expect, it } from "vitest"
 
 import {
+  asActionable,
+  batchListSchema,
   batchViewSchema,
+  crossReviewActionResponseSchema,
+  crossReviewGrantListSchema,
+  crossReviewQueuePageSchema,
   bulkPreviewSchema,
   bulkVerifyPreviewBodySchema,
   crossReviewGrantCreateBodySchema,
@@ -54,8 +59,46 @@ describe("gd1bDocumentSchema — định danh dòng giấy + phiên bản BẮT 
     expect(gd1bDocumentSchema.safeParse(bo("row_version")).success).toBe(false)
   })
 
-  it("row_version null ⇒ đỏ (không nullable)", () => {
+  it("row_version null mà document_row_id có ⇒ đỏ (hai trường cùng có hoặc cùng null)", () => {
     expect(gd1bDocumentSchema.safeParse({ ...giay, row_version: null }).success).toBe(false)
+  })
+
+  it("giấy chưa có dòng: cả hai null + mọi cờ thao tác tắt ⇒ parse được, asActionable = null", () => {
+    const r = gd1bDocumentSchema.safeParse({
+      ...giay,
+      status: "missing",
+      document_row_id: null,
+      row_version: null,
+      can_verify: false,
+      can_reject: false,
+      can_reset: false,
+      can_view_history: false,
+    })
+    expect(r.success).toBe(true)
+    if (r.success) expect(asActionable(r.data)).toBeNull()
+  })
+
+  it.each(["can_verify", "can_reject", "can_reset", "can_view_history"] as const)(
+    "bản 5 B1: định danh null mà %s bật ⇒ đỏ (không im lặng)",
+    (co) => {
+      const r = gd1bDocumentSchema.safeParse({
+        ...giay,
+        document_row_id: null,
+        row_version: null,
+        can_verify: false,
+        can_reject: false,
+        can_reset: false,
+        can_view_history: false,
+        [co]: true,
+      })
+      expect(r.success).toBe(false)
+    },
+  )
+
+  it("giấy có dòng ⇒ asActionable trả định danh + phiên bản là số", () => {
+    const d = asActionable(gd1bDocumentSchema.parse(giay))
+    expect(d?.document_row_id).toBe(11)
+    expect(d?.row_version).toBe(3)
   })
 
   it("row_version là chuỗi số ⇒ đỏ (phải là số)", () => {
@@ -66,7 +109,7 @@ describe("gd1bDocumentSchema — định danh dòng giấy + phiên bản BẮT 
     expect(gd1bDocumentSchema.safeParse({ ...giay, row_version: 0 }).success).toBe(false)
   })
 
-  it("thiếu document_row_id / null ⇒ đỏ", () => {
+  it("thiếu KHOÁ document_row_id ⇒ đỏ; document_row_id null mà row_version có ⇒ đỏ", () => {
     expect(gd1bDocumentSchema.safeParse(bo("document_row_id")).success).toBe(false)
     expect(gd1bDocumentSchema.safeParse({ ...giay, document_row_id: null }).success).toBe(false)
   })
@@ -164,11 +207,56 @@ describe("lô — hợp đồng §2.1", () => {
       items: [],
       can_execute: false,
       can_finalize: false,
+      finalize_requires_reason: false,
     }
     expect(batchViewSchema.safeParse(v).success).toBe(true)
     expect(batchViewSchema.safeParse({ ...v, status: "previewed" }).success).toBe(false)
     const { can_execute: _a, ...thieu } = v
     expect(batchViewSchema.safeParse(thieu).success).toBe(false)
+    const { finalize_requires_reason: _b, ...thieuCoLyDo } = v
+    expect(batchViewSchema.safeParse(thieuCoLyDo).success).toBe(false)
+  })
+
+  it("danh sách lô: cờ can_view_all bắt buộc (bản 5 B4)", () => {
+    expect(batchListSchema.safeParse({ items: [], next_cursor: null, can_view_all: false }).success).toBe(true)
+    expect(batchListSchema.safeParse({ items: [], next_cursor: null }).success).toBe(false)
+  })
+})
+
+describe("duyệt chéo — hình dạng theo schema backend (bản 5 B2)", () => {
+  it("hàng đợi phân trang theo số trang: {items, page, page_size, total_count}", () => {
+    expect(
+      crossReviewQueuePageSchema.safeParse({ items: [], page: 1, page_size: 20, total_count: 0 }).success,
+    ).toBe(true)
+    expect(crossReviewQueuePageSchema.safeParse({ items: [], next_cursor: null }).success).toBe(false)
+  })
+
+  it("phản hồi lệnh chéo: {profile_id, document_row_id, action, new_status, row_version}", () => {
+    const r = { profile_id: 5, document_row_id: 11, action: "verify", new_status: "verified", row_version: 4 }
+    expect(crossReviewActionResponseSchema.safeParse(r).success).toBe(true)
+    const { row_version: _x, ...thieu } = r
+    expect(crossReviewActionResponseSchema.safeParse(thieu).success).toBe(false)
+  })
+
+  it("danh sách quyền là MẢNG TRẦN, mỗi quyền có is_active", () => {
+    const q = {
+      id: 1,
+      grantee_user_id: 9,
+      unit_id: 3,
+      allow_verify: true,
+      allow_reject: false,
+      granted_by_user_id: 1,
+      granted_at: "2026-11-17T01:00:00Z",
+      expires_at: "2026-11-24T01:00:00Z",
+      reason: "thiếu người",
+      revoked_at: null,
+      revoked_by_user_id: null,
+      is_active: true,
+    }
+    expect(crossReviewGrantListSchema.safeParse([q]).success).toBe(true)
+    expect(crossReviewGrantListSchema.safeParse({ items: [q] }).success).toBe(false)
+    const { is_active: _y, ...thieu } = q
+    expect(crossReviewGrantListSchema.safeParse([thieu]).success).toBe(false)
   })
 })
 

@@ -12,6 +12,7 @@
  *   quyền ấy.
  */
 import { useId, useState } from "react"
+import axios from "axios"
 import { toast } from "sonner"
 
 import { Badge } from "@/components/ui/badge"
@@ -117,7 +118,8 @@ function RejectCrossDialog({ item, onClose }: { item: CrossReviewQueueItem; onCl
 export function CrossReviewClient() {
   const eligibility = useCrossReviewEligibility()
   const eligible = eligibility.data?.eligible === true
-  const queue = useCrossReviewQueue(eligible)
+  const [page, setPage] = useState(1)
+  const queue = useCrossReviewQueue(eligible, page)
   const verify = useCrossReviewVerify()
   const [rejecting, setRejecting] = useState<CrossReviewQueueItem | null>(null)
   const [bulkGrant, setBulkGrant] = useState<number | null>(null)
@@ -140,7 +142,10 @@ export function CrossReviewClient() {
     )
   }
 
-  const items = queue.data?.pages.flatMap((p) => p.items) ?? []
+  const items = queue.data?.items ?? []
+  const totalPages = queue.data ? Math.max(1, Math.ceil(queue.data.total_count / queue.data.page_size)) : 1
+  const queueForbidden =
+    axios.isAxiosError(queue.error) && (queue.error.response?.status === 403 || queue.error.response?.status === 404)
   // nhóm hồ sơ theo quyền DUYỆT mà máy chủ chọn cho từng giấy (trình bày, không chọn quyền)
   const byVerifyGrant = new Map<number, Set<number>>()
   for (const it of items) {
@@ -198,7 +203,7 @@ export function CrossReviewClient() {
         {queue.isLoading && <p className="text-sm text-muted-foreground">Đang tải hàng đợi…</p>}
         {queue.isError && (
           <p role="alert" className="text-sm text-destructive">
-            Không tải được hàng đợi — thử lại sau.
+            {queueForbidden ? "Bạn không có quyền xem hàng đợi duyệt chéo." : "Không tải được hàng đợi — thử lại sau."}
           </p>
         )}
         {queue.isSuccess && items.length === 0 && (
@@ -223,7 +228,7 @@ export function CrossReviewClient() {
                       size="sm"
                       onClick={() => doVerify(it)}
                       disabled={verify.isPending}
-                      aria-label={`Duyệt giấy ${it.document_row_id}`}
+                      aria-label={`Duyệt giấy ${it.document_type_code ?? `#${it.document_row_id}`} của hồ sơ #${it.profile_id}`}
                     >
                       {busyRow === it.document_row_id ? "Đang duyệt…" : "Duyệt"}
                     </Button>
@@ -233,7 +238,7 @@ export function CrossReviewClient() {
                       size="sm"
                       variant="outline"
                       onClick={() => setRejecting(it)}
-                      aria-label={`Từ chối giấy ${it.document_row_id}`}
+                      aria-label={`Từ chối giấy ${it.document_type_code ?? `#${it.document_row_id}`} của hồ sơ #${it.profile_id}`}
                     >
                       Từ chối
                     </Button>
@@ -243,10 +248,23 @@ export function CrossReviewClient() {
             ))}
           </ul>
         )}
-        {queue.hasNextPage && (
-          <Button size="sm" variant="ghost" onClick={() => void queue.fetchNextPage()} disabled={queue.isFetchingNextPage}>
-            {queue.isFetchingNextPage ? "Đang tải…" : "Tải thêm"}
-          </Button>
+        {queue.data && totalPages > 1 && (
+          <div className="flex items-center gap-2 text-sm" data-testid="phan-trang-cheo">
+            <Button size="sm" variant="outline" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1}>
+              Trang trước
+            </Button>
+            <span>
+              Trang {queue.data.page}/{totalPages} · {queue.data.total_count} giấy
+            </span>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={page >= totalPages}
+            >
+              Trang sau
+            </Button>
+          </div>
         )}
       </section>
 

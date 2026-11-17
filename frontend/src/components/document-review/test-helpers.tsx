@@ -6,6 +6,8 @@ import type { ReactElement } from "react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { render } from "@testing-library/react"
 
+import { asActionable, gd1bDocumentSchema, type Gd1bActionableDocument } from "@/lib/zod/document-review"
+
 export const API = "http://localhost:8000"
 export const B1 = "3f2b8c1e-5d4a-4c3b-9a1e-0b2c3d4e5f60"
 export const B2 = "7c9e6679-7425-40de-944b-e07fc1f90ae7"
@@ -66,6 +68,14 @@ export function loGia(over: Record<string, unknown> = {}): Record<string, unknow
     ],
     can_execute: false,
     can_finalize: false,
+    finalize_requires_reason: false,
     ...over,
   }
+}
+
+/** Giấy đã có dòng, parse qua Zod — đầu vào cho các hộp thoại GĐ1b. */
+export function giayThaoTac(over: Record<string, unknown> = {}): Gd1bActionableDocument {
+  const doc = asActionable(gd1bDocumentSchema.parse(giayGia(over)))
+  if (!doc) throw new Error("giấy giả thiếu định danh")
+  return doc
 }

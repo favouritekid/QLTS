@@ -80,3 +80,29 @@ describe("GĐ1b giao diện — quét tĩnh", () => {
     expect(TEP.filter((t) => /\bsessionStorage\b/.test(ma(t)))).toEqual([CHO_PHEP_SESSION])
   })
 })
+
+/**
+ * Hai bề mặt duyệt giấy của `/admissions/[id]` đã nối GĐ1b (biên bản V4 có sha): không còn đường duyệt / từ chối /
+ * Đặt lại không mang phiên bản dòng, không duyệt song song, không dự phòng "photo", không "lý do gần đây".
+ */
+const BE_MAT = [
+  "app/(dashboard)/admissions/[id]/_components/tabs/DocumentsTab.tsx",
+  "app/(dashboard)/admissions/[id]/_components/tabs/executive-summary/DocumentChecklist.tsx",
+]
+const CAM_BE_MAT: [string, RegExp][] = [
+  ["hook giấy cũ (không expected_row_version)", /\buse(Verify|Reject|Reset)Document\b/],
+  ["duyệt song song", /Promise\.all/],
+  ["dự phòng photo", /(\?\?|\|\|)\s*["']photo["']/],
+  ["lý do gần đây / storage", /AuditReasonDialog|reason-templates|pushRecentReason|\blocalStorage\b|\bsessionStorage\b/],
+  ["câu 'file sẽ bị xóa'", /file sẽ bị x[oó]a/i],
+]
+
+describe("GĐ1b — bề mặt duyệt giấy /admissions/[id] đã nối", () => {
+  it("đủ tệp để quét", () => {
+    for (const t of BE_MAT) expect(fs.existsSync(path.join(SRC, t)), t).toBe(true)
+  })
+
+  it.each(CAM_BE_MAT)("không %s", (_ten, mau) => {
+    expect(BE_MAT.filter((t) => mau.test(ma(t)))).toEqual([])
+  })
+})

@@ -21,20 +21,20 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Textarea } from "@/components/ui/textarea"
 import { useVerifyDocumentGd1b } from "@/hooks/document-review/useDocumentReview"
 import { formatLabel } from "@/lib/document-review/messages"
-import { VERIFIED_FORMATS, verifiedFormatSchema, type Gd1bDocument, type VerifiedFormat } from "@/lib/zod/document-review"
+import { VERIFIED_FORMATS, verifiedFormatSchema, type Gd1bActionableDocument, type VerifiedFormat } from "@/lib/zod/document-review"
 
 import { UnknownSubmitterAckFields } from "./UnknownSubmitterAckFields"
 import { useDocumentActionFeedback } from "./useDocumentActionFeedback"
 
 interface Props {
   profileId: number
-  document: Gd1bDocument
+  document: Gd1bActionableDocument
   open: boolean
   onOpenChange: (open: boolean) => void
 }
 
 /** Hình thức lúc nhận nếu là mã hợp lệ — KHÔNG đoán khi trống / lạ. */
-function declaredFormat(doc: Gd1bDocument): VerifiedFormat | null {
+function declaredFormat(doc: Gd1bActionableDocument): VerifiedFormat | null {
   const r = verifiedFormatSchema.safeParse(doc.actual_submission_format)
   return r.success ? r.data : null
 }

@@ -262,6 +262,7 @@ export function describeFinalizeError(error: unknown): string {
 export function describeBatchLookupError(error: unknown): string {
   const e = readApiError(error)
   if (e.status === 404) return PREVIEW_GONE_MESSAGE
+  if (e.status === 403) return "Bạn không có quyền xem lô duyệt giấy."
   if (!e.hasResponse) return "Không kết nối được máy chủ — thử tra lại"
   return "Không tra được lô — thử lại sau"
 }

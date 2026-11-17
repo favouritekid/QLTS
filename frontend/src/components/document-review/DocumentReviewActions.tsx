@@ -4,37 +4,20 @@
  * GĐ1b §7 — nút theo CỜ MÁY CHỦ cho MỘT giấy: Duyệt (`can_verify`), Từ chối (`can_reject`), Đặt lại (`can_reset`),
  * Lịch sử (`can_view_history`); lý do khoá Duyệt (`verify_block_reason`). KHÔNG đọc vai người dùng.
  *
- * ⚠️ CHƯA nối vào `/admissions/[id]` (`DocumentsTab`, `DocumentChecklist`) — chờ biên bản đo nền V4 (hợp đồng §2.4).
- * Đầu vào là phần tử `documents_checklist[]` THÔ: parse bằng `gd1bDocumentSchema`; thiếu `document_row_id` /
- * `row_version` / cờ ⇒ KHÔNG dựng nút nào (fail-closed) và báo một dòng.
+ * Đầu vào là phần tử `documents_checklist[]` THÔ, đọc qua `readGd1bDocument` (bản 5 B1): giấy chưa có dòng ⇒ không nút;
+ * lệch hợp đồng ⇒ không nút + báo một dòng nếu máy chủ có bật cờ. Dùng cho mục "Tài liệu ngoài yêu cầu hiện tại" (X1)
+ * và nơi cần nút dạng chữ; bảng giấy của `DocumentsTab` dùng nút biểu tượng với cùng hộp thoại.
  */
 import { useState } from "react"
-import { z } from "zod"
 
 import { Button } from "@/components/ui/button"
 import { documentReasonText } from "@/lib/document-review/messages"
-import { gd1bDocumentSchema } from "@/lib/zod/document-review"
+import { explainedBlockReason, readGd1bDocument } from "@/lib/document-review/parse-document"
 
 import { DocumentHistoryDialog } from "./DocumentHistoryDialog"
 import { RejectDocumentDialog } from "./RejectDocumentDialog"
 import { ResetDocumentDialog } from "./ResetDocumentDialog"
 import { VerifyDocumentDialog } from "./VerifyDocumentDialog"
-
-/** Lý do khoá Duyệt đáng giải thích cho người đang có quyền (mã khác — vd không có quyền — không cần nói trên từng giấy). */
-const EXPLAINED_BLOCK_REASONS: ReadonlySet<string> = new Set([
-  "own_submission",
-  "unknown_submitter",
-  "missing_format",
-  "outside_config",
-])
-
-/** Chỉ để biết máy chủ có BẬT cờ nào cho giấy không parse được (chẩn đoán lệch hợp đồng) — không dùng để dựng nút. */
-const claimedFlagsSchema = z.object({
-  can_verify: z.boolean().optional(),
-  can_reject: z.boolean().optional(),
-  can_reset: z.boolean().optional(),
-  can_view_history: z.boolean().optional(),
-})
 
 type OpenDialog = "verify" | "reject" | "reset" | "history" | null
 
@@ -46,27 +29,21 @@ interface Props {
 
 export function DocumentReviewActions({ profileId, document: raw }: Props) {
   const [open, setOpen] = useState<OpenDialog>(null)
-  const parsed = gd1bDocumentSchema.safeParse(raw)
+  const read = readGd1bDocument(raw)
 
-  if (!parsed.success) {
-    // Giấy chưa có dòng (máy chủ trả mọi cờ tắt) ⇒ im lặng. Máy chủ BẬT một cờ mà thiếu định danh / phiên bản ⇒ lệch
-    // hợp đồng: không dựng nút, báo một dòng (không `console.*`).
-    const claims = claimedFlagsSchema.safeParse(raw)
-    const anyOn = claims.success && Object.values(claims.data).some((v) => v === true)
-    return anyOn ? (
+  if (read.kind === "no_row") return null
+  if (read.kind === "contract_error") {
+    return read.claimsAction ? (
       <span className="text-xs text-muted-foreground" data-testid="giay-thieu-dinh-danh">
         Thiếu định danh giấy từ máy chủ — không thao tác được ở đây.
       </span>
     ) : null
   }
-  const doc = parsed.data
+  const doc = read.doc
   const close = (v: boolean) => {
     if (!v) setOpen(null)
   }
-  const blockReason =
-    !doc.can_verify && doc.verify_block_reason && EXPLAINED_BLOCK_REASONS.has(doc.verify_block_reason)
-      ? doc.verify_block_reason
-      : null
+  const blockReason = explainedBlockReason(doc)
 
   return (
     <div className="flex flex-wrap items-center gap-2">

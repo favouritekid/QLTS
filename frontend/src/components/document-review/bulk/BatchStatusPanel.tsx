@@ -123,6 +123,7 @@ export function BatchStatusPanel({ endpoint, batchId, notice }: Props) {
             <FinalizeBatchDialog
               endpoint={endpoint}
               batchId={view.batch_id}
+              requiresReason={view.finalize_requires_reason}
               open
               onOpenChange={(v) => {
                 if (!v) setFinalizeOpen(false)

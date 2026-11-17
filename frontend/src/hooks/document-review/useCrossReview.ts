@@ -2,7 +2,7 @@
  * GĐ1b §2.2 — hook duyệt chéo tạm thời: quyền của chính người gọi, hàng đợi hẹp, lệnh duyệt / từ chối, quản lý quyền
  * (Admin). Ẩn / hiện theo phản hồi máy chủ (`eligible`, `grant_id_by_action`), KHÔNG theo `user.role`.
  */
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import axios from "axios"
 
 import { CROSS_REVIEW_QUEUE_KEY } from "@/hooks/document-review/useBulkVerify"
@@ -42,19 +42,19 @@ export function useCrossReviewEligibility(options?: { enabled?: boolean }) {
   })
 }
 
-export function useCrossReviewQueue(enabled: boolean) {
-  return useInfiniteQuery({
-    queryKey: crossReviewKeys.queue(),
-    queryFn: ({ pageParam }) => getCrossReviewQueue(pageParam),
-    initialPageParam: null as string | null,
-    getNextPageParam: (last) => last.next_cursor,
+/** Hàng đợi theo SỐ TRANG (bản 5 B2). Khoá gồm số trang; làm mới theo tiền tố `queue()` phủ mọi trang. */
+export function useCrossReviewQueue(enabled: boolean, page: number) {
+  return useQuery({
+    queryKey: [...crossReviewKeys.queue(), page],
+    queryFn: () => getCrossReviewQueue(page),
     enabled,
     staleTime: 0,
+    placeholderData: keepPreviousData,
     retry: noRetryOn4xx,
   })
 }
 
-function useCrossAction(fn: (body: CrossReviewActionBody) => Promise<void>) {
+function useCrossAction(fn: (body: CrossReviewActionBody) => Promise<unknown>) {
   const queryClient = useQueryClient()
   const refresh = () => {
     void queryClient.invalidateQueries({ queryKey: crossReviewKeys.queue() })

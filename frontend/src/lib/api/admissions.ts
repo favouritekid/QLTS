@@ -439,67 +439,8 @@ export async function updateGraduationProof(
 
 
 
-/**
- * Verify document physical format (Officer action)
- */
-export interface DocumentFormatVerifyResponse {
-  code: string
-  verified_format: string
-  is_format_verified: boolean
-}
-
-export async function verifyDocumentFormat(
-  id: number,
-  docCode: string,
-  format: string
-): Promise<DocumentFormatVerifyResponse> {
-  const response = await api.patch<DocumentFormatVerifyResponse>(
-    `/api/admissions/${id}/documents/${docCode}/verify-format`,
-    { format }
-  )
-  return response.data
-}
-
-/**
- * Reject document with reason
- */
-export interface DocumentRejectResponse {
-  code: string
-  status: string
-  rejection_reason: string
-  rejected_at: string | null
-  rejected_by_id: number
-}
-
-export async function rejectDocument(
-  id: number,
-  docCode: string,
-  reason: string
-): Promise<DocumentRejectResponse> {
-  const response = await api.post<DocumentRejectResponse>(
-    `/api/admissions/${id}/documents/${docCode}/reject`,
-    { reason }
-  )
-  return response.data
-}
-
-/**
- * Reset document to missing status (undo submission)
- */
-export interface DocumentResetResponse {
-  code: string
-  status: string
-}
-
-export async function resetDocument(
-  id: number,
-  docCode: string
-): Promise<AdmissionProfileResponse> {
-  const response = await api.post<AdmissionProfileResponse>(
-    `/api/admissions/${id}/documents/${docCode}/reset`
-  )
-  return response.data
-}
+// GĐ1b: Duyệt / Từ chối / Đặt lại MỘT giấy đi qua `@/lib/api/document-review` (gửi `expected_row_version`, lý do, cam
+// kết; phản hồi qua Zod). Ba hàm cũ không mang phiên bản dòng đã bị gỡ — máy chủ GĐ1b trả 422 cho thân thiếu trường ấy.
 
 // ============================================
 // AGGREGATE ENDPOINTS
@@ -700,9 +641,6 @@ export const admissionsApi = {
   uploadAdmissionDocument,
   markPaperSubmitted,
   updateGraduationProof,
-  verifyDocumentFormat,
-  rejectDocument,
-  resetDocument,
   // Aggregate & Config
   getAcademicYears,
   getStatusCounts,

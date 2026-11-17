@@ -25,6 +25,7 @@ const QUYEN = {
   reason: "đơn vị 3 thiếu người",
   revoked_at: null,
   revoked_by_user_id: null,
+  is_active: true,
 }
 
 let thanTao: unknown[] = []
@@ -44,7 +45,7 @@ describe("CrossReviewGrantsClient", () => {
 
   it("cấp quyền: thân đúng hợp đồng, hạn kèm +07:00", async () => {
     server.use(
-      http.get(`${C}/grants`, () => HttpResponse.json({ items: [] })),
+      http.get(`${C}/grants`, () => HttpResponse.json([])),
       http.post(`${C}/grants`, async ({ request }) => {
         thanTao.push(await request.json())
         return HttpResponse.json(QUYEN, { status: 201 })
@@ -73,21 +74,29 @@ describe("CrossReviewGrantsClient", () => {
 
   it("thu hồi cần lý do; gửi {reason}", async () => {
     server.use(
-      http.get(`${C}/grants`, () => HttpResponse.json({ items: [QUYEN] })),
+      http.get(`${C}/grants`, () => HttpResponse.json([QUYEN])),
       http.post(`${C}/grants/31/revoke`, async ({ request }) => {
         thanThuHoi.push(await request.json())
-        return HttpResponse.json({ ...QUYEN, revoked_at: "2026-11-18T01:00:00Z", revoked_by_user_id: 1 })
+        return HttpResponse.json({ ...QUYEN, revoked_at: "2026-11-18T01:00:00Z", revoked_by_user_id: 1, is_active: false })
       }),
     )
     const u = userEvent.setup()
     renderWithClient(<CrossReviewGrantsClient />)
-    await u.click(await screen.findByRole("button", { name: "Thu hồi" }))
+    await u.click(await screen.findByRole("button", { name: "Thu hồi quyền #31" }))
     const hop = await screen.findByRole("dialog")
     const nut = within(hop).getByRole("button", { name: "Thu hồi" })
     expect(nut).toBeDisabled()
     await u.type(within(hop).getByLabelText(/Lý do thu hồi/), "đủ người")
     await u.click(nut)
     await waitFor(() => expect(thanThuHoi).toEqual([{ reason: "đủ người" }]))
+  })
+
+  it("quyền hết hiệu lực (is_active = false, chưa thu hồi) ⇒ nhãn 'Hết hiệu lực', KHÔNG nút Thu hồi", async () => {
+    server.use(http.get(`${C}/grants`, () => HttpResponse.json([{ ...QUYEN, is_active: false }])))
+    renderWithClient(<CrossReviewGrantsClient />)
+    const ds = await screen.findByTestId("danh-sach-quyen-cheo")
+    expect(ds).toHaveTextContent("Hết hiệu lực")
+    expect(screen.queryByRole("button", { name: "Thu hồi quyền #31" })).toBeNull()
   })
 
   it("vnLocalToIso: chỉ nhận đúng dạng datetime-local", () => {

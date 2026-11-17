@@ -29,8 +29,10 @@ export function BatchListPanel({ endpoint, scope, onSelect }: Props) {
       {list.isLoading && <p className="text-sm text-muted-foreground">Đang tải danh sách lô…</p>}
       {list.isError && (
         <p role="alert" className="text-sm text-destructive">
-          {forbidden && scope === "all"
-            ? "Chỉ Admin xem được danh sách tất cả lô."
+          {forbidden
+            ? scope === "all"
+              ? "Chỉ Admin xem được danh sách tất cả lô."
+              : "Bạn không có quyền xem lô duyệt giấy."
             : "Không tải được danh sách lô — thử lại sau."}
         </p>
       )}

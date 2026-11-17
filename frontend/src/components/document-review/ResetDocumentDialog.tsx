@@ -21,7 +21,7 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { useResetDocumentGd1b } from "@/hooks/document-review/useDocumentReview"
 import { documentStatusLabel } from "@/lib/document-review/messages"
-import type { Gd1bDocument } from "@/lib/zod/document-review"
+import type { Gd1bActionableDocument } from "@/lib/zod/document-review"
 
 import { UnknownSubmitterAckFields } from "./UnknownSubmitterAckFields"
 import { useDocumentActionFeedback } from "./useDocumentActionFeedback"
@@ -31,7 +31,7 @@ export const RESET_DETACHES_FILE_TEXT = "Tệp đã tải lên sẽ được g�
 
 interface Props {
   profileId: number
-  document: Gd1bDocument
+  document: Gd1bActionableDocument
   open: boolean
   onOpenChange: (open: boolean) => void
 }

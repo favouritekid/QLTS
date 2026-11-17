@@ -40,32 +40,35 @@ function muc(over: Record<string, unknown>) {
 }
 
 let soQueue = 0
+let trangHoi: Record<string, string>[] = []
 let thanVerify: unknown[] = []
 let thanReject: unknown[] = []
 
 function hangDoi(items: unknown[]) {
   server.use(
     http.get(`${C}/eligibility`, () => HttpResponse.json(QUYEN)),
-    http.get(`${C}/queue`, () => {
+    http.get(`${C}/queue`, ({ request }) => {
       soQueue++
-      return HttpResponse.json({ items, next_cursor: null })
+      trangHoi.push(Object.fromEntries(new URL(request.url).searchParams))
+      return HttpResponse.json({ items, page: 1, page_size: 20, total_count: items.length })
     }),
-    http.get(`${C}/bulk-verify`, () => HttpResponse.json({ items: [], next_cursor: null })),
+    http.get(`${C}/bulk-verify`, () => HttpResponse.json({ items: [], next_cursor: null, can_view_all: false })),
   )
 }
 
 beforeEach(() => {
   soQueue = 0
+  trangHoi = []
   thanVerify = []
   thanReject = []
   server.use(
     http.post(`${C}/verify`, async ({ request }) => {
       thanVerify.push(await request.json())
-      return HttpResponse.json({ document_row_id: 101, row_version: 5 })
+      return HttpResponse.json({ profile_id: 5, document_row_id: 101, action: "verify", new_status: "verified", row_version: 5 })
     }),
     http.post(`${C}/reject`, async ({ request }) => {
       thanReject.push(await request.json())
-      return HttpResponse.json({ document_row_id: 101, row_version: 5 })
+      return HttpResponse.json({ profile_id: 5, document_row_id: 101, action: "reject", new_status: "rejected", row_version: 5 })
     }),
   )
 })
@@ -77,7 +80,7 @@ describe("CrossReviewClient", () => {
       http.get(`${C}/eligibility`, () => HttpResponse.json({ eligible: false, grants: [] })),
       http.get(`${C}/queue`, () => {
         soQueue++
-        return HttpResponse.json({ items: [], next_cursor: null })
+        return HttpResponse.json({ items: [], page: 1, page_size: 20, total_count: 0 })
       }),
     )
     renderWithClient(<CrossReviewClient />)
@@ -89,11 +92,13 @@ describe("CrossReviewClient", () => {
     hangDoi([muc({})])
     const u = userEvent.setup()
     renderWithClient(<CrossReviewClient />)
-    await u.click(await screen.findByRole("button", { name: "Duyệt giấy 101" }))
+    await u.click(await screen.findByRole("button", { name: "Duyệt giấy cccd của hồ sơ #5" }))
     await waitFor(() => expect(thanVerify).toHaveLength(1))
     expect(thanVerify[0]).toEqual({ grant_id: G2, profile_id: 5, document_row_id: 101, expected_row_version: 4 })
+    // hàng đợi hỏi theo SỐ TRANG (bản 5 B2)
+    expect(trangHoi[0]).toEqual({ page: "1", page_size: "20" })
 
-    await u.click(screen.getByRole("button", { name: "Từ chối giấy 101" }))
+    await u.click(screen.getByRole("button", { name: "Từ chối giấy cccd của hồ sơ #5" }))
     const hop = await screen.findByRole("dialog")
     await u.type(within(hop).getByLabelText(/Lý do từ chối/), "giấy mờ")
     await u.click(within(hop).getByRole("button", { name: "Từ chối" }))
@@ -110,14 +115,14 @@ describe("CrossReviewClient", () => {
   it("verify = null ⇒ không nút Duyệt; reject = null ⇒ không nút Từ chối", async () => {
     hangDoi([
       muc({ document_row_id: 101, grant_id_by_action: { verify: null, reject: G1 } }),
-      muc({ document_row_id: 102, grant_id_by_action: { verify: G2, reject: null } }),
+      muc({ document_row_id: 102, document_type_code: "hoc_ba_thpt", grant_id_by_action: { verify: G2, reject: null } }),
     ])
     renderWithClient(<CrossReviewClient />)
     await screen.findByTestId("hang-doi-cheo")
-    expect(screen.queryByRole("button", { name: "Duyệt giấy 101" })).toBeNull()
-    expect(screen.getByRole("button", { name: "Từ chối giấy 101" })).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: "Duyệt giấy 102" })).toBeInTheDocument()
-    expect(screen.queryByRole("button", { name: "Từ chối giấy 102" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Duyệt giấy cccd của hồ sơ #5" })).toBeNull()
+    expect(screen.getByRole("button", { name: "Từ chối giấy cccd của hồ sơ #5" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Duyệt giấy hoc_ba_thpt của hồ sơ #5" })).toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Từ chối giấy hoc_ba_thpt của hồ sơ #5" })).toBeNull()
   })
 
   it("409 actor_not_authorized ⇒ làm mới hàng đợi", async () => {
@@ -132,8 +137,35 @@ describe("CrossReviewClient", () => {
     )
     const u = userEvent.setup()
     renderWithClient(<CrossReviewClient />)
-    await u.click(await screen.findByRole("button", { name: "Duyệt giấy 101" }))
+    await u.click(await screen.findByRole("button", { name: "Duyệt giấy cccd của hồ sơ #5" }))
     await waitFor(() => expect(soQueue).toBeGreaterThanOrEqual(2))
+  })
+
+  it("phân trang theo số trang: total_count 45 ⇒ Trang 1/3; 'Trang sau' hỏi page=2", async () => {
+    server.use(
+      http.get(`${C}/eligibility`, () => HttpResponse.json(QUYEN)),
+      http.get(`${C}/queue`, ({ request }) => {
+        const q = Object.fromEntries(new URL(request.url).searchParams)
+        trangHoi.push(q)
+        return HttpResponse.json({ items: [muc({})], page: Number(q.page), page_size: 20, total_count: 45 })
+      }),
+      http.get(`${C}/bulk-verify`, () => HttpResponse.json({ items: [], next_cursor: null, can_view_all: false })),
+    )
+    const u = userEvent.setup()
+    renderWithClient(<CrossReviewClient />)
+    expect(await screen.findByTestId("phan-trang-cheo")).toHaveTextContent("Trang 1/3")
+    await u.click(screen.getByRole("button", { name: "Trang sau" }))
+    await waitFor(() => expect(trangHoi.at(-1)).toEqual({ page: "2", page_size: "20" }))
+  })
+
+  it("hàng đợi 403 ⇒ báo không có quyền gọn (bản 5 B7)", async () => {
+    server.use(
+      http.get(`${C}/eligibility`, () => HttpResponse.json(QUYEN)),
+      http.get(`${C}/queue`, () => HttpResponse.json({ detail: "Forbidden" }, { status: 403 })),
+      http.get(`${C}/bulk-verify`, () => HttpResponse.json({ items: [], next_cursor: null, can_view_all: false })),
+    )
+    renderWithClient(<CrossReviewClient />)
+    expect(await screen.findByText("Bạn không có quyền xem hàng đợi duyệt chéo.")).toBeInTheDocument()
   })
 
   it("nút lô theo TỪNG quyền duyệt của hàng đợi", async () => {

@@ -10,7 +10,7 @@ import { useId, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { useLastBatchId, type BulkEndpoint } from "@/hooks/document-review/useBulkVerify"
+import { useBatchList, useLastBatchId, type BulkEndpoint } from "@/hooks/document-review/useBulkVerify"
 import { isBatchId } from "@/lib/document-review/batch-session"
 import type { BatchListScope } from "@/lib/zod/document-review"
 
@@ -24,6 +24,9 @@ interface Props {
 export function DocumentBatchesClient({ endpoint }: Props) {
   const inputId = useId()
   const last = useLastBatchId()
+  // cùng khoá với danh sách "của tôi" bên dưới (React Query gộp một lượt gọi) — chỉ để đọc cờ `can_view_all`
+  const mine = useBatchList(endpoint, "mine")
+  const canViewAll = mine.data?.pages[0]?.can_view_all === true
   const [selected, setSelected] = useState<string | null>(null)
   const [typed, setTyped] = useState("")
   const [typedError, setTypedError] = useState<string | null>(null)
@@ -92,14 +95,23 @@ export function DocumentBatchesClient({ endpoint }: Props) {
       <section className="space-y-2">
         <div className="flex flex-wrap items-center gap-2">
           <h2 className="text-lg font-semibold">Danh sách lô</h2>
-          <Button size="sm" variant={scope === "mine" ? "default" : "outline"} onClick={() => setScope("mine")}>
-            Lô của tôi
-          </Button>
-          <Button size="sm" variant={scope === "all" ? "default" : "outline"} onClick={() => setScope("all")}>
-            Tất cả lô (Admin)
-          </Button>
+          {canViewAll && (
+            <>
+              <Button size="sm" variant={scope === "mine" ? "default" : "outline"} onClick={() => setScope("mine")}>
+                Lô của tôi
+              </Button>
+              <Button size="sm" variant={scope === "all" ? "default" : "outline"} onClick={() => setScope("all")}>
+                Tất cả lô (Admin)
+              </Button>
+            </>
+          )}
         </div>
-        <BatchListPanel key={scope} endpoint={endpoint} scope={scope} onSelect={setSelected} />
+        <BatchListPanel
+          key={canViewAll ? scope : "mine"}
+          endpoint={endpoint}
+          scope={canViewAll ? scope : "mine"}
+          onSelect={setSelected}
+        />
       </section>
     </div>
   )

@@ -10,15 +10,14 @@ import { http, HttpResponse } from "msw"
 
 import { server } from "@/test/mocks/server"
 import { admissionsKeys } from "@/hooks/admissions/useAdmissions"
-import { gd1bDocumentSchema } from "@/lib/zod/document-review"
 
 import { ResetDocumentDialog } from "./ResetDocumentDialog"
-import { API, giayGia, renderWithClient } from "./test-helpers"
+import { API, giayThaoTac, renderWithClient } from "./test-helpers"
 
 const URL_RESET = `${API}/api/admissions/5/documents/hoc_ba_thpt/reset`
 
 function hop(over: Record<string, unknown> = {}, onOpenChange = vi.fn()) {
-  const doc = gd1bDocumentSchema.parse(giayGia({ can_reset: true, reset_requires_reason: true, ...over }))
+  const doc = giayThaoTac({ can_reset: true, reset_requires_reason: true, ...over })
   const r = renderWithClient(<ResetDocumentDialog profileId={5} document={doc} open onOpenChange={onOpenChange} />)
   return { ...r, onOpenChange }
 }
