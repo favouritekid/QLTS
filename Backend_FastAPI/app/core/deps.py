@@ -4321,12 +4321,30 @@ async def require_bulk_verify_reviewer(
 ) -> models.User:
     """Lô duyệt giấy (§5): Quản lý CÓ đơn vị / Admin. Casbin đã chặn vai khác; Quản lý chưa gán đơn vị ⇒ 403 (fail-closed —
     kho lọc coi ``unit_id=None`` là "mọi đơn vị")."""
-    if current_user.role == UserRole.ADMIN:
+    if bulk_verify_reviewer_allowed(current_user):
         return current_user
     if current_user.role == UserRole.MANAGER:
-        manager_unit_scope_or_deny(current_user)
-        return current_user
+        manager_unit_scope_or_deny(current_user)  # ném câu "chưa gán đơn vị"
     raise PermissionDeniedError(detail="Admin or Manager access required for this operation.")
+
+
+def bulk_verify_reviewer_allowed(current_user: models.User) -> bool:
+    """MỘT vị từ (sau Casbin) cho cổng ``require_bulk_verify_reviewer`` VÀ cờ ``bulk_verify_eligible`` (bổ sung hợp đồng bản 6
+    C1): Admin; Quản lý CÓ đơn vị."""
+    if current_user.role == UserRole.ADMIN:
+        return True
+    return current_user.role == UserRole.MANAGER and current_user.unit_id is not None
+
+
+def bulk_verify_eligible(request: Request, current_user: models.User) -> bool:
+    """Cờ giao diện "được chạy lô duyệt giấy" = ĐÚNG các cổng của ``POST …/bulk-verify/preview``: Casbin (cùng hàm
+    ``casbin_allows`` của ``check_permission``, trên đường dẫn THẬT của route) VÀ ``bulk_verify_reviewer_allowed``. Không
+    có enforcer ⇒ False (fail-closed)."""
+    enforcer = getattr(request.app.state, "enforcer", None)
+    if not enforcer:
+        return False
+    path = request.app.url_path_for("preview_bulk_verify")
+    return casbin_allows(enforcer, current_user, path, "POST") and bulk_verify_reviewer_allowed(current_user)
 
 
 async def _gd1b_bulk_batch_for(

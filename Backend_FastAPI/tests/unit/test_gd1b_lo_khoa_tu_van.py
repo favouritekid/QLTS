@@ -34,9 +34,9 @@ TEP_LO = (
 
 # ---------------------------------------------------------------------------------------------------- tham số chưa đo
 def test_tham_so_k1_da_do():
-    """ĐỎ CÓ CHỦ ĐÍCH tới khi có số đo V3 (§13.3, §16 V3). KHÔNG điền số giả để làm xanh."""
-    assert svc.BULK_VERIFY_MAX_DOCUMENTS is not None, "N của K1 chưa đo (V3)"
-    assert svc.BULK_VERIFY_LOCK_TIMEOUT_MS is not None, "lock_timeout §5.4 chưa đo (V3)"
+    """Hai tham số lấy từ số đo V3 (§13.3, §16 V3; biên bản ``gd1b/v3/BIEN-BAN-V3-…``). Đổi số = đo lại + sửa biên bản."""
+    assert svc.BULK_VERIFY_MAX_DOCUMENTS == 1000, "N của K1 — biên bản V3"
+    assert svc.BULK_VERIFY_LOCK_TIMEOUT_MS == 5000, "lock_timeout §5.4 — biên bản V3"
 
 
 def test_hang_so_lo_da_chot():

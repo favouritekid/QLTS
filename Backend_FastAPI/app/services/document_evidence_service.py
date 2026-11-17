@@ -58,14 +58,9 @@ EVIDENCE_MAX_BYTES = 10 * 1024 * 1024
 #: bằng chứng của hồ sơ khác, đường dẫn sai lệch.
 _NOT_FOUND = "Resource not found"
 
-#: Loại nội dung theo phần mở rộng do MÁY CHỦ đặt lúc tải lên (từ chữ ký tệp) — cùng bảng của route tải thường; test
-#: ``test_tai_bang_chung_ghi_nhat_ky_giong_het_route_tai_thuong`` so tiêu đề ``content-type`` của hai route.
-_MEDIA_TYPES = {
-    ".pdf": "application/pdf",
-    ".jpg": "image/jpeg",
-    ".jpeg": "image/jpeg",
-    ".png": "image/png",
-}
+# Loại nội dung / tên tệp / nhật ký tải: helper CHUNG với route tải thường (``admission_service.download_media_type``,
+# ``download_safe_basename``, ``record_document_download``); test ``test_tai_bang_chung_ghi_nhat_ky_giong_het_route_tai_thuong``
+# so tiêu đề + bản ghi tải của hai route.
 
 
 class EvidenceFileMissingError(GoneError):
@@ -137,14 +132,17 @@ async def get_evidence_file_for_download(
         ResourceNotFoundError: bằng chứng không thuộc giấy / hồ sơ này, hoặc đường dẫn ra ngoài thư mục hồ sơ.
         EvidenceFileMissingError: tệp không còn trên ổ — ném TRƯỚC mọi lệnh ghi.
     """
-    from app.services.admission_service import _resolve_under
-    from app.services.document_audit_service import DocumentAction, log_document_action
+    from app.services.admission_service import (
+        _resolve_under,
+        download_media_type,
+        download_safe_basename,
+        record_document_download,
+    )
 
     row = (
         await db.execute(
-            select(models.DocumentEvidenceFile, models.ConfigDocumentType.code)
+            select(models.DocumentEvidenceFile, models.ProfileDocument.document_type_id)
             .join(models.ProfileDocument, models.ProfileDocument.id == models.DocumentEvidenceFile.profile_document_id)
-            .outerjoin(models.ConfigDocumentType, models.ConfigDocumentType.id == models.ProfileDocument.document_type_id)
             .where(
                 models.DocumentEvidenceFile.id == evidence_id,
                 models.DocumentEvidenceFile.profile_document_id == document_row_id,
@@ -156,7 +154,7 @@ async def get_evidence_file_for_download(
     ).first()
     if row is None:
         raise ResourceNotFoundError(_NOT_FOUND)
-    evidence, type_code = row
+    evidence, document_type_id = row
 
     abs_path = _resolve_under(_profile_upload_dir(profile_id), evidence.file_path)
     if abs_path is None:
@@ -215,36 +213,25 @@ async def get_evidence_file_for_download(
         )
         raise EvidenceFileAlteredError(evidence.id)
 
-    # Nhật ký tải — như route tải thường (K4c, §4.3): dòng ``downloaded`` + dấu tải độc lập vòng đời hồ sơ, CÙNG giao dịch
-    # (router commit trước khi trả tệp). ``extra_data.evidence_id`` phân biệt "tải tệp bằng chứng" với "tải tệp hiện hành".
-    audit_row = await log_document_action(
-        db=db,
-        profile_document_id=document_row_id,
-        action=DocumentAction.DOWNLOADED,
+    # Nhật ký tải — ĐÚNG helper của route tải thường (MỘT nguồn, CLAUDE.md §7; K4c, §4.3): dòng ``downloaded`` + dấu tải độc
+    # lập vòng đời hồ sơ, CÙNG giao dịch (router commit trước khi trả tệp). ``extra_data.evidence_id`` phân biệt "tải tệp
+    # bằng chứng" với "tải tệp hiện hành".
+    await record_document_download(
+        db,
+        profile_id=profile_id,
+        document_row_id=document_row_id,
+        document_type_id=document_type_id,
         actor_user_id=actor_user_id,
+        actor_ip=actor_ip,
+        actor_user_agent=actor_user_agent,
         extra_data={"evidence_id": evidence.id},
-        ip_address=actor_ip,
-        user_agent=actor_user_agent,
     )
-    db.add(
-        models.DocumentDownloadLog(
-            actor_user_id=actor_user_id,
-            profile_id=profile_id,
-            document_row_id=document_row_id,
-            document_type_code=type_code,
-            ip_address=actor_ip,
-            user_agent=actor_user_agent,
-            source_audit_id=audit_row.id,
-        )
-    )
-    await db.flush()
 
-    ext = os.path.splitext(abs_path)[1].lower()
     return EvidenceDownload(
         abs_path=abs_path,
-        # CR/LF bỏ khỏi tên tệp để không chèn được tiêu đề (như route tải thường).
-        filename=os.path.basename(abs_path).replace("\r", "").replace("\n", ""),
-        media_type=_MEDIA_TYPES.get(ext, "application/octet-stream"),
+        # Tên tệp bỏ CR/LF + loại nội dung theo phần mở rộng: CÙNG helper với route tải thường.
+        filename=download_safe_basename(abs_path),
+        media_type=download_media_type(abs_path),
         evidence_id=evidence.id,
         clear_missing_flag=bool(evidence.file_missing),
         content=content,

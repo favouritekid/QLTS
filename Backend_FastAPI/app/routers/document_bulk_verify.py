@@ -19,6 +19,7 @@ from ..core.client_ip import get_client_ip
 from ..schemas.document_bulk import (
     BatchListResponse,
     BatchView,
+    BulkVerifyEligibility,
     BulkVerifyExecuteRequest,
     BulkVerifyFinalizeRequest,
     BulkVerifyPreviewRequest,
@@ -53,6 +54,16 @@ async def preview_bulk_verify(
     )
     await db.commit()
     return result
+
+
+# Khai TRƯỚC ``GET /{batch_id}`` (đường tĩnh trước đường tham số). Mọi người đã đăng nhập gọi được — chỉ trả cờ của chính
+# người gọi (bổ sung hợp đồng bản 6 C1); không Casbin riêng cho route này.
+@router.get("/eligibility", response_model=BulkVerifyEligibility)
+async def get_bulk_verify_eligibility(
+    request: Request,
+    current_user: models.User = Depends(deps.get_current_active_user),
+):
+    return {"eligible": deps.bulk_verify_eligible(request, current_user)}
 
 
 @router.post("/{batch_id}/execute", response_model=BatchView)

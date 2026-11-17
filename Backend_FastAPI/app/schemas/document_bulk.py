@@ -190,18 +190,28 @@ class BatchCounts(BaseModel):
     pending: int
 
 
+#: Trạng thái lô ĐÃ SUY RA (§5.6) — 3 trạng thái kết thúc lưu bền + 6 trạng thái suy từ khoá. MỘT nguồn cho OpenAPI / giao
+#: diện (bổ sung hợp đồng bản 6 C3); ``tests/unit/test_gd1b_lo_trang_thai_literal.py`` khoá bằng tập ``_derive_status`` trả.
+BatchStatus = Literal[
+    "completed", "stopped", "interrupted",
+    "expired", "starting", "running", "not_started", "interrupted_unfinalized", "unknown",
+]
+#: Kết quả một mục — ``NULL`` trong CSDL hiển thị là ``pending``.
+BatchItemResult = Literal["recorded", "error", "not_processed", "pending"]
+
+
 class BatchItemView(BaseModel):
     profile_id: int
     document_row_id: int
     document_type_code: Optional[str] = None
-    result: str
+    result: BatchItemResult
     reason_code: Optional[str] = None
     message: Optional[str] = None
 
 
 class BatchView(BaseModel):
     batch_id: UUID
-    status: str
+    status: BatchStatus
     created_at: datetime
     started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
@@ -225,7 +235,7 @@ class BatchSummary(BaseModel):
     """Không id hồ sơ / giấy / tên (§5.8)."""
 
     batch_id: UUID
-    status: str
+    status: BatchStatus
     created_at: datetime
     started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
@@ -238,6 +248,12 @@ class BatchListResponse(BaseModel):
     next_cursor: Optional[str] = None
     #: Hợp đồng bản 5 B4: người gọi dùng được ``scope=all`` (Admin, đường lô thường); đường lô chéo luôn ``False``.
     can_view_all: bool
+
+
+class BulkVerifyEligibility(BaseModel):
+    """Bổ sung hợp đồng bản 6 C1 — cờ "được chạy lô duyệt giấy" của CHÍNH người gọi (mục thanh bên, nút duyệt theo bộ lọc)."""
+
+    eligible: bool
 
 
 # ---------------------------------------------------------------------------------------------------------------------

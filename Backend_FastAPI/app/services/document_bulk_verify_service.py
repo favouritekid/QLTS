@@ -22,6 +22,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import time
 from collections import OrderedDict
 from datetime import datetime, timedelta
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence, Tuple
@@ -50,13 +51,14 @@ from app.utils.exceptions import (
 log = structlog.get_logger(__name__)
 
 # =====================================================================================================================
-# Tham số — MỘT chỗ. Hai tham số CHƯA ĐO (K1 = N, ``lock_timeout``) để ``None``: không có mặc định "cho chạy" (§13.3) —
-# thiếu ⇒ 503 fail-closed; ``tests/unit/test_gd1b_lo_khoa_tu_van.py::test_tham_so_k1_da_do`` ĐỎ cho tới khi Claude điền số
-# đo V3 (§16).
+# Tham số — MỘT chỗ. K1 = N và ``lock_timeout`` lấy từ số đo V3 (§16; biên bản
+# ``logs-P5/cong-bo-ket-qua/gd1b/v3/BIEN-BAN-V3-…``): lô 100 hồ sơ × 12 giấy = 1.200 giấy chạy 24,4 s (20,3 ms / giấy),
+# giao dịch một hồ sơ p99 288 ms / max 337 ms. N = 1.000 ⇒ ~20 s, ~3 lần cách trần 60 s của nginx (dư cho máy chủ chậm hơn
+# máy đo); ``lock_timeout`` 5 s ≈ 15 lần giao dịch hồ sơ dài nhất. Kiểu vẫn cho ``None`` = 503 fail-closed (§13.3).
 # =====================================================================================================================
 BULK_VERIFY_MAX_PROFILES = 100
-BULK_VERIFY_MAX_DOCUMENTS: Optional[int] = None
-BULK_VERIFY_LOCK_TIMEOUT_MS: Optional[int] = None
+BULK_VERIFY_MAX_DOCUMENTS: Optional[int] = 1000
+BULK_VERIFY_LOCK_TIMEOUT_MS: Optional[int] = 5000
 BULK_VERIFY_PREVIEW_TTL = timedelta(minutes=30)
 BULK_VERIFY_MAX_LIVE_PREVIEWS = 3
 BULK_VERIFY_LIST_WINDOW_DAYS = 30
@@ -466,6 +468,7 @@ async def execute_batch(
         )
         await _commit_step(db)
         started = True
+        started_at = time.monotonic()
         log.info("bulk_verify_started", batch_id=str(batch_id), actor_id=actor_id, review_mode=review_mode)
         # Bước 3 — đúng các dòng mục đã lưu.
         await _run_profiles(
@@ -483,6 +486,15 @@ async def execute_batch(
         await repo.release_batch_lock(lock)
 
     view = await get_batch(db, batch_id=batch_id, viewer_id=actor_id, viewer_role=None)
+    if started:
+        # Thời gian chạy lô thật (biên bản V3 §4: theo dõi sau deploy trước khi nới N). Chỉ mã lô + số đếm, không PII.
+        log.info(
+            "bulk_verify_run_ended",
+            batch_id=str(batch_id),
+            status=view.get("status"),
+            duration_ms=int((time.monotonic() - started_at) * 1000),
+            counts=view.get("counts"),
+        )
 
     async def post_commit() -> None:
         if started:
