@@ -12,7 +12,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import type { BulkEndpoint, BulkSelection } from "@/lib/api/document-bulk"
+import type { BulkEndpoint, BulkSelection } from "@/hooks/document-review/useBulkVerify"
 
 import { BulkVerifyFlow } from "./BulkVerifyFlow"
 

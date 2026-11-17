@@ -11,8 +11,12 @@ import axios from "axios"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Label } from "@/components/ui/label"
-import { useBatch, useExecuteBatch, useLastBatchId } from "@/hooks/document-review/useBulkVerify"
-import type { BulkEndpoint } from "@/lib/api/document-bulk"
+import {
+  useBatch,
+  useExecuteBatch,
+  useLastBatchId,
+  type BulkEndpoint,
+} from "@/hooks/document-review/useBulkVerify"
 import {
   classifyExecuteError,
   confirmationSentence,

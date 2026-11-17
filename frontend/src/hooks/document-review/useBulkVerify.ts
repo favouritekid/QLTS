@@ -39,6 +39,9 @@ import {
 import { batchPollInterval, TERMINAL_BATCH_STATUSES } from "@/lib/document-review/messages"
 import type { BatchListScope, BatchView } from "@/lib/zod/document-review"
 
+// Thành phần lấy kiểu đường lô qua hook (kiến trúc 2.6.2: thành phần không nhập tầng API).
+export type { BulkEndpoint, BulkSelection }
+
 export const bulkVerifyKeys = {
   all: ["document-bulk-verify"] as const,
   batches: (mode: BulkEndpoint["mode"]) => [...bulkVerifyKeys.all, mode, "batch"] as const,

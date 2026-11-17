@@ -18,8 +18,7 @@ import {
 } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
-import { useFinalizeBatch } from "@/hooks/document-review/useBulkVerify"
-import type { BulkEndpoint } from "@/lib/api/document-bulk"
+import { useFinalizeBatch, type BulkEndpoint } from "@/hooks/document-review/useBulkVerify"
 import { describeFinalizeError } from "@/lib/document-review/messages"
 
 interface Props {

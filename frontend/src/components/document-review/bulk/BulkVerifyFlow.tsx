@@ -13,8 +13,12 @@ import { useId, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Label } from "@/components/ui/label"
-import { useExecuteBatch, usePreviewBulkVerify } from "@/hooks/document-review/useBulkVerify"
-import type { BulkEndpoint, BulkSelection } from "@/lib/api/document-bulk"
+import {
+  useExecuteBatch,
+  usePreviewBulkVerify,
+  type BulkEndpoint,
+  type BulkSelection,
+} from "@/hooks/document-review/useBulkVerify"
 import {
   classifyExecuteError,
   confirmationSentence,

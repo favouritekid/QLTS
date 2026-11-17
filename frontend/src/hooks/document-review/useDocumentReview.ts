@@ -10,11 +10,13 @@ import axios from "axios"
 
 import { admissionsKeys } from "@/hooks/admissions/useAdmissions"
 import {
+  downloadEvidenceFile,
   getDocumentHistory,
   rejectDocumentGd1b,
   resetDocumentGd1b,
   verifyDocumentGd1b,
 } from "@/lib/api/document-review"
+import { downloadBlob } from "@/lib/utils/download-blob"
 import type { RejectDocumentBody, ResetDocumentBody, VerifyDocumentBody } from "@/lib/zod/document-review"
 
 export const documentReviewKeys = {
@@ -45,6 +47,25 @@ export function useDocumentHistory(profileId: number, documentRowId: number, ena
     enabled,
     staleTime: 0,
     retry: false,
+  })
+}
+
+/**
+ * Tải MỘT tệp bằng chứng (§2.3). 410 `EVIDENCE_FILE_MISSING` ⇒ máy chủ đã đánh dấu `file_missing` ⇒ làm mới lịch sử.
+ * Thành phần chỉ hiện câu (không gọi API trực tiếp — kiến trúc 2.6.2).
+ */
+export function useDownloadEvidence(profileId: number, documentRowId: number) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (evidenceId: number) => downloadEvidenceFile(profileId, documentRowId, evidenceId),
+    retry: false,
+    gcTime: 0,
+    onSuccess: (f) => downloadBlob(f.blob, f.filename),
+    onError: (error) => {
+      if (axios.isAxiosError(error) && error.response?.status === 410) {
+        void queryClient.invalidateQueries({ queryKey: documentReviewKeys.history(profileId, documentRowId) })
+      }
+    },
   })
 }
 

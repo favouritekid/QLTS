@@ -6,7 +6,6 @@
  * Tải tệp bằng chứng: 410 `EVIDENCE_FILE_MISSING` ⇒ báo "không còn", làm mới lịch sử (máy chủ đã đánh dấu).
  */
 import { useState } from "react"
-import { useQueryClient } from "@tanstack/react-query"
 import axios from "axios"
 
 import { Badge } from "@/components/ui/badge"
@@ -18,8 +17,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { documentReviewKeys, useDocumentHistory } from "@/hooks/document-review/useDocumentReview"
-import { downloadEvidenceFile } from "@/lib/api/document-review"
+import { useDocumentHistory, useDownloadEvidence } from "@/hooks/document-review/useDocumentReview"
 import {
   documentStatusLabel,
   formatDateTimeVN,
@@ -27,7 +25,6 @@ import {
   historyActionLabel,
   viaLabel,
 } from "@/lib/document-review/messages"
-import { downloadBlob } from "@/lib/utils/download-blob"
 
 interface Props {
   profileId: number
@@ -39,28 +36,23 @@ interface Props {
 
 export function DocumentHistoryDialog({ profileId, documentRowId, label, open, onOpenChange }: Props) {
   const history = useDocumentHistory(profileId, documentRowId, open)
-  const queryClient = useQueryClient()
+  const evidence = useDownloadEvidence(profileId, documentRowId)
   const [downloadError, setDownloadError] = useState<string | null>(null)
-  const [downloading, setDownloading] = useState<number | null>(null)
+  const downloading = evidence.isPending ? evidence.variables : null
 
-  const download = async (evidenceId: number) => {
+  const download = (evidenceId: number) => {
     setDownloadError(null)
-    setDownloading(evidenceId)
-    try {
-      const f = await downloadEvidenceFile(profileId, documentRowId, evidenceId)
-      downloadBlob(f.blob, f.filename)
-    } catch (e) {
-      if (axios.isAxiosError(e) && e.response?.status === 410) {
-        setDownloadError("Tệp bằng chứng không còn trên máy chủ — đã ghi nhận tệp mất.")
-        void queryClient.invalidateQueries({ queryKey: documentReviewKeys.history(profileId, documentRowId) })
-      } else if (axios.isAxiosError(e) && e.response?.status === 404) {
-        setDownloadError("Không tải được tệp bằng chứng này (không có hoặc ngoài phạm vi của bạn).")
-      } else {
-        setDownloadError("Không tải được tệp bằng chứng — thử lại sau.")
-      }
-    } finally {
-      setDownloading(null)
-    }
+    evidence.mutate(evidenceId, {
+      onError: (e) => {
+        if (axios.isAxiosError(e) && e.response?.status === 410) {
+          setDownloadError("Tệp bằng chứng không còn trên máy chủ — đã ghi nhận tệp mất.")
+        } else if (axios.isAxiosError(e) && e.response?.status === 404) {
+          setDownloadError("Không tải được tệp bằng chứng này (không có hoặc ngoài phạm vi của bạn).")
+        } else {
+          setDownloadError("Không tải được tệp bằng chứng — thử lại sau.")
+        }
+      },
+    })
   }
 
   const notFound = axios.isAxiosError(history.error) && history.error.response?.status === 404
@@ -134,8 +126,8 @@ export function DocumentHistoryDialog({ profileId, documentRowId, label, open, o
                         <Button
                           size="sm"
                           variant="outline"
-                          onClick={() => void download(ev.id)}
-                          disabled={downloading !== null}
+                          onClick={() => download(ev.id)}
+                          disabled={evidence.isPending}
                         >
                           {downloading === ev.id ? "Đang tải…" : "Tải tệp"}
                         </Button>

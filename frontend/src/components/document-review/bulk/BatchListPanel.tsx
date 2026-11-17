@@ -8,8 +8,7 @@ import axios from "axios"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { useBatchList } from "@/hooks/document-review/useBulkVerify"
-import type { BulkEndpoint } from "@/lib/api/document-bulk"
+import { useBatchList, type BulkEndpoint } from "@/hooks/document-review/useBulkVerify"
 import { batchStatusLabel, formatDateTimeVN } from "@/lib/document-review/messages"
 import type { BatchListScope } from "@/lib/zod/document-review"
 
