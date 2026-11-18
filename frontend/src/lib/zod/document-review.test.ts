@@ -95,6 +95,15 @@ describe("gd1bDocumentSchema — định danh dòng giấy + phiên bản BẮT 
     },
   )
 
+  it("owner 18-11: can_change_format bật mà can_verify tắt ⇒ đỏ; bật cùng can_verify ⇒ parse được", () => {
+    expect(
+      gd1bDocumentSchema.safeParse({ ...giay, can_verify: false, can_change_format: true }).success,
+    ).toBe(false)
+    expect(
+      gd1bDocumentSchema.safeParse({ ...giay, can_verify: true, can_change_format: true }).success,
+    ).toBe(true)
+  })
+
   it("giấy có dòng ⇒ asActionable trả định danh + phiên bản là số", () => {
     const d = asActionable(gd1bDocumentSchema.parse(giay))
     expect(d?.document_row_id).toBe(11)
