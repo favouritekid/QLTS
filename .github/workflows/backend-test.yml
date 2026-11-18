@@ -1428,6 +1428,10 @@ jobs:
             tests: >-
               tests/unit/test_gd2_minh_chung_uu_tien_luat.py
               tests/api/test_gd2_minh_chung_uu_tien_api.py
+              tests/unit/test_gd2a_quota_ddl_lockin.py
+              tests/integration/test_gd2a_migration.py
+              tests/integration/test_gd2a_count_by_group_db.py
+              tests/api/test_gd2a_bang_chi_tieu_api.py
 
     env:
       APP_ENV: test

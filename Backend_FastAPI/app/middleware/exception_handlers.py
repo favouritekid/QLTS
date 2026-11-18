@@ -484,6 +484,19 @@ async def database_error_handler(request: Request, exc: Exception) -> JSONRespon
             status_code=status.HTTP_409_CONFLICT,
             content={"detail": MESSAGE_CONFIG_IN_USE, "error_code": "CAU_HINH_DA_DUOC_QUYET_DINH_DUNG"},
         )
+    # GĐ2-A: trigger "bảng chỉ tiêu năm đã khoá" (``app.models.admission_quota_ddl``) — bắt mọi đường sửa chỉ tiêu ngành
+    # / nhóm / trần (kể cả API sửa học vụ có sẵn) ⇒ 409 câu dễ hiểu, cùng cách như K-2.
+    from app.models.admission_quota_ddl import MESSAGE_QUOTA_TABLE_LOCKED, SQLSTATE_QUOTA_TABLE_LOCKED
+
+    if db_error_codes(exc)[0] == SQLSTATE_QUOTA_TABLE_LOCKED:
+        logger.warning(
+            "quota_table_locked_write_blocked",
+            extra={"path": _redact_path(request.url.path), "method": request.method},
+        )
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content={"detail": MESSAGE_QUOTA_TABLE_LOCKED, "error_code": "QUOTA_TABLE_LOCKED"},
+        )
     raise exc
 
 
