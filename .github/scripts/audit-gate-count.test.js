@@ -14,7 +14,7 @@ const fs = require('fs');
 const path = require('path');
 const cp = require('child_process');
 
-const { demTheoNgoaiLe, kiemTepNgoaiLe, lietKeTepThat } = require('./audit-ngoai-le.js');
+const { demTheoNgoaiLe, kiemTepNgoaiLe, lietKeTepThat, tonTaiThat, TEP_CAM_TON_TAI } = require('./audit-ngoai-le.js');
 
 const GOC_KHO = path.resolve(__dirname, '..', '..');
 const TEP_FIXTURE = path.join(__dirname, 'fixtures', 'npm-audit-picomatch-2026-11-18.json');
@@ -32,6 +32,7 @@ function fsGia(tep) {
     },
     lietKe: (thu, deQuy) =>
       Object.keys(tep).filter((k) => k.startsWith(`${thu}/`) && (deQuy || !k.slice(thu.length + 1).includes('/'))),
+    tonTai: (rel) => Object.prototype.hasOwnProperty.call(tep, rel) || Object.keys(tep).some((k) => k.startsWith(`${rel}/`)),
   };
 }
 /** Lockfile giả khớp ĐÚNG các giá trị ghim của tệp ngoại lệ thật. */
@@ -315,6 +316,78 @@ test('CLI trên kho thật: có ngoại lệ ⇒ 0 tới hết 2026-12-02 (UTC),
   assert.strictEqual(co.trim(), homNay <= '2026-12-02' ? '0' : '5');
   const khong = cp.execFileSync('node', [cli, TEP_FIXTURE], { encoding: 'utf8' });
   assert.strictEqual(khong.trim(), '5');
+});
+
+test('Codex 76 — có tệp làm npm ci cài lệch lockfile (shrinkwrap, gốc workspace, .npmrc) ⇒ vô hiệu', () => {
+  assert.deepStrictEqual(TEP_CAM_TON_TAI, [
+    'frontend/npm-shrinkwrap.json', 'frontend/.npmrc', 'npm-shrinkwrap.json', 'package.json', 'package-lock.json', '.npmrc',
+  ]);
+  for (const t of TEP_CAM_TON_TAI) {
+    const tep = TEP_DAT();
+    tep[t] = '{}';
+    const kq = dem(AUDIT(), NGOAI_LE(), '2026-11-18', tep);
+    assert.strictEqual(kq.so, 5, t);
+    assert.ok(kq.voHieu[0].lyDo.includes(`có ${t} — npm ci có thể cài khác lockfile đã ghim`), t);
+  }
+  // Là THƯ MỤC (vd thư mục tên npm-shrinkwrap.json) cũng tính là có.
+  const tep = TEP_DAT();
+  tep['frontend/npm-shrinkwrap.json/x'] = '';
+  assert.strictEqual(dem(AUDIT(), NGOAI_LE(), '2026-11-18', tep).so, 5);
+});
+
+test('Codex 76 — không kiểm được sự tồn tại (lỗi, kết quả lạ, thiếu hàm) ⇒ vô hiệu', () => {
+  const tonTaiLa = [
+    () => { throw new Error('EACCES'); },
+    () => undefined,
+    () => 'false',
+    () => 0,
+  ];
+  for (const tonTai of tonTaiLa) {
+    const kq = demTheoNgoaiLe(AUDIT(), NGOAI_LE(), { homNay: '2026-11-18', ...fsGia(TEP_DAT()), tonTai });
+    assert.strictEqual(kq.so, 5, String(tonTai));
+    assert.match(kq.voHieu[0].lyDo.join(' '), /không kiểm được frontend\/npm-shrinkwrap\.json/, String(tonTai));
+  }
+  const { docTep, lietKe } = fsGia(TEP_DAT());
+  const thieu = demTheoNgoaiLe(AUDIT(), NGOAI_LE(), { homNay: '2026-11-18', docTep, lietKe });
+  assert.strictEqual(thieu.so, 5);
+});
+
+test('Codex 76 — tonTaiThat trên đĩa thật: tệp / thư mục / symlink gãy ⇒ có; không có ⇒ không', (t) => {
+  const goc = fs.mkdtempSync(path.join(require('os').tmpdir(), 'tontai-'));
+  try {
+    fs.writeFileSync(path.join(goc, 'tep'), '');
+    fs.mkdirSync(path.join(goc, 'thu-muc'));
+    assert.strictEqual(tonTaiThat(goc, 'tep'), true);
+    assert.strictEqual(tonTaiThat(goc, 'thu-muc'), true);
+    assert.strictEqual(tonTaiThat(goc, 'khong-co'), false);
+    try {
+      fs.symlinkSync(path.join(goc, 'khong-co-dich'), path.join(goc, 'gay'));
+    } catch (e) {
+      t.skip(`máy không tạo được symlink (${e.code})`);
+      return;
+    }
+    assert.strictEqual(tonTaiThat(goc, 'gay'), true);
+  } finally {
+    fs.rmSync(goc, { recursive: true, force: true });
+  }
+});
+
+test('Codex 76 — CLI nối đúng tonTai: cây tối thiểu đạt ⇒ như kho thật; thêm frontend/npm-shrinkwrap.json ⇒ 5', () => {
+  const cli = path.join(__dirname, 'audit-gate-count.js');
+  const goc = fs.mkdtempSync(path.join(require('os').tmpdir(), 'cli-shrinkwrap-'));
+  try {
+    fs.mkdirSync(path.join(goc, 'frontend'));
+    for (const f of ['next.config.ts', 'package.json', 'package-lock.json']) {
+      fs.copyFileSync(path.join(GOC_KHO, 'frontend', f), path.join(goc, 'frontend', f));
+    }
+    const chay = () => cp.execFileSync('node', [cli, TEP_FIXTURE, '--ngoai-le', TEP_NGOAI_LE, '--goc', goc], { encoding: 'utf8' }).trim();
+    const homNay = new Date().toISOString().slice(0, 10);
+    assert.strictEqual(chay(), homNay <= '2026-12-02' ? '0' : '5');
+    fs.writeFileSync(path.join(goc, 'frontend', 'npm-shrinkwrap.json'), '{}');
+    assert.strictEqual(chay(), '5');
+  } finally {
+    fs.rmSync(goc, { recursive: true, force: true });
+  }
 });
 
 test('CLI: --ngoai-le thiếu --goc ⇒ exit 1', () => {

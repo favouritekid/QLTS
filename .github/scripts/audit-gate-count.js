@@ -22,7 +22,7 @@ const fs = require('fs');
 const path = require('path');
 
 const { loadAudit, requireCount } = require('./audit-dev-delta.js');
-const { demTheoNgoaiLe, lietKeTepThat } = require('./audit-ngoai-le.js');
+const { demTheoNgoaiLe, lietKeTepThat, tonTaiThat } = require('./audit-ngoai-le.js');
 
 function thamSo(argv) {
   const [auditPath, ...con] = argv;
@@ -57,6 +57,7 @@ try {
       homNay,
       docTep: (rel) => fs.readFileSync(path.join(ts.goc, rel), 'utf8'),
       lietKe: (thuMuc, deQuy) => lietKeTepThat(ts.goc, thuMuc, deQuy),
+      tonTai: (rel) => tonTaiThat(ts.goc, rel),
     });
     console.error(`ngoại lệ — ngày UTC ${homNay} · high/critical theo metadata ${kq.tongMeta} · còn tính ${kq.so}`);
     if (kq.mien.length) console.error(`  miễn (${kq.mien.length}): ${kq.mien.join(', ')} — theo ${kq.hieuLuc.join(', ')}`);

@@ -16,7 +16,9 @@
  *   - Tệp ngoại lệ sai dạng (khoá lạ, thiếu trường, ngày sai, GHSA sai, trùng GHSA) ⇒ throw.
  *   - Số gói high/critical trong `vulnerabilities` ≠ `metadata` ⇒ throw (schema npm audit đổi).
  *
- * Hàm thuần: đọc tệp qua `docTep` / `lietKe` tiêm vào, ngày qua `homNay` — test không phụ thuộc đĩa hay đồng hồ.
+ *   - Có một tệp trong `TEP_CAM_TON_TAI` (cố định trong mã — Codex 76) hoặc không kiểm được ⇒ vô hiệu.
+ *
+ * Hàm thuần: đọc tệp qua `docTep` / `lietKe` / `tonTai` tiêm vào, ngày qua `homNay` — test không phụ thuộc đĩa hay đồng hồ.
  */
 
 'use strict';
@@ -31,6 +33,21 @@ const MAU_INTEGRITY = /^sha512-[A-Za-z0-9+/]+={0,2}$/;
 // Codex 75: đường dẫn hai tệp phụ thuộc CỐ ĐỊNH (không cho cấu hình trỏ sang tệp khác).
 const TEP_PACKAGE_JSON = 'frontend/package.json';
 const TEP_LOCKFILE = 'frontend/package-lock.json';
+
+// Codex 76: các tệp làm `npm ci` (chạy trong frontend/) cài KHÁC `frontend/package-lock.json` đã ghim — có mặt ⇒ vô hiệu.
+//  - frontend/npm-shrinkwrap.json: npm ưu tiên shrinkwrap, bỏ qua package-lock.json;
+//  - package.json / package-lock.json / npm-shrinkwrap.json ở GỐC kho: npm >= 7 dò ngược thư mục cha tìm gốc workspace — gốc khai
+//    `workspaces` chứa frontend ⇒ cài theo lockfile ở gốc;
+//  - .npmrc ở frontend/ hoặc gốc: cấu hình npm cấp dự án đổi được cách cài (vd `package-lock=false`).
+// Danh sách CỐ ĐỊNH trong mã, không cấu hình được. Kho hiện KHÔNG có tệp nào trong số này (ca CLI trên kho thật khoá điều đó).
+const TEP_CAM_TON_TAI = [
+  'frontend/npm-shrinkwrap.json',
+  'frontend/.npmrc',
+  'npm-shrinkwrap.json',
+  'package.json',
+  'package-lock.json',
+  '.npmrc',
+];
 
 function laObject(v) {
   return v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -142,8 +159,18 @@ function advisoryGoc(vulns, ten, daQua = new Set()) {
 }
 
 /** Lý do điều kiện bị vi phạm (rỗng ⇒ đạt). Không đọc được ⇒ vi phạm (fail closed). */
-function viPhamDieuKien(nl, { docTep, lietKe }) {
+function viPhamDieuKien(nl, { docTep, lietKe, tonTai }) {
   const lyDo = [];
+  for (const t of TEP_CAM_TON_TAI) {
+    let co;
+    try {
+      co = tonTai(t);
+    } catch (e) {
+      co = undefined;
+    }
+    if (co === true) lyDo.push(`có ${t} — npm ci có thể cài khác lockfile đã ghim`);
+    else if (co !== false) lyDo.push(`không kiểm được ${t}`);
+  }
   for (const c of nl.dieu_kien.cam_chuoi_trong_thu_muc) {
     let tep;
     try {
@@ -229,7 +256,7 @@ function lietKeTepThat(goc, thuMuc, deQuy) {
  * Đếm gói high/critical KHÔNG được miễn.
  * @returns {{so: number, tongMeta: number, mien: string[], hieuLuc: string[], voHieu: {ghsa: string, lyDo: string[]}[], khongDung: string[]}}
  */
-function demTheoNgoaiLe(audit, cauHinh, { homNay, docTep, lietKe }) {
+function demTheoNgoaiLe(audit, cauHinh, { homNay, docTep, lietKe, tonTai }) {
   if (!laNgay(homNay)) throw loi(`homNay sai dạng: ${homNay}`);
   kiemTepNgoaiLe(cauHinh);
   const meta = audit.metadata.vulnerabilities;
@@ -246,7 +273,7 @@ function demTheoNgoaiLe(audit, cauHinh, { homNay, docTep, lietKe }) {
   for (const nl of cauHinh.ngoai_le) {
     const lyDo = [];
     if (homNay > nl.het_han) lyDo.push(`hết hạn ${nl.het_han}`);
-    lyDo.push(...viPhamDieuKien(nl, { docTep, lietKe }));
+    lyDo.push(...viPhamDieuKien(nl, { docTep, lietKe, tonTai }));
     if (lyDo.length) voHieu.push({ ghsa: nl.ghsa, lyDo });
     else hieuLuc.set(nl.ghsa, nl);
   }
@@ -274,4 +301,18 @@ function demTheoNgoaiLe(audit, cauHinh, { homNay, docTep, lietKe }) {
   return { so, tongMeta, mien, hieuLuc: [...hieuLuc.keys()], voHieu, khongDung };
 }
 
-module.exports = { demTheoNgoaiLe, kiemTepNgoaiLe, advisoryGoc, laNgay, lietKeTepThat };
+/** Đường dẫn `goc/rel` có tồn tại không — lstat: thư mục, symlink (kể cả symlink gãy) đều tính là CÓ. Chỉ ENOENT ⇒ false;
+ *  lỗi khác ⇒ throw (bên gọi coi là không kiểm được ⇒ vô hiệu). */
+function tonTaiThat(goc, rel) {
+  const fs = require('fs');
+  const path = require('path');
+  try {
+    fs.lstatSync(path.join(goc, rel));
+    return true;
+  } catch (e) {
+    if (e && e.code === 'ENOENT') return false;
+    throw e;
+  }
+}
+
+module.exports = { demTheoNgoaiLe, kiemTepNgoaiLe, advisoryGoc, laNgay, lietKeTepThat, tonTaiThat, TEP_CAM_TON_TAI };
