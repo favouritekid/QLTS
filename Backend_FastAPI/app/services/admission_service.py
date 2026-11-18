@@ -8659,40 +8659,8 @@ async def upload_priority_evidence_document(
     # chen giữa lúc xét và lúc ghi; trạng thái trong JSONB đọc ở dưới là bản SAU khoá (``populate_existing``).
     profile = await _lock_profile_for_document_write(db, profile_id)
 
-    # Guard 1: profile must be in writeable state
-    if profile.status not in APPLICANT_DOC_MUTATION_STATES:
-        raise BusinessRuleViolation(
-            f"Cannot upload priority evidence trong status '{profile.status}'. "
-            f"Allowed: {sorted(APPLICANT_DOC_MUTATION_STATES)}."
-        )
-
-    # Guard 2: sub_code MUST be in profile.priority_object_codes
-    # Officer ghi nhận diện UT TRƯỚC qua AdmissionProfileUpdate, mới scan giấy.
-    priority_codes = list(profile.priority_object_codes or [])
-    if sub_code not in priority_codes:
-        raise BusinessRuleViolation(
-            f"Sub-code '{sub_code}' không có trong profile.priority_object_codes "
-            f"{priority_codes}. Officer phải ghi nhận diện UT trước khi upload "
-            f"minh chứng."
-        )
-
-    # Guard 3: sub_code MUST exist trong catalog year
-    catalog_check = await db.execute(
-        select(models.PriorityObjectConfig.id)
-        .where(
-            models.PriorityObjectConfig.academic_year == profile.academic_year,
-            models.PriorityObjectConfig.sub_code == sub_code,
-            # Hàng ĐANG MỞ (owner Q10(a)); không ``scalar_one_or_none`` — sau lần xoay mức đầu tiên (đóng hàng cũ
-            # + tạo hàng mới cùng mã cùng năm) có 2 hàng ⇒ MultipleResultsFound ⇒ 500 (review C8 R3).
-            models.PriorityObjectConfig.effective_to.is_(None),
-        )
-        .limit(1)
-    )
-    if catalog_check.scalar_one_or_none() is None:
-        raise BusinessRuleViolation(
-            f"Sub-code '{sub_code}' không có trong PriorityObjectConfig "
-            f"catalog year {profile.academic_year}. Admin cần seed config."
-        )
+    # Guard 1–3: MỘT nguồn với đường ghi nhận bản giấy (GĐ2-0) — ``_priority_evidence_write_guards``.
+    await _priority_evidence_write_guards(db, profile, sub_code, verb="upload")
 
     # File validation (mirror upload_document)
     ALLOWED_CONTENT_TYPES = ["application/pdf", "image/jpeg", "image/png"]
@@ -8956,6 +8924,106 @@ async def upload_priority_evidence_document(
             delete_file_inside_profile_dir(old_file_path, profile_id=profile_id)
 
     return profile, finalize
+
+
+async def _priority_evidence_write_guards(db: AsyncSession, profile, sub_code: str, *, verb: str) -> None:
+    """Ba điều kiện chung của MỌI đường ghi dòng giấy minh chứng ưu tiên (tải tệp, ghi nhận bản giấy — GĐ2-0): hồ sơ ở trạng
+    thái cho sửa giấy; mã diện đã được ghi nhận trên hồ sơ; danh mục năm có hàng ĐANG MỞ của mã. Gọi SAU khi khoá hồ sơ."""
+    from .admission_document_policy import APPLICANT_DOC_MUTATION_STATES
+
+    # Guard 1: profile must be in writeable state
+    if profile.status not in APPLICANT_DOC_MUTATION_STATES:
+        raise BusinessRuleViolation(
+            f"Cannot {verb} priority evidence trong status '{profile.status}'. "
+            f"Allowed: {sorted(APPLICANT_DOC_MUTATION_STATES)}."
+        )
+
+    # Guard 2: sub_code MUST be in profile.priority_object_codes
+    # Officer ghi nhận diện UT TRƯỚC qua AdmissionProfileUpdate, mới scan giấy.
+    priority_codes = list(profile.priority_object_codes or [])
+    if sub_code not in priority_codes:
+        raise BusinessRuleViolation(
+            f"Sub-code '{sub_code}' không có trong profile.priority_object_codes "
+            f"{priority_codes}. Officer phải ghi nhận diện UT trước khi upload "
+            f"minh chứng."
+        )
+
+    # Guard 3: sub_code MUST exist trong catalog year
+    catalog_check = await db.execute(
+        select(models.PriorityObjectConfig.id)
+        .where(
+            models.PriorityObjectConfig.academic_year == profile.academic_year,
+            models.PriorityObjectConfig.sub_code == sub_code,
+            # Hàng ĐANG MỞ (owner Q10(a)); không ``scalar_one_or_none`` — sau lần xoay mức đầu tiên (đóng hàng cũ
+            # + tạo hàng mới cùng mã cùng năm) có 2 hàng ⇒ MultipleResultsFound ⇒ 500 (review C8 R3).
+            models.PriorityObjectConfig.effective_to.is_(None),
+        )
+        .limit(1)
+    )
+    if catalog_check.scalar_one_or_none() is None:
+        raise BusinessRuleViolation(
+            f"Sub-code '{sub_code}' không có trong PriorityObjectConfig "
+            f"catalog year {profile.academic_year}. Admin cần seed config."
+        )
+
+
+async def mark_priority_evidence_paper_submitted(
+    db: AsyncSession,
+    profile_id: int,
+    sub_code: str,
+    current_user: models.User,
+) -> models.AdmissionProfile:
+    """GĐ2-0 (câu 2 owner 19-11, ``gd2\\QUYET-DINH-OWNER-GD2-0-A-BON-CAU-2026-11-19.md``): ghi nhận minh chứng ưu tiên nộp
+    bằng BẢN GIẤY — tạo dòng ``profile_document`` (``category='priority_evidence'``, KHÔNG tệp, ``status='paper_submitted'``)
+    với ``paper_submitted_by`` = người bấm (= "người nhận giấy", như giấy tờ GĐ1b). Người nhận KHÔNG được duyệt / từ chối
+    minh chứng ấy (``document_review_rules.decide_priority_evidence``).
+
+    Chỉ khi mã diện CHƯA có dòng giấy nào (giống thao tác ``paper_submitted`` của giấy tờ: chỉ từ ``missing``) — đổi người nhận
+    không có đường: Bỏ diện (xoá dòng) rồi ghi nhận lại, hoặc tải tệp (người tải thành người gắn với minh chứng). Không đổi
+    trạng thái minh chứng trong JSONB (như tải tệp lần đầu). Khoá hồ sơ TRƯỚC câu ghi dòng giấy (GĐ1b §4.5)."""
+    profile = await get_profile(db, profile_id, current_user)
+    profile = await _lock_profile_for_document_write(db, profile_id)
+    await _priority_evidence_write_guards(db, profile, sub_code, verb="record paper")
+
+    existing = (
+        await db.execute(
+            select(models.ProfileDocument.id)
+            .where(
+                models.ProfileDocument.profile_id == profile_id,
+                models.ProfileDocument.category == "priority_evidence",
+                models.ProfileDocument.priority_sub_code == sub_code,
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        raise BusinessRuleViolation(
+            "Mã diện %s đã có minh chứng (tệp hoặc bản giấy đã ghi nhận) — muốn đổi thì Bỏ diện rồi ghi nhận lại, hoặc tải "
+            "tệp." % sub_code
+        )
+    now = datetime.now(timezone.utc)
+    db.add(
+        models.ProfileDocument(
+            profile_id=profile_id,
+            document_type_id=None,
+            category="priority_evidence",
+            priority_sub_code=sub_code,
+            status="paper_submitted",
+            file_path=None,
+            paper_submitted_at=now,
+            paper_submitted_by=current_user.id,
+            paper_submitted_by_unknown=False,
+        )
+    )
+    profile.updated_at = now
+    await db.flush()
+    log.info(
+        "Priority evidence paper recorded",
+        profile_id=profile_id,
+        sub_code=sub_code,
+        user_id=current_user.id,
+    )
+    return profile
 
 
 async def confirm_document_format(

@@ -262,6 +262,8 @@ ADMISSION_WRITE_ROUTES: Final[tuple[tuple[str, str], ...]] = (
     ("POST", "/api/admissions/{profile_id}/unclaim"),
     ("POST", "/api/admissions/{profile_id}/withdraw"),
     ("POST", "/api/v2/admin/admission-backfill-exceptions/bulk-resolve"),
+    # GĐ2-0 (19-11): ghi nhận minh chứng ưu tiên nộp bằng bản giấy — rà tay từ route thật.
+    ("POST", "/api/v2/admissions/{profile_id}/priority-evidence/{sub_code}/paper-submitted"),
     ("PATCH", "/api/v2/admin/admission-backfill-exceptions/{exception_id}/resolve"),
     ("PATCH", "/api/v2/admin/admission-paths/{admission_path_id}/quota"),
     ("POST", "/api/v2/admin/admission-paths/{admission_path_id}/subject-group-configs"),

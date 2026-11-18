@@ -107,9 +107,11 @@ async def test_verify_paper_only_when_document_id_none() -> None:
     actor = _make_actor("officer", user_id=7)
     db = _make_db(catalog_rows=[("04", Decimal("1.00"))])
 
+    # GĐ2-0 (câu 1, 2 owner 19-11): KHÔNG có dòng giấy ⇒ không rõ người nhận ⇒ chỉ qua đường cam kết + lý do.
     updated, _ = await verify_object_evidence(
         db, profile, sub_code="04", document_id=None,
         actor=actor, expected_version=5,
+        unknown_submitter_ack=True, reason="Đã đối chiếu bản giấy gốc tại phòng tuyển sinh",
     )
 
     # Contract: paper_only_verification=True khi không có file

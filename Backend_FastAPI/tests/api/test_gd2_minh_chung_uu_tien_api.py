@@ -98,20 +98,48 @@ async def _tai_len(client, headers, pid):
     )
 
 
-async def _duyet(client, headers, pid):
+async def _duyet(client, headers, pid, **them):
     _khong_cookie(client)
     return await client.patch(
         f"{V2}/{pid}/priority-objects/{MA}/verify", headers=headers,
-        json={"version": await _phien_ban(pid), "document_id": None},
+        json={"version": await _phien_ban(pid), "document_id": None, **them},
     )
 
 
-async def _tu_choi(client, headers, pid):
+async def _tu_choi(client, headers, pid, **them):
     _khong_cookie(client)
     return await client.patch(
         f"{V2}/{pid}/priority-objects/{MA}/reject", headers=headers,
-        json={"version": await _phien_ban(pid), "reject_reason": "Minh chứng không rõ nét, cần nộp lại"},
+        json={"version": await _phien_ban(pid), "reject_reason": "Minh chứng không rõ nét, cần nộp lại", **them},
     )
+
+
+async def _ghi_nhan_giay(client, headers, pid):
+    _khong_cookie(client)
+    return await client.post(f"{V2}/{pid}/priority-evidence/{MA}/paper-submitted", headers=headers)
+
+
+async def _dong_giay(pid):
+    return (
+        await _sql(
+            "SELECT id, status, file_path, paper_submitted_by, paper_submitted_by_unknown, uploaded_by FROM profile_document "
+            "WHERE profile_id = :p AND category = 'priority_evidence' AND priority_sub_code = :m",
+            p=pid, m=MA,
+        )
+    ).one_or_none()
+
+
+async def _vet_moi_nhat(pid):
+    return (
+        await _sql(
+            "SELECT action_type, actor_id, new_value, audit_metadata FROM priority_audit_log WHERE profile_id = :p "
+            "ORDER BY id DESC LIMIT 1",
+            p=pid,
+        )
+    ).one()
+
+
+CAM_KET = {"unknown_submitter_ack": True, "reason": "Đã đối chiếu bản gốc tại phòng tuyển sinh"}
 
 
 @pytest.fixture
@@ -215,7 +243,7 @@ async def test_quan_ly_tu_tai_khong_tu_duyet_409_admin_duyet_duoc(
     assert (await _tai_len(client, ba_vai["quan_ly"], pid)).status_code == 200
     r = await _duyet(client, ba_vai["quan_ly"], pid)
     assert r.status_code == 409, r.text
-    assert r.json().get("error_code") == "PRIORITY_EVIDENCE_OWN_SUBMISSION", r.text
+    assert r.json().get("error_code") == "OWN_SUBMISSION", r.text
     assert (await _minh_chung(pid)).get(MA) is None
     r = await _duyet(client, ba_vai["admin"], pid)
     assert r.status_code == 200, r.text
@@ -230,7 +258,7 @@ async def test_quan_ly_tu_tai_khong_tu_tu_choi_409(
     assert (await _tai_len(client, ba_vai["quan_ly"], pid)).status_code == 200
     r = await _tu_choi(client, ba_vai["quan_ly"], pid)
     assert r.status_code == 409, r.text
-    assert r.json().get("error_code") == "PRIORITY_EVIDENCE_OWN_SUBMISSION", r.text
+    assert r.json().get("error_code") == "OWN_SUBMISSION", r.text
     assert (await _minh_chung(pid)).get(MA) is None
 
 
@@ -242,7 +270,7 @@ async def test_admin_tu_tai_cung_khong_tu_duyet(
     assert (await _tai_len(client, ba_vai["admin"], pid)).status_code == 200
     r = await _duyet(client, ba_vai["admin"], pid)
     assert r.status_code == 409, r.text
-    assert r.json().get("error_code") == "PRIORITY_EVIDENCE_OWN_SUBMISSION", r.text
+    assert r.json().get("error_code") == "OWN_SUBMISSION", r.text
     r = await _duyet(client, ba_vai["quan_ly"], pid)
     assert r.status_code == 200, r.text
 
@@ -263,7 +291,8 @@ async def test_tai_lai_doi_nguoi_tai_luat_theo_nguoi_tai_moi(
 async def test_tep_khong_ro_nguoi_tai_bi_chan_den_khi_tai_lai(
     client: AsyncClient, admin_token_headers, officer_user_in_db, parity_config, ba_vai, don_tep
 ):
-    """Tệp có trước GĐ2-0 (``uploaded_by`` NULL) ⇒ không ai duyệt được (409) cho tới khi có người tải lại."""
+    """Tệp có trước GĐ2-0 (``uploaded_by`` NULL) ⇒ KHÔNG cam kết thì không ai duyệt được (409); tải lại tệp là một cách
+    gỡ."""
     pid = await _ho_so(client, admin_token_headers, officer_user_in_db, parity_config, "a_khong_ro")
     don_tep.append(pid)
     assert (await _tai_len(client, ba_vai["can_bo"], pid)).status_code == 200
@@ -273,20 +302,152 @@ async def test_tep_khong_ro_nguoi_tai_bi_chan_den_khi_tai_lai(
     for vai in ("quan_ly", "admin"):
         r = await _duyet(client, ba_vai[vai], pid)
         assert r.status_code == 409, (vai, r.text)
-        assert r.json().get("error_code") == "PRIORITY_EVIDENCE_UNKNOWN_SUBMITTER", r.text
+        assert r.json().get("error_code") == "UNKNOWN_SUBMITTER", r.text
     assert (await _tai_len(client, ba_vai["can_bo"], pid)).status_code == 200
     assert (await _duyet(client, ba_vai["quan_ly"], pid)).status_code == 200
 
 
-async def test_duyet_ho_so_giay_khong_tep_quan_ly_duoc(
+async def test_tep_khong_ro_nguoi_tai_co_cam_ket_va_ly_do_thi_quan_ly_duyet_duoc_va_luu_vet(
+    client: AsyncClient, admin_token_headers, officer_user_in_db, manager_user_in_db, parity_config, ba_vai, don_tep
+):
+    """Câu 1 owner 19-11 (N1b A′): Quản lý trong đơn vị đi đường cam kết + lý do ⇒ duyệt được; vết ghi ai / lý do / mã."""
+    pid = await _ho_so(client, admin_token_headers, officer_user_in_db, parity_config, "a1_tep_ck")
+    don_tep.append(pid)
+    assert (await _tai_len(client, ba_vai["can_bo"], pid)).status_code == 200
+    await _sql(
+        "UPDATE profile_document SET uploaded_by = NULL WHERE profile_id = :p AND category = 'priority_evidence'", p=pid
+    )
+    r = await _duyet(client, ba_vai["quan_ly"], pid, unknown_submitter_ack=True, reason="   ")
+    assert r.status_code == 409 and r.json().get("error_code") == "UNKNOWN_SUBMITTER", r.text
+    r = await _duyet(client, ba_vai["quan_ly"], pid, unknown_submitter_ack=False, reason="Có lý do mà không cam kết")
+    assert r.status_code == 409 and r.json().get("error_code") == "UNKNOWN_SUBMITTER", r.text
+    r = await _duyet(client, ba_vai["quan_ly"], pid, **CAM_KET)
+    assert r.status_code == 200, r.text
+    hanh_dong, nguoi, moi, them = await _vet_moi_nhat(pid)
+    assert (hanh_dong, nguoi, moi["sub_code"]) == ("ut_evidence_verified", manager_user_in_db["id"], MA)
+    assert (them["unknown_submitter_ack"], them["ack_reason"], them["receiver_kind"]) == (
+        True, CAM_KET["reason"], "upload",
+    )
+
+
+async def test_cam_ket_khong_vuot_qua_vai_nguoi_duyet(
     client: AsyncClient, admin_token_headers, officer_user_in_db, parity_config, ba_vai, don_tep
 ):
-    """Không có tệp (duyệt theo hồ sơ giấy): không có người tải để so ⇒ Quản lý trong đơn vị duyệt được."""
-    pid = await _ho_so(client, admin_token_headers, officer_user_in_db, parity_config, "a_giay")
+    """Đường cam kết vẫn phải qua vị từ người duyệt (C1b): cán bộ có cam kết + lý do vẫn 403."""
+    pid = await _ho_so(client, admin_token_headers, officer_user_in_db, parity_config, "a1_cb_ck")
+    don_tep.append(pid)
+    r = await _duyet(client, ba_vai["can_bo"], pid, **CAM_KET)
+    assert r.status_code == 403, r.text
+
+
+async def test_chua_ghi_nhan_giay_khong_ro_nguoi_nhan_can_cam_ket(
+    client: AsyncClient, admin_token_headers, officer_user_in_db, parity_config, ba_vai, don_tep
+):
+    """Không tệp, chưa ghi nhận bản giấy (mọi lần duyệt giấy trước bản sửa) ⇒ không rõ người nhận ⇒ như câu 1."""
+    pid = await _ho_so(client, admin_token_headers, officer_user_in_db, parity_config, "a2_khong_dong")
     don_tep.append(pid)
     r = await _duyet(client, ba_vai["quan_ly"], pid)
+    assert r.status_code == 409 and r.json().get("error_code") == "UNKNOWN_SUBMITTER", r.text
+    r = await _tu_choi(client, ba_vai["quan_ly"], pid)
+    assert r.status_code == 409 and r.json().get("error_code") == "UNKNOWN_SUBMITTER", r.text
+    r = await _tu_choi(client, ba_vai["quan_ly"], pid, unknown_submitter_ack=True)
     assert r.status_code == 200, r.text
-    assert (await _minh_chung(pid))[MA]["paper_only_verification"] is True
+    assert (await _minh_chung(pid))[MA]["status"] == "rejected"
+    them = (await _vet_moi_nhat(pid))[3]
+    assert (them["unknown_submitter_ack"], them["receiver_kind"]) == (True, "none")
+
+
+async def test_can_bo_ghi_nhan_giay_quan_ly_duyet_duoc(
+    client: AsyncClient, admin_token_headers, officer_user_in_db, parity_config, ba_vai, don_tep
+):
+    pid = await _ho_so(client, admin_token_headers, officer_user_in_db, parity_config, "a2_cb_giay")
+    don_tep.append(pid)
+    r = await _ghi_nhan_giay(client, ba_vai["can_bo"], pid)
+    assert r.status_code == 200, r.text
+    dong = await _dong_giay(pid)
+    assert (dong.status, dong.file_path, dong.paper_submitted_by, dong.paper_submitted_by_unknown) == (
+        "paper_submitted", None, officer_user_in_db["id"], False,
+    )
+    r = await _duyet(client, ba_vai["quan_ly"], pid)
+    assert r.status_code == 200, r.text
+    muc = (await _minh_chung(pid))[MA]
+    assert (muc["status"], muc["document_id"], muc["paper_only_verification"]) == ("verified", dong.id, True)
+
+
+async def test_nguoi_nhan_giay_khong_tu_duyet_409(
+    client: AsyncClient, admin_token_headers, officer_user_in_db, parity_config, ba_vai, don_tep
+):
+    pid = await _ho_so(client, admin_token_headers, officer_user_in_db, parity_config, "a2_ql_duyet")
+    don_tep.append(pid)
+    assert (await _ghi_nhan_giay(client, ba_vai["quan_ly"], pid)).status_code == 200
+    r = await _duyet(client, ba_vai["quan_ly"], pid)
+    assert r.status_code == 409 and r.json().get("error_code") == "OWN_SUBMISSION", r.text
+    r = await _duyet(client, ba_vai["quan_ly"], pid, **CAM_KET)  # cam kết không mở đường cho người nhận đã biết
+    assert r.status_code == 409 and r.json().get("error_code") == "OWN_SUBMISSION", r.text
+    assert (await _minh_chung(pid)).get(MA) is None
+    r = await _duyet(client, ba_vai["admin"], pid)
+    assert r.status_code == 200, r.text
+
+
+async def test_nguoi_nhan_giay_khong_tu_tu_choi_409(
+    client: AsyncClient, admin_token_headers, officer_user_in_db, parity_config, ba_vai, don_tep
+):
+    pid = await _ho_so(client, admin_token_headers, officer_user_in_db, parity_config, "a2_ql_tc")
+    don_tep.append(pid)
+    assert (await _ghi_nhan_giay(client, ba_vai["quan_ly"], pid)).status_code == 200
+    r = await _tu_choi(client, ba_vai["quan_ly"], pid)
+    assert r.status_code == 409 and r.json().get("error_code") == "OWN_SUBMISSION", r.text
+    assert (await _minh_chung(pid)).get(MA) is None
+
+
+async def test_giay_khong_ro_nguoi_nhan_can_cam_ket(
+    client: AsyncClient, admin_token_headers, officer_user_in_db, parity_config, ba_vai, don_tep
+):
+    """Bản ghi giấy cũ mất người nhận ⇒ xử lý như câu 1."""
+    pid = await _ho_so(client, admin_token_headers, officer_user_in_db, parity_config, "a2_giay_khong_ro")
+    don_tep.append(pid)
+    assert (await _ghi_nhan_giay(client, ba_vai["can_bo"], pid)).status_code == 200
+    await _sql(
+        "UPDATE profile_document SET paper_submitted_by = NULL WHERE profile_id = :p AND category = 'priority_evidence'",
+        p=pid,
+    )
+    r = await _duyet(client, ba_vai["quan_ly"], pid)
+    assert r.status_code == 409 and r.json().get("error_code") == "UNKNOWN_SUBMITTER", r.text
+    r = await _duyet(client, ba_vai["quan_ly"], pid, **CAM_KET)
+    assert r.status_code == 200, r.text
+    assert (await _vet_moi_nhat(pid))[3]["receiver_kind"] == "paper"
+
+
+async def test_ghi_nhan_giay_chi_mot_lan_va_khong_khi_da_co_tep(
+    client: AsyncClient, admin_token_headers, officer_user_in_db, parity_config, ba_vai, don_tep
+):
+    """Đổi người nhận không có đường qua ghi nhận lại (chỉ từ "chưa có dòng"); đã có tệp thì không ghi nhận giấy."""
+    pid = await _ho_so(client, admin_token_headers, officer_user_in_db, parity_config, "a2_mot_lan")
+    don_tep.append(pid)
+    assert (await _ghi_nhan_giay(client, ba_vai["can_bo"], pid)).status_code == 200
+    r = await _ghi_nhan_giay(client, ba_vai["quan_ly"], pid)
+    assert r.status_code == 400, r.text
+    assert (await _dong_giay(pid)).paper_submitted_by == officer_user_in_db["id"]
+    pid2 = await _ho_so(client, admin_token_headers, officer_user_in_db, parity_config, "a2_co_tep")
+    don_tep.append(pid2)
+    assert (await _tai_len(client, ba_vai["can_bo"], pid2)).status_code == 200
+    r = await _ghi_nhan_giay(client, ba_vai["quan_ly"], pid2)
+    assert r.status_code == 400, r.text
+
+
+async def test_dong_bang_chan_ghi_nhan_giay_503(
+    client: AsyncClient, admin_token_headers, officer_user_in_db, parity_config, ba_vai, don_tep, monkeypatch
+):
+    from app.config import settings
+
+    pid = await _ho_so(client, admin_token_headers, officer_user_in_db, parity_config, "a2_dong_bang")
+    don_tep.append(pid)
+    monkeypatch.setattr(settings, "ADMISSION_FROZEN", True)
+    r = await _ghi_nhan_giay(client, ba_vai["can_bo"], pid)
+    assert r.status_code == 503 and r.json()["code"] == "ADMISSION_FROZEN", r.text
+    assert await _dong_giay(pid) is None
+    monkeypatch.setattr(settings, "ADMISSION_FROZEN", False)
+    assert (await _ghi_nhan_giay(client, ba_vai["can_bo"], pid)).status_code == 200
 
 
 # --------------------------------------------------------------------------------------------------------------------
@@ -368,6 +529,23 @@ async def test_put_ho_so_gui_lai_nguyen_muc_da_duyet_van_qua_va_giu_ban_luu(
     assert (await _minh_chung(pid))[MA] == goc
 
 
+@pytest.mark.parametrize(
+    "muc",
+    [{"status": "pending", "paper_only_verification": True}, {"status": "pending", "document_id": 1}],
+)
+async def test_put_ho_so_khong_gan_dau_ban_giay_hay_dong_giay_cho_muc_chua_duyet(
+    client: AsyncClient, admin_token_headers, officer_user_in_db, parity_config, ba_vai, don_tep, muc
+):
+    """Câu 2 owner 19-11: đường PUT hồ sơ thường không gắn được cờ "duyệt theo bản giấy" / dòng giấy vào mục chưa duyệt."""
+    pid = await _ho_so(
+        client, admin_token_headers, officer_user_in_db, parity_config, "put_dau_giay", trang_thai="revision_requested"
+    )
+    don_tep.append(pid)
+    r = await _put(client, ba_vai["can_bo"], pid, {MA: muc})
+    assert r.status_code == 400, r.text
+    assert (await _minh_chung(pid)).get(MA) is None
+
+
 async def test_put_ho_so_van_ghi_duoc_muc_cho_duyet(
     client: AsyncClient, admin_token_headers, officer_user_in_db, parity_config, ba_vai, don_tep
 ):
@@ -402,6 +580,20 @@ class _BatCau:
             if re.search(mau, c, re.I | re.S):
                 return i
         return None
+
+
+async def test_ghi_nhan_giay_khoa_ho_so_truoc_cau_ghi_giay(
+    client: AsyncClient, admin_token_headers, officer_user_in_db, parity_config, ba_vai, don_tep
+):
+    pid = await _ho_so(client, admin_token_headers, officer_user_in_db, parity_config, "khoa_giay")
+    don_tep.append(pid)
+    _khong_cookie(client)
+    with _BatCau() as b:
+        r = await client.post(f"{V2}/{pid}/priority-evidence/{MA}/paper-submitted", headers=ba_vai["can_bo"])
+    assert r.status_code == 200, r.text
+    khoa = b.vi_tri(r"FROM admission_profile .*FOR UPDATE")
+    ghi = b.vi_tri(r"^INSERT INTO profile_document")
+    assert khoa is not None and ghi is not None and khoa < ghi, (khoa, ghi)
 
 
 async def test_tai_minh_chung_khoa_ho_so_truoc_cau_ghi_giay(

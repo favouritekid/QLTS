@@ -239,6 +239,18 @@ async def test_khoa_khi_nganh_thanh_vien_thieu_chi_tieu_409(client: AsyncClient,
     assert tuple(await _bang()) == ("draft", 1)
 
 
+async def test_khoa_duoc_khi_chi_tieu_bang_0_nhap_ro(client: AsyncClient, admin_token_headers, hoc_vu):
+    """Câu 4 owner 19-11: chỉ tiêu 0 nhập RÕ RÀNG là một con số (không phải "thiếu") ⇒ khoá được; chỉ NULL mới chặn."""
+    than = _than(0, hoc_vu)
+    than["groups"][1]["members"][0]["annual_admission_quota"] = 0
+    assert (await client.put(f"{P}/{NAM}", headers=admin_token_headers, json=than)).status_code == 200
+    c = hoc_vu["2026"][2]
+    assert await _chi_tieu(c) == 0
+    r = await client.post(f"{P}/{NAM}/lock", headers=admin_token_headers, json={"version": 1})
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "locked"
+
+
 async def test_mo_khoa_bat_buoc_ly_do_va_luu_vet(client: AsyncClient, admin_token_headers, hoc_vu):
     await _tao_va_khoa(client, admin_token_headers, hoc_vu)
     r = await client.post(f"{P}/{NAM}/unlock", headers=admin_token_headers, json={"version": 2, "reason": "   "})

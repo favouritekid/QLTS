@@ -14,7 +14,9 @@ không còn gì dở dang, phiên bản Alembic chưa đổi, chạy lại đư�
 2. tạo ba bảng + chỉ mục (chép theo model ``app/models/admission_quota_table.py`` —
    ``tests/integration/test_gd2a_migration.py`` so lược đồ sau nâng cấp với CSDL dựng thẳng từ model);
 3. hàm + trigger chặn sửa khi bảng đã khoá — chép NGUYÊN từ ``app/models/admission_quota_ddl.py``
-   (``tests/unit/test_gd2a_quota_ddl_lockin.py`` so từng câu sau khi chuẩn hoá khoảng trắng).
+   (``tests/unit/test_gd2a_quota_ddl_lockin.py`` so từng câu sau khi chuẩn hoá khoảng trắng);
+4. GĐ2-0 (câu 2 owner 19-11): Casbin cho route ghi nhận minh chứng ưu tiên bằng bản giấy (``CASBIN_POLICIES``, ``template_id``
+   riêng), chèn ``WHERE NOT EXISTS`` rồi đếm — CŨNG trong câu ``DO`` (câu riêng sẽ commit lẻ dưới AUTOCOMMIT).
 
 Chờ khoá tối đa ``LOCK_TIMEOUT`` (10 s) — quá ⇒ câu ``DO`` rollback trọn, báo ``UpgradeLockTimeout``.
 
@@ -195,6 +197,36 @@ STATEMENTS = (
 )
 
 
+#: Casbin cho route GĐ2-0 (v0, v1, v2, v3) — chép CỨNG (migration không phụ thuộc mã ứng dụng đang đổi);
+#: ``tests/unit/test_gd2_minh_chung_uu_tien_luat.py`` khoá bằng ``policy_templates.GD2_PRIORITY_PAPER_OBJECTS``. Admin qua wildcard;
+#: Quản lý kế thừa cán bộ; kế toán kế thừa cán bộ ⇒ deny tường minh.
+_PRIORITY_PAPER = (("/api/v2/admissions/*/priority-evidence/*/paper-submitted", "POST"),)
+CASBIN_POLICIES = (
+    tuple(("role:officer", o, a, "allow") for o, a in _PRIORITY_PAPER)
+    + tuple(("role:accountant", o, a, "deny") for o, a in _PRIORITY_PAPER)
+)
+CASBIN_TEMPLATE_ID = "_gd2a20261118_priority_paper"
+
+
+def _casbin_block_sql() -> str:
+    """Thân PL/pgSQL nhúng vào câu ``DO`` của nâng cấp (dùng biến ``n_casbin``). Chèn ``WHERE NOT EXISTS`` rồi đếm; lệch ⇒
+    ``RAISE`` (``QLC11``) ⇒ cả câu ``DO`` rollback."""
+    chen = ";\n".join(
+        "    INSERT INTO casbin_rule (ptype, v0, v1, v2, v3, template_id, applied_at) "
+        "SELECT 'p', '{0}', '{1}', '{2}', '{3}', '{t}', now() WHERE NOT EXISTS (SELECT 1 FROM casbin_rule "
+        "WHERE ptype = 'p' AND v0 = '{0}' AND v1 = '{1}' AND v2 = '{2}' AND v3 = '{3}')".format(*p, t=CASBIN_TEMPLATE_ID)
+        for p in CASBIN_POLICIES
+    )
+    dk = " OR ".join("(v0 = '%s' AND v1 = '%s' AND v2 = '%s' AND v3 = '%s')" % p for p in CASBIN_POLICIES)
+    return (
+        "%s;\n"
+        "    SELECT COUNT(DISTINCT (v0, v1, v2, v3)) INTO n_casbin FROM casbin_rule WHERE ptype = 'p' AND (%s);\n"
+        "    IF n_casbin <> %d THEN\n"
+        "        RAISE EXCEPTION 'gd2a20261118: can %% dong casbin, thay %%', %d, n_casbin USING ERRCODE = 'QLC11';\n"
+        "    END IF" % (chen, dk, len(CASBIN_POLICIES), len(CASBIN_POLICIES))
+    )
+
+
 class UpgradeLockTimeout(RuntimeError):
     """upgrade chờ khoá quá ``LOCK_TIMEOUT``. Câu ``DO`` rollback trọn ⇒ không còn gì dở dang; chạy lại khi bảng rảnh."""
 
@@ -219,11 +251,14 @@ def _upgrade_sql() -> str:
     )
     return f"""
 DO $gd2a$
+DECLARE
+    n_casbin bigint;
 BEGIN
     PERFORM set_config('lock_timeout', '{LOCK_TIMEOUT}', true);
     LOCK TABLE offering_academic_info IN SHARE ROW EXCLUSIVE MODE;
     {body};
-    RAISE NOTICE 'gd2a20261118: bang chi tieu nam + nhom nganh + trigger khoa da cai';
+{_casbin_block_sql()};
+    RAISE NOTICE 'gd2a20261118: bang chi tieu nam + nhom nganh + trigger khoa + casbin GD2-0 da cai';
 END
 $gd2a$
 """
@@ -270,6 +305,7 @@ BEGIN
     DROP FUNCTION IF EXISTS chan_xoa_bang_chi_tieu_da_khoa();
     DROP FUNCTION IF EXISTS admission_quota_assert_table_unlocked(integer);
     ALTER TABLE offering_academic_info DROP CONSTRAINT uq_offering_academic_info_id_year;
+    DELETE FROM casbin_rule WHERE ptype = 'p' AND template_id = '_gd2a20261118_priority_paper';
 END
 $gd2a_down$
 """

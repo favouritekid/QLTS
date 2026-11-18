@@ -95,6 +95,13 @@ async def _phien_ban(k):
     return await k.fetchval("SELECT version_num FROM alembic_version")
 
 
+async def _casbin_gd2(k):
+    """Số dòng Casbin mang ``template_id`` GĐ2-0 của migration (route ghi nhận minh chứng ưu tiên bằng bản giấy)."""
+    return await k.fetchval(
+        "SELECT count(*) FROM casbin_rule WHERE ptype = 'p' AND template_id = '_gd2a20261118_priority_paper'"
+    )
+
+
 async def _luoc_do(k):
     """Phần lược đồ GĐ2-A: cột, ràng buộc, chỉ mục của 3 bảng mới + ràng buộc / trigger của ``offering_academic_info``,
     thân 4 hàm."""
@@ -172,6 +179,11 @@ async def test_nang_cap_luoc_do_khop_model_va_trigger_song(csdl_truoc):
     k = await asyncpg.connect(_url(ten, "postgresql"))
     try:
         assert await _phien_ban(k) == SAU
+        # GĐ2-0: hai dòng Casbin của route ghi nhận bản giấy (cán bộ allow, kế toán deny).
+        assert await _casbin_gd2(k) == 2
+        assert {tuple(r) for r in await k.fetch(
+            "SELECT v0, v3 FROM casbin_rule WHERE template_id = '_gd2a20261118_priority_paper'"
+        )} == {("role:officer", "allow"), ("role:accountant", "deny")}
         # Trigger sống sau nâng cấp: bảng khoá ⇒ sửa chỉ tiêu ngành bị chặn bằng SQLSTATE riêng.
         ai = await _hoc_vu(k)
         await k.execute("INSERT INTO admission_quota_table (academic_year) VALUES (2026)")
@@ -225,6 +237,7 @@ async def test_ha_cap_con_du_lieu_thi_dung_khong_xoa_gi_rong_thi_ha_duoc_va_nang
         assert "GD2ADataPresent" in out, out[-3000:]
         assert await _phien_ban(k) == SAU
         assert await k.fetchval("SELECT count(*) FROM admission_quota_table") == 1
+        assert await _casbin_gd2(k) == 2  # dừng ⇒ Casbin cũng còn nguyên
         # Rỗng ⇒ hạ được, gỡ đủ.
         await k.execute("DELETE FROM admission_quota_table")
         rc, out = await _alembic(ten, "downgrade", TRUOC)
@@ -236,10 +249,12 @@ async def test_ha_cap_con_du_lieu_thi_dung_khong_xoa_gi_rong_thi_ha_duoc_va_nang
         assert await k.fetchval(
             "SELECT count(*) FROM pg_constraint WHERE conname = 'uq_offering_academic_info_id_year'"
         ) == 0
+        assert await _casbin_gd2(k) == 0
         # Nâng lại được (câu DO chạy lại trên CSDL đã hạ).
         rc, out = await _alembic(ten, "upgrade", SAU)
         assert rc == 0, out[-3000:]
         assert await _phien_ban(k) == SAU
+        assert await _casbin_gd2(k) == 2
     finally:
         await k.close()
 
