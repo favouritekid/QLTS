@@ -16,7 +16,8 @@ const URL_VERIFY = `${API}/api/admissions/5/documents/hoc_ba_thpt/verify-format`
 let than: unknown[] = []
 
 function hop(over: Record<string, unknown> = {}) {
-  const doc = giayThaoTac({ can_verify: true, ...over })
+  // Mặc định: giấy bản giấy ⇒ máy chủ bật can_change_format cùng can_verify (owner 18-11).
+  const doc = giayThaoTac({ can_verify: true, can_change_format: true, ...over })
   const onOpenChange = vi.fn()
   renderWithClient(<VerifyDocumentDialog profileId={5} document={doc} open onOpenChange={onOpenChange} />)
   return { onOpenChange }
@@ -57,6 +58,24 @@ describe("VerifyDocumentDialog", () => {
     await u.click(screen.getByRole("button", { name: "Duyệt" }))
     await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false))
     expect(than).toEqual([{ format: "certified_copy", expected_row_version: 3, unknown_submitter_ack: false }])
+  })
+
+  it("giấy scan (can_change_format = false) ⇒ không có lựa chọn hình thức, gửi đúng hình thức đã khai", async () => {
+    const u = userEvent.setup()
+    const { onOpenChange } = hop({
+      status: "uploaded", document_id: 77, actual_submission_format: "photo", can_change_format: false,
+    })
+    expect(screen.getByTestId("hinh-thuc-khoa")).toHaveTextContent("Bản photo")
+    expect(screen.queryAllByRole("radio")).toHaveLength(0)
+    await u.click(screen.getByRole("button", { name: "Duyệt" }))
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false))
+    expect(than).toEqual([{ format: "photo", expected_row_version: 3, unknown_submitter_ack: false }])
+  })
+
+  it("thiếu khoá can_change_format ⇒ coi như khoá (fail-closed)", () => {
+    hop({ actual_submission_format: "original", can_change_format: undefined })
+    expect(screen.getByTestId("hinh-thuc-khoa")).toBeInTheDocument()
+    expect(screen.queryAllByRole("radio")).toHaveLength(0)
   })
 
   it("requires_ack ⇒ cần cả cam kết LẪN lý do; thân có reason + ack", async () => {

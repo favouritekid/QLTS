@@ -4,6 +4,8 @@
  * GĐ1b §4.6 / §7 — duyệt MỘT giấy (nút lẻ): hình thức mặc định = hình thức lúc nhận; KHÔNG có dự phòng "photo" —
  * thiếu hình thức lúc nhận ⇒ người duyệt phải tự chọn. `requires_ack` ⇒ hộp cam kết + lý do bắt buộc.
  * Gửi `expected_row_version`. Lý do KHÔNG lưu vào storage.
+ * Chọn hình thức khác CHỈ khi máy chủ bật `can_change_format` (giấy bản giấy — owner 18-11, Codex 71 điểm 2); giấy scan
+ * hiện hình thức đã khai để xem và gửi đúng hình thức ấy. Máy chủ là chốt (409 FORMAT_LOCKED).
  */
 import { useId, useState } from "react"
 
@@ -46,6 +48,7 @@ export function VerifyDocumentDialog({ profileId, document: doc, open, onOpenCha
   const [ack, setAck] = useState(false)
   const verify = useVerifyDocumentGd1b(profileId)
   const feedback = useDocumentActionFeedback(() => onOpenChange(false))
+  const choosable = doc.can_change_format === true
 
   const trimmed = reason.trim()
   const ackOk = !doc.requires_ack || (ack && trimmed.length > 0 && trimmed.length <= 500)
@@ -81,6 +84,14 @@ export function VerifyDocumentDialog({ profileId, document: doc, open, onOpenCha
           </DialogDescription>
         </DialogHeader>
 
+        {!choosable ? (
+          <div className="space-y-1" data-testid="hinh-thuc-khoa">
+            <p className="text-sm font-medium">Hình thức duyệt: {formatLabel(doc.actual_submission_format)}</p>
+            <p className="text-xs text-muted-foreground">
+              Giấy nộp bằng tệp scan chỉ duyệt đúng hình thức đã khai lúc tải lên. Khai sai thì Đặt lại rồi tải lại.
+            </p>
+          </div>
+        ) : (
         <fieldset className="space-y-2">
           <legend className="text-sm font-medium">Hình thức đã đối chiếu</legend>
           <RadioGroup
@@ -106,6 +117,7 @@ export function VerifyDocumentDialog({ profileId, document: doc, open, onOpenCha
             </p>
           )}
         </fieldset>
+        )}
 
         {doc.requires_ack && (
           <>

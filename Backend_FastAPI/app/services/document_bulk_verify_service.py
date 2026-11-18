@@ -133,6 +133,14 @@ def _running() -> BulkBatchConflict:
     return BulkBatchConflict("BATCH_RUNNING", "Lô đang chạy — tra lô để xem kết quả")
 
 
+def confirmation_sentence(n_documents: int) -> str:
+    """Câu của ô xác nhận lô (hợp đồng bản 5 B5) với ``n_documents`` = số mục ĐÃ LƯU của lô (= ``counts.documents`` lúc
+    xem trước). Codex 71 điểm 4: ``execute`` chỉ nhận ĐÚNG câu này rồi mới lưu — chuỗi tuỳ ý không thành dấu vết xác nhận.
+    Giao diện dựng cùng câu (``frontend/src/lib/document-review/messages.ts`` ``confirmationSentence``);
+    ``tests/unit/test_gd1b_lo_cau_xac_nhan.py`` khoá hai bên bằng nhau (CLAUDE.md §7)."""
+    return f"Tôi xác nhận đã đối chiếu giấy thật của {n_documents} giấy này. Phần mềm chỉ ghi lại kết quả kiểm của tôi."
+
+
 # =====================================================================================================================
 # Tiện ích
 # =====================================================================================================================
@@ -462,6 +470,14 @@ async def execute_batch(
         if expired:
             await _safe_rollback(db)
             raise BulkBatchConflict("PREVIEW_EXPIRED", "Bản xem trước đã hết hạn — xem trước lại")
+        n_items = await repo.count_batch_items(db, batch_id)
+        if confirmation_text != confirmation_sentence(n_items):
+            await _safe_rollback(db)
+            raise BulkVerifyUnprocessable(
+                "CONFIRMATION_MISMATCH",
+                "Câu xác nhận không khớp số giấy của lô — xem trước lại rồi xác nhận",
+                {"documents": n_items},
+            )
         grant_id = row.grant_id
         await repo.set_batch_status(
             db, batch_id, status="processing", confirmation_text=confirmation_text, started_at=func.clock_timestamp()

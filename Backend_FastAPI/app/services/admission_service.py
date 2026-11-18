@@ -3200,6 +3200,7 @@ def _compute_frontend_fields(
         DocFacts as _DocFacts,
         config_facts as _config_facts,
         decide as _decide,
+        format_change_allowed as _format_change_allowed,
     )
 
     def _gd1b_flags(uploaded_doc: dict, doc_status: str, requires_upload: bool, is_extra: bool) -> dict:
@@ -3210,7 +3211,7 @@ def _compute_frontend_fields(
             return {
                 "can_verify": False, "can_reject": False, "can_reset": False, "can_view_history": False,
                 "verify_block_reason": None, "requires_ack": False, "reset_requires_reason": False,
-                "reset_keeps_evidence": False,
+                "reset_keeps_evidence": False, "can_change_format": False,
             }
         facts = _DocFacts.from_row(row, requires_upload=requires_upload, is_extra=is_extra)
         kw = dict(policy=_doc_policy, actor_id=current_user.id, profile_status=profile.status, doc=facts)
@@ -3228,6 +3229,8 @@ def _compute_frontend_fields(
             ),
             "reset_requires_reason": ds.allowed,
             "reset_keeps_evidence": bool(ds.allowed and doc_status == "verified" and facts.has_file),
+            # Owner 18-11 (Codex 71 điểm 2): hộp Duyệt chỉ cho chọn hình thức khác khi giấy là bản giấy.
+            "can_change_format": bool(dv.allowed and _format_change_allowed(facts)),
         }
 
     def _compute_document_permissions(

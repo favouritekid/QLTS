@@ -435,13 +435,18 @@ class DocumentItemSchema(BaseModel):
     verify_block_reason: Optional[str] = Field(
         default=None,
         description="Why verify is blocked: own_submission | unknown_submitter | missing_format | outside_config | "
-        "not_pending | not_permitted",
+        "not_pending | not_permitted (single-verify of a scan with no declared format ⇒ missing_format)",
     )
     requires_ack: Optional[bool] = Field(
         default=None, description="Receiver unknown — the action needs unknown_submitter_ack + reason",
     )
     reset_requires_reason: Optional[bool] = Field(default=None, description="Reset needs a reason")
     reset_keeps_evidence: Optional[bool] = Field(default=None, description="Reset keeps the verified scan file")
+    can_change_format: Optional[bool] = Field(
+        default=None,
+        description="Verify may pick a format other than the received one (paper documents only; scan files are "
+        "locked to the format declared at upload)",
+    )
 
     @field_validator('label')
     @classmethod

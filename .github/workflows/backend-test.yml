@@ -1382,6 +1382,7 @@ jobs:
           - tier: Tier 5h — GĐ1b lõi + bằng chứng + nối dây
             tests: >-
               tests/integration/test_gd1b_migration.py
+              tests/unit/test_gd1b_migration_duong_dan_bang_chung.py
               tests/api/test_gd1b_xoa_tai_khoan.py
               tests/api/test_gd1b_khoa_va_tep.py
               tests/unit/test_gd1b_xoa_tep_trong_thu_muc_ho_so.py
@@ -1397,6 +1398,7 @@ jobs:
             tests: >-
               tests/unit/test_gd1b_lo_khoa_tu_van.py
               tests/unit/test_gd1b_lo_trang_thai_literal.py
+              tests/unit/test_gd1b_lo_cau_xac_nhan.py
               tests/api/test_gd1b_lo_eligibility.py
               tests/api/test_gd1b_lo_xem_truoc.py
               tests/api/test_gd1b_lo_chay.py

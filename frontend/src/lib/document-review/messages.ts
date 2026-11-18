@@ -16,7 +16,10 @@ export const DOCUMENT_REASON_MESSAGES: Readonly<Record<string, string>> = {
   version_changed: VERSION_CHANGED_MESSAGE,
   own_submission: "Người nhận / người tải giấy không tự duyệt, từ chối hay Đặt lại giấy đã duyệt của mình",
   unknown_submitter: "Không rõ người nhận giấy — nút lẻ cần cam kết kèm lý do; giấy này không vào lô / duyệt chéo",
-  missing_format: "Chưa ghi hình thức lúc nhận — duyệt từng giấy",
+  missing_format:
+    "Chưa ghi hình thức lúc nhận — giấy bản giấy: duyệt từng giấy; giấy scan: Đặt lại rồi tải lại kèm hình thức",
+  format_locked:
+    "Giấy nộp bằng tệp scan chỉ duyệt đúng hình thức đã khai lúc tải lên — khai sai thì Đặt lại rồi tải lại",
   outside_config: "Giấy ngoài cấu hình hiện tại — chỉ Quản lý / Admin Đặt lại được",
   not_pending: "Hồ sơ hoặc giấy không ở trạng thái chờ xét",
   cross_no_reset: "Duyệt chéo không có thao tác Đặt lại",
@@ -70,6 +73,8 @@ export const BATCH_RESULT_LABELS: Readonly<Record<BatchItemResult, string>> = {
 /**
  * Câu của ô xác nhận lô (đặc tả bản 2.2 "Ô xác nhận chung cho lô" — Codex 59 câu 7; bản 3.6 giữ "ô xác nhận lô").
  * `n` = số giấy MÁY CHỦ trả ở bản xem trước / lô — giao diện không tự đếm. Gửi NGUYÊN VĂN làm `confirmation_text`.
+ * Máy chủ chỉ nhận ĐÚNG câu này với số giấy đã lưu của lô (Codex 71 điểm 4 — khác ⇒ 422 `CONFIRMATION_MISMATCH`);
+ * `Backend_FastAPI/tests/unit/test_gd1b_lo_cau_xac_nhan.py` khoá câu ở đây bằng `confirmation_sentence` của máy chủ.
  * Ô này là cam kết thao tác, không chứng minh đã đối chiếu giấy thật.
  */
 export function confirmationSentence(n: number): string {

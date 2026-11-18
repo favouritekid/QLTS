@@ -262,6 +262,12 @@ async def item_counts(db: AsyncSession, batch_ids: Sequence[UUID]) -> Dict[UUID,
     }
 
 
+async def count_batch_items(db: AsyncSession, batch_id: UUID) -> int:
+    """Số mục (giấy) ĐÃ LƯU của lô lúc xem trước = ``counts.documents`` đã trả cho người tạo."""
+    t = models.DocumentBulkBatchItem
+    return int((await db.execute(select(func.count()).select_from(t).where(t.batch_id == batch_id))).scalar_one())
+
+
 async def profile_has_results(db: AsyncSession, batch_id: UUID, profile_id: int) -> bool:
     t = models.DocumentBulkBatchItem
     return bool(

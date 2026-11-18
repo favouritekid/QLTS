@@ -53,7 +53,12 @@ MESSAGES: Dict[str, str] = {
     rules.UNKNOWN_SUBMITTER: (
         "Không rõ người nhận giấy — nút lẻ cần cam kết kèm lý do; giấy này không vào lô / duyệt chéo"
     ),
-    rules.MISSING_FORMAT: "Chưa ghi hình thức lúc nhận — duyệt từng giấy",
+    rules.MISSING_FORMAT: (
+        "Chưa ghi hình thức lúc nhận — giấy bản giấy: duyệt từng giấy; giấy scan: Đặt lại rồi tải lại kèm hình thức"
+    ),
+    rules.FORMAT_LOCKED: (
+        "Giấy nộp bằng tệp scan chỉ duyệt đúng hình thức đã khai lúc tải lên — khai sai thì Đặt lại rồi tải lại"
+    ),
     rules.OUTSIDE_CONFIG: "Giấy ngoài cấu hình hiện tại — chỉ Quản lý / Admin Đặt lại được",
     rules.NOT_PENDING: "Hồ sơ hoặc giấy không ở trạng thái chờ xét",
     rules.CROSS_NO_RESET: "Duyệt chéo không có thao tác Đặt lại",
@@ -262,6 +267,12 @@ async def transition_document(
 
     if action == rules.ACTION_VERIFY:
         if via == rules.VIA_SINGLE:
+            if (
+                verified_format
+                and verified_format != doc.actual_submission_format
+                and not rules.format_change_allowed(facts)
+            ):
+                raise DocumentTransitionConflict(rules.FORMAT_LOCKED)
             fmt = verified_format or doc.actual_submission_format
         else:
             fmt = doc.actual_submission_format  # §4.6: lô / chéo duyệt ĐÚNG hình thức lúc nhận

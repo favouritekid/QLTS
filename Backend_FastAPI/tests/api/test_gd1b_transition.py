@@ -72,11 +72,15 @@ async def _tai(client, user, pid, code, noi_dung=PDF):
     return await _giay(pid, code)
 
 
-async def _duyet(client, user, pid, code, rv, **them):
+async def _duyet(client, user, pid, code, rv, *, fmt=None, **them):
+    """Mặc định gửi ĐÚNG hình thức lúc nhận của giấy (giấy scan khoá theo hình thức đã khai — owner 18-11); ca kiểm luật
+    hình thức truyền ``fmt`` tường minh."""
+    if fmt is None:
+        fmt = (await _giay(pid, code)).actual_submission_format or "original"
     h = await _dn(client, user)
     return await client.patch(
         f"{ADMISSIONS}/{pid}/documents/{code}/verify-format", headers=h,
-        json={"format": "original", "expected_row_version": rv, **them},
+        json={"format": fmt, "expected_row_version": rv, **them},
     )
 
 
@@ -295,6 +299,64 @@ async def test_co_may_chu_va_dinh_danh_dong_cho_moi_giay(
     assert (giay["document_row_id"], giay["row_version"]) == (d.id, d.row_version)
     assert giay["can_verify"] is False and giay["verify_block_reason"] == "own_submission"
     assert giay["can_view_history"] is True
+    assert giay["can_change_format"] is False, "không duyệt được thì cũng không chọn hình thức"
+
+
+# ---------------------------------------------------------------- hình thức khi duyệt lẻ (§4.6; owner 18-11, Codex 71 điểm 2)
+async def test_giay_ban_giay_duyet_le_duoc_chon_hinh_thuc_khac_nhat_ky_ghi_ca_hai(
+    client, admin_token_headers, admin_user_in_db, officer_user_in_db, parity_config
+):
+    prof = await _create_profile(client, admin_token_headers, officer_user_in_db, parity_config, "ht_ban_giay")
+    code = parity_config["paper_doc_code"]
+    d = await _nhan_giay(client, officer_user_in_db, prof["id"], code)  # khai "original"
+    h = await _dn(client, admin_user_in_db)
+    giay = {x["code"]: x for x in (await client.get(f"{ADMISSIONS}/{prof['id']}", headers=h)).json()["documents_checklist"]}
+    assert (giay[code]["can_verify"], giay[code]["can_change_format"]) == (True, True)
+    r = await _duyet(client, admin_user_in_db, prof["id"], code, d.row_version, fmt="photo")
+    assert r.status_code == 200, r.text
+    assert (await _giay(prof["id"], code)).verified_format == "photo"
+    nk = (await _nhat_ky(d.id))[-1]
+    assert nk.action == "verified" and nk.extra_data["declared_format"] == "original"
+
+
+async def test_giay_scan_duyet_le_chon_hinh_thuc_khac_thi_409_khong_ghi(
+    client, admin_token_headers, admin_user_in_db, officer_user_in_db, parity_config
+):
+    prof = await _create_profile(client, admin_token_headers, officer_user_in_db, parity_config, "ht_scan")
+    code = parity_config["upload_doc_code"]
+    d = await _tai(client, officer_user_in_db, prof["id"], code)  # khai "photo"
+    h = await _dn(client, admin_user_in_db)
+    giay = {x["code"]: x for x in (await client.get(f"{ADMISSIONS}/{prof['id']}", headers=h)).json()["documents_checklist"]}
+    assert (giay[code]["can_verify"], giay[code]["can_change_format"]) == (True, False)
+    so_dong = len(await _nhat_ky(d.id))
+    r = await _duyet(client, admin_user_in_db, prof["id"], code, d.row_version, fmt="original")
+    assert r.status_code == 409 and r.json()["error_code"] == "FORMAT_LOCKED", r.text
+    sau = await _giay(prof["id"], code)
+    assert (sau.status, sau.verified_format, sau.row_version) == ("uploaded", None, d.row_version)
+    assert len(await _nhat_ky(d.id)) == so_dong
+    r = await _duyet(client, admin_user_in_db, prof["id"], code, d.row_version, fmt="photo")
+    assert r.status_code == 200, r.text
+    assert (await _giay(prof["id"], code)).verified_format == "photo"
+
+
+async def test_giay_scan_chua_khai_hinh_thuc_thi_khong_duyet_le_duoc(
+    client, admin_token_headers, admin_user_in_db, officer_user_in_db, parity_config
+):
+    prof = await _create_profile(client, admin_token_headers, officer_user_in_db, parity_config, "ht_scan_trong")
+    code = parity_config["upload_doc_code"]
+    d = await _tai(client, officer_user_in_db, prof["id"], code)
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            await s.execute(text("UPDATE profile_document SET actual_submission_format = NULL WHERE id = :d"), {"d": d.id})
+    d = await _giay(prof["id"], code)
+    h = await _dn(client, admin_user_in_db)
+    giay = {x["code"]: x for x in (await client.get(f"{ADMISSIONS}/{prof['id']}", headers=h)).json()["documents_checklist"]}
+    assert (giay[code]["can_verify"], giay[code]["verify_block_reason"], giay[code]["can_change_format"]) == (
+        False, "missing_format", False,
+    )
+    r = await _duyet(client, admin_user_in_db, prof["id"], code, d.row_version, fmt="original")
+    assert r.status_code == 409 and r.json()["error_code"] == "MISSING_FORMAT", r.text
+    assert (await _giay(prof["id"], code)).status == "uploaded"
 
 
 # ---------------------------------------------------------------- lịch sử K2 (§4.7)

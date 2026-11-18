@@ -34,6 +34,8 @@ OUTSIDE_CONFIG = "outside_config"
 NOT_PENDING = "not_pending"
 CROSS_NO_RESET = "cross_no_reset"
 NOT_RESETTABLE = "not_resettable"
+#: Nút lẻ chọn hình thức KHÁC hình thức lúc nhận trên giấy có tệp scan (owner 18-11, sau Codex 71 điểm 2).
+FORMAT_LOCKED = "format_locked"
 
 
 def config_facts(applied_rules: Optional[dict], doc_code: str, *, has_file: bool) -> Tuple[bool, bool]:
@@ -78,6 +80,16 @@ class DocFacts:
             receiver_unknown=flag or rid is None,
             actual_submission_format=doc.actual_submission_format,
         )
+
+
+def format_change_allowed(doc: "DocFacts") -> bool:
+    """Nút lẻ được chọn hình thức KHÁC hình thức lúc nhận CHỈ với giấy nộp bản giấy — người duyệt cầm giấy thật (§4.6,
+    quyết định 3A). Giấy có tệp scan: khoá theo hình thức đã khai lúc tải lên; khai sai thì Đặt lại rồi tải lại (owner
+    18-11, sau Codex 71 điểm 2). "Có tệp" = cùng định nghĩa với người gắn với giấy (``DocFacts.has_file``, §4.2).
+
+    MỘT nguồn cho cổng ghi (``transition_document``), :func:`decide` (giấy scan chưa khai hình thức) và cờ máy chủ
+    ``can_change_format`` của phản hồi hồ sơ."""
+    return not doc.has_file
 
 
 @dataclass(frozen=True)
@@ -162,6 +174,12 @@ def decide(
     gate = _receiver_gate(actor_id, doc, via)
     if not gate.allowed:
         return gate
-    if action == ACTION_VERIFY and via in (VIA_BATCH, VIA_CROSS) and not doc.actual_submission_format:
+    # Thiếu hình thức lúc nhận: lô / chéo không duyệt được; nút lẻ chỉ tự chọn được khi giấy là bản giấy (giấy scan khoá
+    # theo hình thức đã khai — :func:`format_change_allowed`).
+    if (
+        action == ACTION_VERIFY
+        and not doc.actual_submission_format
+        and (via in (VIA_BATCH, VIA_CROSS) or not format_change_allowed(doc))
+    ):
         return Decision(False, MISSING_FORMAT)
     return gate

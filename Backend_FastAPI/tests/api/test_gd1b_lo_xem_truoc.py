@@ -22,6 +22,7 @@ from tests.api.test_gd1b_lo_tro_giup import (  # noqa: F401
     lo_routers,
     sql,
     tao_ho_so_cho_xet,
+    xac_nhan,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -253,7 +254,7 @@ async def test_lo_da_chay_khong_bao_gio_bi_don(
     r = await _xem_truoc(client, manager_user_in_db, profile_ids=[p["id"]])
     da_chay = r.json()["batch_id"]
     h = await dn(client, manager_user_in_db)
-    r = await client.post(f"{BULK}/{da_chay}/execute", headers=h, json={"confirmation_text": "Đồng ý"})
+    r = await client.post(f"{BULK}/{da_chay}/execute", headers=h, json=await xac_nhan(da_chay))
     assert r.status_code == 200 and r.json()["status"] == "completed", r.text
     # Lô đã chạy là CŨ NHẤT và đã "hết hạn" theo expires_at — vẫn không được đụng.
     await sql(

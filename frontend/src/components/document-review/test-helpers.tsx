@@ -40,6 +40,7 @@ export function giayGia(over: Record<string, unknown> = {}): Record<string, unkn
     requires_ack: false,
     reset_requires_reason: false,
     reset_keeps_evidence: false,
+    can_change_format: false,
     ...over,
   }
 }

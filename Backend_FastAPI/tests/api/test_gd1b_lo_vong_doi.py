@@ -33,6 +33,7 @@ from tests.api.test_gd1b_lo_tro_giup import (  # noqa: F401
     lo_routers,
     sql,
     tao_ho_so_cho_xet,
+    xac_nhan,
 )
 from app.core.advisory_lock_keys import batch_lock_key
 
@@ -79,7 +80,7 @@ async def test_execute_giu_khoa_chua_commit_processing_thi_tra_starting_va_chot_
     ca, ha = await dang_nhap(manager_user_in_db)
     cb, hb = await dang_nhap(manager_user_in_db)
     try:
-        a = asyncio.create_task(ca.post(f"{BULK}/{ma}/execute", headers=ha, json={"confirmation_text": "x"}))
+        a = asyncio.create_task(ca.post(f"{BULK}/{ma}/execute", headers=ha, json=await xac_nhan(ma)))
         await asyncio.wait_for(diem.toi.wait(), 30)
         rg = await cb.get(f"{BULK}/{ma}", headers=hb)
         rf = await cb.post(f"{BULK}/{ma}/finalize", headers=hb, json={})
@@ -107,7 +108,7 @@ async def test_huy_execute_o_pha_starting_thi_not_started_roi_chay_lai_cung_ma(
     boc(monkeypatch, repo, "lock_batch_row", diem, truoc=True)  # ĐÃ giữ khoá lô, CHƯA khoá dòng / commit ``processing``
     ca, ha = await dang_nhap(manager_user_in_db)
     try:
-        a = asyncio.create_task(ca.post(f"{BULK}/{ma}/execute", headers=ha, json={"confirmation_text": "x"}))
+        a = asyncio.create_task(ca.post(f"{BULK}/{ma}/execute", headers=ha, json=await xac_nhan(ma)))
         await asyncio.wait_for(diem.toi.wait(), 30)
         while not a.done():
             a.cancel()
@@ -119,7 +120,7 @@ async def test_huy_execute_o_pha_starting_thi_not_started_roi_chay_lai_cung_ma(
     h = await dn(client, manager_user_in_db)
     r = await client.get(f"{BULK}/{ma}", headers=h)
     assert r.status_code == 200 and r.json()["status"] == "not_started" and r.json()["can_execute"] is True, r.text
-    r = await client.post(f"{BULK}/{ma}/execute", headers=h, json={"confirmation_text": "chạy lại"})
+    r = await client.post(f"{BULK}/{ma}/execute", headers=h, json=await xac_nhan(ma))
     assert r.status_code == 200 and r.json()["status"] == "completed", r.text
 
 
@@ -139,7 +140,7 @@ async def test_tra_lo_thay_processing_roi_nguoi_chay_xong_va_nha_thi_tra_complet
     ca, ha = await dang_nhap(manager_user_in_db)
     cb, hb = await dang_nhap(manager_user_in_db)
     try:
-        a = asyncio.create_task(ca.post(f"{BULK}/{ma}/execute", headers=ha, json={"confirmation_text": "x"}))
+        a = asyncio.create_task(ca.post(f"{BULK}/{ma}/execute", headers=ha, json=await xac_nhan(ma)))
         await asyncio.wait_for(diem_a.toi.wait(), 30)
         b = asyncio.create_task(cb.get(f"{BULK}/{ma}", headers=hb))
         await asyncio.wait_for(diem_b.toi.wait(), 30)
@@ -194,7 +195,7 @@ async def test_chot_lo_da_xong_tra_finalized_now_false_khong_doi_dong_ket_qua(
     ps = await _ho_so(client, admin_token_headers, officer_user_in_db, lo_config, 1)
     ma = await _xem_truoc(client, manager_user_in_db, [ps[0]["id"]])
     h = await dn(client, manager_user_in_db)
-    assert (await client.post(f"{BULK}/{ma}/execute", headers=h, json={"confirmation_text": "x"})).status_code == 200
+    assert (await client.post(f"{BULK}/{ma}/execute", headers=h, json=await xac_nhan(ma))).status_code == 200
     truoc = _bam(await dong_muc(ma))
     r = await client.post(f"{BULK}/{ma}/finalize", headers=h, json={})
     assert r.status_code == 200 and r.json()["finalized_now"] is False and r.json()["batch"]["status"] == "completed"
@@ -262,10 +263,10 @@ async def test_hai_execute_dong_thoi_dung_mot_chay_mot_409_batch_running(
     ca, ha = await dang_nhap(manager_user_in_db)
     cb, hb = await dang_nhap(manager_user_in_db)
     try:
-        a = asyncio.create_task(ca.post(f"{BULK}/{ma}/execute", headers=ha, json={"confirmation_text": "x"}))
+        a = asyncio.create_task(ca.post(f"{BULK}/{ma}/execute", headers=ha, json=await xac_nhan(ma)))
         await asyncio.wait_for(diem.toi.wait(), 30)
         t0 = time.monotonic()
-        rb = await cb.post(f"{BULK}/{ma}/execute", headers=hb, json={"confirmation_text": "x"})
+        rb = await cb.post(f"{BULK}/{ma}/execute", headers=hb, json=await xac_nhan(ma))
         tg = time.monotonic() - t0
         diem.di.set()
         ra = await a
@@ -298,7 +299,7 @@ async def test_doi_dong_lo_giua_buoc_0_va_buoc_2_thi_404_preview_gone(
     boc(monkeypatch, repo, "lock_batch_row", diem, truoc=True)  # ĐÃ giữ khoá lô, CHƯA khoá dòng / commit ``processing``
     ca, ha = await dang_nhap(manager_user_in_db)
     try:
-        a = asyncio.create_task(ca.post(f"{BULK}/{ma}/execute", headers=ha, json={"confirmation_text": "x"}))
+        a = asyncio.create_task(ca.post(f"{BULK}/{ma}/execute", headers=ha, json=await xac_nhan(ma)))
         await asyncio.wait_for(diem.toi.wait(), 30)
         if bien == "xoa_dong":
             await sql("DELETE FROM document_bulk_batch WHERE batch_id = :b", b=ma)
@@ -390,7 +391,7 @@ async def test_don_ban_xem_truoc_khong_dung_lo_dang_bi_execute_giu(
     ca, ha = await dang_nhap(manager_user_in_db)
     cb, hb = await dang_nhap(manager_user_in_db)
     try:
-        a = asyncio.create_task(ca.post(f"{BULK}/{x}/execute", headers=ha, json={"confirmation_text": "x"}))
+        a = asyncio.create_task(ca.post(f"{BULK}/{x}/execute", headers=ha, json=await xac_nhan(x)))
         await asyncio.wait_for(diem.toi.wait(), 30)
         rb = await cb.post(f"{BULK}/preview", headers=hb, json={"profile_ids": [ps[0]["id"]]})
         diem.di.set()
@@ -449,7 +450,7 @@ async def test_co_chot_can_ly_do_false_khi_lo_khong_chot_duoc_ke_ca_voi_admin_kh
     chua_chay = await _xem_truoc(client, manager_user_in_db, [ps[0]["id"]])
     da_xong = await _xem_truoc(client, manager_user_in_db, [ps[0]["id"]])
     h = await dn(client, manager_user_in_db)
-    assert (await client.post(f"{BULK}/{da_xong}/execute", headers=h, json={"confirmation_text": "x"})).status_code == 200
+    assert (await client.post(f"{BULK}/{da_xong}/execute", headers=h, json=await xac_nhan(da_xong))).status_code == 200
     h = await dn(client, admin_user_in_db)
     for ma, st in ((chua_chay, "not_started"), (da_xong, "completed")):
         v = (await client.get(f"{BULK}/{ma}", headers=h)).json()

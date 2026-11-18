@@ -210,6 +210,18 @@ async def dong_lo(batch_id) -> Optional[dict]:
         return dict(r) if r else None
 
 
+async def xac_nhan(batch_id) -> dict:
+    """Thân ``execute`` mang ĐÚNG câu xác nhận của lô: câu chuẩn của máy chủ với số mục ĐÃ LƯU (Codex 71 điểm 4 — máy chủ từ
+    chối chuỗi khác bằng 422 ``CONFIRMATION_MISMATCH``). Đếm độc lập bằng SQL thô, không qua repository của lô."""
+    from app.services.document_bulk_verify_service import confirmation_sentence
+
+    async with AsyncSessionLocal() as s:
+        n = (
+            await s.execute(text("SELECT count(*) FROM document_bulk_batch_item WHERE batch_id = :b"), {"b": str(batch_id)})
+        ).scalar_one()
+    return {"confirmation_text": confirmation_sentence(int(n))}
+
+
 async def dong_muc(batch_id) -> List[dict]:
     async with AsyncSessionLocal() as s:
         return [

@@ -32,6 +32,7 @@ from tests.api.test_gd1b_lo_tro_giup import (  # noqa: F401
     lo_routers,
     sql,
     tao_ho_so_cho_xet,
+    xac_nhan,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -50,7 +51,7 @@ async def _xem_truoc(client, user, ids, **them):
 
 async def _chay(client, user, batch_id):
     h = await dn(client, user)
-    return await client.post(f"{BULK}/{batch_id}/execute", headers=h, json={"confirmation_text": "Tôi xác nhận"})
+    return await client.post(f"{BULK}/{batch_id}/execute", headers=h, json=await xac_nhan(batch_id))
 
 
 async def _trang_thai_giay(doc_id: int) -> str:
@@ -164,7 +165,7 @@ async def test_admin_xem_duoc_nhung_khong_chay_lo_cua_nguoi_khac(
     h = await dn(client, admin_user_in_db)
     r = await client.get(f"{BULK}/{ma}", headers=h)
     assert r.status_code == 200 and r.json()["status"] == "not_started" and r.json()["can_execute"] is False, r.text
-    r = await client.post(f"{BULK}/{ma}/execute", headers=h, json={"confirmation_text": "x"})
+    r = await client.post(f"{BULK}/{ma}/execute", headers=h, json=await xac_nhan(ma))
     assert r.status_code == 404, r.text
     assert (await dong_lo(ma))["status"] == "previewed"
 
@@ -194,7 +195,8 @@ async def test_nguoi_khac_goi_lo_dang_chay_404_cung_than_khong_hoi_khoa(
     for e in eng:
         event.listen(e, "before_cursor_execute", _nghe)
     try:
-        a = asyncio.create_task(goi("A", lambda: ca.post(f"{BULK}/{ma}/execute", headers=ha, json={"confirmation_text": "x"})))
+        than_a = await xac_nhan(ma)
+        a = asyncio.create_task(goi("A", lambda: ca.post(f"{BULK}/{ma}/execute", headers=ha, json=than_a)))
         await asyncio.wait_for(diem.toi.wait(), 30)
         ma_la = uuid.uuid4()
         tra = {}
@@ -349,7 +351,7 @@ async def test_kiem_lai_quyen_nguoi_bam_o_tung_ho_so(
     boc(monkeypatch, svc, "_commit_profile", diem)
     ca, ha = await dang_nhap(manager_user_in_db)
     try:
-        a = asyncio.create_task(ca.post(f"{BULK}/{ma}/execute", headers=ha, json={"confirmation_text": "x"}))
+        a = asyncio.create_task(ca.post(f"{BULK}/{ma}/execute", headers=ha, json=await xac_nhan(ma)))
         await asyncio.wait_for(diem.toi.wait(), 30)
         cau = {
             "ha_vai": "UPDATE \"user\" SET role = 'officer' WHERE id = :u",
@@ -439,7 +441,7 @@ async def test_huy_tac_vu_giua_ho_so_2_va_3_khoa_van_nha(
     boc(monkeypatch, svc, "_commit_profile", diem)
     ca, ha = await dang_nhap(manager_user_in_db)
     try:
-        a = asyncio.create_task(ca.post(f"{BULK}/{ma}/execute", headers=ha, json={"confirmation_text": "x"}))
+        a = asyncio.create_task(ca.post(f"{BULK}/{ma}/execute", headers=ha, json=await xac_nhan(ma)))
         await asyncio.wait_for(diem.toi.wait(), 30)
         assert [x for x in await khoa_vung_lo() if x["k"] == batch_lock_key(uuid.UUID(ma))], "đang giữ khoá"
         # Huỷ LẶP LẠI (như phạm vi huỷ của anyio) cho tới khi tác vụ kết thúc.
@@ -478,7 +480,7 @@ async def test_ket_noi_L_bi_cat_giua_lo_khong_ghi_ho_so_tiep_theo(
     boc(monkeypatch, svc, "_commit_profile", diem)
     ca, ha = await dang_nhap(manager_user_in_db)
     try:
-        a = asyncio.create_task(ca.post(f"{BULK}/{ma}/execute", headers=ha, json={"confirmation_text": "x"}))
+        a = asyncio.create_task(ca.post(f"{BULK}/{ma}/execute", headers=ha, json=await xac_nhan(ma)))
         await asyncio.wait_for(diem.toi.wait(), 30)
         async with csdl.engine.connect() as k:
             assert (await k.execute(text("SELECT pg_terminate_backend(:p)"), {"p": giu_tham_chieu[0].pid})).scalar()
@@ -520,3 +522,32 @@ async def test_su_kien_bulk_verify_finished_toi_nguoi_tao_sau_commit_cuoi(
     r = await _chay(client, manager_user_in_db, ma)
     assert r.status_code == 200, r.text
     assert phat == [({"batch_id": ma}, f"user_room_{manager_user_in_db['id']}", "completed")]
+
+
+# ---------------------------------------------------------------------------------------------------- câu xác nhận (Codex 71 điểm 4)
+@pytest.mark.parametrize("sai", ["lech_mot_giay", "chuoi_tuy_y"])
+async def test_cau_xac_nhan_khong_dung_cau_chuan_cua_lo_thi_422_khong_chay_khong_luu(
+    client, admin_token_headers, manager_user_in_db, officer_user_in_db, lo_config, lo_routers, sai
+):
+    """Máy chủ chỉ nhận ĐÚNG câu chuẩn với số mục ĐÃ LƯU của lô; câu khác (kể cả chỉ lệch số giấy) ⇒ 422
+    ``CONFIRMATION_MISMATCH`` kèm số giấy, lô vẫn ``previewed``, không ghi giấy nào, không lưu câu. Câu đúng ⇒ chạy."""
+    from app.services.document_bulk_verify_service import confirmation_sentence
+
+    ps = await _ho_so(client, admin_token_headers, officer_user_in_db, lo_config, 2)
+    ma = await _xem_truoc(client, manager_user_in_db, [p["id"] for p in ps])
+    dung = await xac_nhan(ma)
+    assert dung["confirmation_text"] == confirmation_sentence(4)  # 2 hồ sơ × 2 giấy bản giấy đã nhận
+    cau = confirmation_sentence(5) if sai == "lech_mot_giay" else "Tôi xác nhận"
+    h = await dn(client, manager_user_in_db)
+    r = await client.post(f"{BULK}/{ma}/execute", headers=h, json={"confirmation_text": cau})
+    assert r.status_code == 422 and r.json()["error_code"] == "CONFIRMATION_MISMATCH", r.text
+    assert r.json()["documents"] == 4, r.text
+    lo = await dong_lo(ma)
+    assert (lo["status"], lo["started_at"], lo["confirmation_text"]) == ("previewed", None, None)
+    assert {m["result"] for m in await dong_muc(ma)} == {None}
+    for p in ps:
+        for k in "AB":
+            assert (await giay(p["id"], lo_config["codes"][k])).status == "paper_submitted"
+    r = await client.post(f"{BULK}/{ma}/execute", headers=h, json=dung)
+    assert r.status_code == 200 and r.json()["status"] == "completed", r.text
+    assert (await dong_lo(ma))["confirmation_text"] == dung["confirmation_text"]

@@ -1573,7 +1573,7 @@ describe("DocumentsTab — GĐ1b nút lẻ theo cờ máy chủ", () => {
       }),
     );
     const user = userEvent.setup();
-    render(<DocumentsTab profile={buildProfile([giayDuyet({ can_verify: true })]) as never} isEditable />);
+    render(<DocumentsTab profile={buildProfile([giayDuyet({ can_verify: true, can_change_format: true })]) as never} isEditable />);
     await user.click(within(screen.getByRole("table")).getByRole("button", { name: "Duyệt giấy Học bạ" }));
     const hop = await screen.findByRole("dialog");
     expect(within(hop).getByLabelText("Bản sao chứng thực")).toBeChecked();
@@ -1586,7 +1586,7 @@ describe("DocumentsTab — GĐ1b nút lẻ theo cờ máy chủ", () => {
     const user = userEvent.setup();
     render(
       <DocumentsTab
-        profile={buildProfile([giayDuyet({ can_verify: true, actual_submission_format: null })]) as never}
+        profile={buildProfile([giayDuyet({ can_verify: true, can_change_format: true, actual_submission_format: null })]) as never}
         isEditable
       />,
     );

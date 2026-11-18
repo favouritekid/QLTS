@@ -13,6 +13,7 @@ import hashlib
 import itertools
 import os
 import secrets
+import shutil
 import sys
 from pathlib import Path
 
@@ -395,6 +396,101 @@ async def test_ha_cap_con_du_lieu_thi_dung_khong_xoa_gi(csdl_truoc):
         assert await _casbin_gd1b(k) == (0, set())
     finally:
         await k.close()
+
+
+async def _giay_da_duyet(k, profile_id, file_path, nguoi_tai, nguoi_duyet):
+    """Giấy thường đã duyệt, đủ nhật ký ``uploaded`` + ``verified`` ⇒ nếu không có guard đường dẫn thì migration CHẠY XONG."""
+    d = await _giay(k, profile_id, file_path=file_path, status="verified")
+    await _nhat_ky(k, d, "uploaded", nguoi_tai, new_file_path=file_path, giay_truoc=30)
+    await _nhat_ky(k, d, "verified", nguoi_duyet, giay_truoc=5)
+    return d
+
+
+@pytest.mark.parametrize("ca", ["tuyet_doi_ngoai", "cham_cham_sang_ho_so_khac", "symlink_ra_ngoai", "qua_tran"])
+async def test_tep_bang_chung_ngoai_thu_muc_ho_so_hoac_qua_tran_thi_dung_truoc_khi_ghi(csdl_truoc, tmp_path, ca):
+    """Codex 71 — migration chỉ MỞ tệp đã resolve nằm trong ``uploads/admissions/{profile_id}`` và ≤ trần tải lên.
+    Ngoài thư mục (tuyệt đối, ``..``, symlink thoát ra) / vượt trần ⇒ dừng TRƯỚC câu ``DO``: phiên bản giữ nguyên, không
+    bảng GĐ1b nào. Mỗi ca chỉ vi phạm MỘT điều: giấy đủ nhật ký, tệp có thật ⇒ bỏ guard thì nâng cấp xanh."""
+    ten = csdl_truoc
+    m = _migration()
+    pid, pid_khac = 990004, 990005
+    thu_muc = GOC / "uploads" / "admissions" / str(pid)
+    thu_muc_khac = GOC / "uploads" / "admissions" / str(pid_khac)
+    ngoai = tmp_path / "ngoai.pdf"
+    ngoai.write_bytes(b"tep-ngoai-thu-muc-ho-so")
+    thu_muc.mkdir(parents=True, exist_ok=True)
+    thu_muc_khac.mkdir(parents=True, exist_ok=True)
+    if ca == "tuyet_doi_ngoai":
+        duong = str(ngoai)
+    elif ca == "cham_cham_sang_ho_so_khac":
+        (thu_muc_khac / "x.pdf").write_bytes(b"tep-cua-ho-so-khac")
+        duong = "uploads/admissions/%d/../%d/x.pdf" % (pid, pid_khac)
+    elif ca == "symlink_ra_ngoai":
+        (thu_muc / "lien-ket.pdf").symlink_to(ngoai)
+        duong = "uploads/admissions/%d/lien-ket.pdf" % pid
+    else:
+        with open(thu_muc / "lon.pdf", "wb") as f:
+            f.truncate(m.EVIDENCE_MAX_BYTES + 1)  # tệp thưa: kích thước thật trên hệ tệp, không tốn ổ
+        duong = "uploads/admissions/%d/lon.pdf" % pid
+    k = await asyncpg.connect(_url(ten, "postgresql"))
+    try:
+        await k.execute("SET session_replication_role = replica")
+        a = await _user(k, "gd1b_mig_dd_a")
+        b = await _user(k, "gd1b_mig_dd_b")
+        d = await _giay_da_duyet(k, pid, duong, a, b)
+        await k.execute("SET session_replication_role = origin")
+        rc, out = await _alembic(ten, "upgrade", SAU)
+        assert rc != 0, out[-3000:]
+        assert "EvidenceFileRejected" in out, out[-3000:]
+        if ca == "qua_tran":
+            assert "0 giấy đã duyệt có đường dẫn tệp ngoài" in out and "1 tệp vượt trần" in out, out[-3000:]
+        else:
+            assert "1 giấy đã duyệt có đường dẫn tệp ngoài" in out and "0 tệp vượt trần" in out, out[-3000:]
+        assert "id [%d]" % d in out, out[-3000:]
+        assert str(ngoai) not in out  # chỉ in mã dòng giấy, không in đường dẫn
+        assert await _phien_ban(k) == TRUOC
+        for bang in BANG_MOI:
+            assert await k.fetchval("SELECT to_regclass($1)", bang) is None, bang
+    finally:
+        await k.close()
+        shutil.rmtree(thu_muc, ignore_errors=True)
+        shutil.rmtree(thu_muc_khac, ignore_errors=True)
+
+
+async def test_symlink_trong_thu_muc_ho_so_va_tep_dung_tran_van_bam_dung(csdl_truoc):
+    """Đối chứng của ca trên: symlink trỏ tới tệp CÙNG thư mục hồ sơ và tệp đúng bằng trần ⇒ vẫn nâng cấp, sha256 đúng
+    nội dung đích (guard không chặn quá tay; biên trần là ``>`` chứ không ``>=``)."""
+    ten = csdl_truoc
+    m = _migration()
+    pid = 990006
+    thu_muc = GOC / "uploads" / "admissions" / str(pid)
+    thu_muc.mkdir(parents=True, exist_ok=True)
+    noi_dung = b"gd1b-dich-symlink-" + secrets.token_bytes(8)
+    (thu_muc / "goc.pdf").write_bytes(noi_dung)
+    (thu_muc / "lien-ket.pdf").symlink_to(thu_muc / "goc.pdf")
+    with open(thu_muc / "dung-tran.pdf", "wb") as f:
+        f.truncate(m.EVIDENCE_MAX_BYTES)
+    k = await asyncpg.connect(_url(ten, "postgresql"))
+    try:
+        await k.execute("SET session_replication_role = replica")
+        a = await _user(k, "gd1b_mig_dc_a")
+        b = await _user(k, "gd1b_mig_dc_b")
+        d1 = await _giay_da_duyet(k, pid, "uploads/admissions/%d/lien-ket.pdf" % pid, a, b)
+        d2 = await _giay_da_duyet(k, pid, "uploads/admissions/%d/dung-tran.pdf" % pid, a, b)
+        await k.execute("SET session_replication_role = origin")
+        rc, out = await _alembic(ten, "upgrade", SAU)
+        assert rc == 0, out[-3000:]
+        bc = {
+            r["profile_document_id"]: (r["sha256"], r["file_missing"])
+            for r in await k.fetch("SELECT profile_document_id, sha256, file_missing FROM document_evidence_file")
+        }
+        assert bc == {
+            d1: (hashlib.sha256(noi_dung).hexdigest(), False),
+            d2: (hashlib.sha256(b"\0" * m.EVIDENCE_MAX_BYTES).hexdigest(), False),
+        }
+    finally:
+        await k.close()
+        shutil.rmtree(thu_muc, ignore_errors=True)
 
 
 async def test_buoc_casbin_hong_thi_ca_nang_cap_rollback_khong_do_dang(csdl_truoc):

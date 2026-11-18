@@ -20,8 +20,9 @@ MỘT câu ``DO`` làm TẤT CẢ (``env.py`` chạy ``AUTOCOMMIT`` ⇒ chỉ m�
 5. đếm trước / sau, lệch ⇒ ``RAISE``; rồi mới thêm I1, I2 (kiểm toàn bảng);
 6. điền ngược ``document_download_log`` từ mọi dòng ``downloaded`` có actor (đếm, lệch ⇒ ``RAISE``);
 7. điền ngược ``document_evidence_file`` cho giấy thường ``verified`` có tệp — sha256 / tệp mất tính bằng Python TRƯỚC câu
-   ``DO`` (đọc đĩa, chỉ đọc), truyền vào như một hằng JSON; trong câu ``DO`` đối chiếu lại đúng tập giấy + đường dẫn, lệch ⇒
-   ``RAISE``. Giấy ``verified`` có tệp mà KHÔNG có bản ghi nhật ký ``verified`` ⇒ ``RAISE`` (không bịa nhật ký; ghi chú
+   ``DO`` (đọc đĩa, chỉ đọc, CHỈ tệp đã resolve nằm trong ``uploads/admissions/{profile_id}`` và ≤ trần tải lên — ngoài
+   thư mục / vượt trần ⇒ ``EvidenceFileRejected`` trước khi ghi gì), truyền vào như một hằng JSON; trong câu ``DO`` đối
+   chiếu lại đúng tập giấy + đường dẫn, lệch ⇒ ``RAISE``. Giấy ``verified`` có tệp mà KHÔNG có bản ghi nhật ký ``verified`` ⇒ ``RAISE`` (không bịa nhật ký; ghi chú
    ở ``gd1b/KE-HOACH-VIET-MA-GD1B-2026-11-17.md`` — đo trên production trước khi xin GO deploy);
 9. ``user_activity_log.target_user_id`` ⇒ ``ON DELETE SET NULL`` (K4: tài khoản BỊ thao tác không phải "đã từng thao
    tác"; trước đây ORM tự gán NULL qua ``User.activities_received``) — ``app/services/user_deletion_policy.py``;
@@ -254,28 +255,82 @@ def _sqlstate(e: DBAPIError) -> str:
     return ""
 
 
-def _sha256_of(path: Path) -> str:
+#: Trần đọc khi băm tệp bằng chứng = trần tải lên của ``admission_service.upload_document`` (``MAX_FILE_SIZE``, biến cục
+#: bộ) = ``document_evidence_service.EVIDENCE_MAX_BYTES``. Chép CỨNG (migration không nhập mã ứng dụng);
+#: ``tests/unit/test_gd1b_migration_duong_dan_bang_chung.py`` khoá bằng nhau.
+EVIDENCE_MAX_BYTES = 10 * 1024 * 1024
+
+
+class EvidenceFileRejected(RuntimeError):
+    """Có giấy đã duyệt mà đường dẫn tệp KHÔNG nằm trong ``uploads/admissions/{profile_id}`` (sau khi resolve — kể cả
+    ``..`` và symlink thoát ra ngoài) hoặc tệp vượt trần — dừng TRƯỚC mọi lệnh ghi; xử lý tay rồi chạy lại (Codex 71)."""
+
+
+def _evidence_target(profile_id: int, file_path: str) -> "Path | None":
+    """Đường dẫn ĐÃ resolve (theo symlink) nếu nằm trong ``APP_ROOT/uploads/admissions/{profile_id}``, ngược lại ``None``.
+
+    Cùng phép kiểm với ``admission_service._resolve_under`` (``Path.resolve`` + ``os.path.commonpath``), gốc là
+    ``APP_ROOT`` thay cho thư mục làm việc — ``tests/unit/test_gd1b_migration_duong_dan_bang_chung.py`` khoá hai bên
+    cho cùng kết quả."""
+    base = (APP_ROOT / "uploads" / "admissions" / str(int(profile_id))).resolve(strict=False)
+    p = Path(file_path)
+    if not p.is_absolute():
+        p = APP_ROOT / p
+    target = p.resolve(strict=False)
+    try:
+        if os.path.commonpath([str(base), str(target)]) != str(base):
+            return None
+    except ValueError:  # khác ổ đĩa / rỗng ⇒ không an toàn
+        return None
+    return target
+
+
+def _sha256_capped(path: Path) -> "str | None":
+    """sha256 của tệp, đọc theo khối 1 MiB; vượt ``EVIDENCE_MAX_BYTES`` ⇒ ``None`` (dừng đọc ngay, không băm tiếp)."""
     h = hashlib.sha256()
+    n = 0
     with open(path, "rb") as f:
         for chunk in iter(lambda: f.read(1 << 20), b""):
+            n += len(chunk)
+            if n > EVIDENCE_MAX_BYTES:
+                return None
             h.update(chunk)
     return h.hexdigest()
 
 
 def _evidence_payload(bind) -> str:
-    """Đọc tập giấy ứng viên + tính sha256 trên đĩa (CHỈ ĐỌC). Trả hằng JSON để nhúng vào câu ``DO``."""
+    """Đọc tập giấy ứng viên + tính sha256 trên đĩa (CHỈ ĐỌC). Trả hằng JSON để nhúng vào câu ``DO``.
+
+    Chỉ mở tệp đã resolve NẰM TRONG thư mục của chính hồ sơ; đường dẫn ra ngoài (tuyệt đối, ``..``, symlink) hoặc tệp
+    vượt trần (đo kích thước TRƯỚC khi mở; lớp hai: đọc có chặn trên) ⇒ ``EvidenceFileRejected`` TRƯỚC câu ``DO`` ⇒ chưa
+    ghi gì, phiên bản giữ nguyên. Chỉ in mã dòng giấy (không in đường dẫn)."""
     rows = bind.execute(
-        text("SELECT d.id, d.file_path FROM profile_document d WHERE " + EVIDENCE_CANDIDATES_WHERE + " ORDER BY d.id")
+        text(
+            "SELECT d.id, d.profile_id, d.file_path FROM profile_document d WHERE "
+            + EVIDENCE_CANDIDATES_WHERE
+            + " ORDER BY d.id"
+        )
     ).all()
-    payload = []
-    for doc_id, file_path in rows:
-        p = Path(file_path)
-        if not p.is_absolute():
-            p = APP_ROOT / p
-        if p.is_file():
-            payload.append({"doc_id": int(doc_id), "path": file_path, "sha": _sha256_of(p), "missing": False})
-        else:
+    payload, ngoai, qua_tran = [], [], []
+    for doc_id, profile_id, file_path in rows:
+        target = _evidence_target(profile_id, file_path)
+        if target is None:
+            ngoai.append(int(doc_id))
+            continue
+        if not target.is_file():
             payload.append({"doc_id": int(doc_id), "path": file_path, "sha": None, "missing": True})
+            continue
+        sha = None if target.stat().st_size > EVIDENCE_MAX_BYTES else _sha256_capped(target)
+        if sha is None:
+            qua_tran.append(int(doc_id))
+            continue
+        payload.append({"doc_id": int(doc_id), "path": file_path, "sha": sha, "missing": False})
+    if ngoai or qua_tran:
+        raise EvidenceFileRejected(
+            "gd1b20261117 dừng TRƯỚC khi ghi: %d giấy đã duyệt có đường dẫn tệp ngoài thư mục hồ sơ (id %s); "
+            "%d tệp vượt trần %d byte (id %s) — xử lý tay rồi chạy lại"
+            % (len(ngoai), ngoai[:20], len(qua_tran), EVIDENCE_MAX_BYTES, qua_tran[:20])
+        )
     raw = json.dumps(payload, ensure_ascii=False)
     if _EVIDENCE_TAG in raw or "$$" in raw:
         raise RuntimeError("gd1b20261117: đường dẫn tệp chứa thẻ dollar-quote — dừng, cần xử lý tay")

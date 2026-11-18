@@ -107,7 +107,8 @@ async def _duyet(client, user, pid, code) -> models.ProfileDocument:
     h = await _dn(client, user)
     r = await client.patch(
         f"{ADMISSIONS}/{pid}/documents/{code}/verify-format", headers=h,
-        json={"format": "original", "expected_row_version": d.row_version},
+        # Giấy scan duyệt ĐÚNG hình thức đã khai lúc tải lên (owner 18-11, Codex 71 điểm 2).
+        json={"format": d.actual_submission_format, "expected_row_version": d.row_version},
     )
     assert r.status_code == 200, r.text
     return await _giay(pid, code)

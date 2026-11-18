@@ -52,8 +52,20 @@ export const gd1bDocumentSchema = z
   requires_ack: z.boolean(),
   reset_requires_reason: z.boolean(),
   reset_keeps_evidence: z.boolean(),
+  /**
+   * Owner 18-11 (Codex 71 điểm 2): hộp Duyệt được chọn hình thức KHÁC hình thức lúc nhận — chỉ giấy bản giấy. Giấy scan
+   * khoá theo hình thức đã khai. Thiếu khoá ⇒ coi là `false` (khoá — fail-closed).
+   */
+  can_change_format: z.boolean().optional(),
   })
   .superRefine((d, ctx) => {
+    if (d.can_change_format === true && !d.can_verify) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["can_change_format"],
+        message: "can_change_format bật mà can_verify tắt",
+      })
+    }
     if ((d.document_row_id === null) !== (d.row_version === null)) {
       ctx.addIssue({
         code: "custom",

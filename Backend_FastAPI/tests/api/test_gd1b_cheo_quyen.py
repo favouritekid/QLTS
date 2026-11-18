@@ -29,6 +29,7 @@ from tests.api.test_gd1b_lo_tro_giup import (  # noqa: F401
     lo_routers,
     sql,
     tao_ho_so_cho_xet,
+    xac_nhan,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -243,7 +244,7 @@ async def test_lo_cheo_xem_truoc_va_chay_ghi_via_cross_va_grant_id(
     ma = r.json()["batch_id"]
     lo = await dong_lo(ma)
     assert lo["review_mode"] == "cross" and lo["grant_id"] == g2
-    r = await client.post(f"{CROSS}/bulk-verify/{ma}/execute", headers=h, json={"confirmation_text": "x"})
+    r = await client.post(f"{CROSS}/bulk-verify/{ma}/execute", headers=h, json=await xac_nhan(ma))
     assert r.status_code == 200 and r.json()["status"] == "completed", r.text
     async with AsyncSessionLocal() as s:
         ex = (
@@ -271,7 +272,7 @@ async def test_lo_cheo_quyen_mat_giua_lo_thi_dung_o_ho_so_ke_tiep(
     boc(monkeypatch, svc, "_commit_profile", diem)
     ca, ha = await dang_nhap(can_bo_cheo)
     try:
-        a = asyncio.create_task(ca.post(f"{CROSS}/bulk-verify/{ma}/execute", headers=ha, json={"confirmation_text": "x"}))
+        a = asyncio.create_task(ca.post(f"{CROSS}/bulk-verify/{ma}/execute", headers=ha, json=await xac_nhan(ma)))
         await asyncio.wait_for(diem.toi.wait(), 30)
         if bien == "thu_hoi":
             await sql(
