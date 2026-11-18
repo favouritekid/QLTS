@@ -17,6 +17,8 @@ on:
       # không bao giờ được kiểm chứng sau khi merge.
       - '.github/workflows/dependency-audit.yml'
       - '.github/scripts/**'
+      # Ngoại lệ có hạn của cổng production (Codex 74): sửa / gia hạn / gỡ ngoại lệ phải có lượt chạy trên main.
+      - '.github/audit-ngoai-le.json'
   pull_request:
     branches: [main]
     # `edited` ở ĐÂY, không ở `backend-test.yml`.
@@ -270,7 +272,8 @@ jobs:
       # tệp này. Kiểm bằng API: `gh api repos/<owner>/<repo>/rulesets/<id>`.
       - name: Self-test counting logic
         working-directory: ${{ github.workspace }}
-        run: node --test .github/scripts/audit-dev-delta.test.js
+        # audit-gate-count.test.js (18-11-2026): khoá ngoại lệ HẸP, CÓ HẠN của cổng — ở ĐÂY (job required) vì cùng lý do trên.
+        run: node --test .github/scripts/audit-dev-delta.test.js .github/scripts/audit-gate-count.test.js
 
       - name: Install dependencies
         run: npm ci
@@ -309,7 +312,20 @@ jobs:
           # `metadata` (vd {"error":{"code":"ENETUNREACH",...}}); và ngay cả
           # khi có `metadata.vulnerabilities` thì nó vẫn có thể là `{}` rỗng.
           # Cả hai ca đều phải NỔ, không được hoá thành 0 rồi báo xanh.
-          VULNS=$(node ../.github/scripts/audit-gate-count.js audit-results.json)
+          #
+          # Ngoại lệ HẸP, CÓ HẠN (owner 18-11-2026, phương án B sau Codex 73): `.github/audit-ngoai-le.json`, logic
+          # `.github/scripts/audit-ngoai-le.js`, test `audit-gate-count.test.js`. Chỉ miễn ĐÚNG GHSA trên ĐÚNG gói / đường
+          # cài đã đo, khi điều kiện còn đúng và chưa qua hạn — ngược lại gói lại bị tính ⇒ ĐỎ. Chi tiết ra stderr; có gói
+          # được miễn ⇒ `::warning::` để MỌI lượt đều thấy ngoại lệ đang dùng.
+          if ! VULNS=$(node ../.github/scripts/audit-gate-count.js audit-results.json \
+                --ngoai-le ../.github/audit-ngoai-le.json --goc .. 2> audit-ngoai-le.log); then
+            cat audit-ngoai-le.log >&2
+            exit 1
+          fi
+          cat audit-ngoai-le.log >&2
+          if grep -q "miễn (" audit-ngoai-le.log; then
+            echo "::warning title=Ngoại lệ audit có hạn::$(grep -m1 'miễn (' audit-ngoai-le.log)"
+          fi
 
           echo "high_count=$VULNS" >> "$GITHUB_OUTPUT"
           echo "📊 Found $VULNS high/critical vulnerability(ies) in production dependencies"
