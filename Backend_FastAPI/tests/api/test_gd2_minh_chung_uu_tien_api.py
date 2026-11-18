@@ -132,7 +132,8 @@ async def _dong_giay(pid):
 async def _vet_moi_nhat(pid):
     return (
         await _sql(
-            "SELECT action_type, actor_id, new_value, audit_metadata FROM priority_audit_log WHERE profile_id = :p "
+            # Cột CSDL tên ``metadata`` (thuộc tính ORM ``audit_metadata``).
+            'SELECT action_type, actor_id, new_value, "metadata" FROM priority_audit_log WHERE profile_id = :p '
             "ORDER BY id DESC LIMIT 1",
             p=pid,
         )
