@@ -17,7 +17,7 @@ import pytest
 from sqlalchemy import text
 
 from app.database import AsyncSessionLocal
-from tests.api.test_gd1b_lo_tro_giup import (  # noqa: F401
+from tests.api.gd1b_lo_tro_giup import (  # noqa: F401
     BULK,
     Diem,
     PidTheoNhan,

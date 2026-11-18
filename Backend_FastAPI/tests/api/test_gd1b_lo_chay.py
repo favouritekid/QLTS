@@ -15,7 +15,7 @@ import app.database as csdl
 from app import models
 from app.core.advisory_lock_keys import batch_lock_key
 from app.database import AsyncSessionLocal
-from tests.api.test_gd1b_lo_tro_giup import (  # noqa: F401
+from tests.api.gd1b_lo_tro_giup import (  # noqa: F401
     BULK,
     Diem,
     PidTheoNhan,
@@ -186,7 +186,7 @@ async def test_nguoi_khac_goi_lo_dang_chay_404_cung_than_khong_hoi_khoa(
     cau_khoa = []
 
     def _nghe(conn, cursor, statement, parameters, context, executemany):
-        from tests.api.test_gd1b_lo_tro_giup import NHAN
+        from tests.api.gd1b_lo_tro_giup import NHAN
 
         if NHAN.get() == "B" and ("advisory" in statement or "pg_locks" in statement):
             cau_khoa.append(statement)

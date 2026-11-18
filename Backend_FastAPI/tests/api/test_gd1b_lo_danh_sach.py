@@ -10,7 +10,7 @@ import pytest
 from sqlalchemy import text
 
 from app.database import AsyncSessionLocal
-from tests.api.test_gd1b_lo_tro_giup import BULK, dn, lo_routers  # noqa: F401
+from tests.api.gd1b_lo_tro_giup import BULK, dn, lo_routers  # noqa: F401
 
 pytestmark = pytest.mark.asyncio
 

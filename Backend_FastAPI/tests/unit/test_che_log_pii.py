@@ -1286,6 +1286,9 @@ _S6_HAM_BOC = {
     # ``council_decision_repository.db_error_codes``; khoá bằng
     # ``test_council_decision_models.py::test_ma_loi_csdl_chi_doc_thuoc_tinh_khong_doc_chu``.
     "db_error_codes",
+    # GĐ1b (18-11, CI PR #729): ``document_bulk_repository.is_busy_error`` trả ĐÚNG / SAI từ SQLSTATE qua
+    # ``db_error_codes`` — không mang chữ lỗi đi đâu; khoá bằng ``test_is_busy_error_chi_doc_sqlstate`` dưới đây.
+    "is_busy_error",
 }
 #: Hàm chuyển đổi — tự nó không phải lối ra; kết quả đi đâu thì lối ra ở đó.
 _S6_TRUNG_TINH = {"str", "repr", "len", "getattr", "format"}
@@ -1460,6 +1463,40 @@ def test_v5_khong_dua_chu_loi_csdl_ra_ngoai_log():
         "lối ra chữ ngoại lệ CHƯA rà (bọc bằng chu_loi_an_toan, hoặc thêm vào _S6_MIEN kèm lý do "
         "nếu chắc chắn không mang lỗi CSDL): %s\nmiễn trừ không còn khớp: %s\n"
         "miễn trừ phủ khối try CÓ thao tác CSDL (phải bọc, không được miễn): %s" % (moi, cu, mien_sai))
+
+
+def test_is_busy_error_chi_doc_sqlstate():
+    """``is_busy_error`` đứng trong ``_S6_HAM_BOC`` ⇒ CHỈ được trả ĐÚNG / SAI từ SQLSTATE (qua ``db_error_codes``), không
+    đọc / trả chữ lỗi (chữ lỗi CSDL có thể mang tham số câu lệnh — CCCD giả ở đây)."""
+    import ast
+    import inspect
+    import textwrap
+
+    from app.repositories import document_bulk_repository as repo
+
+    cay = ast.parse(textwrap.dedent(inspect.getsource(repo.is_busy_error)))
+    goi = {n.func.id if isinstance(n.func, ast.Name) else getattr(n.func, "attr", "?")
+           for n in ast.walk(cay) if isinstance(n, ast.Call)}
+    assert goi == {"db_error_codes"}, goi
+    tra = [n for n in ast.walk(cay) if isinstance(n, ast.Return)]
+    assert len(tra) == 1 and isinstance(tra[0].value, ast.Compare), "phải trả đúng một phép so (bool)"
+
+    class Goc(Exception):
+        sqlstate = sorted(repo.BUSY_SQLSTATES)[0]
+
+        def __str__(self):
+            return "DETAIL: Key (citizen_id)=(099999000E99) CANARY"
+
+    class Boc(Exception):
+        def __init__(self, goc):
+            super().__init__("CANARY 099999000E99 boc")
+            self.orig = goc
+
+    class Khac(Goc):
+        sqlstate = "23505"
+
+    assert repo.is_busy_error(Boc(Goc())) is True
+    assert repo.is_busy_error(Boc(Khac())) is False
 
 
 

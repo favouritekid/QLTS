@@ -34,8 +34,16 @@ STATEMENTS = (SQL_FN_ROW_VERSION, SQL_TRIGGER_ROW_VERSION)
 
 
 def _register():
+    """Gắn vào ``after_create`` của METADATA — nổ ở MỌI lần ``create_all()`` (kể cả khi bảng đã có). ``CREATE TRIGGER`` lần
+    hai ⇒ ``DuplicateObjectError`` (CI PR #729: ``test_create_all_HAI_LAN_lien_tiep_deu_thanh_cong``) ⇒ đổi thành
+    ``CREATE OR REPLACE TRIGGER`` bằng ĐÚNG helper của ``duplicate_guard_ddl`` (một nguồn). ``STATEMENTS`` giữ nguyên văn
+    để khớp migration (migration chạy một lần trên CSDL chưa có trigger)."""
+    from app.models.finance.duplicate_guard_ddl import _lam_chay_lai_duoc
+
     for statement in STATEMENTS:
-        event.listen(Base.metadata, "after_create", DDL(statement).execute_if(dialect="postgresql"))
+        event.listen(
+            Base.metadata, "after_create", DDL(_lam_chay_lai_duoc(statement)).execute_if(dialect="postgresql")
+        )
 
 
 _register()

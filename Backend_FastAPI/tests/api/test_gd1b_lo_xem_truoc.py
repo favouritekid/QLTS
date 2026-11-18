@@ -13,7 +13,7 @@ import app.database as csdl
 from app import models
 from app.core.advisory_lock_keys import BULK_VERIFY_BATCH_NS, batch_lock_key
 from app.database import AsyncSessionLocal
-from tests.api.test_gd1b_lo_tro_giup import (  # noqa: F401
+from tests.api.gd1b_lo_tro_giup import (  # noqa: F401
     BULK,
     dn,
     dong_lo,

@@ -12,7 +12,7 @@ from starlette.routing import Match
 
 import app.database as csdl
 from app.core import advisory_lock_keys as keys
-from tests.api.test_gd1b_lo_tro_giup import khoa_vung_lo, lo_routers  # noqa: F401
+from tests.api.gd1b_lo_tro_giup import khoa_vung_lo, lo_routers  # noqa: F401
 
 pytestmark = pytest.mark.asyncio
 
