@@ -33,6 +33,7 @@ from app.core.deps import (
     get_choice_for_user,
     get_current_active_user,
     require_admin,
+    require_priority_evidence_reviewer,
 )
 from app.services import admission_choice_engine_service as choice_engine
 from app.services.admission_choice_service import AdmissionChoiceService
@@ -1131,7 +1132,8 @@ async def verify_priority_object_evidence(
     sub_code: str,
     payload: schemas.VerifyObjectEvidenceRequest = Body(...),
     db: AsyncSession = Depends(database.get_db),
-    profile: models.AdmissionProfile = Depends(get_admission_for_user),
+    # GĐ2-0 (C1b): phạm vi (404) + chỉ Quản lý trong đơn vị / Admin (403) — ``deps.require_priority_evidence_reviewer``.
+    profile: models.AdmissionProfile = Depends(require_priority_evidence_reviewer),
     current_user: models.User = CasbinAuth,
 ):
     """Officer marks ``priority_object_evidence[sub_code]`` as verified.
@@ -1188,7 +1190,8 @@ async def reject_priority_object_evidence(
     sub_code: str,
     payload: schemas.RejectObjectEvidenceRequest = Body(...),
     db: AsyncSession = Depends(database.get_db),
-    profile: models.AdmissionProfile = Depends(get_admission_for_user),
+    # GĐ2-0 (C1b): cùng cổng với duyệt — ``deps.require_priority_evidence_reviewer``.
+    profile: models.AdmissionProfile = Depends(require_priority_evidence_reviewer),
     current_user: models.User = CasbinAuth,
 ):
     """Officer marks ``priority_object_evidence[sub_code]`` as rejected.

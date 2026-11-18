@@ -2437,6 +2437,10 @@ def _compute_frontend_fields(
         is_manager=is_manager, is_admin=is_admin,
         outstanding_debt_codes=_outstanding_debt_codes,
     )
+    # GĐ2-0 (C1b): vị từ người duyệt minh chứng ưu tiên — MỘT nguồn với ``deps.require_priority_evidence_reviewer``.
+    from .admission_document_policy import DocumentActionPolicy
+    from .document_review_rules import priority_evidence_reviewer as _priority_evidence_reviewer
+
     permissions = {
         "edit": status in ["draft", "rejected", "revision_requested"] and (is_owner or is_manager or is_admin),
         "save": status in ["draft", "rejected", "revision_requested"] and (is_owner or is_manager or is_admin),
@@ -2548,15 +2552,15 @@ def _compute_frontend_fields(
         # Hồ sơ đã công bố ⇒ hộp thoại phải có ô xác nhận (service đòi
         # ``acknowledge_post_publish``). Server nói, FE không tự suy trạng thái.
         "change_applicable_circular_requires_ack": _doi_thong_tu_can_xac_nhan(status),
-        # Q9 #07 Phase E.3 — UT evidence verify/reject (officer write-path).
-        # Used by FE UtEvidenceTab (Step 8 officer-only). Service-layer
+        # Q9 #07 Phase E.3 — UT evidence verify/reject. Service-layer
         # (priority_override_service._evidence_mutation_common_checks) refuses
-        # draft/withdrawn/dropped. Officer scope: assigned to profile;
-        # manager/admin via diamond/wildcard.
-        "verify_priority_object": (
-            is_admin
-            or is_manager
-            or (is_officer and is_owner)
+        # draft/withdrawn/dropped.
+        # GĐ2-0 (C1b, owner 17-11): người duyệt = Admin + Quản lý TRONG ĐƠN VỊ của hồ sơ — CÙNG vị từ với cổng route
+        # ``deps.require_priority_evidence_reviewer`` (``document_review_rules.priority_evidence_reviewer``). Cán bộ
+        # (kể cả cán bộ phụ trách) không còn nút. Luật "người tải không tự duyệt" (C1a) là theo từng mã diện — máy chủ
+        # trả 409 nêu lý do (cờ theo từng mã thuộc giao diện GĐ2-F).
+        "verify_priority_object": _priority_evidence_reviewer(
+            DocumentActionPolicy.for_(profile, current_user)
         ) and status not in ["draft", "withdrawn", "dropped", "withdrawal_pending"],
         # PR-B: admin reverts a pending withdrawal back to draft when the refund
         # was rejected (so the profile is not stuck awaiting a refund).
@@ -6157,13 +6161,35 @@ async def update_profile(
         profile.priority_object_codes = data["priority_object_codes"]
         flag_modified(profile, "priority_object_codes")
     if "priority_object_evidence" in data and data["priority_object_evidence"] is not None:
+        # GĐ2-0 (C1 — owner 17-11): LỐI VÀO THỨ HAI của "tự duyệt minh chứng ưu tiên". Thân PUT này nhận
+        # ``status='verified'`` kèm ``verified_by`` tuỳ ý ⇒ trước bản vá, người sửa được hồ sơ (cán bộ phụ trách, ở
+        # nháp / bị từ chối / yêu cầu bổ sung) tự đặt "đã duyệt" mà không qua Quản lý / Admin — engine cộng điểm theo
+        # đúng trạng thái ấy (``priority_service._resolve_object_bonus``). Trạng thái đã duyệt / từ chối CHỈ đổi qua
+        # đường duyệt (``priority_override_service``); mục đã duyệt giữ NGUYÊN bản đang lưu. Luật MỘT nguồn:
+        # ``document_review_rules.merge_profile_evidence_update``. Giao diện không gửi trường này
+        # (``AdmissionDetailClient`` không nạp lại nó vào form).
+        from .document_review_rules import merge_profile_evidence_update
+
+        _merged_evidence, _reviewed_changes = merge_profile_evidence_update(
+            profile.priority_object_evidence, data["priority_object_evidence"]
+        )
+        if _reviewed_changes:
+            raise BusinessRuleViolation(
+                "Không đặt / đổi / bỏ trạng thái đã duyệt hoặc đã từ chối của minh chứng ưu tiên qua đường cập nhật hồ "
+                "sơ (mã diện %s). Dùng nút Duyệt / Từ chối minh chứng (Quản lý trong đơn vị hoặc Admin) hoặc Bỏ diện."
+                % ", ".join(_reviewed_changes),
+                public_payload={
+                    "reason_code": "priority_evidence_review_via_profile_update",
+                    "sub_codes": _reviewed_changes,
+                },
+            )
         # Phase E.4 G3 — strip display-only fields (verified_by_name +
         # document_file_path) trước khi persist vào JSONB column. Defensive
         # guard nếu FE PATCH lỡ gửi display fields (write schema extra=forbid
         # đã block tại Pydantic boundary, nhưng raw dict path qua model_dump
         # có thể bypass). Persist display fields gây schema drift on re-read.
         profile.priority_object_evidence = _strip_display_fields_from_evidence(
-            data["priority_object_evidence"]
+            _merged_evidence
         )
         flag_modified(profile, "priority_object_evidence")
     # Note: priority_resolution_snapshot KHÔNG set qua candidate payload —
@@ -8628,6 +8654,10 @@ async def upload_priority_evidence_document(
     admission_repo = AdmissionRepository(db)
 
     profile = await get_profile(db, profile_id, current_user)
+    # GĐ2-0 (C1a) + GĐ1b §4.5: khoá hồ sơ TRƯỚC khi đọc lại / ghi dòng giấy minh chứng. Đường duyệt / từ chối giữ khoá hồ
+    # sơ khi xét người tải (``priority_override_service._priority_evidence_row_checked``) ⇒ tải lại không đổi người tải
+    # chen giữa lúc xét và lúc ghi; trạng thái trong JSONB đọc ở dưới là bản SAU khoá (``populate_existing``).
+    profile = await _lock_profile_for_document_write(db, profile_id)
 
     # Guard 1: profile must be in writeable state
     if profile.status not in APPLICANT_DOC_MUTATION_STATES:
@@ -8764,6 +8794,9 @@ async def upload_priority_evidence_document(
                 status="uploaded",
                 file_path=final_path,
                 uploaded_at=uploaded_at_dt,
+                # GĐ2-0 (C1a): người tải — người này không được tự duyệt / từ chối minh chứng.
+                uploaded_by=current_user.id,
+                uploaded_by_unknown=False,
             )
             db.add(doc_row)
         else:
@@ -8772,6 +8805,9 @@ async def upload_priority_evidence_document(
             doc_row.file_path = final_path
             doc_row.status = "uploaded"
             doc_row.uploaded_at = uploaded_at_dt
+            # GĐ2-0 (C1a): tệp mới ⇒ người tải mới (xoá cờ "không rõ" của tệp cũ).
+            doc_row.uploaded_by = current_user.id
+            doc_row.uploaded_by_unknown = False
             doc_row.verified_at = None
             doc_row.verified_by = None
             doc_row.rejected_at = None

@@ -681,6 +681,74 @@ async def _evidence_mutation_common_checks(
         )
 
 
+#: GĐ2-0 (C1a) — câu báo theo mã lý do (mã tiếng Anh dùng chung với giấy tờ: ``document_review_rules``).
+_PRIORITY_EVIDENCE_REVIEW_MESSAGES = {
+    "own_submission": (
+        "Người tải tệp minh chứng ưu tiên không tự duyệt / từ chối minh chứng ấy — cần Quản lý trong đơn vị hoặc Admin khác."
+    ),
+    "unknown_submitter": (
+        "Không rõ người tải tệp minh chứng ưu tiên này (tệp tải trước khi hệ thống ghi người tải) — hãy tải lại tệp rồi "
+        "để người khác duyệt."
+    ),
+}
+
+
+class PriorityEvidenceReviewConflict(ConflictError):
+    """409 — C1(a): người duyệt / từ chối chính là người tải tệp minh chứng, hoặc không rõ người tải."""
+
+    def __init__(self, reason_code: str):
+        super().__init__(
+            detail=_PRIORITY_EVIDENCE_REVIEW_MESSAGES.get(reason_code, reason_code),
+            public_payload={"reason_code": reason_code},
+        )
+        self.reason_code = reason_code
+        self.error_code = "PRIORITY_EVIDENCE_" + reason_code.upper()
+
+
+async def _priority_evidence_row_checked(
+    db: AsyncSession,
+    profile: models.AdmissionProfile,
+    sub_code: str,
+    actor: models.User,
+    action: str,
+):
+    """GĐ2-0 (C1a) — TẦNG CHỦ SỞ HỮU của "người tải không tự duyệt": đọc dòng giấy minh chứng của ``sub_code`` ``FOR UPDATE``
+    (``populate_existing``: không dùng bản đã nạp trước khi chờ khoá) rồi xét bằng luật MỘT nguồn
+    ``document_review_rules.decide_priority_evidence``. Nơi gọi đã giữ khoá hồ sơ (``deps.get_admission_for_user``) và
+    MỌI đường ghi dòng giấy minh chứng khoá hồ sơ trước (tải lên: ``_lock_profile_for_document_write``; bỏ diện: cùng
+    dependency) ⇒ người tải không đổi giữa lúc xét và lúc ghi. Trả dòng giấy (hoặc ``None``) cho nơi gọi dùng tiếp."""
+    from sqlalchemy import select as _sel
+
+    from app.services import document_review_rules as rules
+
+    doc_row = (
+        await db.execute(
+            _sel(models.ProfileDocument)
+            .where(
+                models.ProfileDocument.profile_id == profile.id,
+                models.ProfileDocument.category == "priority_evidence",
+                models.ProfileDocument.priority_sub_code == sub_code,
+            )
+            .with_for_update(of=models.ProfileDocument)
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
+    decision = rules.decide_priority_evidence(
+        action, actor_id=actor.id, evidence=rules.PriorityEvidenceFacts.from_row(doc_row)
+    )
+    if not decision.allowed:
+        log.info(
+            "priority_override_service.priority_evidence_review_blocked",
+            profile_id=profile.id,
+            actor_id=actor.id,
+            sub_code=sub_code,
+            action=action,
+            reason_code=decision.block_reason,
+        )
+        raise PriorityEvidenceReviewConflict(decision.block_reason)
+    return doc_row
+
+
 async def verify_object_evidence(
     db: AsyncSession,
     profile: models.AdmissionProfile,
@@ -730,15 +798,8 @@ async def verify_object_evidence(
     # 2. Client null + row exists → auto-bind doc_id=row.id, paper_only=False
     # 3. Client int + row.id match → bind doc_id=row.id, paper_only=False
     # 4. Client int + row.id mismatch (or no row) → BusinessRuleViolation
-    from sqlalchemy import select as _sel
-    doc_q = await db.execute(
-        _sel(models.ProfileDocument).where(
-            models.ProfileDocument.profile_id == profile.id,
-            models.ProfileDocument.category == "priority_evidence",
-            models.ProfileDocument.priority_sub_code == sub_code,
-        )
-    )
-    doc_row = doc_q.scalar_one_or_none()
+    # GĐ2-0 (C1a): CÙNG lần đọc dòng giấy (FOR UPDATE) xét luôn người tải ≠ người duyệt.
+    doc_row = await _priority_evidence_row_checked(db, profile, sub_code, actor, "verify")
 
     if document_id is None:
         if doc_row is not None:
@@ -881,6 +942,8 @@ async def reject_object_evidence(
         profile, sub_code, actor, expected_version,
         acknowledge_post_publish=acknowledge_post_publish,
     )
+    # GĐ2-0 (C1a): từ chối cũng là thao tác của người duyệt — người tải không tự từ chối (như giấy tờ, §4.2 GĐ1b).
+    await _priority_evidence_row_checked(db, profile, sub_code, actor, "reject")
 
     reason_clean = (reject_reason or "").strip()
     if len(reason_clean) < _MIN_REJECT_REASON_LEN:

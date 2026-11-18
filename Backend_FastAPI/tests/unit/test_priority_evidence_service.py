@@ -230,6 +230,8 @@ async def test_verify_happy_path_mutates_evidence_and_audit() -> None:
     doc_row = SimpleNamespace(
         id=42, category="priority_evidence", priority_sub_code="04",
         file_path="uploads/admissions/42/priority_04_xyz.pdf",
+        # GĐ2-0 (C1a): tệp do người KHÁC người duyệt (id 7) tải lên.
+        uploaded_by=99, uploaded_by_unknown=False,
     )
     db = _make_db(catalog_rows=[("04", Decimal("1.00"))], doc_row=doc_row)
 
