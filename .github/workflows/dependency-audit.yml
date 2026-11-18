@@ -17,6 +17,8 @@ on:
       # không bao giờ được kiểm chứng sau khi merge.
       - '.github/workflows/dependency-audit.yml'
       - '.github/scripts/**'
+      # Ngoại lệ có hạn của cổng production (Codex 74): sửa / gia hạn / gỡ ngoại lệ phải có lượt chạy trên main.
+      - '.github/audit-ngoai-le.json'
   pull_request:
     branches: [main]
     # `edited` ở ĐÂY, không ở `backend-test.yml`.

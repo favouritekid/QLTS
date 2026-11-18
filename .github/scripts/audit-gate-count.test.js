@@ -14,7 +14,7 @@ const fs = require('fs');
 const path = require('path');
 const cp = require('child_process');
 
-const { demTheoNgoaiLe, kiemTepNgoaiLe } = require('./audit-ngoai-le.js');
+const { demTheoNgoaiLe, kiemTepNgoaiLe, lietKeTepThat } = require('./audit-ngoai-le.js');
 
 const GOC_KHO = path.resolve(__dirname, '..', '..');
 const TEP_FIXTURE = path.join(__dirname, 'fixtures', 'npm-audit-picomatch-2026-11-18.json');
@@ -34,12 +34,19 @@ function fsGia(tep) {
       Object.keys(tep).filter((k) => k.startsWith(`${thu}/`) && (deQuy || !k.slice(thu.length + 1).includes('/'))),
   };
 }
+/** Lockfile giả khớp ĐÚNG các giá trị ghim của tệp ngoại lệ thật. */
+const LOCK_DAT = () => {
+  const packages = { '': { name: 'frontend' } };
+  for (const [n, v] of Object.entries(NGOAI_LE().ngoai_le[0].dieu_kien.ghim_lockfile.goi)) packages[n] = { ...v };
+  return { lockfileVersion: 3, packages };
+};
 const TEP_DAT = () => ({
   'frontend/next.config.ts': 'const nextConfig = { output: "standalone" };\nexport default nextConfig;\n',
   'frontend/src/app/error.tsx': "'use client'\nimport('@sentry/nextjs').then((S) => S.captureException(e))\n",
   // Tệp test được phép nhắc các chữ này (không chạy lúc ứng dụng chạy).
   'frontend/src/app/error.sentry.test.tsx': "withSentryConfig 'picomatch' \"@rollup/x\"\n",
   'frontend/package.json': JSON.stringify({ dependencies: { '@sentry/nextjs': '^10.75.2' } }),
+  'frontend/package-lock.json': JSON.stringify(LOCK_DAT()),
 });
 const dem = (audit, cauHinh, homNay = '2026-11-18', tep = TEP_DAT()) =>
   demTheoNgoaiLe(audit, cauHinh, { homNay, ...fsGia(tep) });
@@ -86,6 +93,69 @@ test('mã chạy (không phải tệp test) import picomatch / @rollup / fdir �
     const tep = TEP_DAT();
     tep['frontend/src/lib/x.ts'] = `${dong}\n`;
     assert.strictEqual(dem(AUDIT(), NGOAI_LE(), '2026-11-18', tep).so, 5, dong);
+  }
+});
+
+test('Codex 74 — tệp vào ở GỐC frontend (instrumentation.ts, ngoài src) nhắc picomatch ⇒ vô hiệu', () => {
+  const tep = TEP_DAT();
+  tep['frontend/instrumentation.ts'] = "export async function register() { await import('picomatch') }\n";
+  const kq = dem(AUDIT(), NGOAI_LE(), '2026-11-18', tep);
+  assert.strictEqual(kq.so, 5);
+  assert.match(kq.voHieu[0].lyDo.join(' '), /instrumentation\.ts chứa "picomatch"/);
+});
+
+test('Codex 74 — import bằng template literal (backtick) ⇒ vô hiệu', () => {
+  for (const dong of ['await import(`picomatch`)', 'require(`@rollup/pluginutils`)', 'import(`fdir`)']) {
+    const tep = TEP_DAT();
+    tep['frontend/src/lib/dong.ts'] = `${dong}\n`;
+    assert.strictEqual(dem(AUDIT(), NGOAI_LE(), '2026-11-18', tep).so, 5, dong);
+  }
+});
+
+test('Codex 74 — symlink trong vùng quét ⇒ vô hiệu (hệ tệp giả)', () => {
+  const tep = TEP_DAT();
+  const f = fsGia(tep);
+  const lietKe = (thu, deQuy) => {
+    if (deQuy) throw new Error('symlink trong vùng quét: frontend/src/lk');
+    return f.lietKe(thu, deQuy);
+  };
+  const kq = demTheoNgoaiLe(AUDIT(), NGOAI_LE(), { homNay: '2026-11-18', docTep: f.docTep, lietKe });
+  assert.strictEqual(kq.so, 5);
+  assert.match(kq.voHieu[0].lyDo.join(' '), /symlink trong vùng quét/);
+});
+
+test('Codex 74 — lietKeTepThat gặp symlink THẬT ⇒ throw (bỏ qua nếu máy không cho tạo symlink)', (t) => {
+  const tam = fs.mkdtempSync(path.join(require('os').tmpdir(), 'audit-nl-'));
+  try {
+    fs.mkdirSync(path.join(tam, 'frontend', 'src'), { recursive: true });
+    fs.writeFileSync(path.join(tam, 'frontend', 'src', 'a.ts'), 'export {}\n');
+    fs.writeFileSync(path.join(tam, 'ngoai.ts'), "import('picomatch')\n");
+    try {
+      fs.symlinkSync(path.join(tam, 'ngoai.ts'), path.join(tam, 'frontend', 'src', 'lk.ts'));
+    } catch (e) {
+      t.skip(`không tạo được symlink: ${e.code}`);
+      return;
+    }
+    assert.throws(() => lietKeTepThat(tam, 'frontend', true), /symlink trong vùng quét: frontend\/src\/lk\.ts/);
+    fs.unlinkSync(path.join(tam, 'frontend', 'src', 'lk.ts'));
+    assert.deepStrictEqual(lietKeTepThat(tam, 'frontend', true), ['frontend/src/a.ts']);
+  } finally {
+    fs.rmSync(tam, { recursive: true, force: true });
+  }
+});
+
+test('Codex 74 — lockfile đổi version / integrity / mất gói ⇒ vô hiệu', () => {
+  const doi = [
+    (pk) => { pk['node_modules/picomatch'].version = '4.0.5'; },
+    (pk) => { pk['node_modules/@sentry/nextjs'].integrity = 'sha512-AAAA'; },
+    (pk) => { delete pk['node_modules/fdir']; },
+  ];
+  for (const sua of doi) {
+    const tep = TEP_DAT();
+    const lock = LOCK_DAT();
+    sua(lock.packages);
+    tep['frontend/package-lock.json'] = JSON.stringify(lock);
+    assert.strictEqual(dem(AUDIT(), NGOAI_LE(), '2026-11-18', tep).so, 5, sua.toString());
   }
 });
 
@@ -167,6 +237,9 @@ test('tệp ngoại lệ sai dạng ⇒ NỔ', () => {
     (c) => { c.ngoai_le[0].dieu_kien.cam_chuoi_trong_thu_muc = []; },
     (c) => { c.ngoai_le[0].nodes = ['picomatch']; },
     (c) => { c.phien_ban = 2; },
+    (c) => { delete c.ngoai_le[0].dieu_kien.ghim_lockfile; },
+    (c) => { delete c.ngoai_le[0].dieu_kien.ghim_lockfile.goi['node_modules/fdir']; },
+    (c) => { c.ngoai_le[0].dieu_kien.ghim_lockfile.goi['node_modules/fdir'].integrity = 'md5-abc'; },
   ];
   for (const sua of hong) {
     const c = NGOAI_LE();
@@ -183,6 +256,16 @@ test('tệp ngoại lệ THẬT ghim đúng quyết định owner 18-11 và đú
   assert.strictEqual(nl.het_han, '2026-12-02');
   assert.deepStrictEqual([...nl.goi].sort(), NAM_GOI);
   assert.deepStrictEqual([...nl.nodes].sort(), NAM_GOI.map((g) => `node_modules/${g}`).sort());
+  const ghim = Object.fromEntries(Object.entries(nl.dieu_kien.ghim_lockfile.goi).map(([n, v]) => [n, v.version]));
+  assert.deepStrictEqual(ghim, {
+    'node_modules/picomatch': '4.0.4',
+    'node_modules/@rollup/pluginutils': '5.3.0',
+    'node_modules/@rollup/plugin-commonjs': '28.0.1',
+    'node_modules/fdir': '6.5.0',
+    'node_modules/@sentry/nextjs': '10.75.2',
+  });
+  // Quét TOÀN frontend (không chỉ src) — Codex 74.
+  assert.ok(nl.dieu_kien.cam_chuoi_trong_thu_muc.some((c) => c.thu_muc === 'frontend' && c.de_quy === true));
 });
 
 test('CLI trên kho thật: có ngoại lệ ⇒ 0 tới hết 2026-12-02 (UTC), sau đó 5; không ngoại lệ ⇒ 5 như cũ', () => {

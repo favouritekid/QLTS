@@ -26,7 +26,8 @@ const { requireCount } = require('./audit-dev-delta.js');
 const MUC_CHAN = new Set(['high', 'critical']);
 const KHOA_TEP = new Set(['phien_ban', 'ngoai_le']);
 const KHOA_NGOAI_LE = new Set(['ghsa', 'het_han', 'ly_do', 'quyet_dinh', 'goi', 'nodes', 'dieu_kien']);
-const KHOA_DIEU_KIEN = new Set(['cam_chuoi_trong_thu_muc', 'cam_phu_thuoc_truc_tiep']);
+const KHOA_DIEU_KIEN = new Set(['cam_chuoi_trong_thu_muc', 'cam_phu_thuoc_truc_tiep', 'ghim_lockfile']);
+const MAU_INTEGRITY = /^sha512-[A-Za-z0-9+/]+={0,2}$/;
 const MAU_GHSA = /^GHSA-[23456789cfghjmpqrvwx]{4}-[23456789cfghjmpqrvwx]{4}-[23456789cfghjmpqrvwx]{4}$/;
 
 function loi(msg) {
@@ -91,6 +92,21 @@ function kiemTepNgoaiLe(cauHinh) {
       if (typeof p.tep !== 'string' || !p.tep) throw loi(`${nl.ghsa}: cam_phu_thuoc_truc_tiep thiếu tep`);
       mangChuoi(p.goi, `${nl.ghsa}.cam_phu_thuoc_truc_tiep.goi`);
     }
+    // Ghim ĐÚNG bản đã đo (Codex 74): mỗi đường cài trong `nodes` phải có version + integrity của lockfile.
+    const g = dk.ghim_lockfile;
+    if (!g || typeof g !== 'object' || Array.isArray(g)) throw loi(`${nl.ghsa}: thiếu ghim_lockfile`);
+    khoaLa(g, new Set(['tep', 'goi']), `${nl.ghsa}.ghim_lockfile`);
+    if (typeof g.tep !== 'string' || !g.tep) throw loi(`${nl.ghsa}: ghim_lockfile thiếu tep`);
+    if (!g.goi || typeof g.goi !== 'object' || Array.isArray(g.goi)) throw loi(`${nl.ghsa}: ghim_lockfile.goi phải là object`);
+    const khoaGhim = Object.keys(g.goi).sort();
+    if (JSON.stringify(khoaGhim) !== JSON.stringify([...nl.nodes].sort())) {
+      throw loi(`${nl.ghsa}: ghim_lockfile.goi phải ghim ĐÚNG tập nodes`);
+    }
+    for (const [n, v] of Object.entries(g.goi)) {
+      khoaLa(v || {}, new Set(['version', 'integrity']), `${nl.ghsa}.ghim_lockfile.${n}`);
+      if (!v || typeof v.version !== 'string' || !v.version) throw loi(`${nl.ghsa}: ${n} thiếu version`);
+      if (typeof v.integrity !== 'string' || !MAU_INTEGRITY.test(v.integrity)) throw loi(`${nl.ghsa}: ${n} integrity sai dạng`);
+    }
   }
   return cauHinh;
 }
@@ -127,7 +143,7 @@ function viPhamDieuKien(nl, { docTep, lietKe }) {
     try {
       tep = lietKe(c.thu_muc, c.de_quy).filter((t) => new RegExp(c.mau_ten).test(t.split('/').pop()));
     } catch (e) {
-      lyDo.push(`không liệt kê được ${c.thu_muc}`);
+      lyDo.push(`không liệt kê được ${c.thu_muc} (${e && e.message})`);
       continue;
     }
     if (tep.length === 0) {
@@ -156,7 +172,43 @@ function viPhamDieuKien(nl, { docTep, lietKe }) {
       lyDo.push(`không đọc được ${p.tep}`);
     }
   }
+  const g = nl.dieu_kien.ghim_lockfile;
+  let pk = null;
+  try {
+    pk = JSON.parse(docTep(g.tep)).packages;
+  } catch (e) {
+    lyDo.push(`không đọc được ${g.tep}`);
+  }
+  if (pk) {
+    for (const [n, v] of Object.entries(g.goi)) {
+      const thuc = pk[n];
+      if (!thuc) lyDo.push(`${g.tep} không còn ${n}`);
+      else if (thuc.version !== v.version) lyDo.push(`${n} đổi phiên bản ${v.version} -> ${thuc.version}`);
+      else if (thuc.integrity !== v.integrity) lyDo.push(`${n} đổi integrity`);
+    }
+  }
   return lyDo;
+}
+
+/** Liệt kê tệp THẬT dưới `goc/thuMuc` (đường dẫn tương đối, dấu '/'). Bỏ `node_modules`, `.next` khi đệ quy. Gặp symlink ⇒
+ *  throw (Codex 74: symlink có thể đưa mã từ ngoài vùng quét vào — không kiểm được thì vô hiệu ngoại lệ). */
+function lietKeTepThat(goc, thuMuc, deQuy) {
+  const fs = require('fs');
+  const path = require('path');
+  const ra = [];
+  const di = (rel) => {
+    for (const m of fs.readdirSync(path.join(goc, rel), { withFileTypes: true })) {
+      const con = `${rel}/${m.name}`;
+      if (m.isSymbolicLink()) throw new Error(`symlink trong vùng quét: ${con}`);
+      if (m.isDirectory()) {
+        if (deQuy && m.name !== 'node_modules' && m.name !== '.next') di(con);
+      } else if (m.isFile()) {
+        ra.push(con);
+      }
+    }
+  };
+  di(thuMuc.replace(/\/+$/, ''));
+  return ra;
 }
 
 /**
@@ -208,4 +260,4 @@ function demTheoNgoaiLe(audit, cauHinh, { homNay, docTep, lietKe }) {
   return { so, tongMeta, mien, hieuLuc: [...hieuLuc.keys()], voHieu, khongDung };
 }
 
-module.exports = { demTheoNgoaiLe, kiemTepNgoaiLe, advisoryGoc, laNgay };
+module.exports = { demTheoNgoaiLe, kiemTepNgoaiLe, advisoryGoc, laNgay, lietKeTepThat };

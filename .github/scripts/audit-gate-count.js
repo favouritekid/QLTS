@@ -22,7 +22,7 @@ const fs = require('fs');
 const path = require('path');
 
 const { loadAudit, requireCount } = require('./audit-dev-delta.js');
-const { demTheoNgoaiLe } = require('./audit-ngoai-le.js');
+const { demTheoNgoaiLe, lietKeTepThat } = require('./audit-ngoai-le.js');
 
 function thamSo(argv) {
   const [auditPath, ...con] = argv;
@@ -35,22 +35,6 @@ function thamSo(argv) {
     ra[k === '--ngoai-le' ? 'ngoaiLe' : 'goc'] = v;
   }
   if ((ra.ngoaiLe === undefined) !== (ra.goc === undefined)) throw new Error('--ngoai-le và --goc phải đi cùng nhau');
-  return ra;
-}
-
-function lietKeTep(goc, thuMuc, deQuy) {
-  const ra = [];
-  const di = (rel) => {
-    for (const m of fs.readdirSync(path.join(goc, rel), { withFileTypes: true })) {
-      const con = `${rel}/${m.name}`;
-      if (m.isDirectory()) {
-        if (deQuy && m.name !== 'node_modules' && m.name !== '.next') di(con);
-      } else if (m.isFile()) {
-        ra.push(con);
-      }
-    }
-  };
-  di(thuMuc.replace(/\/+$/, ''));
   return ra;
 }
 
@@ -72,7 +56,7 @@ try {
     const kq = demTheoNgoaiLe(data, cauHinh, {
       homNay,
       docTep: (rel) => fs.readFileSync(path.join(ts.goc, rel), 'utf8'),
-      lietKe: (thuMuc, deQuy) => lietKeTep(ts.goc, thuMuc, deQuy),
+      lietKe: (thuMuc, deQuy) => lietKeTepThat(ts.goc, thuMuc, deQuy),
     });
     console.error(`ngoại lệ — ngày UTC ${homNay} · high/critical theo metadata ${kq.tongMeta} · còn tính ${kq.so}`);
     if (kq.mien.length) console.error(`  miễn (${kq.mien.length}): ${kq.mien.join(', ')} — theo ${kq.hieuLuc.join(', ')}`);
