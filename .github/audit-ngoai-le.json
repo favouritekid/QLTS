@@ -1,0 +1,39 @@
+{
+  "phien_ban": 1,
+  "ngoai_le": [
+    {
+      "ghsa": "GHSA-fc5q-39xc-vjpf",
+      "het_han": "2026-12-02",
+      "ly_do": "picomatch ReDoS khi biên dịch mẫu glob; chưa có bản vá (<=4.0.7). Đo 18-11-2026: chỉ tới qua @sentry/nextjs -> @rollup/plugin-commonjs (loader build wrappingLoader, chỉ bật khi next.config dùng withSentryConfig — dự án không dùng); nạp @sentry/nextjs lúc chạy không nạp picomatch / @rollup / fdir. Chỉ đúng cho cấu hình hiện tại — các điều kiện dưới được kiểm mỗi lượt.",
+      "quyet_dinh": "Owner chọn phương án B 18-11-2026 (hạn 02-12-2026) sau Codex lần 73; PR riêng, Codex review riêng.",
+      "goi": ["picomatch", "@rollup/pluginutils", "@rollup/plugin-commonjs", "fdir", "@sentry/nextjs"],
+      "nodes": [
+        "node_modules/picomatch",
+        "node_modules/@rollup/pluginutils",
+        "node_modules/@rollup/plugin-commonjs",
+        "node_modules/fdir",
+        "node_modules/@sentry/nextjs"
+      ],
+      "dieu_kien": {
+        "cam_chuoi_trong_thu_muc": [
+          {
+            "thu_muc": "frontend",
+            "mau_ten": "^next\\.config\\.",
+            "de_quy": false,
+            "chuoi": ["withSentryConfig", "@sentry/nextjs/config"]
+          },
+          {
+            "thu_muc": "frontend/src",
+            "mau_ten": "^(?!.*\\.(test|spec)\\.)[^.].*\\.[cm]?[jt]sx?$",
+            "de_quy": true,
+            "chuoi": ["\"picomatch", "'picomatch", "\"@rollup/", "'@rollup/", "\"fdir", "'fdir", "@sentry/nextjs/config"]
+          }
+        ],
+        "cam_phu_thuoc_truc_tiep": {
+          "tep": "frontend/package.json",
+          "goi": ["picomatch", "fdir", "@rollup/plugin-commonjs", "@rollup/pluginutils"]
+        }
+      }
+    }
+  ]
+}

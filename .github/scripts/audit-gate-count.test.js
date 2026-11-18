@@ -1,0 +1,201 @@
+/**
+ * Chạy: node --test .github/scripts/audit-gate-count.test.js  (Node 20, không phụ thuộc ngoài)
+ *
+ * Khoá ngoại lệ HẸP, CÓ HẠN của cổng audit production (audit-ngoai-le.js) trên báo cáo `npm audit --omit=dev --json` THẬT
+ * của CI 18-11-2026 (artifact `node-audit-results`, run 44239862197): 5 gói high đều do MỘT advisory GHSA-fc5q-39xc-vjpf.
+ * Mỗi ca phá ĐÚNG một điều kiện; ngày và tệp tiêm vào (không phụ thuộc đồng hồ / đĩa), trừ hai ca CLI cuối.
+ */
+
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert');
+const fs = require('fs');
+const path = require('path');
+const cp = require('child_process');
+
+const { demTheoNgoaiLe, kiemTepNgoaiLe } = require('./audit-ngoai-le.js');
+
+const GOC_KHO = path.resolve(__dirname, '..', '..');
+const TEP_FIXTURE = path.join(__dirname, 'fixtures', 'npm-audit-picomatch-2026-11-18.json');
+const TEP_NGOAI_LE = path.join(GOC_KHO, '.github', 'audit-ngoai-le.json');
+const AUDIT = () => JSON.parse(fs.readFileSync(TEP_FIXTURE, 'utf8'));
+const NGOAI_LE = () => JSON.parse(fs.readFileSync(TEP_NGOAI_LE, 'utf8'));
+const NAM_GOI = ['@rollup/plugin-commonjs', '@rollup/pluginutils', '@sentry/nextjs', 'fdir', 'picomatch'];
+
+/** Hệ tệp giả: {đường dẫn tương đối: nội dung}. */
+function fsGia(tep) {
+  return {
+    docTep: (rel) => {
+      if (!Object.prototype.hasOwnProperty.call(tep, rel)) throw new Error(`ENOENT ${rel}`);
+      return tep[rel];
+    },
+    lietKe: (thu, deQuy) =>
+      Object.keys(tep).filter((k) => k.startsWith(`${thu}/`) && (deQuy || !k.slice(thu.length + 1).includes('/'))),
+  };
+}
+const TEP_DAT = () => ({
+  'frontend/next.config.ts': 'const nextConfig = { output: "standalone" };\nexport default nextConfig;\n',
+  'frontend/src/app/error.tsx': "'use client'\nimport('@sentry/nextjs').then((S) => S.captureException(e))\n",
+  // Tệp test được phép nhắc các chữ này (không chạy lúc ứng dụng chạy).
+  'frontend/src/app/error.sentry.test.tsx': "withSentryConfig 'picomatch' \"@rollup/x\"\n",
+  'frontend/package.json': JSON.stringify({ dependencies: { '@sentry/nextjs': '^10.75.2' } }),
+});
+const dem = (audit, cauHinh, homNay = '2026-11-18', tep = TEP_DAT()) =>
+  demTheoNgoaiLe(audit, cauHinh, { homNay, ...fsGia(tep) });
+
+test('báo cáo thật: 5 gói high, đều do GHSA-fc5q-39xc-vjpf ⇒ ngoại lệ hiệu lực miễn đủ 5, còn 0', () => {
+  const kq = dem(AUDIT(), NGOAI_LE());
+  assert.strictEqual(kq.tongMeta, 5);
+  assert.strictEqual(kq.so, 0);
+  assert.deepStrictEqual([...kq.mien].sort(), NAM_GOI);
+  assert.deepStrictEqual(kq.voHieu, []);
+  assert.deepStrictEqual(kq.khongDung, []);
+});
+
+test('ngày het_han vẫn hiệu lực; ngày sau đó ĐỎ lại đủ 5', () => {
+  assert.strictEqual(dem(AUDIT(), NGOAI_LE(), '2026-12-02').so, 0);
+  const kq = dem(AUDIT(), NGOAI_LE(), '2026-12-03');
+  assert.strictEqual(kq.so, 5);
+  assert.match(kq.voHieu[0].lyDo.join(' '), /hết hạn 2026-12-02/);
+});
+
+test('next.config bật withSentryConfig ⇒ ngoại lệ vô hiệu', () => {
+  const tep = TEP_DAT();
+  tep['frontend/next.config.ts'] = 'import { withSentryConfig } from "@sentry/nextjs";\nexport default withSentryConfig({});\n';
+  const kq = dem(AUDIT(), NGOAI_LE(), '2026-11-18', tep);
+  assert.strictEqual(kq.so, 5);
+  assert.match(kq.voHieu[0].lyDo.join(' '), /next\.config\.ts chứa "withSentryConfig"/);
+});
+
+test('next.config đổi đuôi (.mjs) vẫn bị quét', () => {
+  const tep = TEP_DAT();
+  delete tep['frontend/next.config.ts'];
+  tep['frontend/next.config.mjs'] = 'export default withSentryConfig({})\n';
+  assert.strictEqual(dem(AUDIT(), NGOAI_LE(), '2026-11-18', tep).so, 5);
+});
+
+test('không còn next.config nào để kiểm ⇒ vô hiệu (fail closed)', () => {
+  const tep = TEP_DAT();
+  delete tep['frontend/next.config.ts'];
+  assert.strictEqual(dem(AUDIT(), NGOAI_LE(), '2026-11-18', tep).so, 5);
+});
+
+test('mã chạy (không phải tệp test) import picomatch / @rollup / fdir ⇒ vô hiệu', () => {
+  for (const dong of ["import pm from 'picomatch'", 'import { createFilter } from "@rollup/pluginutils"', "require('fdir')"]) {
+    const tep = TEP_DAT();
+    tep['frontend/src/lib/x.ts'] = `${dong}\n`;
+    assert.strictEqual(dem(AUDIT(), NGOAI_LE(), '2026-11-18', tep).so, 5, dong);
+  }
+});
+
+test('package.json khai thẳng picomatch / fdir / @rollup ⇒ vô hiệu', () => {
+  const tep = TEP_DAT();
+  tep['frontend/package.json'] = JSON.stringify({ dependencies: { '@sentry/nextjs': '^10', fdir: '^6' } });
+  assert.strictEqual(dem(AUDIT(), NGOAI_LE(), '2026-11-18', tep).so, 5);
+});
+
+test('gói phụ thuộc MỚI kéo picomatch (không có trong goi) ⇒ chỉ gói đó bị tính', () => {
+  const a = AUDIT();
+  a.vulnerabilities['foo-build'] = { name: 'foo-build', severity: 'high', isDirect: false, via: ['picomatch'], effects: [], range: '*', nodes: ['node_modules/foo-build'], fixAvailable: false };
+  a.metadata.vulnerabilities.high += 1;
+  a.metadata.vulnerabilities.total += 1;
+  const kq = dem(a, NGOAI_LE());
+  assert.strictEqual(kq.so, 1);
+  assert.ok(!kq.mien.includes('foo-build'));
+});
+
+test('alias npm: đường cài ĐÚNG chỗ đã ghim nhưng tên gói thật khác ⇒ gói đó bị tính', () => {
+  // vd package.json khai "fdir": "npm:goi-khac@1" — npm audit báo theo TÊN THẬT, nodes vẫn là node_modules/fdir.
+  const a = AUDIT();
+  const v = a.vulnerabilities.fdir;
+  delete a.vulnerabilities.fdir;
+  a.vulnerabilities['goi-khac'] = { ...v, name: 'goi-khac' };
+  a.vulnerabilities['@rollup/plugin-commonjs'].via = a.vulnerabilities['@rollup/plugin-commonjs'].via.map((x) => (x === 'fdir' ? 'goi-khac' : x));
+  const kq = dem(a, NGOAI_LE());
+  assert.strictEqual(kq.so, 1);
+  assert.ok(!kq.mien.includes('goi-khac'));
+});
+
+test('picomatch cài ở đường KHÁC đã đo ⇒ gói đó bị tính', () => {
+  const a = AUDIT();
+  a.vulnerabilities.picomatch.nodes = ['node_modules/@rollup/pluginutils/node_modules/picomatch'];
+  assert.strictEqual(dem(a, NGOAI_LE()).so, 1);
+});
+
+test('advisory high KHÁC trên picomatch ⇒ cả chuỗi bị tính lại', () => {
+  const a = AUDIT();
+  a.vulnerabilities.picomatch.via.push({ source: 1, name: 'picomatch', dependency: 'picomatch', title: 'khác', url: 'https://github.com/advisories/GHSA-2222-3333-4444', severity: 'high', range: '*' });
+  assert.strictEqual(dem(a, NGOAI_LE()).so, 5);
+});
+
+test('một gói critical khác (không ngoại lệ) vẫn chặn', () => {
+  const a = AUDIT();
+  a.vulnerabilities['left-pad'] = { name: 'left-pad', severity: 'critical', isDirect: true, via: [{ source: 2, name: 'left-pad', dependency: 'left-pad', title: 't', url: 'https://github.com/advisories/GHSA-4444-5555-6666', severity: 'critical', range: '*' }], effects: [], range: '*', nodes: ['node_modules/left-pad'], fixAvailable: true };
+  a.metadata.vulnerabilities.critical += 1;
+  a.metadata.vulnerabilities.total += 1;
+  assert.strictEqual(dem(a, NGOAI_LE()).so, 1);
+});
+
+test('không ngoại lệ nào ⇒ bằng đúng metadata (5)', () => {
+  assert.strictEqual(dem(AUDIT(), { phien_ban: 1, ngoai_le: [] }).so, 5);
+});
+
+test('ngoại lệ hiệu lực mà không gói nào cần ⇒ báo không còn dùng (để gỡ)', () => {
+  const a = AUDIT();
+  for (const g of NAM_GOI) delete a.vulnerabilities[g];
+  a.metadata.vulnerabilities.high = 0;
+  const kq = dem(a, NGOAI_LE());
+  assert.strictEqual(kq.so, 0);
+  assert.deepStrictEqual(kq.khongDung, ['GHSA-fc5q-39xc-vjpf']);
+});
+
+test('metadata lệch số gói high/critical ⇒ NỔ (schema đổi)', () => {
+  const a = AUDIT();
+  a.metadata.vulnerabilities.high = 4;
+  assert.throws(() => dem(a, NGOAI_LE()), /khác metadata/);
+});
+
+test('tệp ngoại lệ sai dạng ⇒ NỔ', () => {
+  const hong = [
+    (c) => { c.ngoai_le[0].mo_rong = true; },
+    (c) => { c.ngoai_le[0].het_han = '2026-13-01'; },
+    (c) => { c.ngoai_le[0].ghsa = 'GHSA-abc'; },
+    (c) => { c.ngoai_le.push(JSON.parse(JSON.stringify(c.ngoai_le[0]))); },
+    (c) => { c.ngoai_le[0].ly_do = '  '; },
+    (c) => { delete c.ngoai_le[0].dieu_kien; },
+    (c) => { c.ngoai_le[0].dieu_kien.cam_chuoi_trong_thu_muc = []; },
+    (c) => { c.ngoai_le[0].nodes = ['picomatch']; },
+    (c) => { c.phien_ban = 2; },
+  ];
+  for (const sua of hong) {
+    const c = NGOAI_LE();
+    sua(c);
+    assert.throws(() => kiemTepNgoaiLe(c), /audit-ngoai-le:/, sua.toString());
+  }
+});
+
+test('tệp ngoại lệ THẬT ghim đúng quyết định owner 18-11 và đúng chuỗi đã đo (gia hạn / nới = sửa test này)', () => {
+  const c = kiemTepNgoaiLe(NGOAI_LE());
+  assert.strictEqual(c.ngoai_le.length, 1);
+  const nl = c.ngoai_le[0];
+  assert.strictEqual(nl.ghsa, 'GHSA-fc5q-39xc-vjpf');
+  assert.strictEqual(nl.het_han, '2026-12-02');
+  assert.deepStrictEqual([...nl.goi].sort(), NAM_GOI);
+  assert.deepStrictEqual([...nl.nodes].sort(), NAM_GOI.map((g) => `node_modules/${g}`).sort());
+});
+
+test('CLI trên kho thật: có ngoại lệ ⇒ 0 tới hết 2026-12-02 (UTC), sau đó 5; không ngoại lệ ⇒ 5 như cũ', () => {
+  const cli = path.join(__dirname, 'audit-gate-count.js');
+  const co = cp.execFileSync('node', [cli, TEP_FIXTURE, '--ngoai-le', TEP_NGOAI_LE, '--goc', GOC_KHO], { encoding: 'utf8' });
+  const homNay = new Date().toISOString().slice(0, 10);
+  assert.strictEqual(co.trim(), homNay <= '2026-12-02' ? '0' : '5');
+  const khong = cp.execFileSync('node', [cli, TEP_FIXTURE], { encoding: 'utf8' });
+  assert.strictEqual(khong.trim(), '5');
+});
+
+test('CLI: --ngoai-le thiếu --goc ⇒ exit 1', () => {
+  const cli = path.join(__dirname, 'audit-gate-count.js');
+  const r = cp.spawnSync('node', [cli, TEP_FIXTURE, '--ngoai-le', TEP_NGOAI_LE], { encoding: 'utf8' });
+  assert.strictEqual(r.status, 1);
+});
