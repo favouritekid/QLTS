@@ -57,6 +57,7 @@ type DocRow = {
   requires_ack?: boolean;
   reset_requires_reason?: boolean;
   reset_keeps_evidence?: boolean;
+  can_change_format?: boolean;
   is_extra?: boolean;
   submission_format?: string | null;
   actual_submission_format?: string | null;
