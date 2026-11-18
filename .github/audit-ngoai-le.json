@@ -55,6 +55,7 @@
         },
         "ghim_lockfile": {
           "tep": "frontend/package-lock.json",
+          "sha256": "65230bb9c3a842c6c010c0cfad307afd9edbcd17d2125eb112001bc6bcc82471",
           "goi": {
             "node_modules/picomatch": {
               "version": "4.0.4",

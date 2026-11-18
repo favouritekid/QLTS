@@ -13,6 +13,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
 const cp = require('child_process');
+const crypto = require('crypto');
 
 const { demTheoNgoaiLe, kiemTepNgoaiLe, lietKeTepThat, tonTaiThat, TEP_CAM_TON_TAI } = require('./audit-ngoai-le.js');
 
@@ -49,8 +50,22 @@ const TEP_DAT = () => ({
   'frontend/package.json': JSON.stringify({ dependencies: { '@sentry/nextjs': '^10.75.2' } }),
   'frontend/package-lock.json': JSON.stringify(LOCK_DAT()),
 });
-const dem = (audit, cauHinh, homNay = '2026-11-18', tep = TEP_DAT()) =>
-  demTheoNgoaiLe(audit, cauHinh, { homNay, ...fsGia(tep) });
+const sha256Hex = (s) => crypto.createHash('sha256').update(s, 'utf8').digest('hex');
+const TEP_LOCK_THAT = path.join(GOC_KHO, 'frontend', 'package-lock.json');
+/** Mặc định ĐỒNG BỘ `ghim_lockfile.sha256` (trên BẢN SAO cấu hình) với lockfile của `tep`, để mỗi ca chỉ phá ĐÚNG bất biến nó
+ *  nhắm. Các ca về sha256 toàn tệp (Codex 77) truyền `{ dongBoSha: false }`. */
+const dem = (audit, cauHinh, homNay = '2026-11-18', tep = TEP_DAT(), { dongBoSha = true } = {}) => {
+  let ch = cauHinh;
+  const lock = tep['frontend/package-lock.json'];
+  if (dongBoSha && typeof lock === 'string' && ch && Array.isArray(ch.ngoai_le)) {
+    ch = JSON.parse(JSON.stringify(cauHinh));
+    for (const nl of ch.ngoai_le) {
+      const g = nl && nl.dieu_kien && nl.dieu_kien.ghim_lockfile;
+      if (g && typeof g === 'object' && !Array.isArray(g)) g.sha256 = sha256Hex(lock);
+    }
+  }
+  return demTheoNgoaiLe(audit, ch, { homNay, ...fsGia(tep) });
+};
 
 test('báo cáo thật: 5 gói high, đều do GHSA-fc5q-39xc-vjpf ⇒ ngoại lệ hiệu lực miễn đủ 5, còn 0', () => {
   const kq = dem(AUDIT(), NGOAI_LE());
@@ -196,10 +211,58 @@ test('Codex 75 — lockfile / package.json không đọc được ⇒ vô hiệu
   }
 });
 
-test('package.json khai thẳng picomatch / fdir / @rollup ⇒ vô hiệu', () => {
+test('package.json khai thẳng TỪNG gói trong danh sách cấm, ở TỪNG mục phụ thuộc ⇒ vô hiệu (Codex 77: khoá đúng danh sách)', () => {
+  const goi = NGOAI_LE().ngoai_le[0].dieu_kien.cam_phu_thuoc_truc_tiep.goi;
+  assert.deepStrictEqual(goi, ['picomatch', 'fdir', '@rollup/plugin-commonjs', '@rollup/pluginutils']);
+  for (const g of goi) {
+    for (const muc of ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies']) {
+      const pj = { dependencies: { '@sentry/nextjs': '^10.75.2' } };
+      pj[muc] = { ...(pj[muc] || {}), [g]: '*' };
+      const tep = TEP_DAT();
+      tep['frontend/package.json'] = JSON.stringify(pj);
+      const kq = dem(AUDIT(), NGOAI_LE(), '2026-11-18', tep);
+      assert.strictEqual(kq.so, 5, `${g} / ${muc}`);
+      assert.ok(kq.voHieu[0].lyDo.includes(`frontend/package.json khai ${g} trong ${muc}`), `${g} / ${muc}`);
+    }
+  }
+});
+
+test('Codex 77 — lockfile THẬT khớp sha256 đã ghim ⇒ hiệu lực; đổi MỘT byte ⇒ vô hiệu', () => {
+  const that = fs.readFileSync(TEP_LOCK_THAT, 'utf8');
   const tep = TEP_DAT();
-  tep['frontend/package.json'] = JSON.stringify({ dependencies: { '@sentry/nextjs': '^10', fdir: '^6' } });
-  assert.strictEqual(dem(AUDIT(), NGOAI_LE(), '2026-11-18', tep).so, 5);
+  tep['frontend/package-lock.json'] = that;
+  assert.strictEqual(dem(AUDIT(), NGOAI_LE(), '2026-11-18', tep, { dongBoSha: false }).so, 0);
+  tep['frontend/package-lock.json'] = `${that}
+`;
+  const kq = dem(AUDIT(), NGOAI_LE(), '2026-11-18', tep, { dongBoSha: false });
+  assert.strictEqual(kq.so, 5);
+  assert.match(kq.voHieu[0].lyDo.join(' '), /frontend\/package-lock\.json khác bản đã đo/);
+});
+
+test('Codex 77 — thêm nhánh phụ thuộc production MỚI dùng chung node picomatch đã ghim, năm mục ghim giữ nguyên ⇒ vô hiệu', () => {
+  const that = fs.readFileSync(TEP_LOCK_THAT, 'utf8');
+  const lock = JSON.parse(that);
+  const truoc = NAM_GOI.map((g) => JSON.stringify(lock.packages[`node_modules/${g}`]));
+  lock.packages['node_modules/goi-moi-dung-picomatch'] = {
+    version: '1.0.0',
+    resolved: 'https://registry.npmjs.org/goi-moi-dung-picomatch/-/goi-moi-dung-picomatch-1.0.0.tgz',
+    integrity: `sha512-${'A'.repeat(86)}==`,
+    license: 'MIT',
+    dependencies: { picomatch: '^4.0.4' },
+  };
+  lock.packages[''].dependencies['goi-moi-dung-picomatch'] = '^1.0.0';
+  assert.deepStrictEqual(NAM_GOI.map((g) => JSON.stringify(lock.packages[`node_modules/${g}`])), truoc);
+  const tep = TEP_DAT();
+  tep['frontend/package-lock.json'] = `${JSON.stringify(lock, null, 2)}
+`;
+  // báo cáo audit KHÔNG đổi (cùng nodes) — đúng ca Codex 77 mô tả.
+  const kq = dem(AUDIT(), NGOAI_LE(), '2026-11-18', tep, { dongBoSha: false });
+  assert.strictEqual(kq.so, 5);
+  assert.deepStrictEqual(kq.voHieu[0].lyDo, [
+    `frontend/package-lock.json khác bản đã đo (sha256 ghim ${NGOAI_LE().ngoai_le[0].dieu_kien.ghim_lockfile.sha256.slice(0, 12)}…)`,
+  ]);
+  // Lớp version / integrity ĐỨNG RIÊNG không bắt ca này (vì sao cần ghim toàn tệp).
+  assert.strictEqual(dem(AUDIT(), NGOAI_LE(), '2026-11-18', tep).so, 0);
 });
 
 test('gói phụ thuộc MỚI kéo picomatch (không có trong goi) ⇒ chỉ gói đó bị tính', () => {
@@ -265,6 +328,11 @@ test('metadata lệch số gói high/critical ⇒ NỔ (schema đổi)', () => {
 
 test('tệp ngoại lệ sai dạng ⇒ NỔ', () => {
   const hong = [
+    // Codex 77: sha256 toàn lockfile bắt buộc, đúng dạng.
+    (c) => { delete c.ngoai_le[0].dieu_kien.ghim_lockfile.sha256; },
+    (c) => { c.ngoai_le[0].dieu_kien.ghim_lockfile.sha256 = c.ngoai_le[0].dieu_kien.ghim_lockfile.sha256.toUpperCase(); },
+    (c) => { c.ngoai_le[0].dieu_kien.ghim_lockfile.sha256 = c.ngoai_le[0].dieu_kien.ghim_lockfile.sha256.slice(1); },
+    (c) => { c.ngoai_le[0].dieu_kien.ghim_lockfile.sha256 = ''; },
     (c) => { c.ngoai_le[0].mo_rong = true; },
     (c) => { c.ngoai_le[0].het_han = '2026-13-01'; },
     (c) => { c.ngoai_le[0].ghsa = 'GHSA-abc'; },
@@ -304,6 +372,13 @@ test('tệp ngoại lệ THẬT ghim đúng quyết định owner 18-11 và đú
     'node_modules/@rollup/plugin-commonjs': '28.0.1',
     'node_modules/fdir': '6.5.0',
     'node_modules/@sentry/nextjs': '10.75.2',
+  });
+  // Codex 77: sha256 toàn lockfile = đúng tệp trên đĩa; danh sách gói cấm khai trực tiếp đúng bốn gói.
+  assert.strictEqual(nl.dieu_kien.ghim_lockfile.sha256, sha256Hex(fs.readFileSync(TEP_LOCK_THAT, 'utf8')));
+  assert.strictEqual(nl.dieu_kien.ghim_lockfile.sha256, crypto.createHash('sha256').update(fs.readFileSync(TEP_LOCK_THAT)).digest('hex'));
+  assert.deepStrictEqual(nl.dieu_kien.cam_phu_thuoc_truc_tiep, {
+    tep: 'frontend/package.json',
+    goi: ['picomatch', 'fdir', '@rollup/plugin-commonjs', '@rollup/pluginutils'],
   });
   // Quét TOÀN frontend (không chỉ src) — Codex 74.
   assert.ok(nl.dieu_kien.cam_chuoi_trong_thu_muc.some((c) => c.thu_muc === 'frontend' && c.de_quy === true));

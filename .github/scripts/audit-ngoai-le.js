@@ -30,6 +30,7 @@ const KHOA_TEP = new Set(['phien_ban', 'ngoai_le']);
 const KHOA_NGOAI_LE = new Set(['ghsa', 'het_han', 'ly_do', 'quyet_dinh', 'goi', 'nodes', 'dieu_kien']);
 const KHOA_DIEU_KIEN = new Set(['cam_chuoi_trong_thu_muc', 'cam_phu_thuoc_truc_tiep', 'ghim_lockfile']);
 const MAU_INTEGRITY = /^sha512-[A-Za-z0-9+/]+={0,2}$/;
+const MAU_SHA256 = /^[0-9a-f]{64}$/;
 // Codex 75: đường dẫn hai tệp phụ thuộc CỐ ĐỊNH (không cho cấu hình trỏ sang tệp khác).
 const TEP_PACKAGE_JSON = 'frontend/package.json';
 const TEP_LOCKFILE = 'frontend/package-lock.json';
@@ -48,6 +49,11 @@ const TEP_CAM_TON_TAI = [
   'package-lock.json',
   '.npmrc',
 ];
+
+/** sha256 (hex) của nội dung đã đọc dạng UTF-8 — với tệp UTF-8 hợp lệ, trùng sha256 của byte trên đĩa. */
+function sha256Hex(s) {
+  return require('crypto').createHash('sha256').update(s, 'utf8').digest('hex');
+}
 
 function laObject(v) {
   return v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -118,8 +124,11 @@ function kiemTepNgoaiLe(cauHinh) {
     // Ghim ĐÚNG bản đã đo (Codex 74): mỗi đường cài trong `nodes` phải có version + integrity của lockfile.
     const g = dk.ghim_lockfile;
     if (!g || typeof g !== 'object' || Array.isArray(g)) throw loi(`${nl.ghsa}: thiếu ghim_lockfile`);
-    khoaLa(g, new Set(['tep', 'goi']), `${nl.ghsa}.ghim_lockfile`);
+    khoaLa(g, new Set(['tep', 'sha256', 'goi']), `${nl.ghsa}.ghim_lockfile`);
     if (g.tep !== TEP_LOCKFILE) throw loi(`${nl.ghsa}: ghim_lockfile.tep phải là ${TEP_LOCKFILE}`);
+    if (typeof g.sha256 !== 'string' || !MAU_SHA256.test(g.sha256)) {
+      throw loi(`${nl.ghsa}: ghim_lockfile.sha256 phải là 64 ký tự hex thường (băm TOÀN tệp lockfile)`);
+    }
     if (!g.goi || typeof g.goi !== 'object' || Array.isArray(g.goi)) throw loi(`${nl.ghsa}: ghim_lockfile.goi phải là object`);
     const khoaGhim = Object.keys(g.goi).sort();
     if (JSON.stringify(khoaGhim) !== JSON.stringify([...nl.nodes].sort())) {
@@ -217,8 +226,26 @@ function viPhamDieuKien(nl, { docTep, lietKe, tonTai }) {
       for (const goi of p.goi) if (Object.prototype.hasOwnProperty.call(pj.v[muc], goi)) lyDo.push(`${p.tep} khai ${goi} trong ${muc}`);
     }
   }
+  // Codex 77: ghim TOÀN BỘ lockfile đã đo bằng sha256 — một nhánh phụ thuộc production mới dùng chung node picomatch đã ghim
+  // làm đổi lockfile dù năm mục ghim giữ nguyên. Lớp version / integrity bên dưới giữ làm lớp bổ sung.
   const g = nl.dieu_kien.ghim_lockfile;
-  const lock = docJson(g.tep);
+  const lock = { ok: false };
+  let lockText;
+  try {
+    lockText = docTep(g.tep);
+  } catch (e) {
+    lockText = undefined;
+  }
+  if (typeof lockText !== 'string') lyDo.push(`không đọc được ${g.tep}`);
+  else {
+    if (sha256Hex(lockText) !== g.sha256) lyDo.push(`${g.tep} khác bản đã đo (sha256 ghim ${g.sha256.slice(0, 12)}…)`);
+    try {
+      lock.v = JSON.parse(lockText);
+      lock.ok = true;
+    } catch (e) {
+      lyDo.push(`không đọc được ${g.tep}`);
+    }
+  }
   if (lock.ok && (!laObject(lock.v) || !laObject(lock.v.packages))) lyDo.push(`${g.tep} thiếu "packages" hợp lệ`);
   else if (lock.ok) {
     for (const [n, v] of Object.entries(g.goi)) {
