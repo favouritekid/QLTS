@@ -1,0 +1,85 @@
+{
+  "phien_ban": 1,
+  "ngoai_le": [
+    {
+      "ghsa": "GHSA-fc5q-39xc-vjpf",
+      "het_han": "2026-12-02",
+      "ly_do": "picomatch ReDoS khi biên dịch mẫu glob; chưa có bản vá (<=4.0.7). Đo 18-11-2026: chỉ tới qua @sentry/nextjs -> @rollup/plugin-commonjs (loader build wrappingLoader, chỉ bật khi next.config dùng withSentryConfig — dự án không dùng); nạp @sentry/nextjs lúc chạy không nạp picomatch / @rollup / fdir. Chỉ đúng cho cấu hình hiện tại — các điều kiện dưới được kiểm mỗi lượt.",
+      "quyet_dinh": "Owner chọn phương án B 18-11-2026 (hạn 02-12-2026) sau Codex lần 73; PR riêng, Codex review riêng.",
+      "goi": [
+        "picomatch",
+        "@rollup/pluginutils",
+        "@rollup/plugin-commonjs",
+        "fdir",
+        "@sentry/nextjs"
+      ],
+      "nodes": [
+        "node_modules/picomatch",
+        "node_modules/@rollup/pluginutils",
+        "node_modules/@rollup/plugin-commonjs",
+        "node_modules/fdir",
+        "node_modules/@sentry/nextjs"
+      ],
+      "dieu_kien": {
+        "cam_chuoi_trong_thu_muc": [
+          {
+            "thu_muc": "frontend",
+            "mau_ten": "^next\\.config\\.",
+            "de_quy": false,
+            "chuoi": [
+              "withSentryConfig",
+              "@sentry/nextjs/config"
+            ]
+          },
+          {
+            "thu_muc": "frontend",
+            "mau_ten": "^(?!.*\\.(test|spec)\\.)[^.].*\\.[cm]?[jt]sx?$",
+            "de_quy": true,
+            "chuoi": [
+              "picomatch",
+              "@rollup/",
+              "fdir",
+              "withSentryConfig",
+              "@sentry/nextjs/config"
+            ]
+          }
+        ],
+        "cam_phu_thuoc_truc_tiep": {
+          "tep": "frontend/package.json",
+          "goi": [
+            "picomatch",
+            "fdir",
+            "@rollup/plugin-commonjs",
+            "@rollup/pluginutils"
+          ]
+        },
+        "ghim_lockfile": {
+          "tep": "frontend/package-lock.json",
+          "sha256": "65230bb9c3a842c6c010c0cfad307afd9edbcd17d2125eb112001bc6bcc82471",
+          "goi": {
+            "node_modules/picomatch": {
+              "version": "4.0.4",
+              "integrity": "sha512-QP88BAKvMam/3NxH6vj2o21R6MjxZUAd6nlwAS/pnGvN9IVLocLHxGYIzFhg6fUQ+5th6P4dv4eW9jX3DSIj7A=="
+            },
+            "node_modules/@rollup/pluginutils": {
+              "version": "5.3.0",
+              "integrity": "sha512-5EdhGZtnu3V88ces7s53hhfK5KSASnJZv8Lulpc04cWO3REESroJXg73DFsOmgbU2BhwV0E20bu2IDZb3VKW4Q=="
+            },
+            "node_modules/@rollup/plugin-commonjs": {
+              "version": "28.0.1",
+              "integrity": "sha512-+tNWdlWKbpB3WgBN7ijjYkq9X5uhjmcvyjEght4NmH5fAU++zfQzAJ6wumLS+dNcvwEZhKx2Z+skY8m7v0wGSA=="
+            },
+            "node_modules/fdir": {
+              "version": "6.5.0",
+              "integrity": "sha512-tIbYtZbucOs0BRGqPJkshJUYdL+SDH7dVM8gjy+ERp3WAUjLEFJE+02kanyHtwjWOnwrKYBiwAmM0p4kLJAnXg=="
+            },
+            "node_modules/@sentry/nextjs": {
+              "version": "10.75.2",
+              "integrity": "sha512-ilzb3E7Kaskx/RQ355kCkxLxrHBtYS67pe6KO+F/O6s53f5t4sVwz4gE2Mz4ScghDXeKM+ccyB5GMq9dlkQ35A=="
+            }
+          }
+        }
+      }
+    }
+  ]
+}

@@ -80,7 +80,10 @@ jobs:
   # ==========================================================================
   inventory:
     name: kiểm kê + chia lát
-    runs-on: ubuntu-latest
+    # Ghim ảnh runner (18-11-2026): `ubuntu-latest` đã chuyển 24.04 -> 26.04; trên 26.04, 10 ca đo thời gian của
+    # tests/unit/test_deploy_dong_cua_ghi.py đỏ ổn định (CI PR #729, run 44239862267 / 44262023326), xanh trên 24.04
+    # (run 44005046897, 17-11). Gỡ ghim khi deploy.sh + harness đã đo đạt trên 26.04.
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
@@ -209,7 +212,10 @@ jobs:
   # ==========================================================================
   pytest-shard:
     name: pytest ${{ matrix.shard.name }}
-    runs-on: ubuntu-latest
+    # Ghim ảnh runner (18-11-2026): `ubuntu-latest` đã chuyển 24.04 -> 26.04; trên 26.04, 10 ca đo thời gian của
+    # tests/unit/test_deploy_dong_cua_ghi.py đỏ ổn định (CI PR #729, run 44239862267 / 44262023326), xanh trên 24.04
+    # (run 44005046897, 17-11). Gỡ ghim khi deploy.sh + harness đã đo đạt trên 26.04.
+    runs-on: ubuntu-24.04
     needs: [inventory]
     timeout-minutes: 75
 
@@ -337,7 +343,10 @@ jobs:
   # ==========================================================================
   coverage-guard:
     name: cổng độ phủ (không thiếu, không trùng)
-    runs-on: ubuntu-latest
+    # Ghim ảnh runner (18-11-2026): `ubuntu-latest` đã chuyển 24.04 -> 26.04; trên 26.04, 10 ca đo thời gian của
+    # tests/unit/test_deploy_dong_cua_ghi.py đỏ ổn định (CI PR #729, run 44239862267 / 44262023326), xanh trên 24.04
+    # (run 44005046897, 17-11). Gỡ ghim khi deploy.sh + harness đã đo đạt trên 26.04.
+    runs-on: ubuntu-24.04
     needs: [inventory, pytest-shard]
     # ``always()``: cổng này phải chạy KỂ CẢ khi có lát đỏ. Mặc định của
     # ``needs`` là bỏ qua job khi phụ thuộc thất bại — mà "một lát đỏ" chính là
@@ -373,7 +382,10 @@ jobs:
   # ==========================================================================
   nightly:
     name: nightly backend pytest
-    runs-on: ubuntu-latest
+    # Ghim ảnh runner (18-11-2026): `ubuntu-latest` đã chuyển 24.04 -> 26.04; trên 26.04, 10 ca đo thời gian của
+    # tests/unit/test_deploy_dong_cua_ghi.py đỏ ổn định (CI PR #729, run 44239862267 / 44262023326), xanh trên 24.04
+    # (run 44005046897, 17-11). Gỡ ghim khi deploy.sh + harness đã đo đạt trên 26.04.
+    runs-on: ubuntu-24.04
     needs: [inventory, pytest-shard, coverage-guard]
     if: always()
 
