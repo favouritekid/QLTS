@@ -249,7 +249,10 @@ jobs:
   # gate ~36 phút thì đó là cách nhanh nhất để đốt cả buổi.
   pytest-shard:
     name: pytest shard — ${{ matrix.tier }}
-    runs-on: ubuntu-latest
+    # Ghim ảnh runner (18-11-2026): `ubuntu-latest` đã chuyển 24.04 -> 26.04; trên 26.04, 10 ca đo thời gian của
+    # tests/unit/test_deploy_dong_cua_ghi.py đỏ ổn định (CI PR #729, run 44239862267 / 44262023326), xanh trên 24.04
+    # (run 44005046897, 17-11). Gỡ ghim khi deploy.sh + harness đã đo đạt trên 26.04.
+    runs-on: ubuntu-24.04
     # Thiếu khoá này thì job kế thừa trần MẶC ĐỊNH 360 phút: một leg treo giữ
     # required check `pytest` suốt sáu giờ ở trạng thái không đỏ cũng không
     # xanh. 75 phút cho biên ~2× so với đường tới hạn hiện tại (Tier 1 ≈ 2266s)
@@ -1481,7 +1484,10 @@ jobs:
   # ở 1/5 rồi 2/4 lượt. Ở đây cha chỉ là một script Python trần.
   session-survival:
     name: session survival — collected == executed
-    runs-on: ubuntu-latest
+    # Ghim ảnh runner (18-11-2026): `ubuntu-latest` đã chuyển 24.04 -> 26.04; trên 26.04, 10 ca đo thời gian của
+    # tests/unit/test_deploy_dong_cua_ghi.py đỏ ổn định (CI PR #729, run 44239862267 / 44262023326), xanh trên 24.04
+    # (run 44005046897, 17-11). Gỡ ghim khi deploy.sh + harness đã đo đạt trên 26.04.
+    runs-on: ubuntu-24.04
     # Job required PHẢI có trần thời gian. Không có nó thì một lượt collect hay
     # import bị treo sẽ giữ required check tới trần mặc định của Actions (6 giờ)
     # — cổng không đỏ, không xanh, chỉ đứng đó.
@@ -1586,7 +1592,10 @@ jobs:
   # tệp test thì cùng một PR vừa xoá ca vừa xoá dòng hằng, và cổng tự miễn trừ.
   classifier-contract:
     name: classifier contract
-    runs-on: ubuntu-latest
+    # Ghim ảnh runner (18-11-2026): `ubuntu-latest` đã chuyển 24.04 -> 26.04; trên 26.04, 10 ca đo thời gian của
+    # tests/unit/test_deploy_dong_cua_ghi.py đỏ ổn định (CI PR #729, run 44239862267 / 44262023326), xanh trên 24.04
+    # (run 44005046897, 17-11). Gỡ ghim khi deploy.sh + harness đã đo đạt trên 26.04.
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -1928,7 +1937,10 @@ jobs:
   # `== 'failure'` — viết kiểu sau thì lượt bị huỷ giữa chừng sẽ lọt qua.
   pytest:
     name: pytest
-    runs-on: ubuntu-latest
+    # Ghim ảnh runner (18-11-2026): `ubuntu-latest` đã chuyển 24.04 -> 26.04; trên 26.04, 10 ca đo thời gian của
+    # tests/unit/test_deploy_dong_cua_ghi.py đỏ ổn định (CI PR #729, run 44239862267 / 44262023326), xanh trên 24.04
+    # (run 44005046897, 17-11). Gỡ ghim khi deploy.sh + harness đã đo đạt trên 26.04.
+    runs-on: ubuntu-24.04
     needs: [pytest-shard, session-survival, classifier-contract]
     if: always()
     steps:
