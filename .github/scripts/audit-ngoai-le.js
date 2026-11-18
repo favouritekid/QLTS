@@ -28,6 +28,13 @@ const KHOA_TEP = new Set(['phien_ban', 'ngoai_le']);
 const KHOA_NGOAI_LE = new Set(['ghsa', 'het_han', 'ly_do', 'quyet_dinh', 'goi', 'nodes', 'dieu_kien']);
 const KHOA_DIEU_KIEN = new Set(['cam_chuoi_trong_thu_muc', 'cam_phu_thuoc_truc_tiep', 'ghim_lockfile']);
 const MAU_INTEGRITY = /^sha512-[A-Za-z0-9+/]+={0,2}$/;
+// Codex 75: đường dẫn hai tệp phụ thuộc CỐ ĐỊNH (không cho cấu hình trỏ sang tệp khác).
+const TEP_PACKAGE_JSON = 'frontend/package.json';
+const TEP_LOCKFILE = 'frontend/package-lock.json';
+
+function laObject(v) {
+  return v !== null && typeof v === 'object' && !Array.isArray(v);
+}
 const MAU_GHSA = /^GHSA-[23456789cfghjmpqrvwx]{4}-[23456789cfghjmpqrvwx]{4}-[23456789cfghjmpqrvwx]{4}$/;
 
 function loi(msg) {
@@ -86,17 +93,16 @@ function kiemTepNgoaiLe(cauHinh) {
       new RegExp(c.mau_ten); // regex sai ⇒ throw
       mangChuoi(c.chuoi, `${nl.ghsa}.cam_chuoi_trong_thu_muc.chuoi`);
     }
-    if (dk.cam_phu_thuoc_truc_tiep !== undefined) {
-      const p = dk.cam_phu_thuoc_truc_tiep;
-      khoaLa(p, new Set(['tep', 'goi']), `${nl.ghsa}.cam_phu_thuoc_truc_tiep`);
-      if (typeof p.tep !== 'string' || !p.tep) throw loi(`${nl.ghsa}: cam_phu_thuoc_truc_tiep thiếu tep`);
-      mangChuoi(p.goi, `${nl.ghsa}.cam_phu_thuoc_truc_tiep.goi`);
-    }
+    const p = dk.cam_phu_thuoc_truc_tiep;
+    if (!laObject(p)) throw loi(`${nl.ghsa}: thiếu cam_phu_thuoc_truc_tiep`);
+    khoaLa(p, new Set(['tep', 'goi']), `${nl.ghsa}.cam_phu_thuoc_truc_tiep`);
+    if (p.tep !== TEP_PACKAGE_JSON) throw loi(`${nl.ghsa}: cam_phu_thuoc_truc_tiep.tep phải là ${TEP_PACKAGE_JSON}`);
+    mangChuoi(p.goi, `${nl.ghsa}.cam_phu_thuoc_truc_tiep.goi`);
     // Ghim ĐÚNG bản đã đo (Codex 74): mỗi đường cài trong `nodes` phải có version + integrity của lockfile.
     const g = dk.ghim_lockfile;
     if (!g || typeof g !== 'object' || Array.isArray(g)) throw loi(`${nl.ghsa}: thiếu ghim_lockfile`);
     khoaLa(g, new Set(['tep', 'goi']), `${nl.ghsa}.ghim_lockfile`);
-    if (typeof g.tep !== 'string' || !g.tep) throw loi(`${nl.ghsa}: ghim_lockfile thiếu tep`);
+    if (g.tep !== TEP_LOCKFILE) throw loi(`${nl.ghsa}: ghim_lockfile.tep phải là ${TEP_LOCKFILE}`);
     if (!g.goi || typeof g.goi !== 'object' || Array.isArray(g.goi)) throw loi(`${nl.ghsa}: ghim_lockfile.goi phải là object`);
     const khoaGhim = Object.keys(g.goi).sort();
     if (JSON.stringify(khoaGhim) !== JSON.stringify([...nl.nodes].sort())) {
@@ -161,28 +167,36 @@ function viPhamDieuKien(nl, { docTep, lietKe }) {
       for (const s of c.chuoi) if (noi.includes(s)) lyDo.push(`${t} chứa ${JSON.stringify(s)}`);
     }
   }
-  const p = nl.dieu_kien.cam_phu_thuoc_truc_tiep;
-  if (p) {
+  // package.json + lockfile: ĐỌC ĐƯỢC thì phải đúng dạng; không đọc được hoặc sai dạng ⇒ vô hiệu (Codex 75: không bao giờ
+  // "bỏ qua phép kiểm" — `null`, mảng, chuỗi, thiếu `packages` đều là lý do vô hiệu).
+  const docJson = (tep) => {
     try {
-      const pj = JSON.parse(docTep(p.tep));
-      for (const muc of ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies']) {
-        for (const g of p.goi) if (pj[muc] && Object.prototype.hasOwnProperty.call(pj[muc], g)) lyDo.push(`${p.tep} khai ${g} trong ${muc}`);
-      }
+      return { ok: true, v: JSON.parse(docTep(tep)) };
     } catch (e) {
-      lyDo.push(`không đọc được ${p.tep}`);
+      lyDo.push(`không đọc được ${tep}`);
+      return { ok: false };
+    }
+  };
+  const p = nl.dieu_kien.cam_phu_thuoc_truc_tiep;
+  const pj = docJson(p.tep);
+  if (pj.ok && !laObject(pj.v)) lyDo.push(`${p.tep} sai dạng (không phải object)`);
+  else if (pj.ok) {
+    for (const muc of ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies']) {
+      if (pj.v[muc] === undefined) continue;
+      if (!laObject(pj.v[muc])) {
+        lyDo.push(`${p.tep} mục ${muc} sai dạng`);
+        continue;
+      }
+      for (const goi of p.goi) if (Object.prototype.hasOwnProperty.call(pj.v[muc], goi)) lyDo.push(`${p.tep} khai ${goi} trong ${muc}`);
     }
   }
   const g = nl.dieu_kien.ghim_lockfile;
-  let pk = null;
-  try {
-    pk = JSON.parse(docTep(g.tep)).packages;
-  } catch (e) {
-    lyDo.push(`không đọc được ${g.tep}`);
-  }
-  if (pk) {
+  const lock = docJson(g.tep);
+  if (lock.ok && (!laObject(lock.v) || !laObject(lock.v.packages))) lyDo.push(`${g.tep} thiếu "packages" hợp lệ`);
+  else if (lock.ok) {
     for (const [n, v] of Object.entries(g.goi)) {
-      const thuc = pk[n];
-      if (!thuc) lyDo.push(`${g.tep} không còn ${n}`);
+      const thuc = lock.v.packages[n];
+      if (!laObject(thuc)) lyDo.push(`${g.tep} không còn ${n} (hoặc sai dạng)`);
       else if (thuc.version !== v.version) lyDo.push(`${n} đổi phiên bản ${v.version} -> ${thuc.version}`);
       else if (thuc.integrity !== v.integrity) lyDo.push(`${n} đổi integrity`);
     }

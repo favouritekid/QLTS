@@ -159,6 +159,42 @@ test('Codex 74 — lockfile đổi version / integrity / mất gói ⇒ vô hi�
   }
 });
 
+test('Codex 75 — lockfile đọc được nhưng SAI DẠNG (thiếu / null / mảng / chuỗi packages, mục ghim không phải object) ⇒ vô hiệu', () => {
+  const sai = [
+    'null', '[]', '"x"', '{}', '{"packages":null}', '{"packages":[]}', '{"packages":"x"}',
+    (() => { const l = LOCK_DAT(); l.packages['node_modules/picomatch'] = null; return JSON.stringify(l); })(),
+    (() => { const l = LOCK_DAT(); l.packages['node_modules/fdir'] = '6.5.0'; return JSON.stringify(l); })(),
+    (() => { const l = LOCK_DAT(); l.packages['node_modules/@sentry/nextjs'] = []; return JSON.stringify(l); })(),
+  ];
+  for (const noi of sai) {
+    const tep = TEP_DAT();
+    tep['frontend/package-lock.json'] = noi;
+    const kq = dem(AUDIT(), NGOAI_LE(), '2026-11-18', tep);
+    assert.strictEqual(kq.so, 5, noi.slice(0, 60));
+    assert.match(kq.voHieu[0].lyDo.join(' '), /package-lock\.json (thiếu "packages" hợp lệ|không còn)/, noi.slice(0, 60));
+  }
+});
+
+test('Codex 75 — package.json đọc được nhưng SAI DẠNG ⇒ vô hiệu', () => {
+  for (const noi of ['null', '[]', '"x"', '{"dependencies":[]}', '{"dependencies":null}', '{"devDependencies":"x"}']) {
+    const tep = TEP_DAT();
+    tep['frontend/package.json'] = noi;
+    const kq = dem(AUDIT(), NGOAI_LE(), '2026-11-18', tep);
+    assert.strictEqual(kq.so, 5, noi);
+    assert.match(kq.voHieu[0].lyDo.join(' '), /package\.json (sai dạng|mục \w+ sai dạng)/, noi);
+  }
+});
+
+test('Codex 75 — lockfile / package.json không đọc được ⇒ vô hiệu', () => {
+  for (const ten of ['frontend/package-lock.json', 'frontend/package.json']) {
+    const tep = TEP_DAT();
+    delete tep[ten];
+    const kq = dem(AUDIT(), NGOAI_LE(), '2026-11-18', tep);
+    assert.strictEqual(kq.so, 5, ten);
+    assert.match(kq.voHieu[0].lyDo.join(' '), new RegExp(`không đọc được ${ten.replace(/[.]/g, '\\.')}`), ten);
+  }
+});
+
 test('package.json khai thẳng picomatch / fdir / @rollup ⇒ vô hiệu', () => {
   const tep = TEP_DAT();
   tep['frontend/package.json'] = JSON.stringify({ dependencies: { '@sentry/nextjs': '^10', fdir: '^6' } });
@@ -240,6 +276,10 @@ test('tệp ngoại lệ sai dạng ⇒ NỔ', () => {
     (c) => { delete c.ngoai_le[0].dieu_kien.ghim_lockfile; },
     (c) => { delete c.ngoai_le[0].dieu_kien.ghim_lockfile.goi['node_modules/fdir']; },
     (c) => { c.ngoai_le[0].dieu_kien.ghim_lockfile.goi['node_modules/fdir'].integrity = 'md5-abc'; },
+    // Codex 75: đường dẫn hai tệp phụ thuộc cố định; điều kiện phụ thuộc trực tiếp bắt buộc.
+    (c) => { c.ngoai_le[0].dieu_kien.ghim_lockfile.tep = 'frontend/khac-lock.json'; },
+    (c) => { c.ngoai_le[0].dieu_kien.cam_phu_thuoc_truc_tiep.tep = 'package.json'; },
+    (c) => { delete c.ngoai_le[0].dieu_kien.cam_phu_thuoc_truc_tiep; },
   ];
   for (const sua of hong) {
     const c = NGOAI_LE();
