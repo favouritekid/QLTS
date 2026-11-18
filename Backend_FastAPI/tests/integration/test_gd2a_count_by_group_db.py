@@ -21,8 +21,9 @@ async def _nhom(c, ten, *o_list, nam=2026):
     g = (
         await _x(
             c,
-            "INSERT INTO admission_quota_group (academic_year, code, name, ceiling) VALUES (:y, :c, :c, 100) RETURNING id",
-            y=nam, c=ten,
+            "INSERT INTO admission_quota_group (academic_year, code, name, ceiling) VALUES (:y, :ma, :ma, 100) "
+            "RETURNING id",
+            y=nam, ma=ten,
         )
     ).scalar_one()
     for o in o_list:
