@@ -355,33 +355,21 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         # sort / column never straddle midnight (mirror routers/invoices.py:139).
         today = today or date.today()
 
-        # Base query for filtering
-        base_conditions = []
+        # Base query for filtering — MỘT nguồn điều kiện lọc (GĐ1b A5, CLAUDE.md §7): danh sách, bộ đếm trạng thái
+        # (``get_status_counts``) và bộ chọn hồ sơ của lô duyệt giấy cùng gọi ``_build_base_conditions``. Trước đây danh sách
+        # chép tay cùng các điều kiện ⇒ ba nơi phải giữ khớp bằng mắt. Gồm: lead chưa xoá mềm, phạm vi IDOR, lọc điều phối,
+        # tìm tên, ngành, năm, trình độ (kèm cờ JOIN), học phí, khoảng ngày.
+        base_conditions, needs_program_join = self._build_base_conditions(
+            unit_id=unit_id, assigned_officer_id=assigned_officer_id,
+            search=search, major_ids=major_ids,
+            academic_year=academic_year, degree_level=degree_level,
+            payment_status=payment_status, date_from=date_from, date_to=date_to,
+            assigned_officer_ids=assigned_officer_ids,
+            assigned_reviewer_ids=assigned_reviewer_ids,
+            unassigned=unassigned, today=today,
+        )
 
-        # Exclude profiles whose parent Lead is soft-deleted (Lead.deleted_at set).
-        # Applies to BOTH count and data queries below (both JOIN Lead).
-        base_conditions.append(models.Lead.deleted_at.is_(None))
-
-        # IDOR Filter: Filter at DB level
-        if assigned_officer_id is not None:
-            base_conditions.append(models.Lead.assigned_officer_id == assigned_officer_id)
-        if unit_id is not None:
-            base_conditions.append(models.Lead.unit_id == unit_id)
-
-        # Coordination filters (admin/manager) — narrowing ONLY, layered on top of
-        # the IDOR scope above (service intersects via _resolve_coordination_filters).
-        if assigned_officer_ids:
-            base_conditions.append(
-                models.Lead.assigned_officer_id.in_(assigned_officer_ids)
-            )
-        if unassigned:
-            base_conditions.append(models.Lead.assigned_officer_id.is_(None))
-        if assigned_reviewer_ids:
-            base_conditions.append(
-                models.AdmissionProfile.assigned_reviewer_id.in_(assigned_reviewer_ids)
-            )
-
-        # Multi-status filter (new)
+        # Trạng thái + lead_id: chỉ danh sách có (bộ đếm trạng thái đếm MỌI trạng thái; lô tự giao với trạng thái chờ xét).
         if statuses and len(statuses) > 0:
             base_conditions.append(models.AdmissionProfile.status.in_(statuses))
         # Backward compatibility: single status from filters
@@ -390,35 +378,6 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
 
         if filters.get("lead_id"):
             base_conditions.append(models.AdmissionProfile.lead_id == filters["lead_id"])
-
-        # Search filter: name diacritic-insensitive (f_unaccent) + exact
-        # email/citizen_id. Shared helper keeps list parity with status-counts.
-        if search:
-            base_conditions.append(self._name_search_condition(search))
-
-        # Major/Program filter via ProgramOffering.program_id (MajorProgram ID)
-        # Requires JOIN through Lead → ProgramOffering → MajorProgram
-        if major_ids and len(major_ids) > 0:
-            base_conditions.append(models.ProgramOffering.program_id.in_(major_ids))
-
-        # Academic year filter
-        if academic_year is not None:
-            base_conditions.append(models.AdmissionProfile.academic_year == academic_year)
-
-        # Degree level or major filter requires JOIN through ProgramOffering → MajorProgram
-        needs_program_join = bool(degree_level) or bool(major_ids)
-        if degree_level:
-            base_conditions.append(models.MajorProgram.degree_level == degree_level)
-
-        # Payment status filter (subquery EXISTS pattern - no JOIN needed)
-        if payment_status:
-            self._apply_payment_status_filter(base_conditions, payment_status, today)
-
-        # Date range filter
-        if date_from:
-            base_conditions.append(models.AdmissionProfile.created_at >= date_from)
-        if date_to:
-            base_conditions.append(models.AdmissionProfile.created_at <= date_to)
 
         # Count query
         count_query = (
@@ -1454,6 +1413,7 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         file_path: Optional[str] = None,
         uploaded_at = None,  # datetime or str (for backward compatibility)
         actual_submission_format: Optional[str] = None,
+        uploaded_by: Optional[int] = None,
     ) -> Optional[models.ProfileDocument]:
         """
         Update ProfileDocument status and file metadata.
@@ -1478,6 +1438,10 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         doc.status = status
         if file_path:
             doc.file_path = file_path
+            # GĐ1b §4.3 / I1: tệp mới ⇒ ghi người tải + xoá cờ "không rõ" (kể cả khi thay tệp của giấy đang "không rõ").
+            if uploaded_by is not None:
+                doc.uploaded_by = uploaded_by
+                doc.uploaded_by_unknown = False
         if uploaded_at is not None:
             # Handle both datetime and string (backward compatibility)
             if isinstance(uploaded_at, str):
@@ -1614,134 +1578,6 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         if new_kind == "official_diploma":
             doc.supplement_due_date = None
         return doc
-
-    async def reset_document(
-        self,
-        profile_id: int,
-        document_type_code: str,
-    ) -> Optional[models.ProfileDocument]:
-        """
-        Reset a document to 'missing' status (undo submission).
-
-        Use case: User accidentally clicked "Đã nộp" or uploaded wrong file.
-        Simple undo without complex audit trail.
-
-        Args:
-            profile_id: AdmissionProfile ID
-            document_type_code: Document type code
-
-        Returns:
-            Updated ProfileDocument or None if not found
-        """
-        doc = await self.get_document_by_type(profile_id, document_type_code)
-        if not doc:
-            return None
-
-        # Reset to missing state. ADM-031 round 10 review (B2): verified_by
-        # was previously left dangling — every other verifier-side column
-        # was cleared but the user id stuck around, so audit queries on
-        # verified_by saw a verifier id for a document that is currently
-        # missing. Clear it alongside verified_at so the row is fully
-        # rewound.
-        doc.status = "missing"
-        doc.file_path = None
-        doc.actual_submission_format = None
-        doc.verified_format = None
-        doc.uploaded_at = None
-        doc.verified_at = None
-        doc.verified_by = None
-        doc.paper_submitted_at = None
-        doc.paper_submitted_by = None
-        doc.rejected_at = None
-        doc.rejected_by = None
-        doc.rejection_reason = None
-        # PR #13 — rewind graduation proof fields.
-        doc.graduation_proof_kind = None
-        doc.supplement_due_date = None
-
-        return doc
-
-    async def reject_document(
-        self,
-        profile_id: int,
-        document_type_code: str,
-        officer_id: int,
-        reason: str,
-    ) -> Optional[models.ProfileDocument]:
-        """
-        Reject a document with reason.
-        
-        User will need to re-upload or resubmit.
-        
-        Args:
-            profile_id: AdmissionProfile ID
-            document_type_code: Document type code
-            officer_id: ID of officer rejecting
-            reason: Rejection reason
-            
-        Returns:
-            Updated ProfileDocument or None if not found
-        """
-        from datetime import datetime, timezone
-        
-        doc = await self.get_document_by_type(profile_id, document_type_code)
-        if not doc:
-            return None
-        
-        doc.status = "rejected"
-        doc.rejection_reason = reason
-        doc.rejected_at = datetime.now(timezone.utc)
-        doc.rejected_by = officer_id
-        # PR #13 — a rejected graduation submission voids the "nợ bằng" debt
-        # fields (mirror reset_document) so the pending-diploma reminder + the
-        # detail badge don't surface a debt on a rejected row.
-        doc.graduation_proof_kind = None
-        doc.supplement_due_date = None
-
-        return doc
-
-    async def confirm_document_format(
-        self,
-        profile_id: int,
-        document_type_code: str,
-        verified_format: str,
-        officer_id: int,
-    ) -> Optional[models.ProfileDocument]:
-        """
-        Confirm document format and mark as verified.
-
-        This method performs the full verification:
-        1. Updates verified_format (original | certified_copy | photo)
-        2. Sets status to 'verified'
-        3. Records verification timestamp
-        4. Records officer who verified
-
-        Args:
-            profile_id: AdmissionProfile ID
-            document_type_code: Document type code
-            verified_format: original | certified_copy | photo
-            officer_id: ID of officer performing verification
-
-        Returns:
-            Updated ProfileDocument or None
-        """
-        from datetime import datetime, timezone
-
-        doc = await self.get_document_by_type(profile_id, document_type_code)
-        if not doc:
-            return None
-
-        # Full verification update
-        doc.verified_format = verified_format
-        doc.status = "verified"
-        doc.verified_at = datetime.now(timezone.utc)
-        doc.verified_by = officer_id
-
-        return doc
-
-    # =========================================================================
-    # CONFIRMATION TOKEN METHODS (Magic Link)
-    # =========================================================================
 
     async def create_confirmation_token(
         self,

@@ -208,6 +208,7 @@ class TestUploadFinalizeTrue:
             document_type_id=staging_doc_type.id,
             status="rejected",
             file_path=old_path,
+            uploaded_by_unknown=True,  # GĐ1b I1: dữ liệu dựng sẵn — không rõ người tải
             uploaded_at=datetime.now(timezone.utc),
             rejection_reason="too blurry",
         )
@@ -292,6 +293,7 @@ class TestUploadFinalizeFalse:
             document_type_id=staging_doc_type.id,
             status="rejected",
             file_path=old_path,
+            uploaded_by_unknown=True,  # GĐ1b I1: dữ liệu dựng sẵn — không rõ người tải
             uploaded_at=datetime.now(timezone.utc),
             rejection_reason="needs reupload",
         )
@@ -453,17 +455,21 @@ class TestResetFinalizeTrue:
             document_type_id=staging_doc_type.id,
             status="uploaded",
             file_path=old_path,
+            uploaded_by_unknown=True,  # GĐ1b I1: dữ liệu dựng sẵn — không rõ người tải
             uploaded_at=datetime.now(timezone.utc),
         )
         db.add(existing)
         await db.flush()
         existing_id = existing.id
 
+        await db.refresh(existing)
         _profile, finalize = await admission_service.reset_document(
             db=db,
             profile_id=staging_profile.id,
             doc_code=staging_doc_type.code,
             current_user=staging_user,
+            reason="Tải nhầm tệp",  # GĐ1b §4.2: Đặt lại bắt buộc lý do
+            expected_row_version=existing.row_version,
         )
 
         # Service must NOT have deleted the file yet.
@@ -513,17 +519,21 @@ class TestResetFinalizeFalse:
             document_type_id=staging_doc_type.id,
             status="uploaded",
             file_path=old_path,
+            uploaded_by_unknown=True,  # GĐ1b I1: dữ liệu dựng sẵn — không rõ người tải
             uploaded_at=datetime.now(timezone.utc),
         )
         db.add(existing)
         await db.flush()
         existing_id = existing.id
 
+        await db.refresh(existing)
         _profile, finalize = await admission_service.reset_document(
             db=db,
             profile_id=staging_profile.id,
             doc_code=staging_doc_type.code,
             current_user=staging_user,
+            reason="Tải nhầm tệp",  # GĐ1b §4.2: Đặt lại bắt buộc lý do
+            expected_row_version=existing.row_version,
         )
 
         # Simulate the router's commit failing → rollback + finalize(False).

@@ -124,6 +124,8 @@ async def test_checklist_exposes_document_id_for_extra_doc(
                 status="uploaded",
                 file_path=f"uploads/admissions/{pid}/extra_{ts}.pdf",
                 uploaded_at=datetime.now(timezone.utc),
+                # GĐ1b I1: giấy thường có tệp phải biết người tải.
+                uploaded_by=officer_user_in_db["id"],
             )
             s.add(pd)
             await s.flush()

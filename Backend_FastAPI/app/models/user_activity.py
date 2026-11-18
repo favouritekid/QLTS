@@ -20,7 +20,8 @@ class UserActivityLog(Base):
     actor_id = Column(Integer, ForeignKey("user.id"), nullable=True, index=True)
 
     # Target user (for user management actions)
-    target_user_id = Column(Integer, ForeignKey("user.id"), nullable=True, index=True)
+    # GĐ1b K4: tài khoản BỊ thao tác — xoá tài khoản thì CSDL gán NULL (trước đây ORM tự làm qua activities_received).
+    target_user_id = Column(Integer, ForeignKey("user.id", ondelete="SET NULL"), nullable=True, index=True)
 
     # Action type: login, logout, create_user, update_user, delete_user, change_role, etc.
     action = Column(String(100), nullable=False, index=True)

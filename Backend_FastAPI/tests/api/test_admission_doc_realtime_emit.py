@@ -23,6 +23,7 @@ helper directly counts ``await``s 1:1 with mutation success.
 """
 
 from __future__ import annotations
+from tests.fixtures.gd1b import phien_ban_giay  # GĐ1b: expected_row_version
 
 from datetime import datetime
 from unittest.mock import AsyncMock, patch
@@ -328,7 +329,7 @@ async def test_verify_emits_data_updated(
         resp = await client.patch(
             f"{ADMISSIONS}/{pid}/documents/{realtime_config['upload_doc_code']}/verify-format",
             headers=admin,
-            json={"format": "photo"},
+            json={"format": "photo", "expected_row_version": await phien_ban_giay(pid, realtime_config['upload_doc_code'])},
         )
         assert resp.status_code == 200, resp.text
 
@@ -368,7 +369,8 @@ async def test_reject_emits_data_updated(
         resp = await client.post(
             f"{ADMISSIONS}/{pid}/documents/{realtime_config['upload_doc_code']}/reject",
             headers=admin,
-            json={"reason": "Bản scan mờ, vui lòng upload lại bản rõ hơn"},
+            json={"reason": "Bản scan mờ, vui lòng upload lại bản rõ hơn",
+                  "expected_row_version": await phien_ban_giay(pid, realtime_config['upload_doc_code'])},
         )
         assert resp.status_code == 200, resp.text
 
@@ -411,7 +413,7 @@ async def test_reset_emits_data_updated_and_response_parity(
         resp = await client.post(
             f"{ADMISSIONS}/{pid}/documents/{realtime_config['upload_doc_code']}/reset",
             headers=admin,
-            json={},
+            json={"reason": "Tải nhầm tệp", "expected_row_version": await phien_ban_giay(pid, realtime_config['upload_doc_code'])},
         )
         assert resp.status_code == 200, resp.text
         body = resp.json()
@@ -559,7 +561,7 @@ async def test_reset_does_not_emit_when_finalize_raises(
             await client.post(
                 f"{ADMISSIONS}/{pid}/documents/{realtime_config['upload_doc_code']}/reset",
                 headers=admin,
-                json={},
+                json={"reason": "Tải nhầm tệp", "expected_row_version": await phien_ban_giay(pid, realtime_config['upload_doc_code'])},
             )
 
     assert mock_emit.await_count == 0, (

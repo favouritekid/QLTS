@@ -794,7 +794,7 @@ def test_metadata(mau):
     bo = _bo_giai()
     kq = render_council_documents(bo, mau, TS_1844_GIA)
     md = kq.metadata
-    assert md["luat_render"] == RENDER_RULE == "v1.1" and md["tran_uu_tien"] == 2.75
+    assert md["luat_render"] == RENDER_RULE == "v1.2" and md["tran_uu_tien"] == 2.75  # GĐ1b §4.6
     assert md["sha256_mau"] == {
         "bien_ban": hashlib.sha256(mau.bien_ban).hexdigest(),
         "quyet_dinh": hashlib.sha256(mau.quyet_dinh).hexdigest(),

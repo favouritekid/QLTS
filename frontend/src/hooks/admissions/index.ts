@@ -46,9 +46,6 @@ export {
   useDeleteAdmission,
   useUploadAdmissionDocument,
   useMarkPaperSubmitted,
-  useVerifyDocument,
-  useRejectDocument,
-  useResetDocument,
   // Bulk Actions
   useBulkApproveAdmissions,
   useBulkRejectAdmissions,

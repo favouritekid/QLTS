@@ -405,7 +405,10 @@ async def test_accountant_deny_rows_seeded(setup_test_database):
       - V3 (2026-10-11) added 1 deny row on
         /api/v2/admissions/*/applicable-circular (đổi thông tư áp dụng —
         accountant kế thừa officer; migration `v3circ20261011b`).
-      - Total NOW: 55 deny rows. (Con số này từng ghi 42 trong khi tập
+      - GĐ1b (2026-11-17) added 8 deny rows on /api/admissions/cross-review/*
+        (duyệt chéo cấp cho cán bộ; accountant kế thừa officer ⇒ deny;
+        migration `gd1b20261117`).
+      - Total NOW: 63 deny rows. (Con số này từng ghi 42 trong khi tập
         thật đã là 53 — các wave sau không cập nhật docstring. Đã đếm
         lại theo `expected` bên dưới.)
     """
@@ -520,6 +523,17 @@ async def test_accountant_deny_rows_seeded(setup_test_database):
             # (owner T2c + Q3). Accountant kế thừa officer ⇒ deny tường minh.
             # Migration `v3circ20261011b`.
             ("/api/v2/admissions/*/applicable-circular",           "POST"),
+            # GĐ1b (2026-11-17) — duyệt chéo tạm thời: cấp cho CÁN BỘ; kế toán kế
+            # thừa officer ⇒ deny tường minh cả 8 route (đặc tả 3.6 §6). Migration
+            # `gd1b20261117` (template `_gd1b20261117_bulk_verify`).
+            ("/api/admissions/cross-review/queue",                 "GET"),
+            ("/api/admissions/cross-review/verify",                "POST"),
+            ("/api/admissions/cross-review/reject",                "POST"),
+            ("/api/admissions/cross-review/bulk-verify/preview",   "POST"),
+            ("/api/admissions/cross-review/bulk-verify/{batch_id}/execute", "POST"),
+            ("/api/admissions/cross-review/bulk-verify/{batch_id}", "GET"),
+            ("/api/admissions/cross-review/bulk-verify/{batch_id}/finalize", "POST"),
+            ("/api/admissions/cross-review/bulk-verify",           "GET"),
         }
         assert observed == expected, (
             f"Accountant deny-row set drifted. "

@@ -1278,7 +1278,7 @@ async def delete_existing_user(
     )
 
     # Delete user AFTER logging (service handles cascading deletes)
-    await user_service.delete_user(db, user_id)
+    await user_service.delete_user(db, user_id, actor_id=current_admin.id)
 
     await db.commit()
 

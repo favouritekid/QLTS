@@ -3190,6 +3190,20 @@ async def get_admission_for_user_read(
     return profile
 
 
+async def get_admission_for_document_history(
+    profile: models.AdmissionProfile = Depends(get_admission_for_user_read),
+    current_user: models.User = Depends(get_current_active_user),
+) -> models.AdmissionProfile:
+    """GĐ1b K2 (đặc tả bản 3.6 §4.7, §4.6b): lịch sử giấy + tệp bằng chứng — CHỈ Quản lý trong phạm vi / Admin.
+
+    Phạm vi hồ sơ qua ``get_admission_for_user_read`` (3 tầng, 404 giả); thêm cổng vai: cán bộ (kể cả cán bộ được cấp
+    duyệt chéo), kế toán ⇒ 404 cùng thân — không lộ hồ sơ tồn tại.
+    """
+    if current_user.role not in (UserRole.ADMIN, UserRole.MANAGER):
+        raise ResourceNotFoundError(detail=f"Admission profile {profile.id} not found")
+    return profile
+
+
 async def get_optional_profile_cultural_for_audience(
     profile_id: Optional[int] = Query(
         None,
@@ -4288,3 +4302,159 @@ async def council_document_permissions(
             met = met and admin_only_met
         out[flag] = met
     return out
+
+
+# =====================================================================================================================
+# GĐ1b — lô duyệt giấy + duyệt chéo tạm thời (agent lô). Hợp đồng API GĐ1b bản 4 §2.1, §2.2; đặc tả bản 3.6 §5, §6.
+# CHỈ THÊM hàm mới, không sửa hàm có sẵn. Quyền / IDOR ở đây; 404 CÙNG THÂN cho "không có" và "không được xem".
+# =====================================================================================================================
+from uuid import UUID as _GD1B_UUID  # noqa: E402
+
+from ..schemas.document_bulk import CrossReviewActionRequest as _CrossReviewActionRequest  # noqa: E402
+
+#: Thân 404 chung của đường duyệt chéo (người không có quyền còn hiệu lực / hồ sơ ngoài phạm vi quyền).
+CROSS_REVIEW_NOT_FOUND_DETAIL = "Không tìm thấy"
+
+
+async def require_bulk_verify_reviewer(
+    current_user: models.User = Depends(check_permission),
+) -> models.User:
+    """Lô duyệt giấy (§5): Quản lý CÓ đơn vị / Admin. Casbin đã chặn vai khác; Quản lý chưa gán đơn vị ⇒ 403 (fail-closed —
+    kho lọc coi ``unit_id=None`` là "mọi đơn vị")."""
+    if bulk_verify_reviewer_allowed(current_user):
+        return current_user
+    if current_user.role == UserRole.MANAGER:
+        manager_unit_scope_or_deny(current_user)  # ném câu "chưa gán đơn vị"
+    raise PermissionDeniedError(detail="Admin or Manager access required for this operation.")
+
+
+def bulk_verify_reviewer_allowed(current_user: models.User) -> bool:
+    """MỘT vị từ (sau Casbin) cho cổng ``require_bulk_verify_reviewer`` VÀ cờ ``bulk_verify_eligible`` (bổ sung hợp đồng bản 6
+    C1): Admin; Quản lý CÓ đơn vị."""
+    if current_user.role == UserRole.ADMIN:
+        return True
+    return current_user.role == UserRole.MANAGER and current_user.unit_id is not None
+
+
+def bulk_verify_eligible(request: Request, current_user: models.User) -> bool:
+    """Cờ giao diện "được chạy lô duyệt giấy" = ĐÚNG các cổng của ``POST …/bulk-verify/preview``: Casbin (cùng hàm
+    ``casbin_allows`` của ``check_permission``, trên đường dẫn THẬT của route) VÀ ``bulk_verify_reviewer_allowed``. Không
+    có enforcer ⇒ False (fail-closed)."""
+    enforcer = getattr(request.app.state, "enforcer", None)
+    if not enforcer:
+        return False
+    path = request.app.url_path_for("preview_bulk_verify")
+    return casbin_allows(enforcer, current_user, path, "POST") and bulk_verify_reviewer_allowed(current_user)
+
+
+async def _gd1b_bulk_batch_for(
+    db: AsyncSession,
+    batch_id: _GD1B_UUID,
+    user: models.User,
+    *,
+    allow_admin: bool,
+    review_mode: Optional[str],
+):
+    """§5.3 bước 0 / §5.6 / §5.7 bước 0: đọc dòng lô KHÔNG khoá, kiểm quyền TRƯỚC mọi truy vấn khoá. Không có / không phải
+    người tạo (/ không phải Admin khi được xem) / mã không phải UUID v4 / sai đường ⇒ 404 CÙNG THÂN."""
+    from ..repositories import document_bulk_repository as bulk_repo
+    from ..services.document_bulk_verify_service import BatchNotFound
+
+    if batch_id.version != 4:
+        raise BatchNotFound()
+    batch = await bulk_repo.read_batch(db, batch_id)
+    if batch is None or (review_mode is not None and batch.review_mode != review_mode):
+        raise BatchNotFound()
+    if batch.actor_user_id == user.id:
+        return batch
+    if allow_admin and user.role == UserRole.ADMIN:
+        return batch
+    raise BatchNotFound()
+
+
+async def get_bulk_batch_for_execute(
+    batch_id: _GD1B_UUID = Path(..., description="Batch ID (UUID v4)"),
+    current_user: models.User = Depends(require_bulk_verify_reviewer),
+    db: AsyncSession = Depends(database.get_db),
+):
+    """CHỈ người tạo chạy lô (§5.3) — quyền xem của Admin KHÔNG suy ra quyền chạy."""
+    return await _gd1b_bulk_batch_for(db, batch_id, current_user, allow_admin=False, review_mode="batch")
+
+
+async def get_bulk_batch_for_view(
+    batch_id: _GD1B_UUID = Path(..., description="Batch ID (UUID v4)"),
+    current_user: models.User = Depends(require_bulk_verify_reviewer),
+    db: AsyncSession = Depends(database.get_db),
+):
+    """Xem / chốt (§5.6, §5.7): người tạo hoặc Admin (ngoại lệ X3). Mọi chế độ lô (Admin xem cả lô chéo)."""
+    return await _gd1b_bulk_batch_for(db, batch_id, current_user, allow_admin=True, review_mode=None)
+
+
+async def require_cross_review_admin(
+    current_user: models.User = Depends(check_permission),
+) -> models.User:
+    """Cấp / thu hồi / liệt kê quyền duyệt chéo: CHỈ Admin (§6, C3)."""
+    if current_user.role != UserRole.ADMIN:
+        raise PermissionDeniedError(detail="Admin access required for this operation.")
+    return current_user
+
+
+async def require_cross_reviewer(
+    current_user: models.User = Depends(check_permission),
+    db: AsyncSession = Depends(database.get_db),
+) -> models.User:
+    """Đường duyệt chéo (§6): Cán bộ đang hoạt động có ÍT NHẤT MỘT quyền còn hiệu lực (``clock_timestamp()``). Không đạt ⇒ 404
+    cùng thân (không lộ đường tồn tại). Lõi ``transition_document`` kiểm lại đúng quyền dưới khoá."""
+    from ..repositories import document_bulk_repository as bulk_repo
+
+    if current_user.role != UserRole.OFFICER:
+        raise ResourceNotFoundError(detail=CROSS_REVIEW_NOT_FOUND_DETAIL)
+    if not await bulk_repo.active_grants_for_user(db, current_user.id):
+        raise ResourceNotFoundError(detail=CROSS_REVIEW_NOT_FOUND_DETAIL)
+    return current_user
+
+
+async def get_cross_bulk_batch_for_execute(
+    batch_id: _GD1B_UUID = Path(..., description="Batch ID (UUID v4)"),
+    current_user: models.User = Depends(require_cross_reviewer),
+    db: AsyncSession = Depends(database.get_db),
+):
+    return await _gd1b_bulk_batch_for(db, batch_id, current_user, allow_admin=False, review_mode="cross")
+
+
+async def get_cross_bulk_batch_for_view(
+    batch_id: _GD1B_UUID = Path(..., description="Batch ID (UUID v4)"),
+    current_user: models.User = Depends(require_cross_reviewer),
+    db: AsyncSession = Depends(database.get_db),
+):
+    return await _gd1b_bulk_batch_for(db, batch_id, current_user, allow_admin=False, review_mode="cross")
+
+
+async def get_cross_review_action_target(
+    body: _CrossReviewActionRequest,
+    current_user: models.User = Depends(require_cross_reviewer),
+    db: AsyncSession = Depends(database.get_db),
+) -> _CrossReviewActionRequest:
+    """Duyệt / từ chối chéo lẻ: hồ sơ phải thuộc ĐƠN VỊ của một quyền còn hiệu lực của người gọi, lead chưa xoá mềm, KHÔNG do
+    chính người gọi phụ trách — không thì 404 cùng thân (không lộ hồ sơ của đơn vị khác). Đúng ``grant_id`` / đúng thao tác
+    do lõi kiểm dưới khoá (409 ``actor_not_authorized``)."""
+    from sqlalchemy import select as _select
+
+    from ..repositories import document_bulk_repository as bulk_repo
+
+    row = (
+        await db.execute(
+            _select(models.Lead.unit_id, models.Lead.assigned_officer_id, models.Lead.deleted_at)
+            .join(models.AdmissionProfile, models.AdmissionProfile.lead_id == models.Lead.id)
+            .where(models.AdmissionProfile.id == body.profile_id)
+        )
+    ).first()
+    units = {g.unit_id for g in await bulk_repo.active_grants_for_user(db, current_user.id)}
+    if (
+        row is None
+        or row.deleted_at is not None
+        or row.unit_id not in units
+        or row.assigned_officer_id == current_user.id
+    ):
+        raise ResourceNotFoundError(detail=CROSS_REVIEW_NOT_FOUND_DETAIL)
+    return body

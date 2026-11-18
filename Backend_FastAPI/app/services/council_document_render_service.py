@@ -88,7 +88,7 @@ from pydantic import field_validator, model_validator
 from app.utils.exceptions import DataValidationError, FileValidationError
 
 # Nhãn luật render — ghi vào metadata của mỗi bộ văn bản.
-RENDER_RULE = "v1.1"
+RENDER_RULE = "v1.2"  # GĐ1b §4.6: giấy đã duyệt in theo verified_format
 
 # Trần tổng điểm ưu tiên (khu vực + đối tượng) của luật v1.1 (= v1) — bộ xuất ghim 2.75 theo
 # ``max_total_bonus`` của quy tắc mặc định trên production lúc in. KHÔNG phải cấu
@@ -118,6 +118,18 @@ VALID_CULTURE_LABELS = frozenset().union(*(nhan for _, nhan in CULTURE_BY_COLUMN
 VALID_SPECIALTIES = ("", "none", "so_cap", "trung_cap", "cao_dang")
 
 _SYMBOLS = {"certified_copy": "Ct", "photo": "Pt", "original": "C"}
+
+#: Cặp (trạng thái, hình thức) của 6 loại giấy in ký hiệu hình thức trên Danh sách 1 (:func:`_list1_row`).
+_PRINTED_FORMAT_FIELDS = (
+    ("s_hocba", "f_hocba"),
+    ("s_bang", "f_bang"),
+    ("s_cngdpt", "f_cngdpt"),
+    ("s_ks", "f_ks"),
+    ("s_cccd", "f_cccd"),
+    ("s_anh", "f_anh"),
+)
+#: GĐ1b luật v1.2 — mã lỗi dữ liệu: giấy đã duyệt mà hình thức đã xác nhận trống / lạ.
+ERROR_VERIFIED_FORMAT_INVALID = "verified_format_invalid"
 
 # Số chỗ trống của từng tham số trong mẫu Quyết định đang dùng. Lệch ⇒ mẫu đã đổi cấu
 # trúc ⇒ DỪNG thay vì in một văn bản điền nửa vời.
@@ -402,6 +414,9 @@ ROW_DATA_ERROR_REASONS: Dict[str, str] = {
     "du_lieu_chuyen_mon_la": "trình độ chuyên môn không thuộc nhãn đã biết",
     "du_lieu_thieu_ma_nganh": "nhóm ngành của hồ sơ chưa có mã ngành — không dựng được Điều 1 của Quyết định",
     "du_lieu_ma_nganh_mau_thuan": "các hồ sơ cùng ngành, cùng trình độ ghi mã ngành khác nhau",
+    ERROR_VERIFIED_FORMAT_INVALID: (
+        "giấy đã duyệt nhưng chưa ghi hình thức đã xác nhận (hoặc hình thức lạ) — Đặt lại rồi duyệt lại giấy đó"
+    ),
 }
 _TEXT_ERROR_CODES = ("du_lieu_khong_phai_chuoi", "du_lieu_ky_tu_la")
 
@@ -425,6 +440,11 @@ def row_data_error(row: CandidateRowV1) -> Optional[Tuple[str, Optional[str]]]:
         return ("du_lieu_van_hoa_la", None)
     if row.chuyen_mon not in VALID_SPECIALTIES:
         return ("du_lieu_chuyen_mon_la", None)
+    # Luật v1.2 (GĐ1b §4.6): giấy ĐÃ duyệt mà hình thức đã xác nhận trống / lạ ⇒ DỪNG, KHÔNG âm thầm in thành "C".
+    # Mã MỚI của GĐ1b — tiếng Anh (quy ước owner 17-11); các mã ``du_lieu_*`` của GĐ1 giữ nguyên.
+    for status_field, format_field in _PRINTED_FORMAT_FIELDS:
+        if getattr(row, status_field) == "verified" and getattr(row, format_field).strip() not in _SYMBOLS:
+            return (ERROR_VERIFIED_FORMAT_INVALID, format_field)
     return None
 
 
@@ -478,6 +498,11 @@ def _row_error_message(line: int, error: Tuple[str, Optional[str]]) -> str:
         return (
             "Dòng %d: trình độ văn hoá rỗng hoặc không thuộc nhãn đã biết "
             "— không dựng thống kê Biên bản." % line
+        )
+    if code == ERROR_VERIFIED_FORMAT_INVALID:
+        return (
+            "Dòng %d, trường %s: giấy đã duyệt nhưng hình thức đã xác nhận trống hoặc không hợp lệ "
+            "— không dựng văn bản (luật in v1.2)." % (line, field)
         )
     return "Dòng %d: trình độ chuyên môn không thuộc %s." % (
         line, " / ".join(repr(x) for x in VALID_SPECIALTIES)

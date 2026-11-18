@@ -12,6 +12,7 @@ import type { Notification } from "@/types/api.types";
 import { useQueryClient } from "@tanstack/react-query";
 import { leadsKeys } from "@/hooks/useLeads";
 import { admissionsKeys } from "@/hooks/admissions/useAdmissions";
+import { onBulkVerifyFinished } from "@/hooks/document-review/useBulkVerify";
 import { feesKeys } from "@/hooks/finance/useFees";
 import { invoicesKeys } from "@/hooks/finance/useInvoices";
 import { refundsKeys } from "@/hooks/finance/useRefunds";
@@ -1360,6 +1361,14 @@ export function SocketHandler() {
     socket.on("priority_object_verified", handlePriorityEvent);
     socket.on("priority_object_rejected", handlePriorityEvent);
 
+    // GĐ1b (đặc tả §5.9, bản 6 C2.3) — `bulk_verify_finished {batch_id}` tới phòng của NGƯỜI TẠO lô sau commit cuối:
+    // làm mới danh sách hồ sơ, bộ đếm, chi tiết các hồ sơ thuộc lô (profile_id lấy từ GET lô) và trang lô nếu đang mở.
+    // CHỈ đọc / làm mới — không gửi lại lệnh nào. Không in payload.
+    const handleBulkVerifyFinished = (data: unknown) => {
+      void onBulkVerifyFinished(queryClient, data);
+    };
+    socket.on("bulk_verify_finished", handleBulkVerifyFinished);
+
     // DEBUG: Log incoming Socket.IO events to diagnose real-time sync.
     // (`debugSocketPayload` declared earlier at top of effect.)
     const handleAnyEvent = (event: string, ...args: unknown[]) => {
@@ -1426,6 +1435,9 @@ export function SocketHandler() {
       socket.off("priority_kv_overridden", handlePriorityEvent);
       socket.off("priority_object_verified", handlePriorityEvent);
       socket.off("priority_object_rejected", handlePriorityEvent);
+
+      // GĐ1b — bulk_verify_finished cleanup
+      socket.off("bulk_verify_finished", handleBulkVerifyFinished);
 
       socket.offAny(handleAnyEvent);
     };

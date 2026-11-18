@@ -19,20 +19,23 @@
  *    officers read the cohort state at a glance and the row actions
  *    have a stable column. Mobile <md still gets a stacked card.
  */
-import { describe, it, expect, vi } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import { render, screen } from "@/test/utils/test-utils";
-import { within, fireEvent } from "@testing-library/react";
+import { within, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { http, HttpResponse } from "msw";
+
+import { server } from "@/test/mocks/server";
 
 import { DocumentsTab } from "./DocumentsTab";
 
-vi.mock("@/hooks/admissions/useAdmissions", () => ({
+// Mock MỘT PHẦN: giữ `admissionsKeys` thật (hook GĐ1b làm mới cache theo khoá ấy); chỉ thay ba hook nhận giấy.
+// Duyệt / Từ chối / Đặt lại / Lịch sử GĐ1b đi qua axios THẬT + MSW (`@/test/mocks/server`).
+vi.mock("@/hooks/admissions/useAdmissions", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/admissions/useAdmissions")>()),
   useUploadAdmissionDocument: () => ({ mutate: vi.fn(), isPending: false, variables: undefined }),
   useMarkPaperSubmitted: () => ({ mutate: vi.fn(), isPending: false, variables: undefined }),
   useUpdateGraduationProof: () => ({ mutate: vi.fn(), isPending: false }),
-  useRejectDocument: () => ({ mutate: vi.fn(), isPending: false }),
-  useResetDocument: () => ({ mutate: vi.fn(), isPending: false, variables: undefined }),
-  useVerifyDocument: () => ({ mutate: vi.fn(), isPending: false, variables: undefined }),
 }));
 
 type DocRow = {
@@ -45,6 +48,17 @@ type DocRow = {
   can_reject?: boolean;
   can_reset?: boolean;
   can_mark_paper_submitted?: boolean;
+  // GĐ1b (hợp đồng bản 5 B1) — buildProfile điền mặc định; ca kiểm đè khi cần
+  can_verify?: boolean;
+  can_view_history?: boolean;
+  document_row_id?: number | null;
+  row_version?: number | null;
+  verify_block_reason?: string | null;
+  requires_ack?: boolean;
+  reset_requires_reason?: boolean;
+  reset_keeps_evidence?: boolean;
+  can_change_format?: boolean;
+  is_extra?: boolean;
   submission_format?: string | null;
   actual_submission_format?: string | null;
   verified_format?: string | null;
@@ -63,7 +77,20 @@ function buildProfile(docs: DocRow[]) {
   return {
     id: 1,
     status: "draft",
-    documents_checklist: docs,
+    // GĐ1b bản 5 B1: khoá định danh + cờ LUÔN có trong phản hồi hồ sơ ⇒ mặc định "có dòng, mọi cờ tắt".
+    documents_checklist: docs.map((d, i) => ({
+      document_row_id: i + 1,
+      row_version: 1,
+      can_verify: false,
+      can_reject: false,
+      can_reset: false,
+      can_view_history: false,
+      verify_block_reason: null,
+      requires_ack: false,
+      reset_requires_reason: false,
+      reset_keeps_evidence: false,
+      ...d,
+    })),
     // DocumentsTab reads applied_rules.upload_config up front for file-size /
     // allowed-type hints; stub an empty rule set so render doesn't crash.
     applied_rules: {
@@ -161,7 +188,7 @@ describe("DocumentsTab — per-row permission flags", () => {
     // (mobile card duplicate would also match).
     const table = screen.getByRole("table");
     expect(
-      within(table).getByRole("button", { name: /đặt lại tài liệu về chưa nộp/i }),
+      within(table).getByRole("button", { name: /^đặt lại giấy bằng tốt nghiệp$/i }),
     ).toBeInTheDocument();
   });
 
@@ -548,7 +575,7 @@ describe("DocumentsTab — ADM-031 round 7 verify button", () => {
     render(<DocumentsTab profile={profile as never} isEditable />);
     const table = screen.getByRole("table");
     expect(
-      within(table).getByRole("button", { name: /duyệt tài liệu/i }),
+      within(table).getByRole("button", { name: /^duyệt giấy học bạ$/i }),
     ).toBeInTheDocument();
   });
 
@@ -565,7 +592,7 @@ describe("DocumentsTab — ADM-031 round 7 verify button", () => {
     ]);
     render(<DocumentsTab profile={profile as never} isEditable />);
     expect(
-      screen.queryByRole("button", { name: /duyệt tài liệu/i }),
+      screen.queryByRole("button", { name: /duyệt giấy/i }),
     ).not.toBeInTheDocument();
   });
 });
@@ -1483,5 +1510,234 @@ describe("DocumentsTab — fast-track nợ giấy tờ banner", () => {
     render(<DocumentsTab profile={profile as never} isEditable />);
     const banner = screen.getByRole("status");
     expect(within(banner).getByText("mystery_doc")).toBeInTheDocument();
+  });
+});
+
+// =============================================================================
+// GĐ1b — nối nút lẻ (hợp đồng bản 4 §2.4 + bản 5; biên bản V4 §3)
+// =============================================================================
+
+describe("DocumentsTab — GĐ1b nút lẻ theo cờ máy chủ", () => {
+  const API = "http://localhost:8000";
+  afterEach(() => server.resetHandlers());
+
+  function giayDuyet(over: Partial<DocRow> = {}): DocRow {
+    return {
+      code: "HOC_BA",
+      label: "Học bạ",
+      status: "paper_submitted",
+      is_mandatory: true,
+      requires_upload: false,
+      actual_submission_format: "certified_copy",
+      document_row_id: 31,
+      row_version: 7,
+      ...over,
+    };
+  }
+
+  it("aria-label các nút GĐ1b mang TÊN giấy (hai giấy ⇒ phân biệt được)", () => {
+    const profile = buildProfile([
+      giayDuyet({ can_verify: true, can_reject: true, can_reset: true, can_view_history: true }),
+      giayDuyet({
+        code: "CCCD",
+        label: "Căn cước",
+        document_row_id: 32,
+        can_verify: true,
+        can_reject: true,
+        can_reset: true,
+        can_view_history: true,
+      }),
+    ]);
+    render(<DocumentsTab profile={profile as never} isEditable />);
+    const table = screen.getByRole("table");
+    for (const ten of ["Học bạ", "Căn cước"]) {
+      for (const nut of ["Duyệt giấy", "Từ chối giấy", "Đặt lại giấy", "Lịch sử giấy"]) {
+        expect(within(table).getByRole("button", { name: `${nut} ${ten}` })).toBeInTheDocument();
+      }
+    }
+  });
+
+  it("mọi cờ GĐ1b tắt ⇒ không nút Duyệt / Từ chối / Đặt lại / Lịch sử", () => {
+    render(<DocumentsTab profile={buildProfile([giayDuyet()]) as never} isEditable />);
+    const table = screen.getByRole("table");
+    expect(
+      within(table).queryByRole("button", { name: /duyệt giấy|từ chối giấy|đặt lại giấy|lịch sử giấy/i }),
+    ).toBeNull();
+  });
+
+  it("Duyệt mở hộp chọn hình thức (mặc định = hình thức lúc nhận) và gửi expected_row_version = row_version", async () => {
+    const than: unknown[] = [];
+    server.use(
+      http.patch(`${API}/api/admissions/1/documents/HOC_BA/verify-format`, async ({ request }) => {
+        than.push(await request.json());
+        return HttpResponse.json({ id: 1 });
+      }),
+    );
+    const user = userEvent.setup();
+    render(<DocumentsTab profile={buildProfile([giayDuyet({ can_verify: true, can_change_format: true })]) as never} isEditable />);
+    await user.click(within(screen.getByRole("table")).getByRole("button", { name: "Duyệt giấy Học bạ" }));
+    const hop = await screen.findByRole("dialog");
+    expect(within(hop).getByLabelText("Bản sao chứng thực")).toBeChecked();
+    await user.click(within(hop).getByRole("button", { name: "Duyệt" }));
+    await waitFor(() => expect(than).toHaveLength(1));
+    expect(than[0]).toEqual({ format: "certified_copy", expected_row_version: 7, unknown_submitter_ack: false });
+  });
+
+  it("Duyệt giấy thiếu hình thức lúc nhận ⇒ KHÔNG dự phòng photo: nút Duyệt khoá tới khi chọn", async () => {
+    const user = userEvent.setup();
+    render(
+      <DocumentsTab
+        profile={buildProfile([giayDuyet({ can_verify: true, can_change_format: true, actual_submission_format: null })]) as never}
+        isEditable
+      />,
+    );
+    await user.click(within(screen.getByRole("table")).getByRole("button", { name: "Duyệt giấy Học bạ" }));
+    const hop = await screen.findByRole("dialog");
+    expect(within(hop).getByRole("button", { name: "Duyệt" })).toBeDisabled();
+  });
+
+  it("Đặt lại: hộp bắt buộc lý do; giấy đã duyệt giữ tệp ⇒ câu giữ tệp scan, không câu xoá tệp; thân {reason, expected_row_version}", async () => {
+    const than: unknown[] = [];
+    server.use(
+      http.post(`${API}/api/admissions/1/documents/HOC_BA/reset`, async ({ request }) => {
+        than.push(await request.json());
+        return HttpResponse.json({ id: 1 });
+      }),
+    );
+    const user = userEvent.setup();
+    render(
+      <DocumentsTab
+        profile={
+          buildProfile([
+            giayDuyet({
+              status: "verified",
+              requires_upload: true,
+              document_id: 31,
+              verified_format: "certified_copy",
+              can_reset: true,
+              reset_requires_reason: true,
+              reset_keeps_evidence: true,
+            }),
+          ]) as never
+        }
+        isEditable
+      />,
+    );
+    await user.click(within(screen.getByRole("table")).getByRole("button", { name: "Đặt lại giấy Học bạ" }));
+    const hop = await screen.findByRole("dialog");
+    expect(hop).toHaveTextContent("Tệp scan được giữ lại");
+    expect(hop.textContent ?? "").not.toMatch(/sẽ bị x[oó]a/i);
+    const nut = within(hop).getByRole("button", { name: "Đặt lại" });
+    expect(nut).toBeDisabled();
+    await user.type(within(hop).getByLabelText(/Lý do đặt lại/), "nhầm hồ sơ");
+    await user.click(nut);
+    await waitFor(() => expect(than).toHaveLength(1));
+    expect(than[0]).toEqual({ reason: "nhầm hồ sơ", expected_row_version: 7, unknown_submitter_ack: false });
+  });
+
+  it("requires_ack ⇒ hộp Từ chối có cam kết không rõ người nhận; thân mang unknown_submitter_ack = true", async () => {
+    const than: unknown[] = [];
+    server.use(
+      http.post(`${API}/api/admissions/1/documents/HOC_BA/reject`, async ({ request }) => {
+        than.push(await request.json());
+        return HttpResponse.json({
+          code: "HOC_BA",
+          status: "rejected",
+          rejection_reason: "mờ",
+          rejected_at: null,
+          rejected_by_id: 2,
+          document_row_id: 31,
+          row_version: 8,
+        });
+      }),
+    );
+    const user = userEvent.setup();
+    render(
+      <DocumentsTab profile={buildProfile([giayDuyet({ can_reject: true, requires_ack: true })]) as never} isEditable />,
+    );
+    await user.click(within(screen.getByRole("table")).getByRole("button", { name: "Từ chối giấy Học bạ" }));
+    const hop = await screen.findByRole("dialog");
+    expect(within(hop).getByTestId("hop-cam-ket-khong-ro-nguoi-nhan")).toBeInTheDocument();
+    await user.type(within(hop).getByLabelText(/Lý do từ chối/), "mờ");
+    const nut = within(hop).getByRole("button", { name: "Từ chối" });
+    expect(nut).toBeDisabled();
+    await user.click(within(hop).getByRole("checkbox"));
+    await user.click(nut);
+    await waitFor(() => expect(than).toHaveLength(1));
+    expect(than[0]).toEqual({ reason: "mờ", expected_row_version: 7, unknown_submitter_ack: true });
+  });
+
+  it("can_view_history ⇒ nút Lịch sử mở hộp lịch sử theo document_row_id", async () => {
+    const goi: string[] = [];
+    server.use(
+      http.get(`${API}/api/admissions/1/documents/31/history`, ({ request }) => {
+        goi.push(request.url);
+        return HttpResponse.json({
+          document_row_id: 31,
+          document_type_code: "HOC_BA",
+          status: "paper_submitted",
+          row_version: 7,
+          entries: [],
+          evidence_files: [],
+        });
+      }),
+    );
+    const user = userEvent.setup();
+    render(<DocumentsTab profile={buildProfile([giayDuyet({ can_view_history: true })]) as never} isEditable />);
+    await user.click(within(screen.getByRole("table")).getByRole("button", { name: "Lịch sử giấy Học bạ" }));
+    expect(await screen.findByText("Chưa có thao tác nào được ghi.")).toBeInTheDocument();
+    expect(goi).toHaveLength(1);
+  });
+
+  it("verify_block_reason own_submission ⇒ hiện lý do khoá Duyệt, không nút Duyệt", () => {
+    render(
+      <DocumentsTab
+        profile={buildProfile([giayDuyet({ can_reject: true, verify_block_reason: "own_submission" })]) as never}
+        isEditable
+      />,
+    );
+    const table = screen.getByRole("table");
+    expect(within(table).getByTestId("ly-do-khoa-duyet")).toHaveTextContent("không tự duyệt");
+    expect(within(table).queryByRole("button", { name: /duyệt giấy/i })).toBeNull();
+  });
+
+  it("lệch hợp đồng: cờ bật mà định danh null ⇒ KHÔNG nút GĐ1b + báo thiếu định danh", () => {
+    render(
+      <DocumentsTab
+        profile={buildProfile([giayDuyet({ document_row_id: null, row_version: null, can_reset: true })]) as never}
+        isEditable
+      />,
+    );
+    const table = screen.getByRole("table");
+    expect(within(table).queryByRole("button", { name: /đặt lại giấy/i })).toBeNull();
+    expect(within(table).getByTestId("giay-thieu-dinh-danh")).toBeInTheDocument();
+  });
+
+  it("X1: giấy ngoài cấu hình can_reset ⇒ nút Đặt lại mang tên giấy và bỏ câu không thể chỉnh trực tiếp", () => {
+    render(
+      <DocumentsTab
+        profile={
+          buildProfile([
+            giayDuyet({ code: "GIAY_CU", label: "Giấy cũ", is_extra: true, is_mandatory: false, can_reset: true }),
+          ]) as never
+        }
+        isEditable
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Đặt lại giấy Giấy cũ" })).toBeInTheDocument();
+    expect(screen.queryByText(/không thể chỉnh trực tiếp ở đây/)).toBeNull();
+  });
+
+  it("X1: giấy ngoài cấu hình mọi cờ tắt ⇒ không nút, giữ câu không thể chỉnh trực tiếp", () => {
+    render(
+      <DocumentsTab
+        profile={
+          buildProfile([giayDuyet({ code: "GIAY_CU", label: "Giấy cũ", is_extra: true, is_mandatory: false })]) as never
+        }
+        isEditable
+      />,
+    );
+    expect(screen.queryByRole("button", { name: /đặt lại giấy/i })).toBeNull();
+    expect(screen.getByText(/không thể chỉnh trực tiếp ở đây/)).toBeInTheDocument();
   });
 });

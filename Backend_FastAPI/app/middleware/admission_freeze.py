@@ -69,6 +69,11 @@ ADMISSION_ROUTER_MODULES: Final[frozenset[str]] = frozenset(
         # miền tuyển sinh; cả hai đã bị đóng băng sẵn qua tiền tố v1.
         "app.routers.document_groups",
         "app.routers.enrollment_letters",
+        # GĐ1b (18-11, CI PR #729): lô duyệt giấy + duyệt chéo GHI vào giấy của hồ sơ tuyển sinh — cùng miền với nút lẻ
+        # ``/api/admissions/{id}/documents/*`` (đã đóng băng). Nằm dưới tiền tố v1 ``/api/admissions`` ⇒ hai tầng đã chặn sẵn;
+        # khai ở đây để danh mục chuẩn khớp route thật. (``document_evidence`` chỉ có GET — không cần phân loại.)
+        "app.routers.document_bulk_verify",
+        "app.routers.document_cross_review",
     }
 )
 
@@ -209,6 +214,17 @@ ADMISSION_WRITE_ROUTES: Final[tuple[tuple[str, str], ...]] = (
     ("DELETE", "/api/admission-config/subjects/{subject_id}"),
     ("PUT", "/api/admission-config/subjects/{subject_id}"),
     ("POST", "/api/admissions"),
+    # GĐ1b — lô duyệt giấy + duyệt chéo tạm thời: rà tay 18-11 từ bảng route thật (CI PR #729 bắt thiếu).
+    ("POST", "/api/admissions/cross-review/bulk-verify/preview"),
+    ("POST", "/api/admissions/cross-review/bulk-verify/{batch_id}/execute"),
+    ("POST", "/api/admissions/cross-review/bulk-verify/{batch_id}/finalize"),
+    ("POST", "/api/admissions/cross-review/grants"),
+    ("POST", "/api/admissions/cross-review/grants/{grant_id}/revoke"),
+    ("POST", "/api/admissions/cross-review/reject"),
+    ("POST", "/api/admissions/cross-review/verify"),
+    ("POST", "/api/admissions/documents/bulk-verify/preview"),
+    ("POST", "/api/admissions/documents/bulk-verify/{batch_id}/execute"),
+    ("POST", "/api/admissions/documents/bulk-verify/{batch_id}/finalize"),
     ("POST", "/api/admissions/bulk/approve"),
     ("POST", "/api/admissions/bulk/assign"),
     ("POST", "/api/admissions/bulk/reject"),

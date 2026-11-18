@@ -79,6 +79,7 @@ out ``OfferingAdmissionConfig`` and ``MajorProgram.degree_level_id``, so
 BEFORE the document rule under test ever ran.
 """
 from __future__ import annotations
+from tests.fixtures.gd1b import phien_ban_giay  # GĐ1b: expected_row_version
 
 from datetime import datetime
 
@@ -553,7 +554,7 @@ async def test_new_profile_post_migration_strict_with_verify_unblocks(
     admin = await _login(client, "testadmin", "AdminPassword!123")
     verify_resp = await client.patch(
         f"{ADMISSIONS}/{pid}/documents/{adm024_paths['legacy_b']['doc_code']}/verify-format",
-        json={"format": "photo"},
+        json={"format": "photo", "expected_row_version": await phien_ban_giay(pid, adm024_paths['legacy_b']['doc_code'])},
         headers=admin,
     )
     assert verify_resp.status_code == 200, verify_resp.text

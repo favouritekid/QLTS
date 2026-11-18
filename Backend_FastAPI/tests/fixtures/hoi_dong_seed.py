@@ -480,6 +480,17 @@ async def ho_so(
     for g in giay:
         g = dict(g)
         g["document_type_id"] = d["giay"][g.pop("loai")]
+        # GĐ1b (đặc tả bản 3.6): I2 — giấy bản giấy (không tệp) đã nhận / đã duyệt phải biết người nhận hoặc mang cờ
+        # "không rõ"; I1 — giấy có tệp phải biết người tải hoặc mang cờ. Dữ liệu giả ⇒ cờ "không rõ" (như dữ liệu cũ
+        # sau migration gd1b20261117).
+        if g.get("status") in ("paper_submitted", "verified") and not g.get("file_path") and "paper_submitted_by" not in g:
+            g.setdefault("paper_submitted_by_unknown", True)
+        if g.get("file_path") and "uploaded_by" not in g:
+            g.setdefault("uploaded_by_unknown", True)
+        # Luật in v1.2 (§4.6): giấy ĐÃ duyệt in theo verified_format. Dữ liệu GĐ1 cũ coi như duyệt đúng hình thức lúc
+        # nhận ⇒ phép so DTO với bộ xuất (chỉ có hình thức lúc nhận) vẫn đúng; ca lệch hình thức có test riêng.
+        if g.get("status") == "verified" and "verified_format" not in g and g.get("actual_submission_format"):
+            g["verified_format"] = g["actual_submission_format"]
         await chen(
             conn,
             "profile_document",

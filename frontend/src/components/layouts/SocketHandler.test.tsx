@@ -501,3 +501,49 @@ describe("SocketHandler — admission event scoping (P2 anchor)", () => {
     })
   })
 })
+
+// GĐ1b (đặc tả §5.9, bản 6 C2.3) — nối dây `bulk_verify_finished`: lắng nghe khi kết nối, làm mới danh sách hồ sơ
+// (phần đồng bộ của `onBulkVerifyFinished`, khoá ở `useBulkVerify.socket.test.ts`), gỡ lắng nghe khi unmount.
+describe("SocketHandler — bulk_verify_finished (GĐ1b)", () => {
+  beforeEach(() => {
+    socketStub.reset()
+    vi.clearAllMocks()
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it("có lắng nghe bulk_verify_finished; nhận sự kiện ⇒ làm mới danh sách hồ sơ + bộ đếm", async () => {
+    const { invalidateSpy } = renderHandler()
+    await fireConnect()
+    expect(socketStub.handlers.get("bulk_verify_finished")?.length ?? 0).toBe(1)
+
+    act(() => {
+      socketStub.fire("bulk_verify_finished", { batch_id: "3f2b8c1e-5d4a-4c3b-9a1e-0b2c3d4e5f60" })
+    })
+
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: admissionsKeys.lists() })
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: [...admissionsKeys.all, "status-counts"] })
+    invalidateSpy.mockRestore()
+  })
+
+  it("payload sai dạng ⇒ không làm mới gì", async () => {
+    const { invalidateSpy } = renderHandler()
+    await fireConnect()
+    invalidateSpy.mockClear()
+    act(() => {
+      socketStub.fire("bulk_verify_finished", { batch_id: "khong-phai-uuid" })
+    })
+    expect(invalidateSpy).not.toHaveBeenCalled()
+    invalidateSpy.mockRestore()
+  })
+
+  it("unmount ⇒ gỡ lắng nghe bulk_verify_finished", async () => {
+    const { unmount } = renderHandler()
+    await fireConnect()
+    unmount()
+    expect(socketStub.handlers.get("bulk_verify_finished")?.length ?? 0).toBe(0)
+  })
+})

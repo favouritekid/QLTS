@@ -424,6 +424,29 @@ class DocumentItemSchema(BaseModel):
         default=None,
         description="Officer may record paper submission (paper-doc + missing status + owning officer)",
     )
+    # GĐ1b (đặc tả bản 3.6 §4.7) — định danh dòng + cờ máy chủ theo giấy (tên tiếng Anh, quy ước owner 17-11).
+    document_row_id: Optional[int] = Field(
+        default=None, description="profile_document.id — every document row, with or without a file (GĐ1b)",
+    )
+    row_version: Optional[int] = Field(
+        default=None, description="Row version; send back as expected_row_version on verify / reject / reset",
+    )
+    can_view_history: Optional[bool] = Field(default=None, description="Manager in scope / Admin may open history")
+    verify_block_reason: Optional[str] = Field(
+        default=None,
+        description="Why verify is blocked: own_submission | unknown_submitter | missing_format | outside_config | "
+        "not_pending | not_permitted (single-verify of a scan with no declared format ⇒ missing_format)",
+    )
+    requires_ack: Optional[bool] = Field(
+        default=None, description="Receiver unknown — the action needs unknown_submitter_ack + reason",
+    )
+    reset_requires_reason: Optional[bool] = Field(default=None, description="Reset needs a reason")
+    reset_keeps_evidence: Optional[bool] = Field(default=None, description="Reset keeps the verified scan file")
+    can_change_format: Optional[bool] = Field(
+        default=None,
+        description="Verify may pick a format other than the received one (paper documents only; scan files are "
+        "locked to the format declared at upload)",
+    )
 
     @field_validator('label')
     @classmethod
@@ -1947,6 +1970,17 @@ class DocumentFormatVerifyRequest(BaseModel):
         ...,
         description="Physical format of the document"
     )
+    # GĐ1b (đặc tả bản 3.6 §4, §4.2, §4.7): phiên bản dòng giấy đang xem (``row_version`` của giấy trong phản hồi hồ sơ)
+    # + cam kết "không rõ người nhận" (chỉ nút lẻ; cần kèm lý do).
+    expected_row_version: int = Field(..., ge=1, description="row_version of the document row being acted on")
+    reason: Optional[str] = Field(None, max_length=500, description="Required with unknown_submitter_ack")
+    unknown_submitter_ack: bool = Field(False, description="Acknowledge the document's receiver is unknown")
+
+    @field_validator('reason')
+    @classmethod
+    def sanitize_optional_reason(cls, v: Optional[str]) -> Optional[str]:
+        """XSS Prevention: Escape HTML entities."""
+        return html.escape(v.strip()) if v else v
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
@@ -1959,6 +1993,23 @@ class DocumentRejectRequest(BaseModel):
         max_length=500,
         description="Rejection reason (required)"
     )
+    expected_row_version: int = Field(..., ge=1, description="row_version of the document row being acted on")
+    unknown_submitter_ack: bool = Field(False, description="Acknowledge the document's receiver is unknown")
+
+    @field_validator('reason')
+    @classmethod
+    def sanitize_reason(cls, v: str) -> str:
+        """XSS Prevention: Escape HTML entities."""
+        return html.escape(v.strip())
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+
+class DocumentResetRequest(BaseModel):
+    """GĐ1b (đặc tả bản 3.6 §4.2): Đặt lại giấy — lý do BẮT BUỘC (thiếu ⇒ 422), kèm phiên bản dòng đang xem."""
+    reason: str = Field(..., min_length=1, max_length=500, description="Reset reason (required)")
+    expected_row_version: int = Field(..., ge=1, description="row_version of the document row being acted on")
+    unknown_submitter_ack: bool = Field(False, description="Acknowledge the document's receiver is unknown")
 
     @field_validator('reason')
     @classmethod

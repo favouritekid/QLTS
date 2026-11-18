@@ -167,24 +167,26 @@ diem AS (
 ),
 giay AS (
     -- trạng thái + hình thức từng loại giấy (không có giấy -> mặc định ở SELECT)
+    -- Luật in v1.2 (GĐ1b §4.6): giấy ĐÃ duyệt in theo hình thức ĐÃ XÁC NHẬN (verified_format); giấy chưa duyệt in
+    -- theo hình thức lúc nhận (như v1.1). verified_format trống / lạ ⇒ bước dựng DỪNG (row_data_error).
     SELECT pd.profile_id AS pid,
       max(pd.status::text) FILTER (WHERE dt.code = 'phieu_dang_ky_xet_tuyen') AS s_phieu,
       max(pd.status::text) FILTER (WHERE dt.code = 'so_yeu_ly_lich') AS s_soyeu,
       max(pd.status::text) FILTER (WHERE dt.code = 'hoc_ba_thpt') AS s_hocba,
-      max(pd.actual_submission_format::text) FILTER (WHERE dt.code = 'hoc_ba_thpt') AS f_hocba,
+      max((CASE WHEN pd.status = 'verified' THEN pd.verified_format ELSE pd.actual_submission_format END)::text) FILTER (WHERE dt.code = 'hoc_ba_thpt') AS f_hocba,
       max(pd.status::text) FILTER (WHERE dt.code = 'bang_tot_nghiep_thpt') AS s_bang,
-      max(pd.actual_submission_format::text)
+      max((CASE WHEN pd.status = 'verified' THEN pd.verified_format ELSE pd.actual_submission_format END)::text)
           FILTER (WHERE dt.code = 'bang_tot_nghiep_thpt') AS f_bang,
       max(pd.graduation_proof_kind) FILTER (WHERE dt.code = 'bang_tot_nghiep_thpt') AS k_bang,
       max(pd.status::text) FILTER (WHERE dt.code = 'giay_cn_hoan_thanh_gdpt') AS s_cngdpt,
-      max(pd.actual_submission_format::text)
+      max((CASE WHEN pd.status = 'verified' THEN pd.verified_format ELSE pd.actual_submission_format END)::text)
           FILTER (WHERE dt.code = 'giay_cn_hoan_thanh_gdpt') AS f_cngdpt,
       max(pd.status::text) FILTER (WHERE dt.code = 'giay_khai_sinh') AS s_ks,
-      max(pd.actual_submission_format::text) FILTER (WHERE dt.code = 'giay_khai_sinh') AS f_ks,
+      max((CASE WHEN pd.status = 'verified' THEN pd.verified_format ELSE pd.actual_submission_format END)::text) FILTER (WHERE dt.code = 'giay_khai_sinh') AS f_ks,
       max(pd.status::text) FILTER (WHERE dt.code = 'cccd') AS s_cccd,
-      max(pd.actual_submission_format::text) FILTER (WHERE dt.code = 'cccd') AS f_cccd,
+      max((CASE WHEN pd.status = 'verified' THEN pd.verified_format ELSE pd.actual_submission_format END)::text) FILTER (WHERE dt.code = 'cccd') AS f_cccd,
       max(pd.status::text) FILTER (WHERE dt.code = 'anh_3x4') AS s_anh,
-      max(pd.actual_submission_format::text) FILTER (WHERE dt.code = 'anh_3x4') AS f_anh
+      max((CASE WHEN pd.status = 'verified' THEN pd.verified_format ELSE pd.actual_submission_format END)::text) FILTER (WHERE dt.code = 'anh_3x4') AS f_anh
     FROM profile_document pd
     JOIN chon ON chon.pid = pd.profile_id
     JOIN config_document_type dt ON dt.id = pd.document_type_id

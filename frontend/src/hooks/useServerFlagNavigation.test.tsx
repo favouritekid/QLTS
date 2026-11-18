@@ -103,3 +103,103 @@ describe("useServerFlagNavigation — mục văn bản Hội đồng theo cờ m
     expect(src).toMatch(/const navigation = useServerFlagNavigation\(navigationByRole\)/)
   })
 })
+
+/**
+ * GĐ1b (đặc tả §7, bản 6 C2.1) — "Duyệt chéo" ⇐ `cross-review/eligibility`, "Lô duyệt giấy" ⇐ `bulk-verify/eligibility`.
+ * Hiện CHỈ khi máy chủ trả `eligible = true`; `false` / đang tải / lỗi mạng / 4xx / 5xx ⇒ ẩn. Không theo vai (`roles: []`).
+ */
+describe("useServerFlagNavigation — mục GĐ1b theo cờ máy chủ (bản 6 C2.1)", () => {
+  const CO = [
+    { flag: "cross-review", href: "/cross-review", url: `${API}/api/admissions/cross-review/eligibility` },
+    { flag: "document-batches", href: "/document-batches", url: `${API}/api/admissions/documents/bulk-verify/eligibility` },
+  ] as const
+
+  const co = (nav: NavGroup[], href: string) => nav.some((g) => g.items.some((i) => i.href === href))
+
+  /** Thân ĐÚNG hình dạng từng endpoint (cross-review/eligibility có thêm `grants`) — sai hình dạng sẽ ẩn mục vì lỗi
+   * parse, làm ca "false ⇒ ẩn" xanh nhầm lý do. */
+  const than = (flag: (typeof CO)[number]["flag"], eligible: boolean) =>
+    HttpResponse.json(flag === "cross-review" ? { eligible, grants: [] } : { eligible })
+
+  /** Cờ Hội đồng tắt hết (để các ca này chỉ đo cờ GĐ1b); hai endpoint GĐ1b theo `tra`. */
+  function mocGd1b(tra: Partial<Record<(typeof CO)[number]["flag"], () => Response>>) {
+    const dem: Record<string, number> = { "cross-review": 0, "document-batches": 0 }
+    server.use(http.get(`${API}${P}/quyen`, () => HttpResponse.json({ permissions: TAT })))
+    for (const c of CO) {
+      server.use(
+        http.get(c.url, () => {
+          dem[c.flag] += 1
+          const f = tra[c.flag]
+          return f ? f() : than(c.flag, false)
+        }),
+      )
+    }
+    return dem
+  }
+
+  it("cấu hình: hai mục mang serverFlag và KHÔNG giới hạn vai (roles rỗng)", () => {
+    const tat = navigationConfig.groups.flatMap((g) => g.items)
+    for (const c of CO) {
+      const muc = tat.find((i) => i.href === c.href)
+      expect(muc?.serverFlag).toBe(c.flag)
+      expect(muc?.roles ?? []).toEqual([])
+    }
+  })
+
+  it.each(CO)("$flag: eligible = true ⇒ hiện mục", async (c) => {
+    mocGd1b({ [c.flag]: () => than(c.flag, true) })
+    const { result } = chay(navTheoVai())
+    await waitFor(() => expect(co(result.current, c.href)).toBe(true))
+  })
+
+  it.each(CO)("$flag: eligible = false ⇒ ẩn mục", async (c) => {
+    const dem = mocGd1b({ [c.flag]: () => than(c.flag, false) })
+    const { result } = chay(navTheoVai())
+    await waitFor(() => expect(dem[c.flag]).toBeGreaterThanOrEqual(1))
+    await new Promise((r) => setTimeout(r, 30))
+    expect(co(result.current, c.href)).toBe(false)
+  })
+
+  it.each(CO)("$flag: 403 ⇒ ẩn mục", async (c) => {
+    const dem = mocGd1b({ [c.flag]: () => HttpResponse.json({ detail: "x" }, { status: 403 }) })
+    const { result } = chay(navTheoVai())
+    await waitFor(() => expect(dem[c.flag]).toBeGreaterThanOrEqual(1))
+    await new Promise((r) => setTimeout(r, 30))
+    expect(co(result.current, c.href)).toBe(false)
+  })
+
+  it.each(CO)("$flag: 500 ⇒ ẩn mục (kể cả lúc đang thử lại)", async (c) => {
+    const dem = mocGd1b({ [c.flag]: () => HttpResponse.json({ detail: "x" }, { status: 500 }) })
+    const { result } = chay(navTheoVai())
+    expect(co(result.current, c.href)).toBe(false)
+    await waitFor(() => expect(dem[c.flag]).toBeGreaterThanOrEqual(1))
+    await new Promise((r) => setTimeout(r, 30))
+    expect(co(result.current, c.href)).toBe(false)
+  })
+
+  it.each(CO)("$flag: lỗi mạng ⇒ ẩn mục", async (c) => {
+    const dem = mocGd1b({ [c.flag]: () => HttpResponse.error() })
+    const { result } = chay(navTheoVai())
+    await waitFor(() => expect(dem[c.flag]).toBeGreaterThanOrEqual(1))
+    await new Promise((r) => setTimeout(r, 30))
+    expect(co(result.current, c.href)).toBe(false)
+  })
+
+  it("hai cờ độc lập: chỉ cross-review bật ⇒ chỉ hiện Duyệt chéo", async () => {
+    mocGd1b({ "cross-review": () => than("cross-review", true) })
+    const { result } = chay(navTheoVai())
+    await waitFor(() => expect(co(result.current, "/cross-review")).toBe(true))
+    expect(co(result.current, "/document-batches")).toBe(false)
+  })
+
+  it("không còn mục mang cờ GĐ1b ⇒ không hỏi hai endpoint eligibility", async () => {
+    const dem = mocGd1b({})
+    const khong = navTheoVai().map((g) => ({
+      ...g,
+      items: g.items.filter((i) => i.href !== "/cross-review" && i.href !== "/document-batches"),
+    }))
+    chay(khong)
+    await new Promise((r) => setTimeout(r, 30))
+    expect(dem).toEqual({ "cross-review": 0, "document-batches": 0 })
+  })
+})

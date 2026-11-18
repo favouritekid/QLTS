@@ -31,6 +31,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from tests.fixtures.gd1b import phien_ban_giay  # GĐ1b: expected_row_version
 import pytest
 import pytest_asyncio
 from httpx import AsyncClient
@@ -264,7 +265,7 @@ async def test_strict_path_allows_submit_when_verified(
     admin = await _login(client, "testadmin", "AdminPassword!123")
     verify_resp = await client.patch(
         f"{ADMISSIONS}/{pid}/documents/{strict_path_config['doc_code']}/verify-format",
-        json={"format": "photo"},
+        json={"format": "photo", "expected_row_version": await phien_ban_giay(pid, strict_path_config['doc_code'])},
         headers=admin,
     )
     assert verify_resp.status_code == 200, verify_resp.text

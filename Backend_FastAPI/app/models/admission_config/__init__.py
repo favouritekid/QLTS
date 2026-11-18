@@ -22,6 +22,15 @@ from .criteria import AdmissionCriteria, CriteriaSubjectGroup
 from .offering_config import OfferingAdmissionConfig
 from .document_group import DocumentGroup, DocumentGroupItem
 from .profile_data import ProfileSubjectScore, ProfileDocument, DocumentAuditLog
+from .document_review import (
+    DocumentBulkBatch,
+    DocumentBulkBatchItem,
+    DocumentCrossReviewGrant,
+    DocumentDownloadLog,
+    DocumentEvidenceFile,
+)
+# GĐ1b: trigger tăng row_version — bản cho create_all() (bản thật: migration gd1b20261117). Import để gắn listener.
+from . import document_row_version_ddl  # noqa: E402,F401
 from .admission_path import AdmissionPath
 from .path_subject_group import PathSubjectGroupConfig, PathSubjectGroupItem
 
@@ -38,6 +47,11 @@ __all__ = [
     "ProfileSubjectScore",
     "ProfileDocument",
     "DocumentAuditLog",  # Audit trail for document operations
+    "DocumentBulkBatch",  # GĐ1b
+    "DocumentBulkBatchItem",  # GĐ1b
+    "DocumentCrossReviewGrant",  # GĐ1b
+    "DocumentDownloadLog",  # GĐ1b
+    "DocumentEvidenceFile",  # GĐ1b
     "AdmissionPath",
     "PathSubjectGroupConfig",  # Phase 2 v8.2 PR-2D
     "PathSubjectGroupItem",  # Phase 2 v8.2 PR-2D

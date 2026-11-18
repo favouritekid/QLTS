@@ -1101,6 +1101,13 @@ jobs:
           #   test_admission_doc_mutations_response_parity — route upload (PDF) + fixture `parity_config`
           #   test_upload_anh_http — route upload với ẢNH thật: byte ghi ra = byte gửi lên; 400 không đổi thư mục
           #   test_document_operations — thao tác tài liệu (upload / xác minh / từ chối) + nhật ký
+          # GĐ1b (18-11, CI PR #729 — cổng độ nhìn thấy): năm tệp test giấy tờ hồ sơ mà GĐ1b đã sửa, trước đó KHÔNG lát
+          # nào chọn — cùng miền upload / duyệt giấy nên vào 4s (~11 phút).
+          #   test_admission_doc_realtime_emit — sự kiện realtime sau thao tác giấy
+          #   test_admission_document_download — tải tệp giấy (dấu tải xuống GĐ1b)
+          #   test_admission_submit_requires_verified_docs — nộp hồ sơ cần giấy đã duyệt
+          #   test_major_change_reprice — đổi ngành / tính lại phí (đường xoá giấy)
+          #   test_pr13_graduation_proof_api — giấy tốt nghiệp
           - tier: Tier 4s — Admission state transitions + confirmation token
             tests: >-
               tests/integration/test_admission_state_transitions.py
@@ -1109,6 +1116,11 @@ jobs:
               tests/api/test_admission_doc_mutations_response_parity.py
               tests/api/test_upload_anh_http.py
               tests/integration/test_document_operations.py
+              tests/api/test_admission_doc_realtime_emit.py
+              tests/api/test_admission_document_download.py
+              tests/api/test_admission_submit_requires_verified_docs.py
+              tests/api/test_major_change_reprice.py
+              tests/api/test_pr13_graduation_proof_api.py
           # `test_conftest_db_url_guard.py` vào Tier 5, cùng họ phép kiểm CẤU
           # TRÚC với `test_nginx_template_packaging` / `test_ci_test_visibility`:
           # nó đọc `tests/conftest.py` và `tests/fixtures/database.py` như VĂN
@@ -1378,6 +1390,37 @@ jobs:
               tests/integration/test_council_document_casbin_vong_gd_migration.py
               tests/unit/test_hop_dong_msw_ghim_luat.py
               tests/unit/test_hop_dong_msw_cau_loi.py
+          # GĐ1b — duyệt giấy nhanh (đặc tả bản 3.6; bổ sung hợp đồng bản 5 A4). Hai lát RIÊNG: ca GĐ1b chậm (đo local ~15–18 s
+          # mỗi ca API, tổng ~50 phút một luồng) ⇒ gộp vào một tier có sẵn sẽ vượt trần 75 phút. Trước 18-11 KHÔNG tier nào chứa
+          # `test_gd1b_*` (required check xanh mà không chạy — CLAUDE.md §11). Fixture dùng chung của lô ở `tests/api/gd1b_lo_tro_giup.py` (KHÔNG phải tệp test).
+          # `test_tham_so_k1_da_do` (Tier 5i) khoá N = 1.000 / lock_timeout = 5 s theo biên bản V3 (18-11).
+          - tier: Tier 5h — GĐ1b lõi + bằng chứng + nối dây
+            tests: >-
+              tests/integration/test_gd1b_migration.py
+              tests/unit/test_gd1b_migration_duong_dan_bang_chung.py
+              tests/api/test_gd1b_xoa_tai_khoan.py
+              tests/api/test_gd1b_khoa_va_tep.py
+              tests/unit/test_gd1b_xoa_tep_trong_thu_muc_ho_so.py
+              tests/api/test_gd1b_transition.py
+              tests/unit/test_gd1b_config_facts.py
+              tests/integration/test_gd1b_luat_in_v12.py
+              tests/api/test_gd1b_hai_phien.py
+              tests/api/test_gd1b_bang_chung_tai.py
+              tests/api/test_gd1b_bang_chung_xoa.py
+              tests/api/test_gd1b_bang_chung_toan_ven.py
+              tests/api/test_gd1b_tich_hop_dang_ky.py
+          - tier: Tier 5i — GĐ1b lô duyệt giấy + duyệt chéo
+            tests: >-
+              tests/unit/test_gd1b_lo_khoa_tu_van.py
+              tests/unit/test_gd1b_lo_trang_thai_literal.py
+              tests/unit/test_gd1b_lo_cau_xac_nhan.py
+              tests/api/test_gd1b_lo_eligibility.py
+              tests/api/test_gd1b_lo_xem_truoc.py
+              tests/api/test_gd1b_lo_chay.py
+              tests/api/test_gd1b_lo_vong_doi.py
+              tests/api/test_gd1b_lo_danh_sach.py
+              tests/api/test_gd1b_lo_khoa_tu_van_csdl.py
+              tests/api/test_gd1b_cheo_quyen.py
 
     env:
       APP_ENV: test

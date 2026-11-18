@@ -204,6 +204,7 @@ from .admission import (
     # Document upload
     DocumentUploadResponse,
     DocumentRejectRequest,
+    DocumentResetRequest,  # GĐ1b — Đặt lại có lý do
     DocumentSubmissionRequest,
     GraduationProofUpdateRequest,  # PR #13 — graduation proof upgrade
     # Student schemas

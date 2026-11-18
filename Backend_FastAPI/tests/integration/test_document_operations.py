@@ -159,14 +159,18 @@ async def uploaded_profile_document(
     db: AsyncSession,
     doc_ops_profile: models.AdmissionProfile,
     doc_ops_document_type: models.ConfigDocumentType,
+    doc_ops_user: models.User,
 ) -> models.ProfileDocument:
-    """Create a test profile document already in uploaded status."""
+    """Create a test profile document already in uploaded status.
+
+    GĐ1b (I1, ``ck_profile_document_uploader_known``): giấy thường CÓ tệp phải biết người tải (hoặc cờ "không rõ")."""
     profile_doc = models.ProfileDocument(
         profile_id=doc_ops_profile.id,
         document_type_id=doc_ops_document_type.id,
         status="uploaded",
         file_path="/uploads/test/existing_doc.pdf",
         uploaded_at=datetime.now(timezone.utc),
+        uploaded_by=doc_ops_user.id,
     )
     db.add(profile_doc)
     await db.flush()
@@ -290,6 +294,7 @@ class TestDocumentStatusTransitions:
         self,
         db: AsyncSession,
         doc_ops_profile_document: models.ProfileDocument,
+        doc_ops_user: models.User,
     ):
         """Document can transition from missing to uploaded."""
         assert doc_ops_profile_document.status == "missing"
@@ -297,6 +302,7 @@ class TestDocumentStatusTransitions:
         doc_ops_profile_document.status = "uploaded"
         doc_ops_profile_document.file_path = "/uploads/test/new_doc.pdf"
         doc_ops_profile_document.uploaded_at = datetime.now(timezone.utc)
+        doc_ops_profile_document.uploaded_by = doc_ops_user.id  # GĐ1b I1: có tệp ⇒ biết người tải
         await db.flush()
 
         assert doc_ops_profile_document.status == "uploaded"
@@ -527,6 +533,7 @@ class TestDocumentLifecycleWithAudit:
         doc_ops_profile_document.status = "uploaded"
         doc_ops_profile_document.file_path = "/uploads/test/doc.pdf"
         doc_ops_profile_document.uploaded_at = datetime.now(timezone.utc)
+        doc_ops_profile_document.uploaded_by = doc_ops_user.id  # GĐ1b I1: có tệp ⇒ biết người tải
 
         await log_document_upload(
             db=db,
