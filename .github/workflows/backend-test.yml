@@ -1431,6 +1431,7 @@ jobs:
               tests/unit/test_gd2a_quota_ddl_lockin.py
               tests/integration/test_gd2a_migration.py
               tests/integration/test_gd2a_count_by_group_db.py
+              tests/integration/test_gd2a_rang_buoc_db.py
               tests/api/test_gd2a_bang_chi_tieu_api.py
 
     env:

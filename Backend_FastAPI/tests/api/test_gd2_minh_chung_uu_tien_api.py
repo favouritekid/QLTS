@@ -45,8 +45,15 @@ async def _sql(cau: str, **ts):
             return await s.execute(text(cau), ts)
 
 
+def _khong_cookie(client):
+    """Máy chủ ưu tiên cookie ``access_token`` hơn tiêu đề ``Authorization``: cookie của lần đăng nhập SAU CÙNG sẽ đè
+    vai của mọi request. Xoá cookie trước MỖI request ⇒ request đi đúng vai của tiêu đề."""
+    client.cookies.clear()
+
+
 async def _ho_so(client, admin_token_headers, officer_user_in_db, parity_config, nhan, trang_thai="submitted"):
     """Hồ sơ đã ghi nhận diện ``MA`` ở trạng thái chờ xét + danh mục mã diện của năm."""
+    _khong_cookie(client)
     prof = await _create_profile(client, admin_token_headers, officer_user_in_db, parity_config, nhan)
     pid = prof["id"]
     async with AsyncSessionLocal() as s:
@@ -84,6 +91,7 @@ async def _minh_chung(pid: int):
 
 
 async def _tai_len(client, headers, pid):
+    _khong_cookie(client)
     return await client.post(
         f"{V2}/{pid}/priority-evidence/{MA}/upload", headers=headers,
         files={"file": ("ut.pdf", PDF, "application/pdf")},
@@ -91,6 +99,7 @@ async def _tai_len(client, headers, pid):
 
 
 async def _duyet(client, headers, pid):
+    _khong_cookie(client)
     return await client.patch(
         f"{V2}/{pid}/priority-objects/{MA}/verify", headers=headers,
         json={"version": await _phien_ban(pid), "document_id": None},
@@ -98,6 +107,7 @@ async def _duyet(client, headers, pid):
 
 
 async def _tu_choi(client, headers, pid):
+    _khong_cookie(client)
     return await client.patch(
         f"{V2}/{pid}/priority-objects/{MA}/reject", headers=headers,
         json={"version": await _phien_ban(pid), "reject_reason": "Minh chứng không rõ nét, cần nộp lại"},
@@ -114,11 +124,13 @@ def don_tep():
 
 @pytest.fixture
 async def ba_vai(client, admin_token_headers, officer_user_in_db, manager_user_in_db):
-    return {
+    vai = {
         "admin": admin_token_headers,
         "can_bo": await _login(client, officer_user_in_db["username"], officer_user_in_db["password"]),
         "quan_ly": await _login(client, manager_user_in_db["username"], manager_user_in_db["password"]),
     }
+    _khong_cookie(client)
+    return vai
 
 
 # --------------------------------------------------------------------------------------------------------------------
@@ -152,7 +164,7 @@ async def test_quan_ly_don_vi_khac_nhan_404(
     pid = await _ho_so(client, admin_token_headers, officer_user_in_db, parity_config, "b_ql_khac")
     don_tep.append(pid)
     h = await _login(client, manager_other_unit_user_in_db["username"], manager_other_unit_user_in_db["password"])
-    r = await _duyet(client, h, pid)
+    r = await _duyet(client, h, pid)  # _duyet xoá cookie ⇒ đúng vai của tiêu đề
     assert r.status_code == 404, r.text
 
 
@@ -185,6 +197,7 @@ async def test_co_verify_priority_object_theo_dung_vai(
     don_tep.append(pid)
     co = {}
     for vai, h in ba_vai.items():
+        _khong_cookie(client)
         r = await client.get(f"{V1}/{pid}", headers=h)
         assert r.status_code == 200, (vai, r.text)
         co[vai] = r.json()["permissions"]["verify_priority_object"]
@@ -280,6 +293,7 @@ async def test_duyet_ho_so_giay_khong_tep_quan_ly_duoc(
 # Lối vào thứ hai: PUT hồ sơ thường
 # --------------------------------------------------------------------------------------------------------------------
 async def _put(client, headers, pid, minh_chung):
+    _khong_cookie(client)
     return await client.put(
         f"{V1}/{pid}", headers=headers,
         json={"version": await _phien_ban(pid), "priority_object_evidence": minh_chung},

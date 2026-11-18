@@ -278,6 +278,7 @@ async def test_chi_admin_403_cho_vai_khac(
     assert (await client.put(f"{P}/{NAM}", headers=admin_token_headers, json=_than(0, hoc_vu))).status_code == 200
     u = manager_user_in_db if vai == "quan_ly" else officer_user_in_db
     h = await _login(client, u["username"], u["password"])
+    client.cookies.clear()  # cookie đăng nhập đè tiêu đề — request đi đúng vai của ``h``
     for m, duong, than in (
         ("GET", f"{P}/{NAM}", None),
         ("PUT", f"{P}/{NAM}", _than(1, hoc_vu)),
