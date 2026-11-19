@@ -1424,9 +1424,11 @@ jobs:
           # GĐ2 — PR đầu (owner GO 18-11): GĐ2-0 quy tắc duyệt minh chứng ưu tiên (C1) + GĐ2-A bảng chỉ tiêu năm / nhóm
           # ngành. Lát RIÊNG như GĐ1b (ca API trên CSDL thật chậm; gộp vào lát có sẵn dễ chạm trần 75 phút). Ngoài mọi tier
           # thì required check vẫn xanh mà không chạy (CLAUDE.md §11). Ghim WHOLE-FILE.
+          # `test_priority_evidence_service.py` (tệp cũ, trước đây ngoài mọi tier): GĐ2-0 sửa nó ⇒ cổng độ nhìn thấy đòi phân loại.
           - tier: Tier 5j — GĐ2 minh chứng ưu tiên + bảng chỉ tiêu
             tests: >-
               tests/unit/test_gd2_minh_chung_uu_tien_luat.py
+              tests/unit/test_priority_evidence_service.py
               tests/api/test_gd2_minh_chung_uu_tien_api.py
               tests/unit/test_gd2a_quota_ddl_lockin.py
               tests/integration/test_gd2a_migration.py
