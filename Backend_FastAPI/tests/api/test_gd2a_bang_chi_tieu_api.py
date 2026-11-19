@@ -83,14 +83,18 @@ async def _bang():
 
 
 async def _dau(sua=None) -> str:
-    """GĐ2-F1 — dấu chỉ tiêu HIỆN TẠI của năm (CÙNG hàm ``quota_fingerprint_of`` của dịch vụ) như GET trả; ``sua`` =
-    {id học vụ: chỉ tiêu} ⇒ dấu của trạng thái SAU một lệnh sửa (cho ca hai phiên)."""
-    from app.services.admission_quota_table_service import quota_fingerprint_of
+    """GĐ2-F1 — dấu chỉ tiêu HIỆN TẠI của năm, lấy bằng ĐÚNG hàm đọc của dịch vụ (``read_quota_fingerprint``, như GET trả) —
+    test KHÔNG tự chọn lại tập dòng (một nguồn). ``sua`` = {id học vụ: chỉ tiêu} ⇒ dấu của trạng thái SAU một lệnh sửa chưa
+    commit (chỉ ca hai phiên "ghi trước thì khoá chờ" cần): khi ấy đọc dòng của năm rồi băm bằng ``quota_fingerprint_of``."""
+    from app.services import admission_quota_table_service as svc
 
+    if not sua:
+        async with AsyncSessionLocal() as s:
+            return await svc.read_quota_fingerprint(s, NAM, lock=False)
     rows = (await _sql("SELECT id, annual_admission_quota FROM offering_academic_info WHERE academic_year = :y", y=NAM)).all()
     m = {r[0]: r[1] for r in rows}
-    m.update(sua or {})
-    return quota_fingerprint_of(m.items())
+    m.update(sua)
+    return svc.quota_fingerprint_of(m.items())
 
 
 async def _gui(version, hoc_vu, *, nhom=None) -> dict:

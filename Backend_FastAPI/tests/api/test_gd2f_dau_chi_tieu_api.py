@@ -25,7 +25,6 @@ from tests.api.test_gd2a_bang_chi_tieu_api import (  # noqa: F401 — fixture d�
     _chi_tieu,
     _dau,
     _dong,
-    _gui,
     _mo_ta,
     _pid,
     _tao_bang_nhap,
@@ -53,7 +52,10 @@ async def _sua_o_trang_cu(client, h, hoc_vu_id: int, chi_tieu: int) -> None:
 
 
 async def _tao_bang(client, h, hoc_vu) -> None:
-    r = await client.put(f"{P}/{NAM}", headers=h, json=await _gui(0, hoc_vu))
+    """Tạo bảng như giao diện: dấu lấy từ GET (404 mang dấu) — không tự tính lại trong test."""
+    phien_ban, dau = await _mo(client, h)
+    assert phien_ban == 0
+    r = await client.put(f"{P}/{NAM}", headers=h, json={**_than(0, hoc_vu), "quota_fingerprint": dau})
     assert r.status_code == 200, r.text
 
 
