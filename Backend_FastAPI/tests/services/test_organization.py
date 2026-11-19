@@ -176,6 +176,10 @@ async def test_delete_program_offering_cascade(mock_db_session, mock_user, mock_
 
     # GĐ2-F1 luật C: trước câu UPDATE dây chuyền, dịch vụ đọc tập năm của học vụ (``scalars``), khoá các năm ấy, đọc lại dòng
     # (``all``) rồi kiểm bảng chỉ tiêu — giả lập offering CHƯA có học vụ nào (tập năm rỗng ⇒ không khoá / không kiểm thêm).
+    # Codex lượt 3: khoá cấp loại hình (dòng program_offering FOR NO KEY UPDATE) lấy ĐẦU TIÊN — giả lập loại hình đang hoạt động.
+    mocker.patch(
+        "app.services.organization_service._lock_offering_row", new_callable=AsyncMock, return_value=True
+    )
     ket_qua_nam = MagicMock()
     ket_qua_nam.scalars.return_value = []
     ket_qua_dong = MagicMock()
@@ -237,6 +241,10 @@ async def test_restore_academic_info_success(mock_db_session, mock_user, mock_ac
     # Mock Repository for the IDOR check internally
     mock_repo = mocker.patch("app.services.organization_service.OrganizationRepository", autospec=True)
     mock_repo.return_value.get_academic_info_by_id = AsyncMock(return_value=mock_academic_info)
+    # Codex lượt 3: khoá cấp loại hình lấy ĐẦU TIÊN — giả lập loại hình đang hoạt động.
+    mocker.patch(
+        "app.services.organization_service._lock_offering_row", new_callable=AsyncMock, return_value=True
+    )
     # GĐ2-F1 luật C: dịch vụ lấy khoá năm rồi đọc lại (chỉ tiêu, cờ xoá mềm) dưới khoá — giả lập dòng đang xoá mềm, chỉ tiêu trống.
     mocker.patch(
         "app.services.organization_service._academic_info_state_under_year_lock",
