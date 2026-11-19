@@ -266,12 +266,14 @@ async def resource_not_found_handler(
         },
     )
 
+    # GĐ2-F1: ``public_payload`` đi ra như ở ``base_app_exception_handler`` (đổ TRƯỚC, ``detail`` / ``error_code`` ghi đè) —
+    # mặc định rỗng ⇒ mọi 404 khác không đổi; chỉ người ném CHỦ ĐỘNG điền (vd dấu chỉ tiêu của năm chưa có bảng chỉ tiêu).
+    content = dict(getattr(exc, "public_payload", None) or {})
+    content["detail"] = exc.detail
+    content["error_code"] = exc.error_code
     return JSONResponse(
         status_code=status.HTTP_404_NOT_FOUND,
-        content={
-            "detail": exc.detail,
-            "error_code": exc.error_code,
-        },
+        content=content,
     )
 
 
