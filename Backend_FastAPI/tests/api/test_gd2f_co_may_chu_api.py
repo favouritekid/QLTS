@@ -94,8 +94,9 @@ async def test_co_cam_ket_va_ly_do_chan_khop_cong_duyet(
     # Cổng ghi THẬT phải nói đúng điều cờ nói.
     if muc["review_block_reason"] is not None:
         ma_loi = muc["review_block_reason"].upper()
-        for goi in (_duyet, _tu_choi):
-            r = await goi(client, ba_vai["quan_ly"], pid, **CAM_KET)  # cam kết KHÔNG mở đường khi bị chặn
+        # Cam kết KHÔNG mở đường khi bị chặn. Từ chối: lý do của cam kết = ``reject_reason`` (thân không có ``reason``).
+        for goi, cam_ket in ((_duyet, CAM_KET), (_tu_choi, {"unknown_submitter_ack": True})):
+            r = await goi(client, ba_vai["quan_ly"], pid, **cam_ket)
             assert r.status_code == 409 and r.json().get("error_code") == ma_loi, (kich_ban, goi.__name__, r.text)
     elif muc["requires_ack"]:
         r = await _duyet(client, ba_vai["quan_ly"], pid)

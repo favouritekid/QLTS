@@ -74,10 +74,7 @@ import {
   isMissingEvidenceFile,
   resolveVerifyDocumentId,
 } from "@/lib/utils/priority-evidence-helpers"
-import type {
-  AdmissionProfileResponse,
-  PriorityEvidenceDocumentItem,
-} from "@/lib/zod/admissions"
+import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
 
 import { UtEvidenceVerifyAckDialog } from "./UtEvidenceVerifyAckDialog"
 

@@ -46,7 +46,8 @@ describe("GĐ2-F1 — 'Đã nhận bản giấy' minh chứng: một đường g
   })
 
   it("client chỉ được gọi từ MỘT hook", () => {
-    expect(tepCo(/\.markPaperSubmitted\s*\(/)).toEqual([HOOK])
+    // `priorityEvidenceApi.` — `admissionsApi.markPaperSubmitted` là route GIẤY TỜ thường (GĐ1b), khác đường.
+    expect(tepCo(/priorityEvidenceApi\s*\.\s*markPaperSubmitted\s*\(/)).toEqual([HOOK])
   })
 
   it("hook chỉ được dùng trong MỘT thành phần dùng chung", () => {

@@ -932,7 +932,10 @@ export function DocumentsTab({ profile }: DocumentsTabProps) {
   // also counts paper_submitted). Spec text: "Bắt buộc: 2/5 verified ·
   // cần 3 nữa" — semantic is "manager already cleared file" not
   // "officer recorded paper at counter", so paper_submitted excluded.
-  const priorityEvidenceDocs = profile.priority_evidence_documents ?? []
+  const priorityEvidenceDocs = useMemo(
+    () => profile.priority_evidence_documents ?? [],
+    [profile.priority_evidence_documents],
+  )
   const eligibilitySummary = useMemo(() => {
     const mandatoryAll = activeDocs.filter((d) => d.is_mandatory)
     const mandatoryVerified = mandatoryAll.filter(
