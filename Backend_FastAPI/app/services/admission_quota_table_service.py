@@ -11,21 +11,33 @@ Tầng chủ sở hữu:
     ngoại ghép trong CSDL; kiểm ở đây để báo đủ danh sách sai trong MỘT lần (lớp phụ);
   * ai được làm — Casbin + ``deps.require_quota_table_admin`` (chỉ Admin).
 
-THỨ TỰ KHOÁ (một giao dịch): khoá năm ``pg_advisory_xact_lock(REVIEW_YEAR_NS, năm)`` → học vụ sẽ đổi chỉ tiêu
-(``quota_occupancy_service.lock_quota_cells``, id tăng dần, MỘT câu) → dòng ``admission_quota_table`` ``FOR UPDATE``. Học vụ
-TRƯỚC bảng: đường sửa chỉ tiêu có sẵn (``PATCH /api/admin/academic-info/{id}``) khoá dòng học vụ (UPDATE) rồi trigger mới
-khoá dòng bảng ``FOR SHARE`` — cùng chiều ⇒ không vòng chờ. Khoá / mở khoá chỉ khoá năm + dòng bảng.
+THỨ TỰ KHOÁ (một giao dịch): khoá năm ``pg_advisory_xact_lock(REVIEW_YEAR_NS, năm)`` → [GĐ2-F1] ``FOR SHARE`` MỌI học vụ của
+năm (+ học vụ thành viên gửi lên), id tăng dần, MỘT câu (:func:`read_quota_fingerprint`) → học vụ sẽ đổi chỉ tiêu ``FOR UPDATE``
+(``quota_occupancy_service.lock_quota_cells``, id tăng dần, MỘT câu — chỉ NÂNG khoá trên dòng đã giữ ``FOR SHARE``, không lấy
+dòng mới xen giữa) → dòng ``admission_quota_table`` ``FOR UPDATE``. Học vụ TRƯỚC bảng: đường sửa chỉ tiêu có sẵn
+(``PATCH /api/admin/academic-info/{id}`` → ``organization_service.update_academic_info``) khoá dòng học vụ (UPDATE) rồi trigger
+khoá dòng bảng ``FOR SHARE`` — cùng chiều ⇒ không vòng chờ. Khoá bảng: khoá năm → ``FOR SHARE`` học vụ của năm → dòng bảng.
+Mở khoá chỉ khoá năm + dòng bảng.
+
+[GĐ2-F1 — điểm chặn Codex] DẤU CHỈ TIÊU (``quota_fingerprint``): đường sửa học vụ cũ đổi ``annual_admission_quota`` mà KHÔNG
+tăng ``version`` của bảng ⇒ chỉ ``version`` không đỡ được "A mở bảng, B sửa ở trang cũ, A lưu bản cũ ⇒ ghi đè B" (kể cả năm
+CHƯA có bảng, ``version`` 0). GET trả dấu = băm (:func:`quota_fingerprint_of`) của (id, chỉ tiêu) MỌI học vụ của năm (NULL ≠ 0);
+PUT / khoá BẮT BUỘC gửi lại dấu lúc mở; dịch vụ đọc lại các dòng ấy ``FOR SHARE`` SAU khoá năm, TRƯỚC khi ghi — lệnh sửa cũ
+đang dở phải commit xong trước rồi mới đọc giá trị mới — lệch ⇒ 409 ``quota_table_stale``. ``FOR SHARE`` chặn cả lệnh sửa đang
+dở (``UPDATE`` giữ khoá dòng xung đột ``FOR SHARE``) lẫn lệnh sửa đến SAU (``UPDATE`` chờ tới khi ta commit ⇒ giá trị của họ nằm
+SAU bản ta ghi, không bị đè).
 
 Vết: mỗi lần sửa / khoá / mở khoá một dòng ``entity_audit_log`` (``entity_type='admission_quota_table'``, ``entity_id`` =
 năm, người, giờ, lý do mở khoá) — cùng giao dịch. Log ứng dụng chỉ năm + số đếm.
 """
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import structlog
-from sqlalchemy import delete, select, text
+from sqlalchemy import delete, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
@@ -40,7 +52,10 @@ AUDIT_ENTITY = "admission_quota_table"
 
 #: Câu báo theo mã lý do (mã tiếng Anh — quy ước owner 17-11).
 MESSAGES: Dict[str, str] = {
-    "quota_table_stale": "Bảng chỉ tiêu đã được người khác sửa / khoá sau khi bạn mở — hãy tải lại rồi làm lại.",
+    "quota_table_stale": (
+        "Bảng chỉ tiêu hoặc chỉ tiêu ngành của năm đã được sửa ở nơi khác (bảng này hoặc trang cấu hình học vụ) sau khi bạn "
+        "mở — hãy tải lại rồi làm lại."
+    ),
     "quota_table_locked": "Bảng chỉ tiêu năm này đã khoá — Admin mở khoá (có lý do) trước khi sửa.",
     "quota_table_already_locked": "Bảng chỉ tiêu năm này đã khoá rồi.",
     "quota_table_not_locked": "Bảng chỉ tiêu năm này chưa khoá — không có gì để mở khoá.",
@@ -80,8 +95,52 @@ class QuotaTableConflict(ConflictError):
         self.error_code = reason_code.upper()
 
 
-def _not_found(academic_year: int) -> ResourceNotFoundError:
-    return ResourceNotFoundError(detail="Năm %d chưa có bảng chỉ tiêu." % academic_year)
+def _not_found(academic_year: int, quota_fingerprint: Optional[str] = None) -> ResourceNotFoundError:
+    payload: Dict[str, Any] = {"reason_code": "quota_table_not_found"}
+    if quota_fingerprint is not None:
+        # GĐ2-F1: năm CHƯA có bảng vẫn có dấu chỉ tiêu — giao diện gửi lại khi tạo bảng (``version`` 0).
+        payload["quota_fingerprint"] = quota_fingerprint
+    return ResourceNotFoundError(detail="Năm %d chưa có bảng chỉ tiêu." % academic_year, public_payload=payload)
+
+
+#: GĐ2-F1 — tiền tố phiên bản công thức dấu chỉ tiêu (đổi công thức ⇒ đổi tiền tố ⇒ mọi dấu cũ lệch — an toàn).
+QUOTA_FINGERPRINT_PREFIX = "qfp-v1"
+
+
+def quota_fingerprint_of(rows: Iterable[Tuple[int, Optional[int]]]) -> str:
+    """GĐ2-F1 — MỘT hàm băm ổn định cho dấu chỉ tiêu (dùng cho GET và cho kiểm ở PUT / khoá): sha256 hex của danh sách
+    ``(offering_academic_info.id, annual_admission_quota)`` đã sắp theo id. NULL ghi là ``null`` — KHÁC ``0`` (trống ≠ 0,
+    quyết định owner 19-11 câu 4)."""
+    phan = []
+    for oai_id, quota in sorted(((int(i), q) for i, q in rows), key=lambda x: x[0]):
+        phan.append("%d=%s" % (oai_id, "null" if quota is None else "%d" % int(quota)))
+    return hashlib.sha256(("%s|%s" % (QUOTA_FINGERPRINT_PREFIX, ",".join(phan))).encode("ascii")).hexdigest()
+
+
+async def read_quota_fingerprint(
+    db: AsyncSession, academic_year: int, *, lock: bool, also_lock_ids: Iterable[int] = ()
+) -> str:
+    """GĐ2-F1 — dấu chỉ tiêu của năm, đọc từ CSDL: MỌI dòng ``offering_academic_info`` có ``academic_year = năm`` (kể cả đã
+    xoá mềm; học vụ mới / dời năm cũng làm dấu đổi). ``lock=True`` ⇒ MỘT câu ``FOR SHARE`` id tăng dần, gồm thêm
+    ``also_lock_ids`` (thành viên gửi lên — có thể khác năm, dịch vụ báo 400 sau) để bước ``lock_quota_cells`` sau đó chỉ NÂNG
+    khoá trên dòng đã giữ, không lấy dòng mới xen giữa ⇒ không vòng chờ với giao dịch khoá học vụ theo id tăng dần. Dấu chỉ
+    tính dòng có năm = ``năm`` theo giá trị đọc SAU khoá (dòng vừa bị dời năm không còn tính)."""
+    oai = models.OfferingAcademicInfo
+    extra = sorted({int(x) for x in also_lock_ids})
+    cond = oai.academic_year == academic_year
+    if extra:
+        cond = or_(cond, oai.id.in_(extra))
+    stmt = select(oai.id, oai.academic_year, oai.annual_admission_quota).where(cond).order_by(oai.id)
+    if lock:
+        stmt = stmt.with_for_update(read=True)
+    rows = (await db.execute(stmt)).all()
+    return quota_fingerprint_of((r.id, r.annual_admission_quota) for r in rows if r.academic_year == academic_year)
+
+
+def _check_quota_fingerprint(expected: str, current: str, *, current_version: int) -> None:
+    """Dấu gửi lên (lúc mở) ≠ dấu đọc lại dưới khoá ⇒ chỉ tiêu ngành của năm đã đổi ở nơi khác ⇒ 409, không ghi gì."""
+    if expected != current:
+        raise QuotaTableConflict("quota_table_stale", {"current_version": int(current_version)})
 
 
 async def lock_review_year(db: AsyncSession, academic_year: int) -> None:
@@ -130,8 +189,9 @@ async def get_quota_table(db: AsyncSession, academic_year: int) -> Dict[str, Any
     :func:`quota_occupancy_service.count_by_group`). Năm chưa có bảng ⇒ 404."""
     t = models.AdmissionQuotaTable
     table = (await db.execute(select(t).where(t.academic_year == academic_year))).scalar_one_or_none()
+    quota_fingerprint = await read_quota_fingerprint(db, academic_year, lock=False)
     if table is None:
-        raise _not_found(academic_year)
+        raise _not_found(academic_year, quota_fingerprint)
     g, m = models.AdmissionQuotaGroup, models.AdmissionQuotaGroupMember
     oai, po, mp = models.OfferingAcademicInfo, models.ProgramOffering, models.MajorProgram
     groups = (
@@ -186,6 +246,7 @@ async def get_quota_table(db: AsyncSession, academic_year: int) -> Dict[str, Any
         "locked_by_user_id": table.locked_by_user_id,
         "locked_at": table.locked_at,
         "available_actions": quota_table_actions(table.status),
+        "quota_fingerprint": quota_fingerprint,
         "groups": out_groups,
     }
 
@@ -227,11 +288,16 @@ async def replace_quota_table(
         mem.offering_academic_info_id: mem.annual_admission_quota for grp in groups for mem in grp.members
     }
 
-    # 1. Khoá năm → học vụ (id tăng dần) → dòng bảng.
+    # 1. Khoá năm → [GĐ2-F1] FOR SHARE học vụ của năm + thành viên (dấu chỉ tiêu) → học vụ thành viên FOR UPDATE (id tăng
+    #    dần, chỉ nâng khoá) → dòng bảng.
     await lock_review_year(db, academic_year)
+    current_fp = await read_quota_fingerprint(db, academic_year, lock=True, also_lock_ids=want.keys())
     await qos.lock_quota_cells(db, want.keys(), ())
     table = await _table_for_update(db, academic_year)
     _check_version(table, payload.version)
+    _check_quota_fingerprint(
+        payload.quota_fingerprint, current_fp, current_version=0 if table is None else int(table.version)
+    )
     if table is not None and ACTION_EDIT not in quota_table_actions(table.status):
         raise QuotaTableConflict("quota_table_locked")
 
@@ -308,14 +374,21 @@ async def replace_quota_table(
 
 
 # ═══════════════════════════════ khoá / mở khoá ════════════════════════════════════════════
-async def lock_quota_table(db: AsyncSession, academic_year: int, *, expected_version: int, actor_id: int) -> Dict[str, Any]:
+async def lock_quota_table(
+    db: AsyncSession, academic_year: int, *, expected_version: int, expected_quota_fingerprint: str, actor_id: int
+) -> Dict[str, Any]:
     """``draft`` → ``locked``. Điều kiện kỹ thuật: mọi ngành thành viên có chỉ tiêu năm (thiếu ⇒ 409 nêu id) — ngành thiếu
-    chỉ tiêu không xét được (đặc tả §5.4 bước 1), khoá bảng như vậy chỉ dời lỗi sang lúc xét."""
+    chỉ tiêu không xét được (đặc tả §5.4 bước 1), khoá bảng như vậy chỉ dời lỗi sang lúc xét.
+
+    GĐ2-F1: khoá đóng băng ĐÚNG các chỉ tiêu người khoá đã xem ⇒ đòi dấu chỉ tiêu lúc mở (đọc lại ``FOR SHARE`` sau khoá năm,
+    TRƯỚC dòng bảng — cùng chiều "học vụ trước bảng" với trigger)."""
     await lock_review_year(db, academic_year)
+    current_fp = await read_quota_fingerprint(db, academic_year, lock=True)
     table = await _table_for_update(db, academic_year)
     if table is None:
         raise _not_found(academic_year)
     _check_version(table, expected_version)
+    _check_quota_fingerprint(expected_quota_fingerprint, current_fp, current_version=int(table.version))
     if ACTION_LOCK not in quota_table_actions(table.status):
         raise QuotaTableConflict("quota_table_already_locked")
     m, oai = models.AdmissionQuotaGroupMember, models.OfferingAcademicInfo

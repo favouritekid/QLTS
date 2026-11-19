@@ -137,14 +137,15 @@ export function QuotaTableView({ table, labelOf, onEdit }: Props) {
 function LockDialog({ table, labelOf, onClose }: { table: QuotaTableOut; labelOf: Props["labelOf"]; onClose: () => void }) {
   const year = table.academic_year
   const lock = useLockQuotaTable(year)
-  // Phiên bản chốt lúc mở hộp — bảng làm mới sau lỗi không âm thầm đổi bản sẽ khoá (khoá bản chưa xem).
+  // Phiên bản + dấu chỉ tiêu chốt lúc mở hộp — bảng làm mới sau lỗi không âm thầm đổi bản sẽ khoá (khoá bản chưa xem).
   const [version] = useState(table.version)
+  const [quotaFingerprint] = useState(table.quota_fingerprint)
   const [error, setError] = useState<string | null>(null)
 
   const submit = () => {
     setError(null)
     lock.mutate(
-      { version },
+      { version, quota_fingerprint: quotaFingerprint },
       {
         onSuccess: () => {
           toast.success(`Đã khoá bảng chỉ tiêu năm ${year}`)

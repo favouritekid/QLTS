@@ -30,7 +30,7 @@ from tests.api.test_gd2_minh_chung_uu_tien_api import (  # noqa: F401 — fixtur
     don_tep,
     parity_config,
 )
-from tests.api.test_gd2a_bang_chi_tieu_api import NAM, P, _than, hoc_vu  # noqa: F401
+from tests.api.test_gd2a_bang_chi_tieu_api import NAM, P, _gui, _khoa_than, hoc_vu  # noqa: F401
 
 pytestmark = pytest.mark.asyncio
 
@@ -194,7 +194,7 @@ async def test_dong_ban_giay_hien_trang_thai_paper_submitted(
 # --------------------------------------------------------------------------------------------------------------------
 async def test_available_actions_bang_chi_tieu_khop_cong(client: AsyncClient, admin_token_headers, hoc_vu):
     h = admin_token_headers
-    r = await client.put(f"{P}/{NAM}", headers=h, json=_than(0, hoc_vu))
+    r = await client.put(f"{P}/{NAM}", headers=h, json=await _gui(0, hoc_vu))
     assert r.status_code == 200, r.text
     assert r.json()["available_actions"] == ["edit", "lock"], r.text
     r = await client.get(f"{P}/{NAM}", headers=h)
@@ -203,13 +203,13 @@ async def test_available_actions_bang_chi_tieu_khop_cong(client: AsyncClient, ad
     r = await client.post(f"{P}/{NAM}/unlock", headers=h, json={"version": 1, "reason": "thử cổng"})
     assert r.status_code == 409 and r.json()["error_code"] == "QUOTA_TABLE_NOT_LOCKED", r.text
     # Có "lock" ⇒ khoá được.
-    r = await client.post(f"{P}/{NAM}/lock", headers=h, json={"version": 1})
+    r = await client.post(f"{P}/{NAM}/lock", headers=h, json=await _khoa_than(1))
     assert r.status_code == 200, r.text
     assert r.json()["available_actions"] == ["unlock"], r.text
     # Bảng khoá: KHÔNG có "edit" / "lock" ⇒ cổng sửa và cổng khoá từ chối.
-    r = await client.put(f"{P}/{NAM}", headers=h, json=_than(2, hoc_vu))
+    r = await client.put(f"{P}/{NAM}", headers=h, json=await _gui(2, hoc_vu))
     assert r.status_code == 409 and r.json()["error_code"] == "QUOTA_TABLE_LOCKED", r.text
-    r = await client.post(f"{P}/{NAM}/lock", headers=h, json={"version": 2})
+    r = await client.post(f"{P}/{NAM}/lock", headers=h, json=await _khoa_than(2))
     assert r.status_code == 409 and r.json()["error_code"] == "QUOTA_TABLE_ALREADY_LOCKED", r.text
     # Có "unlock" ⇒ mở khoá được; về lại edit + lock.
     r = await client.post(f"{P}/{NAM}/unlock", headers=h, json={"version": 2, "reason": "Điều chỉnh chỉ tiêu thử"})

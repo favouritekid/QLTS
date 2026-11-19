@@ -31,16 +31,21 @@ function batDanhMuc() {
 afterEach(() => server.resetHandlers())
 
 describe("QuotaTablesClient", () => {
-  it("năm chưa có bảng (404) ⇒ nút tạo; tạo ⇒ PUT version 0", async () => {
+  it("năm chưa có bảng (404) ⇒ nút tạo; tạo ⇒ PUT version 0 + DẤU CHỈ TIÊU trong thân 404", async () => {
     const than: unknown[] = []
     batDanhMuc()
     server.use(
-      http.get(P, () => HttpResponse.json({ detail: "Năm 2026 chưa có bảng chỉ tiêu." }, { status: 404 })),
+      http.get(P, () =>
+        HttpResponse.json(
+          { detail: "Năm 2026 chưa có bảng chỉ tiêu.", reason_code: "quota_table_not_found", quota_fingerprint: "c".repeat(64) },
+          { status: 404 },
+        ),
+      ),
       http.put(P, async ({ request }) => {
         than.push(await request.json())
         return HttpResponse.json({
           academic_year: 2026, status: "draft", version: 1, locked_by_user_id: null, locked_at: null,
-          available_actions: ["edit", "lock"], groups: [],
+          available_actions: ["edit", "lock"], quota_fingerprint: "d".repeat(64), groups: [],
         })
       }),
     )
@@ -53,7 +58,11 @@ describe("QuotaTablesClient", () => {
     await u.type(screen.getByLabelText("Trần chỉ tiêu nhóm"), "10")
     await u.click(screen.getByTestId("luu-bang"))
     await waitFor(() => expect(than).toHaveLength(1))
-    expect(than[0]).toEqual({ version: 0, groups: [{ code: "N1", name: "Nhóm thử", ceiling: 10, members: [] }] })
+    expect(than[0]).toEqual({
+      version: 0,
+      quota_fingerprint: "c".repeat(64),
+      groups: [{ code: "N1", name: "Nhóm thử", ceiling: 10, members: [] }],
+    })
   })
 
   it("máy chủ 403 ⇒ câu 'Chỉ Admin', không nút tạo / sửa", async () => {

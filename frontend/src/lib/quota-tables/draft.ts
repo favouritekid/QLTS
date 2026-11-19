@@ -63,9 +63,11 @@ export function draftFromTable(table: QuotaTableOut | null): DraftGroup[] {
   }))
 }
 
-export function draftToPutBody(version: number, groups: DraftGroup[]): QuotaTablePut {
+/** `quotaFingerprint` = dấu chỉ tiêu LÚC MỞ (GĐ2-F1) — không lấy dấu của lần tải lại sau đó. */
+export function draftToPutBody(version: number, quotaFingerprint: string, groups: DraftGroup[]): QuotaTablePut {
   return {
     version,
+    quota_fingerprint: quotaFingerprint,
     groups: groups.map((g) => ({
       code: g.code,
       name: g.name,

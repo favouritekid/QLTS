@@ -25,7 +25,7 @@ export function quotaConflictText(reasonCode: string | undefined, data: Record<s
   switch (reasonCode) {
     case "quota_table_stale": {
       const v = typeof data?.current_version === "number" ? ` (phiên bản hiện tại: ${data.current_version})` : ""
-      return `Bảng chỉ tiêu đã được người khác sửa / khoá sau khi bạn mở${v} — tải lại bảng rồi làm lại.`
+      return `Bảng chỉ tiêu hoặc chỉ tiêu ngành của năm đã được sửa ở nơi khác (có thể ở trang Cấu hình tuyển sinh) sau khi bạn mở${v} — tải lại bảng rồi làm lại.`
     }
     case "quota_table_locked":
       return LOCKED_MESSAGE
@@ -56,6 +56,7 @@ function issueText(issue: RawIssue, ctx: QuotaErrorContext): string | null {
   const gi = loc[0] === "body" && loc[1] === "groups" && typeof loc[2] === "number" ? loc[2] : null
   if (gi === null) {
     if (loc[0] === "body" && loc[1] === "reason") return "Lý do mở khoá là bắt buộc."
+    if (loc[0] === "body" && loc[1] === "quota_fingerprint") return "Thiếu dấu chỉ tiêu lúc mở bảng — tải lại trang rồi làm lại."
     return null
   }
   const g = ctx.draft?.[gi]

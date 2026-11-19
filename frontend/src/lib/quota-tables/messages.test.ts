@@ -28,7 +28,7 @@ const ctx = (draft?: DraftGroup[]) => ({
 
 describe("describeQuotaTableError — 409 theo reason_code", () => {
   it.each([
-    ["quota_table_stale", { current_version: 4 }, /người khác sửa \/ khoá.*phiên bản hiện tại: 4/],
+    ["quota_table_stale", { current_version: 4 }, /sửa ở nơi khác \(có thể ở trang Cấu hình tuyển sinh\).*phiên bản hiện tại: 4/],
     ["quota_table_locked", {}, /đã khoá — Admin mở khoá/],
     ["quota_table_already_locked", {}, /đã khoá rồi/],
     ["quota_table_not_locked", {}, /chưa khoá — không có gì để mở khoá/],
@@ -115,6 +115,12 @@ describe("describeQuotaTableError — 400 / 422 / quyền", () => {
       ctx(draft),
     )
     expect(cau).toMatch(/Nhóm N2: trần chỉ tiêu còn trống/)
+  })
+
+  it("422 thiếu / sai dấu chỉ tiêu ⇒ câu tải lại", () => {
+    expect(
+      describeQuotaTableError(loi(422, { errors: [{ loc: ["body", "quota_fingerprint"], msg: "x" }] }), ctx()),
+    ).toMatch(/Thiếu dấu chỉ tiêu lúc mở bảng — tải lại trang/)
   })
 
   it("422 lý do mở khoá ⇒ câu lý do bắt buộc", () => {

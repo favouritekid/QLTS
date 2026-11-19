@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { http, HttpResponse } from "msw"
+import { QueryClientProvider } from "@tanstack/react-query"
 
 import { API, renderWithClient } from "@/components/document-review/test-helpers"
 import { server } from "@/test/mocks/server"
@@ -15,6 +16,7 @@ import type { QuotaTableOut } from "@/lib/zod/quota-tables"
 import { QuotaTableView } from "./QuotaTableView"
 
 const P = `${API}/api/admission-config/quota-tables/2026`
+const FP = "a".repeat(64)
 
 function bang(over: Partial<QuotaTableOut> = {}): QuotaTableOut {
   return {
@@ -24,6 +26,7 @@ function bang(over: Partial<QuotaTableOut> = {}): QuotaTableOut {
     locked_by_user_id: null,
     locked_at: null,
     available_actions: ["edit", "lock"],
+    quota_fingerprint: FP,
     groups: [
       {
         id: 7,
@@ -118,6 +121,36 @@ describe("QuotaTableView — mở khoá bắt buộc lý do", () => {
 })
 
 describe("QuotaTableView — khoá bảng", () => {
+  it("GĐ2-F1: bảng làm mới (dấu chỉ tiêu mới) khi hộp khoá đang mở ⇒ vẫn gửi DẤU LÚC MỞ hộp", async () => {
+    const than: unknown[] = []
+    server.use(
+      http.post(`${P}/lock`, async ({ request }) => {
+        than.push(await request.json())
+        return HttpResponse.json(
+          { reason_code: "quota_table_stale", error_code: "QUOTA_TABLE_STALE", current_version: 3, detail: "x" },
+          { status: 409 },
+        )
+      }),
+    )
+    const u = userEvent.setup()
+    const { queryClient, rerender } = renderWithClient(<QuotaTableView table={bang()} labelOf={labelOf} onEdit={vi.fn()} />)
+    await u.click(screen.getByTestId("nut-khoa-bang"))
+    await u.click(screen.getByTestId("xac-nhan-khoa-bang"))
+    await screen.findByRole("alert")
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <QuotaTableView table={bang({ quota_fingerprint: "b".repeat(64) })} labelOf={labelOf} onEdit={vi.fn()} />
+      </QueryClientProvider>,
+    )
+    await u.click(screen.getByTestId("xac-nhan-khoa-bang"))
+    await waitFor(() => expect(than).toHaveLength(2))
+    expect(than).toEqual([
+      { version: 3, quota_fingerprint: FP },
+      { version: 3, quota_fingerprint: FP },
+    ])
+  })
+
+
   it("gửi {version}; 409 thiếu chỉ tiêu ⇒ câu nêu TÊN ngành, giữ hộp", async () => {
     const than: unknown[] = []
     server.use(
@@ -134,7 +167,7 @@ describe("QuotaTableView — khoá bảng", () => {
     await u.click(screen.getByTestId("nut-khoa-bang"))
     await u.click(screen.getByTestId("xac-nhan-khoa-bang"))
     const loi = await screen.findByRole("alert")
-    expect(than).toEqual([{ version: 3 }])
+    expect(than).toEqual([{ version: 3, quota_fingerprint: FP }])
     expect(loi).toHaveTextContent("M1 — Ngành Một")
     expect(loi).toHaveTextContent(/chưa có chỉ tiêu năm/)
     expect(loi.textContent).not.toMatch(/quota_table_member_quota_missing/i)

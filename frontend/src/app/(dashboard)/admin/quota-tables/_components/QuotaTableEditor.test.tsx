@@ -15,6 +15,8 @@ import type { DraftGroup } from "@/lib/quota-tables/draft"
 import { QuotaTableEditor, type MemberOption } from "./QuotaTableEditor"
 
 const P = `${API}/api/admission-config/quota-tables/2026`
+const FP = "a".repeat(64)
+const FP_MOI = "b".repeat(64)
 
 const NHOM: DraftGroup[] = [
   {
@@ -59,6 +61,7 @@ function ve(over: Partial<Parameters<typeof QuotaTableEditor>[0]> = {}) {
     <QuotaTableEditor
       year={2026}
       version={3}
+      quotaFingerprint={FP}
       initialGroups={NHOM}
       options={LUA_CHON}
       labelOf={labelOf}
@@ -84,6 +87,7 @@ describe("QuotaTableEditor — trống ≠ 0", () => {
     await u.click(screen.getByTestId("luu-bang"))
     await waitFor(() => expect(onSaved).toHaveBeenCalled())
     expect(than[0].version).toBe(3)
+    expect(than[0].quota_fingerprint).toBe(FP)
     expect(thanhVien(than[0])).toEqual([
       { offering_academic_info_id: 11, annual_admission_quota: null },
       { offering_academic_info_id: 12, annual_admission_quota: 40 },
@@ -113,7 +117,11 @@ describe("QuotaTableEditor — trống ≠ 0", () => {
     await u.type(screen.getByLabelText("Tên nhóm"), "Nhóm mới")
     await u.click(screen.getByTestId("luu-bang"))
     await waitFor(() => expect(than).toHaveLength(1))
-    expect(than[0]).toEqual({ version: 0, groups: [{ code: "N9", name: "Nhóm mới", ceiling: null, members: [] }] })
+    expect(than[0]).toEqual({
+      version: 0,
+      quota_fingerprint: FP,
+      groups: [{ code: "N9", name: "Nhóm mới", ceiling: null, members: [] }],
+    })
   })
 
   it("thêm ngành chưa có chỉ tiêu năm ⇒ ô trống ⇒ null; ngành đã có chỉ tiêu ⇒ điền đúng số máy chủ", async () => {
@@ -152,17 +160,36 @@ describe("QuotaTableEditor — lỗi máy chủ", () => {
     const props = {
       year: 2026, initialGroups: NHOM, options: LUA_CHON, labelOf, onCancel: vi.fn(), onSaved: vi.fn(),
     }
-    const { queryClient, rerender } = renderWithClient(<QuotaTableEditor version={3} {...props} />)
+    const { queryClient, rerender } = renderWithClient(<QuotaTableEditor version={3} quotaFingerprint={FP} {...props} />)
     await u.click(screen.getByTestId("luu-bang"))
     await screen.findByRole("alert")
     rerender(
       <QueryClientProvider client={queryClient}>
-        <QuotaTableEditor version={5} {...props} />
+        <QuotaTableEditor version={5} quotaFingerprint={FP} {...props} />
       </QueryClientProvider>,
     )
     await u.click(screen.getByTestId("luu-bang"))
     await waitFor(() => expect(than).toHaveLength(2))
     expect(than.map((t) => t.version)).toEqual([3, 3])
+  })
+
+  it("GĐ2-F1: dấu chỉ tiêu mới sau khi bảng làm mới ⇒ Lưu lần nữa VẪN gửi DẤU LÚC MỞ (không đè chỉ tiêu sửa ở trang khác)", async () => {
+    batPut(409, { reason_code: "quota_table_stale", error_code: "QUOTA_TABLE_STALE", current_version: 3, detail: "x" })
+    const u = userEvent.setup()
+    const props = {
+      year: 2026, version: 3, initialGroups: NHOM, options: LUA_CHON, labelOf, onCancel: vi.fn(), onSaved: vi.fn(),
+    }
+    const { queryClient, rerender } = renderWithClient(<QuotaTableEditor quotaFingerprint={FP} {...props} />)
+    await u.click(screen.getByTestId("luu-bang"))
+    await screen.findByRole("alert")
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <QuotaTableEditor quotaFingerprint={FP_MOI} {...props} />
+      </QueryClientProvider>,
+    )
+    await u.click(screen.getByTestId("luu-bang"))
+    await waitFor(() => expect(than).toHaveLength(2))
+    expect(than.map((t) => t.quota_fingerprint)).toEqual([FP, FP])
   })
 
   it("409 quota_table_stale ⇒ câu tải lại, giữ bản nháp", async () => {
@@ -171,7 +198,7 @@ describe("QuotaTableEditor — lỗi máy chủ", () => {
     ve()
     await u.click(screen.getByTestId("luu-bang"))
     const loi = await screen.findByRole("alert")
-    expect(loi).toHaveTextContent(/người khác sửa \/ khoá/)
+    expect(loi).toHaveTextContent(/sửa ở nơi khác/)
     expect(screen.getByLabelText("Chỉ tiêu năm — M2 — Ngành Hai")).toHaveValue(40)
   })
 })

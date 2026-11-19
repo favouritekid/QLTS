@@ -82,9 +82,30 @@ async def _bang():
     return (await _sql("SELECT status, version FROM admission_quota_table WHERE academic_year = :y", y=NAM)).one_or_none()
 
 
+async def _dau(sua=None) -> str:
+    """GĐ2-F1 — dấu chỉ tiêu HIỆN TẠI của năm (CÙNG hàm ``quota_fingerprint_of`` của dịch vụ) như GET trả; ``sua`` =
+    {id học vụ: chỉ tiêu} ⇒ dấu của trạng thái SAU một lệnh sửa (cho ca hai phiên)."""
+    from app.services.admission_quota_table_service import quota_fingerprint_of
+
+    rows = (await _sql("SELECT id, annual_admission_quota FROM offering_academic_info WHERE academic_year = :y", y=NAM)).all()
+    m = {r[0]: r[1] for r in rows}
+    m.update(sua or {})
+    return quota_fingerprint_of(m.items())
+
+
+async def _gui(version, hoc_vu, *, nhom=None) -> dict:
+    """Thân PUT kèm dấu chỉ tiêu hiện tại (GĐ2-F1 — bắt buộc)."""
+    return {**_than(version, hoc_vu, nhom=nhom), "quota_fingerprint": await _dau()}
+
+
+async def _khoa_than(version) -> dict:
+    """Thân POST …/lock kèm dấu chỉ tiêu hiện tại (GĐ2-F1 — bắt buộc)."""
+    return {"version": version, "quota_fingerprint": await _dau()}
+
+
 # ── tạo / đọc / sửa ─────────────────────────────────────────────────────────────────────────────────────────────────
 async def test_admin_tao_bang_moi_ghi_chi_tieu_nganh_va_doc_lai(client: AsyncClient, admin_token_headers, hoc_vu):
-    r = await client.put(f"{P}/{NAM}", headers=admin_token_headers, json=_than(0, hoc_vu))
+    r = await client.put(f"{P}/{NAM}", headers=admin_token_headers, json=await _gui(0, hoc_vu))
     assert r.status_code == 200, r.text
     body = r.json()
     assert (body["status"], body["version"]) == ("draft", 1)
@@ -108,8 +129,8 @@ async def test_doc_nam_chua_co_bang_404(client: AsyncClient, admin_token_headers
 
 
 async def test_put_sai_phien_ban_409_khong_ghi_gi(client: AsyncClient, admin_token_headers, hoc_vu):
-    assert (await client.put(f"{P}/{NAM}", headers=admin_token_headers, json=_than(0, hoc_vu))).status_code == 200
-    than = _than(0, hoc_vu)
+    assert (await client.put(f"{P}/{NAM}", headers=admin_token_headers, json=await _gui(0, hoc_vu))).status_code == 200
+    than = await _gui(0, hoc_vu)
     than["groups"][0]["ceiling"] = 999
     r = await client.put(f"{P}/{NAM}", headers=admin_token_headers, json=than)
     assert r.status_code == 409 and r.json()["error_code"] == "QUOTA_TABLE_STALE", r.text
@@ -118,10 +139,10 @@ async def test_put_sai_phien_ban_409_khong_ghi_gi(client: AsyncClient, admin_tok
 
 
 async def test_put_lan_hai_giu_id_nhom_theo_ma_thay_thanh_vien(client: AsyncClient, admin_token_headers, hoc_vu):
-    r = await client.put(f"{P}/{NAM}", headers=admin_token_headers, json=_than(0, hoc_vu))
+    r = await client.put(f"{P}/{NAM}", headers=admin_token_headers, json=await _gui(0, hoc_vu))
     id_n1 = next(g["id"] for g in r.json()["groups"] if g["code"] == "N1")
     a, b, c, d = hoc_vu["2026"]
-    than = _than(1, hoc_vu, nhom=[
+    than = await _gui(1, hoc_vu, nhom=[
         {"code": "N1", "name": "Nhóm Kỹ thuật (đổi tên)", "ceiling": 100,
          "members": [{"offering_academic_info_id": a, "annual_admission_quota": 55}]},
         {"code": "N3", "name": "Nhóm mới", "ceiling": 10,
@@ -137,7 +158,7 @@ async def test_put_lan_hai_giu_id_nhom_theo_ma_thay_thanh_vien(client: AsyncClie
 
 
 async def test_put_nganh_khac_nam_400(client: AsyncClient, admin_token_headers, hoc_vu):
-    than = _than(0, hoc_vu)
+    than = await _gui(0, hoc_vu)
     than["groups"][1]["members"].append({"offering_academic_info_id": hoc_vu["2025"], "annual_admission_quota": 5})
     r = await client.put(f"{P}/{NAM}", headers=admin_token_headers, json=than)
     assert r.status_code == 400, r.text
@@ -146,7 +167,7 @@ async def test_put_nganh_khac_nam_400(client: AsyncClient, admin_token_headers, 
 
 
 async def test_put_mot_nganh_hai_nhom_400(client: AsyncClient, admin_token_headers, hoc_vu):
-    than = _than(0, hoc_vu)
+    than = await _gui(0, hoc_vu)
     a = hoc_vu["2026"][0]
     than["groups"][1]["members"].append({"offering_academic_info_id": a, "annual_admission_quota": 5})
     r = await client.put(f"{P}/{NAM}", headers=admin_token_headers, json=than)
@@ -156,7 +177,7 @@ async def test_put_mot_nganh_hai_nhom_400(client: AsyncClient, admin_token_heade
 
 
 async def test_put_ma_nhom_trung_400(client: AsyncClient, admin_token_headers, hoc_vu):
-    than = _than(0, hoc_vu)
+    than = await _gui(0, hoc_vu)
     than["groups"][1]["code"] = "N1"
     r = await client.put(f"{P}/{NAM}", headers=admin_token_headers, json=than)
     assert r.status_code == 400, r.text
@@ -164,7 +185,7 @@ async def test_put_ma_nhom_trung_400(client: AsyncClient, admin_token_headers, h
 
 
 async def test_put_tran_am_422(client: AsyncClient, admin_token_headers, hoc_vu):
-    than = _than(0, hoc_vu)
+    than = await _gui(0, hoc_vu)
     than["groups"][0]["ceiling"] = -1
     r = await client.put(f"{P}/{NAM}", headers=admin_token_headers, json=than)
     assert r.status_code == 422, r.text
@@ -172,8 +193,8 @@ async def test_put_tran_am_422(client: AsyncClient, admin_token_headers, hoc_vu)
 
 # ── khoá / mở khoá ──────────────────────────────────────────────────────────────────────────────────────────────────
 async def _tao_va_khoa(client, h, hoc_vu):
-    assert (await client.put(f"{P}/{NAM}", headers=h, json=_than(0, hoc_vu))).status_code == 200
-    r = await client.post(f"{P}/{NAM}/lock", headers=h, json={"version": 1})
+    assert (await client.put(f"{P}/{NAM}", headers=h, json=await _gui(0, hoc_vu))).status_code == 200
+    r = await client.post(f"{P}/{NAM}/lock", headers=h, json=await _khoa_than(1))
     assert r.status_code == 200, r.text
     return r.json()
 
@@ -181,7 +202,7 @@ async def _tao_va_khoa(client, h, hoc_vu):
 async def test_khoa_bang_roi_put_bi_chan_409(client: AsyncClient, admin_token_headers, admin_user_in_db, hoc_vu):
     body = await _tao_va_khoa(client, admin_token_headers, hoc_vu)
     assert (body["status"], body["version"], body["locked_by_user_id"]) == ("locked", 2, admin_user_in_db["id"])
-    r = await client.put(f"{P}/{NAM}", headers=admin_token_headers, json=_than(2, hoc_vu))
+    r = await client.put(f"{P}/{NAM}", headers=admin_token_headers, json=await _gui(2, hoc_vu))
     assert r.status_code == 409 and r.json()["error_code"] == "QUOTA_TABLE_LOCKED", r.text
 
 
@@ -223,17 +244,17 @@ async def test_bang_khoa_thi_csdl_chan_moi_cau_ghi_nhom_thanh_vien(client: Async
 
 async def test_khoa_hai_lan_va_sai_phien_ban(client: AsyncClient, admin_token_headers, hoc_vu):
     await _tao_va_khoa(client, admin_token_headers, hoc_vu)
-    r = await client.post(f"{P}/{NAM}/lock", headers=admin_token_headers, json={"version": 2})
+    r = await client.post(f"{P}/{NAM}/lock", headers=admin_token_headers, json=await _khoa_than(2))
     assert r.status_code == 409 and r.json()["error_code"] == "QUOTA_TABLE_ALREADY_LOCKED", r.text
-    r = await client.post(f"{P}/{NAM}/lock", headers=admin_token_headers, json={"version": 1})
+    r = await client.post(f"{P}/{NAM}/lock", headers=admin_token_headers, json=await _khoa_than(1))
     assert r.status_code == 409 and r.json()["error_code"] == "QUOTA_TABLE_STALE", r.text
 
 
 async def test_khoa_khi_nganh_thanh_vien_thieu_chi_tieu_409(client: AsyncClient, admin_token_headers, hoc_vu):
-    assert (await client.put(f"{P}/{NAM}", headers=admin_token_headers, json=_than(0, hoc_vu))).status_code == 200
+    assert (await client.put(f"{P}/{NAM}", headers=admin_token_headers, json=await _gui(0, hoc_vu))).status_code == 200
     c = hoc_vu["2026"][2]
     await _sql("UPDATE offering_academic_info SET annual_admission_quota = NULL WHERE id = :i", i=c)
-    r = await client.post(f"{P}/{NAM}/lock", headers=admin_token_headers, json={"version": 1})
+    r = await client.post(f"{P}/{NAM}/lock", headers=admin_token_headers, json=await _khoa_than(1))
     assert r.status_code == 409, r.text
     assert r.json()["offering_academic_info_ids"] == [c]
     assert tuple(await _bang()) == ("draft", 1)
@@ -241,12 +262,12 @@ async def test_khoa_khi_nganh_thanh_vien_thieu_chi_tieu_409(client: AsyncClient,
 
 async def test_khoa_duoc_khi_chi_tieu_bang_0_nhap_ro(client: AsyncClient, admin_token_headers, hoc_vu):
     """Câu 4 owner 19-11: chỉ tiêu 0 nhập RÕ RÀNG là một con số (không phải "thiếu") ⇒ khoá được; chỉ NULL mới chặn."""
-    than = _than(0, hoc_vu)
+    than = await _gui(0, hoc_vu)
     than["groups"][1]["members"][0]["annual_admission_quota"] = 0
     assert (await client.put(f"{P}/{NAM}", headers=admin_token_headers, json=than)).status_code == 200
     c = hoc_vu["2026"][2]
     assert await _chi_tieu(c) == 0
-    r = await client.post(f"{P}/{NAM}/lock", headers=admin_token_headers, json={"version": 1})
+    r = await client.post(f"{P}/{NAM}/lock", headers=admin_token_headers, json=await _khoa_than(1))
     assert r.status_code == 200, r.text
     assert r.json()["status"] == "locked"
 
@@ -272,12 +293,12 @@ async def test_mo_khoa_bat_buoc_ly_do_va_luu_vet(client: AsyncClient, admin_toke
         ("created", None), ("locked", None), ("unlocked", "Có văn bản điều chỉnh chỉ tiêu ngành"),
     ]
     # Mở khoá xong sửa được.
-    r = await client.put(f"{P}/{NAM}", headers=admin_token_headers, json=_than(3, hoc_vu))
+    r = await client.put(f"{P}/{NAM}", headers=admin_token_headers, json=await _gui(3, hoc_vu))
     assert r.status_code == 200, r.text
 
 
 async def test_mo_khoa_bang_chua_khoa_409(client: AsyncClient, admin_token_headers, hoc_vu):
-    assert (await client.put(f"{P}/{NAM}", headers=admin_token_headers, json=_than(0, hoc_vu))).status_code == 200
+    assert (await client.put(f"{P}/{NAM}", headers=admin_token_headers, json=await _gui(0, hoc_vu))).status_code == 200
     r = await client.post(f"{P}/{NAM}/unlock", headers=admin_token_headers, json={"version": 1, "reason": "thử"})
     assert r.status_code == 409 and r.json()["error_code"] == "QUOTA_TABLE_NOT_LOCKED", r.text
 
@@ -287,14 +308,14 @@ async def test_mo_khoa_bang_chua_khoa_409(client: AsyncClient, admin_token_heade
 async def test_chi_admin_403_cho_vai_khac(
     client: AsyncClient, admin_token_headers, manager_user_in_db, officer_user_in_db, hoc_vu, vai
 ):
-    assert (await client.put(f"{P}/{NAM}", headers=admin_token_headers, json=_than(0, hoc_vu))).status_code == 200
+    assert (await client.put(f"{P}/{NAM}", headers=admin_token_headers, json=await _gui(0, hoc_vu))).status_code == 200
     u = manager_user_in_db if vai == "quan_ly" else officer_user_in_db
     h = await _login(client, u["username"], u["password"])
     client.cookies.clear()  # cookie đăng nhập đè tiêu đề — request đi đúng vai của ``h``
     for m, duong, than in (
         ("GET", f"{P}/{NAM}", None),
-        ("PUT", f"{P}/{NAM}", _than(1, hoc_vu)),
-        ("POST", f"{P}/{NAM}/lock", {"version": 1}),
+        ("PUT", f"{P}/{NAM}", await _gui(1, hoc_vu)),
+        ("POST", f"{P}/{NAM}/lock", await _khoa_than(1)),
         ("POST", f"{P}/{NAM}/unlock", {"version": 1, "reason": "x"}),
     ):
         r = await client.request(m, duong, headers=h, json=than)
@@ -321,11 +342,11 @@ async def test_lop_phu_chi_admin_tu_choi_vai_khac_du_lot_casbin():
 async def test_dong_bang_chan_route_ghi_bang_chi_tieu_503_doc_van_duoc(
     client: AsyncClient, admin_token_headers, hoc_vu, monkeypatch
 ):
-    assert (await client.put(f"{P}/{NAM}", headers=admin_token_headers, json=_than(0, hoc_vu))).status_code == 200
+    assert (await client.put(f"{P}/{NAM}", headers=admin_token_headers, json=await _gui(0, hoc_vu))).status_code == 200
     monkeypatch.setattr(settings, "ADMISSION_FROZEN", True)
     for m, duong, than in (
-        ("PUT", f"{P}/{NAM}", _than(1, hoc_vu)),
-        ("POST", f"{P}/{NAM}/lock", {"version": 1}),
+        ("PUT", f"{P}/{NAM}", await _gui(1, hoc_vu)),
+        ("POST", f"{P}/{NAM}/lock", await _khoa_than(1)),
         ("POST", f"{P}/{NAM}/unlock", {"version": 1, "reason": "x"}),
     ):
         r = await client.request(m, duong, headers=admin_token_headers, json=than)
@@ -333,7 +354,7 @@ async def test_dong_bang_chan_route_ghi_bang_chi_tieu_503_doc_van_duoc(
     assert (await client.get(f"{P}/{NAM}", headers=admin_token_headers)).status_code == 200
     assert tuple(await _bang()) == ("draft", 1)
     monkeypatch.setattr(settings, "ADMISSION_FROZEN", False)
-    r = await client.post(f"{P}/{NAM}/lock", headers=admin_token_headers, json={"version": 1})
+    r = await client.post(f"{P}/{NAM}/lock", headers=admin_token_headers, json=await _khoa_than(1))
     assert r.status_code == 200, r.text
 
 
@@ -346,9 +367,9 @@ async def test_khoa_nam_tuan_tu_hai_lan_tao_bang_cung_nam(admin_user_in_db, hoc_
     from app.services import admission_quota_table_service as svc
 
     a, b, c, d = hoc_vu["2026"]
-    than_1 = QuotaTablePut(version=0, groups=[{"code": "N1", "name": "Một", "ceiling": 9,
+    than_1 = QuotaTablePut(version=0, quota_fingerprint=await _dau(), groups=[{"code": "N1", "name": "Một", "ceiling": 9,
                                                 "members": [{"offering_academic_info_id": a, "annual_admission_quota": 1}]}])
-    than_2 = QuotaTablePut(version=0, groups=[{"code": "N2", "name": "Hai", "ceiling": 9,
+    than_2 = QuotaTablePut(version=0, quota_fingerprint=await _dau(), groups=[{"code": "N2", "name": "Hai", "ceiling": 9,
                                                 "members": [{"offering_academic_info_id": b, "annual_admission_quota": 2}]}])
     s1, s2 = AsyncSessionLocal(), AsyncSessionLocal()
     try:
@@ -414,7 +435,7 @@ async def _tao_bang_nhap(admin_user_in_db, hoc_vu) -> None:
     from app.services import admission_quota_table_service as svc
 
     async with AsyncSessionLocal() as s:
-        await svc.replace_quota_table(s, NAM, QuotaTablePut(**_than(0, hoc_vu)), actor_id=admin_user_in_db["id"])
+        await svc.replace_quota_table(s, NAM, QuotaTablePut(**(await _gui(0, hoc_vu))), actor_id=admin_user_in_db["id"])
         await s.commit()
     assert tuple(await _bang()) == ("draft", 1)
 
@@ -473,6 +494,9 @@ async def test_hai_phien_ghi_chi_tieu_truoc_thi_khoa_bang_phai_cho(admin_user_in
     ghi, doc, cu, moi = GHI_KHI_KHOA[duong]
     ts = _tham_so_ghi(duong, hoc_vu)
     await _tao_bang_nhap(admin_user_in_db, hoc_vu)
+    # GĐ2-F1: khoá đòi dấu chỉ tiêu; đưa dấu của trạng thái SAU lệnh sửa của phiên 1 ⇒ khoá chỉ qua được nếu nó đọc ĐÚNG giá trị
+    # phiên 1 đã commit (đường sửa chỉ tiêu nay chờ ở bước đọc dấu ``FOR SHARE``; đường trần nhóm vẫn chờ ở dòng bảng).
+    dau_sau = await _dau({hoc_vu["2026"][0]: moi} if duong == "chi_tieu_nganh" else None)
     s1, s2 = AsyncSessionLocal(), AsyncSessionLocal()
     viec = None
     try:
@@ -480,7 +504,9 @@ async def test_hai_phien_ghi_chi_tieu_truoc_thi_khoa_bang_phai_cho(admin_user_in
         await s1.execute(text(ghi), ts)  # giữ khoá, CHƯA commit
         pid2 = await _pid(s2)
         viec = asyncio.ensure_future(
-            svc.lock_quota_table(s2, NAM, expected_version=1, actor_id=admin_user_in_db["id"])
+            svc.lock_quota_table(
+                s2, NAM, expected_version=1, expected_quota_fingerprint=dau_sau, actor_id=admin_user_in_db["id"]
+            )
         )
         assert await _bi_chan_boi(pid2, pid1, viec), (
             "khoá bảng KHÔNG chờ giao dịch đang sửa (%s) — %s" % (duong, _mo_ta(viec))
@@ -512,7 +538,9 @@ async def test_hai_phien_khoa_bang_truoc_thi_ghi_chi_tieu_cho_roi_bi_chan(admin_
     viec = None
     try:
         pid2 = await _pid(s2)
-        await svc.lock_quota_table(s2, NAM, expected_version=1, actor_id=admin_user_in_db["id"])  # CHƯA commit
+        await svc.lock_quota_table(
+            s2, NAM, expected_version=1, expected_quota_fingerprint=await _dau(), actor_id=admin_user_in_db["id"]
+        )  # CHƯA commit
         pid1 = await _pid(s1)
         viec = asyncio.ensure_future(s1.execute(text(ghi), ts))
         assert await _bi_chan_boi(pid1, pid2, viec), (

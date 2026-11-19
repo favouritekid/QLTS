@@ -9,6 +9,9 @@ from typing import List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+#: GĐ2-F1 — dấu chỉ tiêu = sha256 hex chữ thường (``admission_quota_table_service.quota_fingerprint_of``).
+QUOTA_FINGERPRINT_PATTERN = r"^[0-9a-f]{64}$"
+
 
 class QuotaGroupMemberIn(BaseModel):
     """Một ngành (học vụ = ngành + năm) thuộc nhóm, kèm chỉ tiêu năm của ngành (ghi vào cột có sẵn
@@ -40,9 +43,12 @@ class QuotaGroupIn(BaseModel):
 class QuotaTablePut(BaseModel):
     """Thay TOÀN BỘ nội dung bảng chỉ tiêu của năm (nhóm, trần, thành viên, chỉ tiêu ngành của thành viên).
 
-    ``version`` = phiên bản bảng đang xem; ``0`` = năm chưa có bảng (tạo mới). Lệch ⇒ 409, không ghi gì."""
+    ``version`` = phiên bản bảng đang xem; ``0`` = năm chưa có bảng (tạo mới). Lệch ⇒ 409, không ghi gì.
+    ``quota_fingerprint`` (GĐ2-F1) = dấu chỉ tiêu của năm lúc mở (GET; năm chưa có bảng: trong thân 404) — chỉ tiêu ngành đổi ở
+    nơi khác (vd trang cấu hình học vụ, không tăng ``version``) ⇒ lệch ⇒ 409, không ghi gì."""
 
     version: int = Field(..., ge=0)
+    quota_fingerprint: str = Field(..., pattern=QUOTA_FINGERPRINT_PATTERN, description="Dấu chỉ tiêu của năm lúc mở")
     groups: List[QuotaGroupIn] = Field(..., max_length=200)
 
     model_config = ConfigDict(extra="forbid")
@@ -50,6 +56,8 @@ class QuotaTablePut(BaseModel):
 
 class QuotaTableLockIn(BaseModel):
     version: int = Field(..., ge=1)
+    #: GĐ2-F1 — khoá đóng băng đúng chỉ tiêu đã xem: dấu lúc mở bắt buộc.
+    quota_fingerprint: str = Field(..., pattern=QUOTA_FINGERPRINT_PATTERN, description="Dấu chỉ tiêu của năm lúc mở")
 
     model_config = ConfigDict(extra="forbid")
 
@@ -104,4 +112,6 @@ class QuotaTableOut(BaseModel):
     #: GĐ2-F1 — thao tác người xem làm được trên bảng (``edit`` / ``lock`` / ``unlock``): CÙNG hàm với cổng ghi
     #: (``admission_quota_table_service.quota_table_actions``). Giao diện hiện nút theo cờ này, không theo ``status``.
     available_actions: List[Literal["edit", "lock", "unlock"]]
+    #: GĐ2-F1 — dấu chỉ tiêu ngành của năm (mọi học vụ của năm) — gửi lại nguyên văn khi PUT / khoá.
+    quota_fingerprint: str
     groups: List[QuotaGroupOut]

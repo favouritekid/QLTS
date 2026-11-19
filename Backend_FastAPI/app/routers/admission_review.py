@@ -83,7 +83,11 @@ async def lock_quota_table(
     db: AsyncSession = Depends(database.get_db),
 ):
     out = await quota_table_service.lock_quota_table(
-        db, academic_year, expected_version=payload.version, actor_id=current_user.id
+        db,
+        academic_year,
+        expected_version=payload.version,
+        expected_quota_fingerprint=payload.quota_fingerprint,
+        actor_id=current_user.id,
     )
     await db.commit()
     return out

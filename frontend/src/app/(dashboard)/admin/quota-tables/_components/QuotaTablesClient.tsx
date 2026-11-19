@@ -78,6 +78,9 @@ export function QuotaTablesClient({ initialYear }: { initialYear?: number }) {
   const err = table.error ? readApiError(table.error) : null
   const noTable = err?.status === 404
   const data = table.data ?? null
+  // GĐ2-F1: năm chưa có bảng — máy chủ vẫn trả dấu chỉ tiêu trong thân 404 để tạo bảng (version 0) không đè chỉ tiêu ai vừa sửa.
+  const noTableFingerprint =
+    noTable && typeof err?.data?.quota_fingerprint === "string" ? err.data.quota_fingerprint : ""
 
   return (
     <div className="container mx-auto space-y-6 p-6">
@@ -127,6 +130,7 @@ export function QuotaTablesClient({ initialYear }: { initialYear?: number }) {
         <QuotaTableEditor
           year={year}
           version={data?.version ?? 0}
+          quotaFingerprint={data?.quota_fingerprint ?? noTableFingerprint}
           initialGroups={draftFromTable(data)}
           options={options}
           labelOf={labelOf}

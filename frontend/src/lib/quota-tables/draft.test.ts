@@ -35,6 +35,7 @@ const BANG: QuotaTableOut = {
   locked_by_user_id: null,
   locked_at: null,
   available_actions: ["edit", "lock"],
+  quota_fingerprint: "a".repeat(64),
   groups: [
     {
       id: 7,
@@ -54,9 +55,10 @@ describe("draftFromTable ⇄ draftToPutBody", () => {
   it("chỉ tiêu null của máy chủ ⇒ ô trống ⇒ gửi lại null (không thành 0); 0 giữ 0; trần 0 giữ 0", () => {
     const nhap = draftFromTable(BANG)
     expect(nhap[0].members.map((m) => m.quota)).toEqual(["", "0"])
-    const than = draftToPutBody(BANG.version, nhap)
+    const than = draftToPutBody(BANG.version, BANG.quota_fingerprint, nhap)
     expect(than).toEqual({
       version: 3,
+      quota_fingerprint: "a".repeat(64),
       groups: [
         {
           code: "N1",
@@ -72,7 +74,7 @@ describe("draftFromTable ⇄ draftToPutBody", () => {
   })
 
   it("trần nhóm để trống ⇒ null", () => {
-    const than = draftToPutBody(0, [{ key: "k", code: "N9", name: "Mới", ceiling: "", members: [] }])
+    const than = draftToPutBody(0, "b".repeat(64), [{ key: "k", code: "N9", name: "Mới", ceiling: "", members: [] }])
     expect(than.groups[0].ceiling).toBeNull()
   })
 

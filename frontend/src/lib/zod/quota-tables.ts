@@ -53,6 +53,8 @@ export const quotaTableOutSchema = z
     locked_at: z.string().nullable(),
     /** Thao tác người xem làm được — CÙNG hàm với cổng ghi (`quota_table_actions`). Giao diện hiện nút theo cờ này. */
     available_actions: z.array(z.enum(QUOTA_TABLE_ACTIONS)),
+    /** GĐ2-F1 — dấu chỉ tiêu ngành của năm (mọi học vụ của năm). Gửi lại NGUYÊN VĂN dấu lúc mở khi PUT / khoá. */
+    quota_fingerprint: z.string(),
     groups: z.array(quotaGroupOutSchema),
   })
   .strict()
@@ -81,11 +83,15 @@ export const quotaTablePutSchema = z
   .object({
     /** Phiên bản bảng đang xem; 0 = năm chưa có bảng (tạo mới). */
     version: z.number().int().min(0),
+    /** GĐ2-F1 — dấu chỉ tiêu lúc mở (GET; năm chưa có bảng: trong thân 404). Lệch ⇒ 409 `quota_table_stale`. */
+    quota_fingerprint: z.string(),
     groups: z.array(quotaGroupInSchema),
   })
   .strict()
 
-export const quotaTableLockSchema = z.object({ version: z.number().int().min(1) }).strict()
+export const quotaTableLockSchema = z
+  .object({ version: z.number().int().min(1), quota_fingerprint: z.string() })
+  .strict()
 
 export const quotaTableUnlockSchema = z
   .object({

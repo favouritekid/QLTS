@@ -36,6 +36,8 @@ interface Props {
   year: number
   /** Phiên bản bảng đang xem; 0 = năm chưa có bảng. */
   version: number
+  /** GĐ2-F1 — dấu chỉ tiêu của năm lúc mở (GET; năm chưa có bảng: thân 404). */
+  quotaFingerprint: string
   initialGroups: DraftGroup[]
   options: MemberOption[]
   labelOf: (offeringAcademicInfoId: number) => string
@@ -45,11 +47,22 @@ interface Props {
 
 const NUMBER_INPUT_CLASS = "w-28 text-right tabular-nums"
 
-export function QuotaTableEditor({ year, version: versionProp, initialGroups, options, labelOf, onCancel, onSaved }: Props) {
+export function QuotaTableEditor({
+  year,
+  version: versionProp,
+  quotaFingerprint: quotaFingerprintProp,
+  initialGroups,
+  options,
+  labelOf,
+  onCancel,
+  onSaved,
+}: Props) {
   const baseId = useId()
   // Phiên bản CHỐT lúc mở soạn: bảng được làm mới sau lỗi (vd 409 stale) KHÔNG được âm thầm nâng phiên bản của bản nháp —
   // nếu không, bấm Lưu lần nữa sẽ đè thay đổi của người khác mà người soạn chưa xem.
   const [version] = useState(versionProp)
+  // GĐ2-F1 (điểm chặn Codex): dấu chỉ tiêu cũng CHỐT lúc mở — chỉ tiêu ngành sửa ở trang khác sau đó ⇒ máy chủ 409, không đè.
+  const [quotaFingerprint] = useState(quotaFingerprintProp)
   const [groups, setGroups] = useState<DraftGroup[]>(initialGroups)
   const [error, setError] = useState<string | null>(null)
   const save = useSaveQuotaTable(year)
@@ -101,7 +114,7 @@ export function QuotaTableEditor({ year, version: versionProp, initialGroups, op
 
   const submit = () => {
     setError(null)
-    save.mutate(draftToPutBody(version, groups), {
+    save.mutate(draftToPutBody(version, quotaFingerprint, groups), {
       onSuccess: () => {
         toast.success(version === 0 ? `Đã tạo bảng chỉ tiêu năm ${year}` : `Đã lưu bảng chỉ tiêu năm ${year}`)
         onSaved()
