@@ -435,13 +435,15 @@ async def test_hai_put_khac_nam_cung_cham_mot_hoc_vu_khong_vong_cho(admin_user_i
     assert b_bi_a_chan, "PUT hợp lệ KHÔNG chờ PUT sai năm đang giữ khoá học vụ ``a``"
 
 
-async def test_tao_hoc_vu_khi_khong_co_put_van_qua(client: AsyncClient, admin_token_headers, hoc_vu):
-    """Ca thường: không có PUT / khoá nào đang chạy ⇒ ``POST /api/offerings/{id}/academic-info`` vẫn tạo được như cũ."""
+async def test_tao_hoc_vu_khi_khong_co_put_van_qua(admin_user_in_db, hoc_vu):
+    """Ca thường: không có PUT / khoá nào đang giữ khoá năm ⇒ tạo học vụ qua ĐÚNG hàm của route ``POST
+    /api/offerings/{id}/academic-info`` xong ngay (không chờ ai) và dòng đã ghi — khoá năm không đổi hành vi cũ.
+
+    Gọi hàm dịch vụ, KHÔNG gọi HTTP: cả hai route POST học vụ trả đối tượng ORM SAU ``commit`` mà ``semester_tuitions`` chưa
+    nạp ⇒ tuần tự hoá phản hồi đổ ``MissingGreenlet`` (``ResponseValidationError``) dù dòng ĐÃ ghi. Lỗi ấy CÓ TỪ TRƯỚC nhánh
+    này (route / schema / model không đổi so với ``f11f8f94``; bỏ khoá năm vẫn đổ y hệt) — ghi ở gói rà §9, không vá ở đây."""
     o = await _offering_chua_co_nam(hoc_vu)
-    r = await client.post(
-        f"/api/offerings/{o}/academic-info",
-        headers=admin_token_headers,
-        json={"offering_id": o, "academic_year": NAM, "annual_admission_quota": 3, "is_published": False},
-    )
-    assert r.status_code == 200, r.text
+    async with AsyncSessionLocal() as s:
+        await asyncio.wait_for(_tao_hoc_vu(s, admin_user_in_db, o), 10)
+        await s.commit()
     assert await _so_hoc_vu(o, NAM) == 1
