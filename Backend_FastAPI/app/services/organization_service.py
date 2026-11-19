@@ -25,7 +25,7 @@ from ..database import safe_redis_delete, safe_redis_get, safe_redis_set, redis_
 from ..repositories import OrganizationRepository
 from ..socket_manager import emit_to_all
 from ..core.constants import UserRole
-from ..utils.exceptions import BadRequest, DuplicateResourceError, ForbiddenError, ResourceNotFoundError
+from ..utils.exceptions import BadRequest, ConflictError, DuplicateResourceError, ForbiddenError, ResourceNotFoundError
 
 log = structlog.get_logger(__name__)
 
@@ -1345,6 +1345,16 @@ async def create_academic_info(
         program = await get_major_program_by_id(db, offering.program_id)
         await _check_unit_access(db, program.unit_id, current_user)
 
+        # GĐ2-F1 lượt 3 (điểm chặn Codex lượt 2): dòng học vụ MỚI đổi tập (id, chỉ tiêu) của năm — kể cả khi chỉ tiêu trống —
+        # nên LUÔN lấy khoá năm TRƯỚC INSERT (bất biến ở ``app.core.review_year_lock``). PUT / khoá bảng chỉ tiêu cùng năm đang dở
+        # ⇒ chờ; tạo đang dở ⇒ PUT / khoá chờ rồi thấy dòng mới (dấu lệch ⇒ 409). Luật "bảng năm đã khoá" khi tạo: MỘT chỗ ở dịch
+        # vụ bảng chỉ tiêu (mặc định cho phép — xem ``check_academic_info_create_allowed``).
+        from ..core.review_year_lock import lock_review_year
+        from .admission_quota_table_service import check_academic_info_create_allowed
+
+        await lock_review_year(db, academic_info_in.academic_year)
+        await check_academic_info_create_allowed(db, academic_info_in.academic_year)
+
         # Check duplicate (offering_id, academic_year)
         existing = await get_academic_info_by_offering_and_year(
             db, academic_info_in.offering_id, academic_info_in.academic_year
@@ -1424,6 +1434,27 @@ async def update_academic_info(
         await _check_unit_access(db, program.unit_id, current_user)
 
         update_data = academic_info_in.model_dump(exclude_unset=True)
+
+        # GĐ2-F1 lượt 3 (điểm chặn Codex lượt 2): sửa chỉ tiêu / dời năm đổi tập (id, chỉ tiêu) học vụ của năm ⇒ lấy khoá năm cũ
+        # (+ năm mới nếu dời), TĂNG DẦN, TRƯỚC khi ghi dòng (bất biến ở ``app.core.review_year_lock``). Năm cũ đọc ở trên TRƯỚC
+        # khi có khoá ⇒ đọc lại dưới khoá; lệnh khác vừa dời học vụ sang năm khác ⇒ 409, không ghi (khoá đang giữ có thể không
+        # phải năm của dòng nữa).
+        if "annual_admission_quota" in update_data or "academic_year" in update_data:
+            from ..core.review_year_lock import lock_review_years
+
+            nam_cu = db_academic_info.academic_year
+            await lock_review_years(db, (nam_cu, update_data.get("academic_year")))
+            nam_duoi_khoa = (
+                await db.execute(
+                    select(models.OfferingAcademicInfo.academic_year).where(
+                        models.OfferingAcademicInfo.id == academic_info_id
+                    )
+                )
+            ).scalar_one()
+            if nam_duoi_khoa != nam_cu:
+                raise ConflictError(
+                    detail="Học vụ vừa được dời sang năm khác ở nơi khác — tải lại rồi làm lại."
+                )
 
         # ✅ FIX: Prevent editing financial data for past academic years
         current_year = datetime.now(timezone.utc).year

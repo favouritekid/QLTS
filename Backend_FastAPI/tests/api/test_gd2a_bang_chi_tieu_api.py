@@ -90,7 +90,7 @@ async def _dau(sua=None) -> str:
 
     if not sua:
         async with AsyncSessionLocal() as s:
-            return await svc.read_quota_fingerprint(s, NAM, lock=False)
+            return await svc.read_quota_fingerprint(s, NAM)
     rows = (await _sql("SELECT id, annual_admission_quota FROM offering_academic_info WHERE academic_year = :y", y=NAM)).all()
     m = {r[0]: r[1] for r in rows}
     m.update(sua)

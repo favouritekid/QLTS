@@ -11,21 +11,30 @@ Tầng chủ sở hữu:
     ngoại ghép trong CSDL; kiểm ở đây để báo đủ danh sách sai trong MỘT lần (lớp phụ);
   * ai được làm — Casbin + ``deps.require_quota_table_admin`` (chỉ Admin).
 
-THỨ TỰ KHOÁ (một giao dịch): khoá năm ``pg_advisory_xact_lock(REVIEW_YEAR_NS, năm)`` → [GĐ2-F1] ``FOR SHARE`` MỌI học vụ của
-năm (+ học vụ thành viên gửi lên), id tăng dần, MỘT câu (:func:`read_quota_fingerprint`) → học vụ sẽ đổi chỉ tiêu ``FOR UPDATE``
-(``quota_occupancy_service.lock_quota_cells``, id tăng dần, MỘT câu — chỉ NÂNG khoá trên dòng đã giữ ``FOR SHARE``, không lấy
-dòng mới xen giữa) → dòng ``admission_quota_table`` ``FOR UPDATE``. Học vụ TRƯỚC bảng: đường sửa chỉ tiêu có sẵn
-(``PATCH /api/admin/academic-info/{id}`` → ``organization_service.update_academic_info``) khoá dòng học vụ (UPDATE) rồi trigger
-khoá dòng bảng ``FOR SHARE`` — cùng chiều ⇒ không vòng chờ. Khoá bảng: khoá năm → ``FOR SHARE`` học vụ của năm → dòng bảng.
-Mở khoá chỉ khoá năm + dòng bảng.
+THỨ TỰ KHOÁ (một giao dịch):
+  * PUT: khoá năm (``app.core.review_year_lock`` — MỘT định nghĩa) → [GĐ2-F1 lượt 3] ``FOR UPDATE`` MỌI học vụ của năm + học vụ
+    thành viên gửi lên, id TĂNG DẦN, MỘT câu, dấu chỉ tiêu tính từ chính câu ấy (:func:`read_quota_fingerprint`
+    ``lock="update"``) → ``quota_occupancy_service.lock_quota_cells`` chỉ KHOÁ LẠI dòng đã giữ (không nâng khoá, không lấy dòng mới)
+    → dòng ``admission_quota_table`` ``FOR UPDATE``.
+  * Khoá bảng: khoá năm → ``FOR SHARE`` học vụ của năm (id tăng dần, một câu; KHÔNG nâng khoá về sau) → dòng bảng ``FOR UPDATE``.
+  * Mở khoá: khoá năm → dòng bảng.
+Lập luận không vòng chờ:
+  * Với đường tạo / sửa / dời học vụ (``organization_service.create_academic_info`` / ``update_academic_info``): cả hai phía lấy
+    KHOÁ NĂM trước mọi khoá dòng học vụ (bất biến ở ``app.core.review_year_lock``) ⇒ tuần tự theo khoá năm, nhiều năm thì tăng dần.
+  * Với giao dịch khoá ô chỉ tiêu không lấy khoá năm (ghi nhận QĐ, "Phê duyệt" cũ — ``lock_quota_cells`` ``FOR UPDATE`` id tăng dần
+    một câu): ta cũng lấy dòng học vụ bằng MỘT câu id tăng dần, rồi chỉ khoá lại dòng đã giữ ⇒ cùng thứ tự toàn cục, không vòng.
+  * Hai PUT khác năm cùng chạm một dòng R (PUT gửi sai năm một thành viên R): trước lượt 3 cả hai giữ ``FOR SHARE`` R rồi cùng nâng
+    lên ``FOR UPDATE`` ⇒ vòng chờ (``40P01``). Nay mỗi PUT lấy ``FOR UPDATE`` ngay trong câu đầu ⇒ PUT đến sau CHỜ, không vòng.
+  * Học vụ TRƯỚC dòng bảng, cùng chiều trigger (UPDATE học vụ rồi trigger ``FOR SHARE`` dòng bảng).
 
 [GĐ2-F1 — điểm chặn Codex] DẤU CHỈ TIÊU (``quota_fingerprint``): đường sửa học vụ cũ đổi ``annual_admission_quota`` mà KHÔNG
 tăng ``version`` của bảng ⇒ chỉ ``version`` không đỡ được "A mở bảng, B sửa ở trang cũ, A lưu bản cũ ⇒ ghi đè B" (kể cả năm
 CHƯA có bảng, ``version`` 0). GET trả dấu = băm (:func:`quota_fingerprint_of`) của (id, chỉ tiêu) MỌI học vụ của năm (NULL ≠ 0);
-PUT / khoá BẮT BUỘC gửi lại dấu lúc mở; dịch vụ đọc lại các dòng ấy ``FOR SHARE`` SAU khoá năm, TRƯỚC khi ghi — lệnh sửa cũ
-đang dở phải commit xong trước rồi mới đọc giá trị mới — lệch ⇒ 409 ``quota_table_stale``. ``FOR SHARE`` chặn cả lệnh sửa đang
-dở (``UPDATE`` giữ khoá dòng xung đột ``FOR SHARE``) lẫn lệnh sửa đến SAU (``UPDATE`` chờ tới khi ta commit ⇒ giá trị của họ nằm
-SAU bản ta ghi, không bị đè).
+PUT / khoá BẮT BUỘC gửi lại dấu lúc mở; dịch vụ đọc lại các dòng ấy dưới khoá SAU khoá năm, TRƯỚC khi ghi — lệch ⇒ 409
+``quota_table_stale``. Từ lượt 3, mọi đường tạo / sửa / dời học vụ cũng lấy khoá năm ⇒ một lệnh như vậy đang dở thì ta chờ ở khoá
+năm (rồi đọc giá trị mới), lệnh đến SAU thì chờ ta commit (giá trị của họ nằm SAU bản ta ghi, không bị đè) — gồm cả dòng MỚI chèn,
+thứ khoá dòng không chặn được. Khoá dòng (``FOR UPDATE`` / ``FOR SHARE``) giữ làm lớp thứ hai cho SQL tay / đường không theo bất
+biến.
 
 Vết: mỗi lần sửa / khoá / mở khoá một dòng ``entity_audit_log`` (``entity_type='admission_quota_table'``, ``entity_id`` =
 năm, người, giờ, lý do mở khoá) — cùng giao dịch. Log ứng dụng chỉ năm + số đếm.
@@ -37,11 +46,11 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import structlog
-from sqlalchemy import delete, or_, select, text
+from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
-from app.core.advisory_lock_keys import REVIEW_YEAR_NS
+from app.core.review_year_lock import lock_review_year  # MỘT định nghĩa khoá năm (GĐ2-F1 lượt 3)
 from app.models.admission_quota_table import QUOTA_TABLE_DRAFT, QUOTA_TABLE_LOCKED
 from app.services import quota_occupancy_service as qos
 from app.utils.exceptions import ConflictError, ResourceNotFoundError, ValidationError
@@ -117,22 +126,32 @@ def quota_fingerprint_of(rows: Iterable[Tuple[int, Optional[int]]]) -> str:
     return hashlib.sha256(("%s|%s" % (QUOTA_FINGERPRINT_PREFIX, ",".join(phan))).encode("ascii")).hexdigest()
 
 
+#: Chế độ khoá dòng khi đọc dấu: ``None`` = đọc thường (GET); ``"share"`` = khoá bảng (không ghi dòng học vụ); ``"update"`` = PUT
+#: (sẽ ghi chỉ tiêu thành viên — lấy ``FOR UPDATE`` NGAY câu đầu, không nâng khoá về sau).
+LOCK_SHARE = "share"
+LOCK_UPDATE = "update"
+
+
 async def read_quota_fingerprint(
-    db: AsyncSession, academic_year: int, *, lock: bool, also_lock_ids: Iterable[int] = ()
+    db: AsyncSession, academic_year: int, *, lock: Optional[str] = None, also_lock_ids: Iterable[int] = ()
 ) -> str:
     """GĐ2-F1 — dấu chỉ tiêu của năm, đọc từ CSDL: MỌI dòng ``offering_academic_info`` có ``academic_year = năm`` (kể cả đã
-    xoá mềm; học vụ mới / dời năm cũng làm dấu đổi). ``lock=True`` ⇒ MỘT câu ``FOR SHARE`` id tăng dần, gồm thêm
-    ``also_lock_ids`` (thành viên gửi lên — có thể khác năm, dịch vụ báo 400 sau) để bước ``lock_quota_cells`` sau đó chỉ NÂNG
-    khoá trên dòng đã giữ, không lấy dòng mới xen giữa ⇒ không vòng chờ với giao dịch khoá học vụ theo id tăng dần. Dấu chỉ
-    tính dòng có năm = ``năm`` theo giá trị đọc SAU khoá (dòng vừa bị dời năm không còn tính)."""
+    xoá mềm; học vụ mới / dời năm cũng làm dấu đổi). ``lock`` ⇒ MỘT câu khoá id tăng dần, gồm thêm ``also_lock_ids`` (thành viên
+    gửi lên — có thể khác năm, dịch vụ báo 400 sau) ⇒ bước ``lock_quota_cells`` sau đó chỉ khoá lại dòng đã giữ, không lấy dòng
+    mới xen giữa, không nâng khoá. Dấu chỉ tính dòng có năm = ``năm`` theo giá trị đọc SAU khoá (dòng vừa bị dời năm không còn
+    tính)."""
     oai = models.OfferingAcademicInfo
     extra = sorted({int(x) for x in also_lock_ids})
     cond = oai.academic_year == academic_year
     if extra:
         cond = or_(cond, oai.id.in_(extra))
     stmt = select(oai.id, oai.academic_year, oai.annual_admission_quota).where(cond).order_by(oai.id)
-    if lock:
+    if lock == LOCK_UPDATE:
+        stmt = stmt.with_for_update()
+    elif lock == LOCK_SHARE:
         stmt = stmt.with_for_update(read=True)
+    elif lock is not None:
+        raise ValueError(lock)
     rows = (await db.execute(stmt)).all()
     return quota_fingerprint_of((r.id, r.annual_admission_quota) for r in rows if r.academic_year == academic_year)
 
@@ -143,11 +162,13 @@ def _check_quota_fingerprint(expected: str, current: str, *, current_version: in
         raise QuotaTableConflict("quota_table_stale", {"current_version": int(current_version)})
 
 
-async def lock_review_year(db: AsyncSession, academic_year: int) -> None:
-    """"Khoá năm" của GĐ2 (``REVIEW_YEAR_NS``) — khoá GIAO DỊCH, nhả khi commit / rollback. Lấy TRƯỚC mọi khoá dòng."""
-    await db.execute(
-        text("SELECT pg_advisory_xact_lock(:ns, :k)"), {"ns": REVIEW_YEAR_NS, "k": int(academic_year)}
-    )
+async def check_academic_info_create_allowed(db: AsyncSession, academic_year: int) -> None:
+    """GĐ2-F1 lượt 3 — MỘT chỗ quyết "tạo học vụ mới cho năm có bảng chỉ tiêu đã khoá" (gọi bởi
+    ``organization_service.create_academic_info`` SAU khoá năm, trước INSERT). MẶC ĐỊNH CHO PHÉP (hành vi hiện có): học vụ mới
+    chưa thể là thành viên bảng — giống PATCH học vụ ngoài bảng đang được phép; dấu chỉ tiêu đổi ⇒ ai đang mở bảng phải tải lại.
+    Owner đang được hỏi; nếu chọn chặn thì thêm MỘT nhánh ở đây: đọc ``admission_quota_table`` của năm (đang giữ khoá năm) ⇒
+    ``locked`` ⇒ 409."""
+    return None
 
 
 async def _table_for_update(db: AsyncSession, academic_year: int) -> Optional[models.AdmissionQuotaTable]:
@@ -189,7 +210,7 @@ async def get_quota_table(db: AsyncSession, academic_year: int) -> Dict[str, Any
     :func:`quota_occupancy_service.count_by_group`). Năm chưa có bảng ⇒ 404."""
     t = models.AdmissionQuotaTable
     table = (await db.execute(select(t).where(t.academic_year == academic_year))).scalar_one_or_none()
-    quota_fingerprint = await read_quota_fingerprint(db, academic_year, lock=False)
+    quota_fingerprint = await read_quota_fingerprint(db, academic_year)
     if table is None:
         raise _not_found(academic_year, quota_fingerprint)
     g, m = models.AdmissionQuotaGroup, models.AdmissionQuotaGroupMember
@@ -288,10 +309,10 @@ async def replace_quota_table(
         mem.offering_academic_info_id: mem.annual_admission_quota for grp in groups for mem in grp.members
     }
 
-    # 1. Khoá năm → [GĐ2-F1] FOR SHARE học vụ của năm + thành viên (dấu chỉ tiêu) → học vụ thành viên FOR UPDATE (id tăng
-    #    dần, chỉ nâng khoá) → dòng bảng.
+    # 1. Khoá năm → [GĐ2-F1 lượt 3] FOR UPDATE học vụ của năm + thành viên, MỘT câu id tăng dần (dấu chỉ tiêu tính từ câu ấy)
+    #    → lock_quota_cells chỉ khoá lại dòng đã giữ → dòng bảng.
     await lock_review_year(db, academic_year)
-    current_fp = await read_quota_fingerprint(db, academic_year, lock=True, also_lock_ids=want.keys())
+    current_fp = await read_quota_fingerprint(db, academic_year, lock=LOCK_UPDATE, also_lock_ids=want.keys())
     await qos.lock_quota_cells(db, want.keys(), ())
     table = await _table_for_update(db, academic_year)
     _check_version(table, payload.version)
@@ -383,7 +404,7 @@ async def lock_quota_table(
     GĐ2-F1: khoá đóng băng ĐÚNG các chỉ tiêu người khoá đã xem ⇒ đòi dấu chỉ tiêu lúc mở (đọc lại ``FOR SHARE`` sau khoá năm,
     TRƯỚC dòng bảng — cùng chiều "học vụ trước bảng" với trigger)."""
     await lock_review_year(db, academic_year)
-    current_fp = await read_quota_fingerprint(db, academic_year, lock=True)
+    current_fp = await read_quota_fingerprint(db, academic_year, lock=LOCK_SHARE)
     table = await _table_for_update(db, academic_year)
     if table is None:
         raise _not_found(academic_year)
