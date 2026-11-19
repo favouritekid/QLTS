@@ -58,6 +58,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
 from app.core.review_year_lock import lock_review_year  # MỘT định nghĩa khoá năm (GĐ2-F1 lượt 3)
+from app.models.admission_quota_ddl import MESSAGE_QUOTA_TABLE_LOCKED  # MỘT câu cho trigger và lớp kiểm trước (luật B)
 from app.models.admission_quota_table import QUOTA_TABLE_DRAFT, QUOTA_TABLE_LOCKED
 from app.services import quota_occupancy_service as qos
 from app.utils.exceptions import ConflictError, ResourceNotFoundError, ValidationError
@@ -170,13 +171,89 @@ def _check_quota_fingerprint(expected: str, current: str, *, current_version: in
         raise QuotaTableConflict("quota_table_stale", {"current_version": int(current_version)})
 
 
-async def check_academic_info_create_allowed(db: AsyncSession, academic_year: int) -> None:
-    """GĐ2-F1 lượt 3 — MỘT chỗ quyết "tạo học vụ mới cho năm có bảng chỉ tiêu đã khoá" (gọi bởi
-    ``organization_service.create_academic_info`` SAU khoá năm, trước INSERT). MẶC ĐỊNH CHO PHÉP (hành vi hiện có): học vụ mới
-    chưa thể là thành viên bảng — giống PATCH học vụ ngoài bảng đang được phép; dấu chỉ tiêu đổi ⇒ ai đang mở bảng phải tải lại.
-    Owner đang được hỏi; nếu chọn chặn thì thêm MỘT nhánh ở đây: đọc ``admission_quota_table`` của năm (đang giữ khoá năm) ⇒
-    ``locked`` ⇒ 409."""
-    return None
+class QuotaTableLockedWrite(ConflictError):
+    """409 khi lớp kiểm trước ở dịch vụ chặn một lệnh ghi học vụ theo luật B — CÙNG hình dạng phản hồi với lỗi trigger
+    ``QLC01`` mà ``middleware.exception_handlers.database_error_handler`` đổi ra (``{"detail": MESSAGE_QUOTA_TABLE_LOCKED,
+    "error_code": "QUOTA_TABLE_LOCKED"}``, không ``public_payload``) ⇒ người gọi không phân biệt được tầng nào chặn."""
+
+    error_code = "QUOTA_TABLE_LOCKED"
+
+    def __init__(self):
+        super().__init__(detail=MESSAGE_QUOTA_TABLE_LOCKED)
+
+
+class AcademicInfoInQuotaGroup(ConflictError):
+    """409 R4: học vụ đang là thành viên một nhóm của bảng chỉ tiêu ⇒ không đổi năm học (khoá ngoại ghép
+    ``fk_admission_quota_group_member_oai`` (id, năm) không có ``ON UPDATE`` ⇒ CSDL cũng chặn, nhưng bằng lỗi khoá ngoại)."""
+
+    error_code = "ACADEMIC_INFO_IN_QUOTA_GROUP"
+
+    def __init__(self, academic_year: int):
+        super().__init__(
+            detail="Học vụ đang nằm trong nhóm của bảng chỉ tiêu năm %d — gỡ khỏi nhóm trước." % academic_year
+        )
+
+
+async def _locked_years(db: AsyncSession, academic_years: Iterable[Optional[int]]) -> List[int]:
+    """Năm nào trong số ``academic_years`` có bảng chỉ tiêu ``locked``. Gọi khi ĐÃ giữ khoá năm của các năm ấy (khoá / mở
+    khoá bảng cũng lấy khoá năm ⇒ trạng thái không đổi dưới chân ta)."""
+    nam = sorted({int(y) for y in academic_years if y is not None})
+    if not nam:
+        return []
+    t = models.AdmissionQuotaTable
+    return list(
+        (
+            await db.execute(
+                select(t.academic_year).where(t.academic_year.in_(nam), t.status == QUOTA_TABLE_LOCKED)
+            )
+        ).scalars()
+    )
+
+
+async def check_academic_info_create_allowed(
+    db: AsyncSession, academic_year: int, annual_admission_quota: Optional[int]
+) -> None:
+    """GĐ2-F1 luật B — R1 (owner chốt 19-11): tạo học vụ cho năm có bảng chỉ tiêu ĐÃ KHOÁ chỉ được khi chỉ tiêu TRỐNG (NULL;
+    0 KHÔNG phải trống) — khoá bảng đóng băng chỉ tiêu nhưng vẫn cho cấu hình học phí sớm. Gọi bởi
+    ``organization_service.create_academic_info`` SAU khoá năm, trước INSERT.
+
+    Tầng chủ sở hữu: trigger ``trg_chan_sua_chi_tieu_nganh_khi_bang_khoa`` (nhánh ``INSERT``, ``app/models/admission_quota_ddl.py``)
+    — chặn mọi đường kể cả SQL tay. Ở đây chỉ là lớp kiểm trước, cùng hình dạng phản hồi (:class:`QuotaTableLockedWrite`).
+    (Docstring cũ ghi "PATCH học vụ ngoài bảng đang được phép" là SAI: trigger GĐ2-A chặn đổi chỉ tiêu của MỌI học vụ trong
+    năm đã khoá, thuộc bảng hay không.)"""
+    if annual_admission_quota is None:
+        return
+    if await _locked_years(db, [academic_year]):
+        raise QuotaTableLockedWrite()
+
+
+async def check_academic_info_move_allowed(
+    db: AsyncSession,
+    academic_info_id: int,
+    *,
+    old_year: int,
+    new_year: int,
+    old_quota: Optional[int],
+    new_quota: Optional[int],
+) -> None:
+    """GĐ2-F1 luật B — đổi ``academic_year`` của một học vụ (gọi bởi ``organization_service.update_academic_info`` SAU khoá năm
+    cũ + mới và sau khi đọc lại dòng dưới khoá; chỉ khi năm THẬT SỰ đổi):
+
+    * R4 — học vụ đang là thành viên một nhóm của bảng chỉ tiêu ⇒ :class:`AcademicInfoInQuotaGroup` (kiểm TRƯỚC R3 để học vụ
+      thành viên của bảng đã khoá cũng nhận câu "gỡ khỏi nhóm trước" — việc người dùng phải làm trước tiên). Thành viên nhóm chỉ
+      đổi qua PUT bảng, PUT giữ khoá năm ⇒ đọc ở đây ổn định.
+    * R3 — học vụ có chỉ tiêu (cũ HOẶC mới khác NULL) chuyển VÀO hoặc RA năm có bảng đã khoá ⇒ :class:`QuotaTableLockedWrite`
+      (kể cả khi con số không đổi). Tầng chủ sở hữu R3: trigger (theo dõi thêm ``academic_year``); đây là lớp kiểm trước."""
+    m = models.AdmissionQuotaGroupMember
+    nam_nhom = (
+        await db.execute(select(m.academic_year).where(m.offering_academic_info_id == academic_info_id))
+    ).scalar_one_or_none()
+    if nam_nhom is not None:
+        raise AcademicInfoInQuotaGroup(int(nam_nhom))
+    if old_quota is None and new_quota is None:
+        return
+    if await _locked_years(db, [old_year, new_year]):
+        raise QuotaTableLockedWrite()
 
 
 async def _table_for_update(db: AsyncSession, academic_year: int) -> Optional[models.AdmissionQuotaTable]:

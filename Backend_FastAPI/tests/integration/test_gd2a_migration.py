@@ -207,7 +207,10 @@ async def test_nang_cap_luoc_do_khop_model_va_trigger_song(csdl_truoc):
             await k.execute("UPDATE offering_academic_info SET annual_admission_quota = 11 WHERE id = $1", ai)
         assert e.value.sqlstate == "QLC01"
 
-        # Lược đồ GĐ2-A sau nâng cấp == lược đồ dựng thẳng từ model.
+        # Lược đồ GĐ2-A sau nâng cấp == lược đồ dựng thẳng từ model. Model (``admission_quota_ddl.STATEMENTS``) mang trạng
+        # thái HEAD — GĐ2-F1 luật B (``gd2f20261119``) thay hàm + trigger học vụ ⇒ nâng nốt tới head rồi mới so.
+        rc, out = await _alembic(ten, "upgrade", "head")
+        assert rc == 0, out[-3000:]
         ten_mau = await _tao_db()
         try:
             await _create_all(ten_mau)

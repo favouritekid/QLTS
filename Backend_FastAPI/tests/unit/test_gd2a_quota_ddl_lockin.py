@@ -28,8 +28,11 @@ def _mig():
 
 
 def test_hai_ban_ddl_khong_troi_khoi_nhau():
+    """Phần GĐ2-A của bản ``create_all()`` (:data:`ddl.STATEMENTS_GD2A`) == migration ``gd2a20261118``. Phần F1 (luật B) thay
+    hàm + trigger học vụ ở migration riêng — khoá ở ``tests/unit/test_gd2f_trigger_luat_b_lockin.py``."""
     m = _mig()
-    assert [_chuan_hoa(c) for c in ddl.STATEMENTS] == [_chuan_hoa(c) for c in m.STATEMENTS]
+    assert [_chuan_hoa(c) for c in ddl.STATEMENTS_GD2A] == [_chuan_hoa(c) for c in m.STATEMENTS]
+    assert ddl.STATEMENTS[: len(ddl.STATEMENTS_GD2A)] == ddl.STATEMENTS_GD2A
 
 
 def test_sqlstate_trigger_khop_hang():
@@ -49,7 +52,9 @@ def test_migration_noi_dung_head_gd1b():
 
 
 def test_mot_head_alembic():
-    """Sau GĐ2-A Alembic có ĐÚNG một head (nhánh gộp đọc cả ``down_revision`` dạng bộ nhiều dòng)."""
+    """Sau GĐ2-A Alembic có ĐÚNG một head (nhánh gộp đọc cả ``down_revision`` dạng bộ nhiều dòng) và ``gd2a20261118`` nằm
+    trên chuỗi tới head (GĐ2-F1 luật B nối ``gd2f20261119`` ngay sau — khoá ở ``test_gd2f_trigger_luat_b_lockin.py``; không
+    ghim head = revision cuối, như review max PR #724 R15)."""
     revs, downs = set(), set()
     for p in (GOC / "alembic" / "versions").glob("*.py"):
         s = p.read_text(encoding="utf-8")
@@ -60,7 +65,9 @@ def test_mot_head_alembic():
         d = re.search(r"^down_revision\s*(?::[^=]+)?=\s*(\([^)]*\)|[^\n]+)", s, re.M | re.S)
         if d:
             downs.update(re.findall(r"['\"]([^'\"]+)['\"]", d.group(1)))
-    assert revs - downs == {"gd2a20261118"}
+    heads = revs - downs
+    assert len(heads) == 1, heads
+    assert "gd2a20261118" in revs and ("gd2a20261118" in heads or "gd2a20261118" in downs)
 
 
 def test_so_phan_loai_khoa_ngoai_co_nguoi_khoa_bang_chi_tieu():

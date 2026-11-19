@@ -1437,6 +1437,9 @@ jobs:
               tests/api/test_gd2a_bang_chi_tieu_api.py
               tests/api/test_gd2f_co_may_chu_api.py
               tests/api/test_gd2f_dau_chi_tieu_api.py
+              tests/api/test_gd2f_luat_b_bang_khoa_api.py
+              tests/unit/test_gd2f_trigger_luat_b_lockin.py
+              tests/integration/test_gd2f_trigger_luat_b_migration.py
 
     env:
       APP_ENV: test

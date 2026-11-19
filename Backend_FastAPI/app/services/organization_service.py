@@ -1347,13 +1347,16 @@ async def create_academic_info(
 
         # GĐ2-F1 lượt 3 (điểm chặn Codex lượt 2): dòng học vụ MỚI đổi tập (id, chỉ tiêu) của năm — kể cả khi chỉ tiêu trống —
         # nên LUÔN lấy khoá năm TRƯỚC INSERT (bất biến ở ``app.core.review_year_lock``). PUT / khoá bảng chỉ tiêu cùng năm đang dở
-        # ⇒ chờ; tạo đang dở ⇒ PUT / khoá chờ rồi thấy dòng mới (dấu lệch ⇒ 409). Luật "bảng năm đã khoá" khi tạo: MỘT chỗ ở dịch
-        # vụ bảng chỉ tiêu (mặc định cho phép — xem ``check_academic_info_create_allowed``).
+        # ⇒ chờ; tạo đang dở ⇒ PUT / khoá chờ rồi thấy dòng mới (dấu lệch ⇒ 409). Luật B (owner 19-11) "năm đã khoá bảng chỉ
+        # tiêu ⇒ chỉ tạo được học vụ chỉ tiêu TRỐNG": kiểm trước ở ``check_academic_info_create_allowed`` (SAU khoá năm); chủ sở
+        # hữu là trigger CSDL (nhánh INSERT).
         from ..core.review_year_lock import lock_review_year
         from .admission_quota_table_service import check_academic_info_create_allowed
 
         await lock_review_year(db, academic_info_in.academic_year)
-        await check_academic_info_create_allowed(db, academic_info_in.academic_year)
+        await check_academic_info_create_allowed(
+            db, academic_info_in.academic_year, academic_info_in.annual_admission_quota
+        )
 
         # Check duplicate (offering_id, academic_year)
         existing = await get_academic_info_by_offering_and_year(
@@ -1441,19 +1444,32 @@ async def update_academic_info(
         # phải năm của dòng nữa).
         if "annual_admission_quota" in update_data or "academic_year" in update_data:
             from ..core.review_year_lock import lock_review_years
+            from .admission_quota_table_service import check_academic_info_move_allowed
 
             nam_cu = db_academic_info.academic_year
             await lock_review_years(db, (nam_cu, update_data.get("academic_year")))
-            nam_duoi_khoa = (
+            nam_duoi_khoa, chi_tieu_duoi_khoa = (
                 await db.execute(
-                    select(models.OfferingAcademicInfo.academic_year).where(
-                        models.OfferingAcademicInfo.id == academic_info_id
-                    )
+                    select(
+                        models.OfferingAcademicInfo.academic_year, models.OfferingAcademicInfo.annual_admission_quota
+                    ).where(models.OfferingAcademicInfo.id == academic_info_id)
                 )
-            ).scalar_one()
+            ).one()
             if nam_duoi_khoa != nam_cu:
                 raise ConflictError(
                     detail="Học vụ vừa được dời sang năm khác ở nơi khác — tải lại rồi làm lại."
+                )
+            # Luật B (owner 19-11), SAU khoá năm: đổi năm học ⇒ R4 (thành viên nhóm bảng chỉ tiêu ⇒ 409 "gỡ khỏi nhóm trước")
+            # rồi R3 (học vụ có chỉ tiêu vào / ra năm đã khoá ⇒ 409 như trigger). Chủ sở hữu R3: trigger CSDL.
+            nam_moi = update_data.get("academic_year", nam_cu)
+            if nam_moi != nam_cu:
+                await check_academic_info_move_allowed(
+                    db,
+                    academic_info_id,
+                    old_year=nam_cu,
+                    new_year=nam_moi,
+                    old_quota=chi_tieu_duoi_khoa,
+                    new_quota=update_data.get("annual_admission_quota", chi_tieu_duoi_khoa),
                 )
 
         # ✅ FIX: Prevent editing financial data for past academic years
