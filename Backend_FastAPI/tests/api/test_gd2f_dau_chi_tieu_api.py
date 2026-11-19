@@ -346,6 +346,55 @@ async def test_hai_phien_doi_hoc_vu_tu_nam_khac_vao_nam_bang_thi_put_phai_cho_ro
     assert tuple(await _bang()) == ("draft", 1)
 
 
+async def test_hai_phien_sua_chi_tieu_hoc_vu_vua_bi_doi_nam_thi_409(admin_user_in_db, hoc_vu):
+    """1e — phiên 1 DỜI học vụ ``e`` từ năm 2025 sang năm bảng, CHƯA commit (giữ khoá năm 2025 + năm bảng). Phiên 2 sửa chỉ tiêu
+    ``e`` qua ĐÚNG ``update_academic_info``: đọc thấy năm 2025 ⇒ lấy khoá năm 2025 ⇒ CHỜ đúng phiên 1. Phiên 1 commit ⇒ phiên 2
+    đọc lại năm DƯỚI khoá = năm bảng ≠ 2025 ⇒ 409 — không sửa chỉ tiêu một học vụ của năm mà mình KHÔNG giữ khoá; chỉ tiêu ``e``
+    không đổi."""
+    from app import schemas
+    from app.services import organization_service
+    from app.utils.exceptions import ConflictError
+
+    e_id = hoc_vu["2025"]
+    chi_tieu_truoc = (
+        await _sql("SELECT annual_admission_quota FROM offering_academic_info WHERE id = :i", i=e_id)
+    ).scalar_one()
+    s1, s2 = AsyncSessionLocal(), AsyncSessionLocal()
+    viec = None
+    try:
+        pid1 = await _pid(s1)
+        nguoi1 = await s1.get(models.User, admin_user_in_db["id"])
+        await organization_service.update_academic_info(
+            s1,
+            academic_info_id=e_id,
+            academic_info_in=schemas.OfferingAcademicInfoUpdate(academic_year=NAM),
+            current_user=nguoi1,
+            updated_by_user_id=nguoi1.id,
+        )  # CHƯA commit
+        pid2 = await _pid(s2)
+        nguoi2 = await s2.get(models.User, admin_user_in_db["id"])
+        viec = asyncio.ensure_future(
+            organization_service.update_academic_info(
+                s2,
+                academic_info_id=e_id,
+                academic_info_in=schemas.OfferingAcademicInfoUpdate(annual_admission_quota=33),
+                current_user=nguoi2,
+                updated_by_user_id=nguoi2.id,
+            )
+        )
+        assert await _bi_chan_boi(pid2, pid1, viec), "sửa chỉ tiêu KHÔNG chờ lệnh dời năm đang dở — %s" % _mo_ta(viec)
+        await s1.commit()
+        with pytest.raises(ConflictError):
+            await asyncio.wait_for(viec, 10)
+    finally:
+        await _dong(s1, s2, viec)
+    assert tuple(
+        (
+            await _sql("SELECT academic_year, annual_admission_quota FROM offering_academic_info WHERE id = :i", i=e_id)
+        ).one()
+    ) == (NAM, chi_tieu_truoc)
+
+
 async def test_hai_put_khac_nam_cung_cham_mot_hoc_vu_khong_vong_cho(admin_user_in_db, hoc_vu, monkeypatch):
     """2 — PUT A của năm khác gửi SAI một thành viên ``a`` (học vụ năm 2026) và PUT B hợp lệ của năm 2026 cùng tới điểm ngay trước
     ``lock_quota_cells`` (điểm dừng gài bằng ``asyncio.Event``). Trước lượt 3: cả hai giữ ``FOR SHARE`` trên ``a`` rồi cùng nâng
