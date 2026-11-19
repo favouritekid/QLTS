@@ -5,7 +5,7 @@ Tên trường tiếng Anh (owner 17-11: API mới GĐ1b+ tiếng Anh). Không t
 phần tử là giới hạn KỸ THUẬT chống thân request phình (không phải con số nghiệp vụ): số chỉ tiêu / trần do Admin nhập.
 """
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -101,4 +101,7 @@ class QuotaTableOut(BaseModel):
     version: int
     locked_by_user_id: Optional[int] = None
     locked_at: Optional[datetime] = None
+    #: GĐ2-F1 — thao tác người xem làm được trên bảng (``edit`` / ``lock`` / ``unlock``): CÙNG hàm với cổng ghi
+    #: (``admission_quota_table_service.quota_table_actions``). Giao diện hiện nút theo cờ này, không theo ``status``.
+    available_actions: List[Literal["edit", "lock", "unlock"]]
     groups: List[QuotaGroupOut]

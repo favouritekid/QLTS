@@ -3611,12 +3611,52 @@ async def _enrich_priority_evidence_display(
     return enriched
 
 
+#: GĐ2-F1 — cờ máy chủ theo mã diện khi KHÔNG tính được (không có người xem / lỗi): mọi cờ ``None`` ⇒ giao diện không hiện
+#: nút nào dựa trên cờ (fail-closed).
+_PRIORITY_EVIDENCE_NO_FLAGS: Dict[str, Any] = {
+    "can_mark_paper_submitted": None,
+    "requires_ack": None,
+    "review_block_reason": None,
+}
+
+
+def _priority_evidence_item_flags(doc, *, policy, actor_id: int, in_open_catalog: bool) -> Dict[str, Any]:
+    """GĐ2-F1 — cờ theo TỪNG mã diện cho người xem, tính bằng ĐÚNG các hàm luật mà cổng ghi gọi:
+
+    * ``can_mark_paper_submitted`` = ``document_review_rules.priority_evidence_paper_recordable`` (cổng route ghi nhận bản
+      giấy gọi cùng hàm) + mã có hàng danh mục ĐANG MỞ của năm (cùng điều kiện "guard 3" của đường ghi —
+      ``_priority_evidence_write_guards``; danh mục ở đây đọc bằng cùng bộ lọc);
+    * ``requires_ack`` / ``review_block_reason`` = ``document_review_rules.decide_priority_evidence`` với dòng giấy minh chứng
+      VỪA đọc — cổng duyệt / từ chối (``priority_override_service._priority_evidence_row_decided``) gọi cùng hàm với dòng đọc
+      lại dưới khoá. Duyệt và từ chối dùng chung một quyết định (hàm chỉ kiểm tên thao tác)."""
+    from .document_review_rules import (
+        ACTION_VERIFY,
+        PriorityEvidenceFacts,
+        decide_priority_evidence,
+        priority_evidence_paper_recordable,
+    )
+
+    decision = decide_priority_evidence(
+        ACTION_VERIFY, actor_id=actor_id, evidence=PriorityEvidenceFacts.from_row(doc)
+    )
+    return {
+        "can_mark_paper_submitted": bool(in_open_catalog)
+        and priority_evidence_paper_recordable(policy, has_row=doc is not None),
+        "requires_ack": bool(decision.requires_ack),
+        "review_block_reason": None if decision.allowed else decision.block_reason,
+    }
+
+
 async def _populate_priority_evidence_projections(
     db: AsyncSession,
     profile: models.AdmissionProfile,
     documents: List[models.ProfileDocument],
+    current_user: Optional[models.User] = None,
 ) -> None:
     """Phase E.4 — populate 3 TRANSIENT priority evidence projections.
+
+    GĐ2-F1: ``current_user`` (người xem) ⇒ thêm cờ theo mã diện vào ``priority_evidence_documents``
+    (:func:`_priority_evidence_item_flags`); không có ⇒ cờ ``None``.
 
     Sets 3 transient attributes (NOT tracked by SQLAlchemy, KHÔNG persist):
     - ``priority_object_evidence_display``: enriched evidence dict với
@@ -3707,6 +3747,12 @@ async def _populate_priority_evidence_projections(
                 if getattr(doc, "category", None) == "priority_evidence"
                 and getattr(doc, "priority_sub_code", None)
             }
+            # GĐ2-F1: vị từ giấy tờ của người xem — dựng MỘT lần (cần ``profile.lead`` đã nạp, như cờ ``permissions``).
+            viewer_policy = None
+            if current_user is not None:
+                from .admission_document_policy import DocumentActionPolicy
+
+                viewer_policy = DocumentActionPolicy.for_(profile, current_user)
             items: List[Dict[str, Any]] = []
             for code in priority_codes:
                 cat = catalog_by_code.get(code, {})
@@ -3714,14 +3760,28 @@ async def _populate_priority_evidence_projections(
                 evidence_entry = evidence_raw.get(code, {}) if isinstance(
                     evidence_raw.get(code), dict
                 ) else {}
+                flags = dict(_PRIORITY_EVIDENCE_NO_FLAGS)
+                if viewer_policy is not None:
+                    try:
+                        flags = _priority_evidence_item_flags(
+                            doc, policy=viewer_policy, actor_id=current_user.id, in_open_catalog=code in catalog_by_code
+                        )
+                    except Exception as exc:  # noqa: BLE001 — cờ hỏng ⇒ không nút nào (fail-closed), giữ dòng
+                        log.warning(
+                            "priority_evidence_item_flags compute failed",
+                            profile_id=profile.id,
+                            error=str(exc),
+                        )
                 items.append({
                     "sub_code": code,
                     "bonus_points": cat.get("bonus_points", 0.0),
                     "label": cat.get("evidence_doc_type", "(Chưa có catalog)"),
                     "document_id": doc.id if doc else None,
                     "document_file_path": doc.file_path if doc else None,
-                    "status": "uploaded" if doc else "missing",
+                    # GĐ2-F1: dòng không tệp = minh chứng bản giấy đã ghi nhận (route GĐ2-0) — không còn hiện "uploaded".
+                    "status": ("uploaded" if doc.file_path else "paper_submitted") if doc else "missing",
                     "verification_status": evidence_entry.get("status"),
+                    **flags,
                 })
             profile.priority_evidence_documents = items
         else:
@@ -4003,7 +4063,7 @@ async def _populate_response_fields(
     # (Decision #2 inline warning), priority_evidence_documents (G0a DocumentsTab).
     # G2 defensive: helper wraps each compute in try/except → no crash if
     # documents lazy-load fails.
-    await _populate_priority_evidence_projections(db, profile, documents)
+    await _populate_priority_evidence_projections(db, profile, documents, current_user=current_user)
 
     # TUITION_PREPAY_FASTTRACK finding #1 — flag học phí trả trước chưa hoàn
     # khi hồ sơ đã rejected/withdrawn (giữ-chỗ rồi từ chối/rút). Parity:
@@ -5696,7 +5756,7 @@ async def get_profile(
     # this gap — projection logic existed (line 2264) but only fired from
     # ``_populate_response_fields`` callers, leaving the read-side dark.
     profile.priority_audit_log = await _load_priority_audit_log(db, profile.id)
-    await _populate_priority_evidence_projections(db, profile, documents)
+    await _populate_priority_evidence_projections(db, profile, documents, current_user=current_user)
 
     # Parity with mutation responses (reject/withdraw go through
     # ``_populate_response_fields``): GET detail builds via
@@ -8981,7 +9041,13 @@ async def mark_priority_evidence_paper_submitted(
     Chỉ khi mã diện CHƯA có dòng giấy nào (giống thao tác ``paper_submitted`` của giấy tờ: chỉ từ ``missing``) — đổi người nhận
     không có đường: Bỏ diện (xoá dòng) rồi ghi nhận lại, hoặc tải tệp (người tải thành người gắn với minh chứng). Không đổi
     trạng thái minh chứng trong JSONB (như tải tệp lần đầu). Khoá hồ sơ TRƯỚC câu ghi dòng giấy (GĐ1b §4.5)."""
+    from .admission_document_policy import DocumentActionPolicy
+    from .document_review_rules import priority_evidence_paper_recordable
+
     profile = await get_profile(db, profile_id, current_user)
+    # GĐ2-F1: vị từ dựng NGAY sau ``get_profile`` (``lead`` đã nạp) — khoá hồ sơ bên dưới ``populate_existing`` có thể làm
+    # hết hạn quan hệ ``lead``. Trạng thái hồ sơ đọc lại dưới khoá vẫn do ``_priority_evidence_write_guards`` xét trước.
+    viewer_policy = DocumentActionPolicy.for_(profile, current_user)
     profile = await _lock_profile_for_document_write(db, profile_id)
     await _priority_evidence_write_guards(db, profile, sub_code, verb="record paper")
 
@@ -9001,6 +9067,10 @@ async def mark_priority_evidence_paper_submitted(
             "Mã diện %s đã có minh chứng (tệp hoặc bản giấy đã ghi nhận) — muốn đổi thì Bỏ diện rồi ghi nhận lại, hoặc tải "
             "tệp." % sub_code
         )
+    # GĐ2-F1: CÙNG hàm với cờ ``priority_evidence_documents[*].can_mark_paper_submitted`` — cờ và cổng không lệch nhau.
+    # Các kiểm có câu riêng ở trên đi trước; tới đây chỉ còn phạm vi người bấm ⇒ 404 như IDOR.
+    if not priority_evidence_paper_recordable(viewer_policy, has_row=existing is not None):
+        raise PermissionDeniedError("Không có quyền ghi nhận minh chứng bản giấy cho hồ sơ này.")
     now = datetime.now(timezone.utc)
     db.add(
         models.ProfileDocument(

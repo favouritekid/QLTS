@@ -1435,6 +1435,7 @@ jobs:
               tests/integration/test_gd2a_count_by_group_db.py
               tests/integration/test_gd2a_rang_buoc_db.py
               tests/api/test_gd2a_bang_chi_tieu_api.py
+              tests/api/test_gd2f_co_may_chu_api.py
 
     env:
       APP_ENV: test

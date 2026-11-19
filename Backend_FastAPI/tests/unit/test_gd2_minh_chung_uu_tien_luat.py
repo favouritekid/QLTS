@@ -361,3 +361,84 @@ def test_tai_minh_chung_khoa_ho_so_truoc_va_ghi_nguoi_tai():
     assert src.index("_lock_profile_for_document_write(") < src.index("models.ProfileDocument(")
     assert src.count("uploaded_by=current_user.id") == 1
     assert src.count("doc_row.uploaded_by = current_user.id") == 1
+
+
+# ── GĐ2-F1: cờ máy chủ cho giao diện — tính bằng ĐÚNG hàm luật của cổng ghi ───────────────────────────────────────────
+@pytest.mark.parametrize(
+    "nguoi, trang_thai, co_dong, mong",
+    [
+        (_nguoi("officer", 7, DON_VI), "submitted", False, True),  # cán bộ PHỤ TRÁCH, chưa có dòng
+        (_nguoi("manager", 2, DON_VI), "submitted", False, True),
+        (_nguoi("admin", 1, None), "submitted", False, True),
+        (_nguoi("officer", 7, DON_VI), "submitted", True, False),  # đã có dòng (tệp / bản giấy)
+        (_nguoi("officer", 7, DON_VI), "approved", False, False),  # hồ sơ không ở trạng thái cho sửa giấy
+        (_nguoi("officer", 9, DON_VI), "submitted", False, False),  # cán bộ KHÔNG phụ trách
+        (_nguoi("manager", 3, 99), "submitted", False, False),  # quản lý đơn vị khác
+        (_nguoi("accountant", 8, DON_VI), "submitted", False, False),
+    ],
+)
+def test_vi_tu_ghi_nhan_ban_giay_minh_chung(nguoi, trang_thai, co_dong, mong):
+    pol = DocumentActionPolicy.for_(_ho_so(trang_thai=trang_thai), nguoi)
+    assert rules.priority_evidence_paper_recordable(pol, has_row=co_dong) is mong
+
+
+@pytest.mark.parametrize(
+    "dong, nguoi_bam",
+    [
+        (_tep(uploaded_by=5), 6),
+        (_tep(uploaded_by=5), 5),
+        (_tep(uploaded_by=None), 6),
+        (_giay(paper_by=5), 5),
+        (_giay(paper_by=None), 6),
+        (None, 6),
+    ],
+)
+def test_co_theo_ma_dien_bang_quyet_dinh_cua_cong(dong, nguoi_bam):
+    """Cờ ``requires_ack`` / ``review_block_reason`` của phản hồi = ĐÚNG ``decide_priority_evidence`` mà cổng duyệt / từ
+    chối gọi (cùng dòng giấy, cùng người)."""
+    from app.services.admission_service import _priority_evidence_item_flags
+
+    pol = DocumentActionPolicy.for_(_ho_so(), _nguoi("manager", nguoi_bam, DON_VI))
+    co = _priority_evidence_item_flags(dong, policy=pol, actor_id=nguoi_bam, in_open_catalog=True)
+    for hanh_dong in ("verify", "reject"):
+        d = rules.decide_priority_evidence(
+            hanh_dong, actor_id=nguoi_bam, evidence=rules.PriorityEvidenceFacts.from_row(dong)
+        )
+        assert (co["requires_ack"], co["review_block_reason"]) == (
+            d.requires_ack, None if d.allowed else d.block_reason
+        ), (hanh_dong, dong, nguoi_bam)
+
+
+def test_co_ghi_nhan_ban_giay_can_hang_danh_muc_dang_mo():
+    from app.services.admission_service import _priority_evidence_item_flags
+
+    pol = DocumentActionPolicy.for_(_ho_so(), _nguoi("officer", 7, DON_VI))
+    assert _priority_evidence_item_flags(None, policy=pol, actor_id=7, in_open_catalog=True)["can_mark_paper_submitted"]
+    assert not _priority_evidence_item_flags(None, policy=pol, actor_id=7, in_open_catalog=False)[
+        "can_mark_paper_submitted"
+    ]
+
+
+def test_route_ghi_nhan_ban_giay_goi_cung_vi_tu_voi_co():
+    """Nối dây: cổng route ghi nhận bản giấy gọi CÙNG hàm với cờ ``can_mark_paper_submitted``; vị từ dựng TRƯỚC khoá hồ
+    sơ (khoá ``populate_existing`` có thể làm hết hạn ``lead``)."""
+    from app.services import admission_service
+
+    src = inspect.getsource(admission_service.mark_priority_evidence_paper_submitted)
+    assert src.count("priority_evidence_paper_recordable(viewer_policy, has_row=existing is not None)") == 1
+    assert src.index("DocumentActionPolicy.for_(profile, current_user)") < src.index(
+        "_lock_profile_for_document_write("
+    )
+    flags_src = inspect.getsource(admission_service._priority_evidence_item_flags)
+    assert "priority_evidence_paper_recordable(policy, has_row=doc is not None)" in flags_src
+    assert "decide_priority_evidence(" in flags_src
+
+
+@pytest.mark.parametrize(
+    "trang_thai, mong",
+    [("draft", ["edit", "lock"]), ("locked", ["unlock"]), ("la", [])],
+)
+def test_thao_tac_bang_chi_tieu_theo_trang_thai(trang_thai, mong):
+    from app.services.admission_quota_table_service import quota_table_actions
+
+    assert quota_table_actions(trang_thai) == mong

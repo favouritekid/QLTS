@@ -53,6 +53,7 @@ import {
 } from "@/components/ui/responsive-dialog"
 import { Textarea } from "@/components/ui/textarea"
 
+import { UnknownSubmitterAckFields } from "@/components/document-review/UnknownSubmitterAckFields"
 import {
   useRejectObjectEvidence,
   useUntickPriorityEvidence,
@@ -60,6 +61,10 @@ import {
 } from "@/lib/hooks/use-priority-evidence"
 import { useUtCatalog } from "@/lib/hooks/use-priority-object-catalog"
 import { API_BASE_URL } from "@/lib/api/client"
+import {
+  describePriorityEvidenceError,
+  priorityEvidenceBlockText,
+} from "@/lib/priority-evidence/messages"
 import type { PriorityObjectCatalogItem } from "@/lib/api/priority-objects"
 import {
   findEvidenceDocument,
@@ -72,6 +77,8 @@ import type {
   AdmissionProfileResponse,
   PriorityEvidenceDocumentItem,
 } from "@/lib/zod/admissions"
+
+import { UtEvidenceVerifyAckDialog } from "./UtEvidenceVerifyAckDialog"
 
 const MIN_REJECT_REASON = 10
 const MAX_REJECT_REASON = 500
@@ -218,11 +225,17 @@ function UtEvidenceCardItem({
   const isMissing = isMissingEvidenceFile(profile, subCode)
   const status = entry?.status ?? "pending"
   const hasFile = Boolean(docItem?.document_file_path)
+  // GĐ2-F1 — cờ máy chủ theo mã diện cho người xem (cùng hàm luật với cổng duyệt / từ chối). Chỉ tin giá trị rõ ràng:
+  // thiếu / null ⇒ không cam kết, không lý do chặn (máy chủ vẫn là chốt — 409 có câu rõ).
+  const requiresAck = docItem?.requires_ack === true
+  const blockReason = docItem?.review_block_reason ?? null
+  const isRecordedPaper = docItem?.status === "paper_submitted"
 
   // Adjustment #4 (PR-3): verify mutation MUST pass server doc_id từ
   // priority_evidence_documents projection. Null chỉ paper-only verify.
   const verifyDocId = resolveVerifyDocumentId(profile, subCode)
   const verifyMutation = useVerifyObjectEvidence(profile.id, subCode)
+  const [showAckVerify, setShowAckVerify] = useState(false)
   // P1 fix (PR-3 Step C audit): untick mutation lifted to card item — items
   // có file open confirm dialog, items không file untick trực tiếp.
   const untickMutation = useUntickPriorityEvidence(profile.id, subCode)
@@ -245,27 +258,36 @@ function UtEvidenceCardItem({
   }
 
   const onVerifyClick = () => {
+    // GĐ2-F1: không rõ người tải / người nhận ⇒ hộp cam kết + lý do (máy chủ đòi — câu 1 owner 19-11).
+    if (requiresAck) {
+      setShowAckVerify(true)
+      return
+    }
     verifyMutation.mutate(
       { version: profile.version ?? 0, document_id: verifyDocId },
       {
         onSuccess: () => {
           toast.success(
-            verifyDocId
+            hasFile
               ? `Đã duyệt UT${subCode} (gắn file ${getDisplayFilename(
                   docItem?.document_file_path ?? null,
                 )})`
-              : `Đã duyệt UT${subCode} (hồ sơ giấy)`,
+              : `Đã duyệt UT${subCode} (bản giấy)`,
           )
         },
         onError: (err) => {
-          toast.error(`Duyệt UT${subCode} thất bại: ${err.message}`)
+          toast.error(`Duyệt UT${subCode} thất bại: ${describePriorityEvidenceError(err, "verify")}`)
         },
       },
     )
   }
 
-  const verifyButtonLabel =
-    verifyDocId === null ? "Duyệt (Hồ sơ giấy)" : "Duyệt"
+  // Nhãn chỉ trình bày theo dữ liệu máy chủ: có tệp / bản giấy đã ghi nhận / chưa có dòng giấy nào.
+  const verifyButtonLabel = hasFile
+    ? "Duyệt"
+    : isRecordedPaper
+      ? "Duyệt (bản giấy)"
+      : "Duyệt (Hồ sơ giấy)"
 
   return (
     <article
@@ -346,13 +368,24 @@ function UtEvidenceCardItem({
             className="ml-auto h-auto p-0 text-xs"
             data-testid={`ut-evidence-navigate-documents-${subCode}`}
           >
-            → Mở tab Giấy tờ để upload
+            → Mở tab Giấy tờ để tải tệp / ghi nhận bản giấy
           </Button>
         </div>
       )}
 
+      {/* GĐ2-F1: máy chủ báo người xem KHÔNG được duyệt / từ chối mã này (vd chính là người tải / người nhận) ⇒ không
+          nút, hiện lý do. */}
+      {status === "pending" && canVerify && blockReason !== null && (
+        <p
+          className="rounded-md border border-border bg-muted/40 p-2 text-xs text-muted-foreground"
+          data-testid={`ut-evidence-block-reason-${subCode}`}
+        >
+          {priorityEvidenceBlockText(blockReason)}
+        </p>
+      )}
+
       {/* Verify/Reject actions (pending status) */}
-      {status === "pending" && canVerify && (
+      {status === "pending" && canVerify && blockReason === null && (
         <div className="flex flex-wrap items-center gap-2 pt-1">
           <Button
             type="button"
@@ -409,6 +442,18 @@ function UtEvidenceCardItem({
           subCode={subCode}
           profile={profile}
           onClose={() => setShowUntickConfirm(false)}
+        />
+      )}
+
+      {/* GĐ2-F1: duyệt có cam kết + lý do (máy chủ báo requires_ack) */}
+      {showAckVerify && (
+        <UtEvidenceVerifyAckDialog
+          profileId={profile.id}
+          profileVersion={profile.version ?? 0}
+          subCode={subCode}
+          documentId={verifyDocId}
+          noEvidenceRow={docItem?.status === "missing"}
+          onClose={() => setShowAckVerify(false)}
         />
       )}
     </article>
@@ -510,22 +555,33 @@ interface RejectReasonDialogProps {
 
 function RejectReasonDialog({ subCode, profile, onClose }: RejectReasonDialogProps) {
   const [reason, setReason] = useState("")
+  // GĐ2-F1: máy chủ báo không rõ người tải / người nhận ⇒ phải tích cam kết; lý do từ chối cũng là lý do của cam kết
+  // (như hộp Từ chối giấy tờ GĐ1b). Thiếu cờ / null ⇒ không hộp cam kết, gửi `false` (máy chủ là chốt).
+  const requiresAck = findEvidenceDocument(profile, subCode)?.requires_ack === true
+  // Phiên bản hồ sơ chốt lúc mở hộp: lỗi ⇒ chi tiết được làm mới, nhưng lần gửi lại KHÔNG âm thầm dùng bản mới chưa xem.
+  const [version] = useState(profile.version ?? 0)
+  const [ack, setAck] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const rejectMutation = useRejectObjectEvidence(profile.id, subCode)
   const reasonLen = reason.trim().length
-  const isValid = reasonLen >= MIN_REJECT_REASON && reasonLen <= MAX_REJECT_REASON
+  const isValid =
+    reasonLen >= MIN_REJECT_REASON && reasonLen <= MAX_REJECT_REASON && (!requiresAck || ack)
 
   const handleSubmit = () => {
     if (!isValid) return
+    setError(null)
     rejectMutation.mutate(
-      { version: profile.version ?? 0, reject_reason: reason.trim() },
+      {
+        version,
+        reject_reason: reason.trim(),
+        unknown_submitter_ack: requiresAck ? ack : false,
+      },
       {
         onSuccess: () => {
           toast.success(`Đã từ chối UT${subCode}.`)
           onClose()
         },
-        onError: (err) => {
-          toast.error(`Từ chối UT${subCode} thất bại: ${err.message}`)
-        },
+        onError: (err) => setError(describePriorityEvidenceError(err, "reject")),
       },
     )
   }
@@ -558,6 +614,19 @@ function RejectReasonDialog({ subCode, profile, onClose }: RejectReasonDialogPro
             {reasonLen}/{MAX_REJECT_REASON}
           </p>
         </div>
+        {requiresAck && (
+          <UnknownSubmitterAckFields
+            id={`ut-reject-ack-${subCode}`}
+            checked={ack}
+            onCheckedChange={setAck}
+            disabled={rejectMutation.isPending}
+          />
+        )}
+        {error && (
+          <p role="alert" className="text-sm text-destructive">
+            {error}
+          </p>
+        )}
         <ResponsiveDialogFooter>
           <Button
             type="button"

@@ -261,6 +261,16 @@ def decide_priority_evidence(action: str, *, actor_id: int, evidence: PriorityEv
     return Decision(True)
 
 
+def priority_evidence_paper_recordable(policy: DocumentActionPolicy, *, has_row: bool) -> bool:
+    """GĐ2-F1 — người xem có được ghi nhận minh chứng ưu tiên nộp bằng BẢN GIẤY cho một mã diện không: chỉ khi mã CHƯA có
+    dòng giấy nào (như ``paper_submitted`` của giấy tờ: chỉ từ ``missing``) và vị từ "ghi nhận bản giấy" của giấy tờ cho
+    phép (hồ sơ ở trạng thái cho sửa giấy + cán bộ phụ trách / Quản lý trong đơn vị / Admin — ``DocumentActionPolicy``).
+
+    MỘT nguồn cho cờ ``priority_evidence_documents[*].can_mark_paper_submitted`` VÀ cổng route
+    ``admission_service.mark_priority_evidence_paper_submitted`` (gọi sau các kiểm có câu báo riêng)."""
+    return (not has_row) and policy.authorize("paper_submitted", "missing", False)
+
+
 def priority_evidence_ack_satisfied(decision: Decision, *, unknown_submitter_ack: bool, reason: Optional[str]) -> bool:
     """Đường ngoại lệ có cam kết (giống ``transition_document``: ``requires_ack and not (unknown_submitter_ack and reason)``
     ⇒ chặn): cờ cam kết TƯỜNG MINH + lý do khác rỗng sau khi bỏ khoảng trắng hai đầu. MỘT nguồn cho duyệt và từ chối."""

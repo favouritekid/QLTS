@@ -74,6 +74,7 @@ import {
   Upload,
   XCircle,
 } from "lucide-react"
+import { PriorityEvidencePaperButton } from "@/components/documents/PriorityEvidencePaperButton"
 import { PriorityEvidenceUploadCell } from "@/components/documents/PriorityEvidenceUploadCell"
 import { DocumentHistoryDialog } from "@/components/document-review/DocumentHistoryDialog"
 import { DocumentReviewActions } from "@/components/document-review/DocumentReviewActions"
@@ -944,8 +945,9 @@ export function DocumentsTab({ profile }: DocumentsTabProps) {
       (d) => d.document_file_path != null,
     ).length
     const priorityTotal = priorityEvidenceDocs.length
+    // GĐ2-F1: dòng máy chủ báo `paper_submitted` (đã ghi nhận bản giấy) KHÔNG còn là "thiếu minh chứng".
     const priorityMissingCodes = priorityEvidenceDocs
-      .filter((d) => d.document_file_path == null)
+      .filter((d) => d.document_file_path == null && d.status !== "paper_submitted")
       .map((d) => `UT${d.sub_code}`)
 
     return {
@@ -1682,7 +1684,8 @@ export function DocumentsTab({ profile }: DocumentsTabProps) {
             <CardDescription>
               Minh chứng cho diện ưu tiên đã ghi nhận trong{" "}
               <em>tab Ưu tiên tuyển sinh</em>. Trạng thái duyệt thuộc về
-              tab đó; ở đây chỉ quản lý file upload/xem/tải lại.
+              tab đó; ở đây tải tệp / xem / tải lại, hoặc ghi nhận đã nhận
+              bản giấy.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
@@ -1713,6 +1716,11 @@ export function DocumentsTab({ profile }: DocumentsTabProps) {
                   </div>
                 </div>
                 <PriorityEvidenceUploadCell
+                  profile={profile}
+                  subCode={item.sub_code}
+                />
+                {/* GĐ2-F1 — "Đã nhận bản giấy" theo cờ máy chủ can_mark_paper_submitted */}
+                <PriorityEvidencePaperButton
                   profile={profile}
                   subCode={item.sub_code}
                 />

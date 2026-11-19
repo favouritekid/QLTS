@@ -50,6 +50,24 @@ MESSAGES: Dict[str, str] = {
 }
 
 
+#: GĐ2-F1 — thao tác trên bảng ĐANG CÓ của năm (giao diện hiện nút theo ``available_actions`` của phản hồi).
+ACTION_EDIT = "edit"
+ACTION_LOCK = "lock"
+ACTION_UNLOCK = "unlock"
+
+
+def quota_table_actions(status: str) -> List[str]:
+    """GĐ2-F1 — MỘT nguồn cho cờ ``available_actions`` của phản hồi VÀ cổng trạng thái của ``replace_quota_table`` (sửa),
+    ``lock_quota_table`` (khoá), ``unlock_quota_table`` (mở khoá): bảng ``draft`` ⇒ sửa + khoá; ``locked`` ⇒ chỉ mở khoá.
+    Năm CHƯA có bảng không qua hàm này (GET 404; PUT ``version`` 0 tạo mới). GĐ2-C thêm điều kiện mở khoá (năm có lần xét
+    đã khoá) thì thêm VÀO ĐÂY để nút và cổng đổi cùng nhau."""
+    if status == QUOTA_TABLE_LOCKED:
+        return [ACTION_UNLOCK]
+    if status == QUOTA_TABLE_DRAFT:
+        return [ACTION_EDIT, ACTION_LOCK]
+    return []
+
+
 class QuotaTableConflict(ConflictError):
     """409 có mã lý do (``reason_code``) + dữ liệu công khai (chỉ id / số)."""
 
@@ -167,6 +185,7 @@ async def get_quota_table(db: AsyncSession, academic_year: int) -> Dict[str, Any
         "version": table.version,
         "locked_by_user_id": table.locked_by_user_id,
         "locked_at": table.locked_at,
+        "available_actions": quota_table_actions(table.status),
         "groups": out_groups,
     }
 
@@ -213,7 +232,7 @@ async def replace_quota_table(
     await qos.lock_quota_cells(db, want.keys(), ())
     table = await _table_for_update(db, academic_year)
     _check_version(table, payload.version)
-    if table is not None and table.status == QUOTA_TABLE_LOCKED:
+    if table is not None and ACTION_EDIT not in quota_table_actions(table.status):
         raise QuotaTableConflict("quota_table_locked")
 
     # 2. Học vụ phải có thật, chưa xoá mềm, ĐÚNG năm của bảng (đọc lại dưới khoá).
@@ -297,7 +316,7 @@ async def lock_quota_table(db: AsyncSession, academic_year: int, *, expected_ver
     if table is None:
         raise _not_found(academic_year)
     _check_version(table, expected_version)
-    if table.status == QUOTA_TABLE_LOCKED:
+    if ACTION_LOCK not in quota_table_actions(table.status):
         raise QuotaTableConflict("quota_table_already_locked")
     m, oai = models.AdmissionQuotaGroupMember, models.OfferingAcademicInfo
     missing = sorted(
@@ -336,7 +355,7 @@ async def unlock_quota_table(
     if table is None:
         raise _not_found(academic_year)
     _check_version(table, expected_version)
-    if table.status != QUOTA_TABLE_LOCKED:
+    if ACTION_UNLOCK not in quota_table_actions(table.status):
         raise QuotaTableConflict("quota_table_not_locked")
     now = datetime.now(timezone.utc)
     table.status = QUOTA_TABLE_DRAFT
