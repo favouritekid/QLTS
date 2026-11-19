@@ -1,7 +1,7 @@
 """GĐ2 — KHOÁ NĂM (``advisory_lock_keys.REVIEW_YEAR_NS``): MỘT định nghĩa cho mọi nơi lấy khoá này.
 
 BẤT BIẾN (GĐ2-F1 lượt 3 — điểm chặn Codex lượt 2): mọi lệnh ghi làm đổi tập ``(offering_academic_info.id,
-annual_admission_quota)`` của học vụ một năm PHẢI giữ khoá năm của MỌI năm bị chạm (id năm tăng dần) TRƯỚC khi chạm dòng học vụ:
+annual_admission_quota)`` của học vụ một năm PHẢI giữ khoá năm của MỌI năm bị chạm (năm tăng dần) TRƯỚC khi chạm dòng học vụ:
 
 * tạo học vụ — ``organization_service.create_academic_info`` (dòng mới đổi tập dòng kể cả khi chỉ tiêu trống);
 * sửa chỉ tiêu / dời năm học vụ — ``organization_service.update_academic_info`` (năm cũ + năm mới);
@@ -13,6 +13,13 @@ dời CHƯA commit làm sai — lệnh ấy hoặc đã commit xong trước (ta
 Không đường nào được khoá dòng học vụ TRƯỚC rồi mới lấy khoá năm (sẽ tạo vòng chờ với đường tạo / sửa / PUT): các nơi gọi đều lấy
 khoá năm ngay sau kiểm quyền, khi giao dịch chưa giữ khoá dòng học vụ nào. Xoá mềm (``is_deleted``, kể cả dây chuyền khi xoá
 offering) không đổi ``(id, chỉ tiêu)`` ⇒ không cần khoá năm.
+
+Khoá DÒNG học vụ lấy SAU khoá năm dùng chế độ YẾU NHẤT đủ việc, lấy MỘT lần, không nâng trong cùng giao dịch (GĐ2-F1 lượt 3b):
+PUT bảng chỉ tiêu chỉ ghi ``annual_admission_quota`` (không cột nào thuộc khoá duy nhất / khoá ngoại) ⇒ ``FOR NO KEY UPDATE`` —
+đúng chế độ lệnh UPDATE của PostgreSQL tự lấy. Nó vẫn xung đột với ``FOR SHARE`` (khoá bảng), ``FOR NO KEY UPDATE`` (UPDATE chỉ
+tiêu ở trang cũ / SQL tay) và ``FOR UPDATE`` (``lock_quota_cells`` của ghi nhận / Phê duyệt) ⇒ mọi đường đổi chỉ tiêu vẫn tuần tự;
+nhưng KHÔNG xung đột với ``FOR KEY SHARE`` mà kiểm khoá ngoại lấy ⇒ lệnh chèn / sửa dòng TRỎ tới học vụ (học phí, lộ trình xét,
+cấu hình, phí…) không phải chờ PUT, và không thể vòng chờ với PUT qua khoá ấy.
 """
 from __future__ import annotations
 

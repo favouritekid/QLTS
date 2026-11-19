@@ -5,7 +5,8 @@ thật cho ca đồng thời. Không dữ liệu thật. Mỗi ca kiểm MỘT b
 
 Tầng chủ sở hữu: ``admission_quota_table_service`` (:func:`quota_fingerprint_of` — MỘT hàm cho GET và cho kiểm;
 :func:`read_quota_fingerprint` đọc dưới khoá dòng sau khoá năm, trước khi ghi). Lượt 3: mọi đường tạo / sửa / dời học vụ cũng
-giữ khoá năm (``app.core.review_year_lock``) — ca hai phiên 1a–1d; PUT lấy ``FOR UPDATE`` một câu, không nâng khoá — ca 2.
+giữ khoá năm (``app.core.review_year_lock``) — ca hai phiên 1a–1e; PUT lấy khoá ghi một câu, không nâng khoá — ca 2. Lượt 3b:
+khoá ghi ấy là ``FOR NO KEY UPDATE`` ⇒ dòng đang trỏ tới học vụ (``FOR KEY SHARE`` của khoá ngoại) không làm PUT chờ — ca 3b.
 """
 from __future__ import annotations
 
@@ -396,31 +397,21 @@ async def test_hai_phien_sua_chi_tieu_hoc_vu_vua_bi_doi_nam_thi_409(admin_user_i
 
 
 async def test_hai_put_khac_nam_cung_cham_mot_hoc_vu_khong_vong_cho(admin_user_in_db, hoc_vu, monkeypatch):
-    """2 — PUT A của năm khác gửi SAI một thành viên ``a`` (học vụ năm 2026) và PUT B hợp lệ của năm 2026 cùng tới điểm ngay trước
-    ``lock_quota_cells`` (điểm dừng gài bằng ``asyncio.Event``). Trước lượt 3: cả hai giữ ``FOR SHARE`` trên ``a`` rồi cùng nâng
-    lên ``FOR UPDATE`` ⇒ PostgreSQL huỷ một bên ``40P01``. Nay: B CHỜ A (``pg_blocking_pids``) từ câu khoá đầu, A 400
-    (thành viên sai năm), B 200, không ``40P01``. Mọi bước chờ có hạn — không treo."""
+    """2 — PUT A của năm khác gửi SAI một thành viên ``a`` (học vụ năm 2026) và PUT B hợp lệ của năm 2026 cùng tới điểm ngay SAU
+    câu khoá dòng đầu tiên (``read_quota_fingerprint`` có khoá — điểm dừng gài bằng ``asyncio.Event``). Trước lượt 3: cả hai giữ
+    ``FOR SHARE`` trên ``a`` rồi cùng nâng lên ``FOR UPDATE`` (``lock_quota_cells``) ⇒ PostgreSQL huỷ một bên ``40P01``. Nay: B CHỜ
+    A (``pg_blocking_pids``) ngay ở câu khoá đầu, A 400 (thành viên sai năm), B 200, không ``40P01``. Mọi bước chờ có hạn — không
+    treo."""
     from sqlalchemy import text
     from sqlalchemy.exc import DBAPIError
 
     from app.repositories.council_decision_repository import db_error_codes
     from app.schemas.admission_quota_table import QuotaTablePut
     from app.services import admission_quota_table_service as svc
-    from app.services import quota_occupancy_service as qos
     from app.utils.exceptions import ValidationError as LoiDuLieu
 
     a = hoc_vu["2026"][0]
     nam_khac = NAM - 1
-    goc = qos.lock_quota_cells
-    den: dict = {}
-    di_tiep = asyncio.Event()
-
-    async def tram(db, oai_ids, path_ids):
-        den[(await db.execute(text("SELECT pg_backend_pid()"))).scalar_one()] = True
-        await asyncio.wait_for(di_tiep.wait(), 30)
-        return await goc(db, oai_ids, path_ids)
-
-    monkeypatch.setattr(qos, "lock_quota_cells", tram)
     async with AsyncSessionLocal() as s:
         dau_khac = await svc.read_quota_fingerprint(s, nam_khac)
     than_a = QuotaTablePut(
@@ -429,6 +420,19 @@ async def test_hai_put_khac_nam_cung_cham_mot_hoc_vu_khong_vong_cho(admin_user_i
                  "members": [{"offering_academic_info_id": a, "annual_admission_quota": 1}]}],
     )
     than_b = QuotaTablePut(**{**_than(0, hoc_vu), "quota_fingerprint": await _dau()})
+
+    goc = svc.read_quota_fingerprint
+    den: dict = {}
+    di_tiep = asyncio.Event()
+
+    async def tram(db, academic_year, **kw):
+        dau = await goc(db, academic_year, **kw)  # câu khoá dòng ĐẦU TIÊN của PUT chạy thật, rồi mới dừng
+        if kw.get("lock") is not None:
+            den[(await db.execute(text("SELECT pg_backend_pid()"))).scalar_one()] = True
+            await asyncio.wait_for(di_tiep.wait(), 30)
+        return dau
+
+    monkeypatch.setattr(svc, "read_quota_fingerprint", tram)  # gài SAU khi đã lấy dấu của hai thân
     uid = admin_user_in_db["id"]
     sa, sb = AsyncSessionLocal(), AsyncSessionLocal()
     va = vb = None
@@ -482,6 +486,48 @@ async def test_hai_put_khac_nam_cung_cham_mot_hoc_vu_khong_vong_cho(admin_user_i
     assert ket_qua["A"].public_payload.get("reason_code") == "quota_table_bad_member", ket_qua
     assert ket_qua.get("B") is None, ket_qua
     assert b_bi_a_chan, "PUT hợp lệ KHÔNG chờ PUT sai năm đang giữ khoá học vụ ``a``"
+
+
+@pytest.mark.parametrize("vai", ["thanh_vien", "ngoai_bang"])
+async def test_hai_phien_dong_tro_toi_hoc_vu_dang_mo_thi_put_khong_cho(admin_user_in_db, hoc_vu, vai):
+    """3b — phiên T chèn một dòng học phí học kỳ (``offering_semester_tuition`` — khoá ngoại tới học vụ ⇒ PostgreSQL giữ
+    ``FOR KEY SHARE`` trên dòng học vụ tới hết giao dịch) và GIỮ giao dịch mở. PUT bảng của năm ấy phải xong mà KHÔNG chờ T
+    (``pg_blocking_pids`` hỏi từ phiên thứ ba) và xong khi T VẪN chưa kết thúc (dòng của T chưa ai thấy). ``thanh_vien``: học vụ
+    ``a`` là thành viên PUT gửi lên (chỉ tiêu của nó được ghi); ``ngoai_bang``: học vụ ``d`` cùng năm, KHÔNG thuộc bảng. Khoá ghi
+    của PUT là ``FOR NO KEY UPDATE`` — không xung đột với ``KEY SHARE``; ``FOR UPDATE`` (lượt 3, hay nâng khoá qua
+    ``lock_quota_cells``) thì có."""
+    from sqlalchemy import text
+
+    from app.schemas.admission_quota_table import QuotaTablePut
+    from app.services import admission_quota_table_service as svc
+
+    a, _b, _c, d = hoc_vu["2026"]
+    dich = a if vai == "thanh_vien" else d
+    than = QuotaTablePut(**{**_than(0, hoc_vu), "quota_fingerprint": await _dau()})
+    st, sp = AsyncSessionLocal(), AsyncSessionLocal()
+    viec = None
+    try:
+        pid_t = await _pid(st)
+        await st.execute(
+            text(
+                "INSERT INTO offering_semester_tuition (academic_info_id, semester_no, amount) VALUES (:i, 1, 1000)"
+            ),
+            {"i": dich},
+        )  # GIỮ giao dịch mở
+        pid_p = await _pid(sp)
+        viec = asyncio.ensure_future(svc.replace_quota_table(sp, NAM, than, actor_id=admin_user_in_db["id"]))
+        assert not await _bi_chan_boi(pid_p, pid_t, viec), (
+            "PUT CHỜ giao dịch đang chèn dòng trỏ tới học vụ %s (%s) — %s" % (dich, vai, _mo_ta(viec))
+        )
+        await asyncio.wait_for(viec, 10)
+        await sp.commit()
+        assert (
+            await _sql("SELECT count(*) FROM offering_semester_tuition WHERE academic_info_id = :i", i=dich)
+        ).scalar_one() == 0, "T đã kết thúc trước khi PUT xong — phép đo không chứng minh được 'không chờ'"
+    finally:
+        await _dong(st, sp, viec)
+    assert tuple(await _bang()) == ("draft", 1)
+    assert await _chi_tieu(a) == 50
 
 
 async def test_tao_hoc_vu_khi_khong_co_put_van_qua(admin_user_in_db, hoc_vu):

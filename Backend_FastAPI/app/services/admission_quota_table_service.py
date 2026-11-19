@@ -12,19 +12,26 @@ Tầng chủ sở hữu:
   * ai được làm — Casbin + ``deps.require_quota_table_admin`` (chỉ Admin).
 
 THỨ TỰ KHOÁ (một giao dịch):
-  * PUT: khoá năm (``app.core.review_year_lock`` — MỘT định nghĩa) → [GĐ2-F1 lượt 3] ``FOR UPDATE`` MỌI học vụ của năm + học vụ
-    thành viên gửi lên, id TĂNG DẦN, MỘT câu, dấu chỉ tiêu tính từ chính câu ấy (:func:`read_quota_fingerprint`
-    ``lock="update"``) → ``quota_occupancy_service.lock_quota_cells`` chỉ KHOÁ LẠI dòng đã giữ (không nâng khoá, không lấy dòng mới)
-    → dòng ``admission_quota_table`` ``FOR UPDATE``.
+  * PUT: khoá năm (``app.core.review_year_lock`` — MỘT định nghĩa) → [GĐ2-F1 lượt 3b] ``FOR NO KEY UPDATE`` MỌI học vụ của năm +
+    học vụ thành viên gửi lên, id TĂNG DẦN, MỘT câu, dấu chỉ tiêu tính từ chính câu ấy (:func:`read_quota_fingerprint`
+    ``lock="no_key_update"``) → dòng ``admission_quota_table`` ``FOR UPDATE``. KHÔNG gọi ``lock_quota_cells`` (nó lấy ``FOR UPDATE``
+    ⇒ sẽ NÂNG khoá thành viên và lại chặn ``KEY SHARE`` của kiểm khoá ngoại). Sau câu khoá đầu, giao dịch PUT không lấy thêm khoá
+    nào mạnh hơn trên học vụ: UPDATE chỉ tiêu tự lấy ``FOR NO KEY UPDATE`` (cột không thuộc khoá duy nhất nào); chèn thành viên
+    nhóm lấy ``FOR KEY SHARE`` (khoá ngoại ghép) — yếu hơn khoá đã giữ, cùng giao dịch ⇒ không chờ; trigger chỉ khoá dòng bảng.
   * Khoá bảng: khoá năm → ``FOR SHARE`` học vụ của năm (id tăng dần, một câu; KHÔNG nâng khoá về sau) → dòng bảng ``FOR UPDATE``.
   * Mở khoá: khoá năm → dòng bảng.
 Lập luận không vòng chờ:
   * Với đường tạo / sửa / dời học vụ (``organization_service.create_academic_info`` / ``update_academic_info``): cả hai phía lấy
     KHOÁ NĂM trước mọi khoá dòng học vụ (bất biến ở ``app.core.review_year_lock``) ⇒ tuần tự theo khoá năm, nhiều năm thì tăng dần.
   * Với giao dịch khoá ô chỉ tiêu không lấy khoá năm (ghi nhận QĐ, "Phê duyệt" cũ — ``lock_quota_cells`` ``FOR UPDATE`` id tăng dần
-    một câu): ta cũng lấy dòng học vụ bằng MỘT câu id tăng dần, rồi chỉ khoá lại dòng đã giữ ⇒ cùng thứ tự toàn cục, không vòng.
+    một câu): ta cũng lấy dòng học vụ bằng MỘT câu id tăng dần (``NO KEY UPDATE`` xung đột với ``FOR UPDATE``), không lấy thêm ⇒
+    cùng thứ tự toàn cục, không vòng.
   * Hai PUT khác năm cùng chạm một dòng R (PUT gửi sai năm một thành viên R): trước lượt 3 cả hai giữ ``FOR SHARE`` R rồi cùng nâng
-    lên ``FOR UPDATE`` ⇒ vòng chờ (``40P01``). Nay mỗi PUT lấy ``FOR UPDATE`` ngay trong câu đầu ⇒ PUT đến sau CHỜ, không vòng.
+    lên ``FOR UPDATE`` ⇒ vòng chờ (``40P01``). Nay mỗi PUT lấy khoá ghi (``NO KEY UPDATE`` — hai bên xung đột nhau) ngay trong câu
+    đầu, không nâng về sau ⇒ PUT đến sau CHỜ, không vòng.
+  * Lệnh chèn / sửa dòng TRỎ tới học vụ (khoá ngoại ⇒ ``FOR KEY SHARE``): không xung đột với ``NO KEY UPDATE`` ⇒ không chờ PUT,
+    PUT không chờ nó ⇒ không có vòng chờ qua khoá ấy (lượt 3 dùng ``FOR UPDATE`` — chặn ``KEY SHARE`` ⇒ mở rủi ro vòng chờ với
+    giao dịch giữ ``KEY SHARE`` theo thứ tự id khác).
   * Học vụ TRƯỚC dòng bảng, cùng chiều trigger (UPDATE học vụ rồi trigger ``FOR SHARE`` dòng bảng).
 
 [GĐ2-F1 — điểm chặn Codex] DẤU CHỈ TIÊU (``quota_fingerprint``): đường sửa học vụ cũ đổi ``annual_admission_quota`` mà KHÔNG
@@ -33,8 +40,8 @@ CHƯA có bảng, ``version`` 0). GET trả dấu = băm (:func:`quota_fingerpri
 PUT / khoá BẮT BUỘC gửi lại dấu lúc mở; dịch vụ đọc lại các dòng ấy dưới khoá SAU khoá năm, TRƯỚC khi ghi — lệch ⇒ 409
 ``quota_table_stale``. Từ lượt 3, mọi đường tạo / sửa / dời học vụ cũng lấy khoá năm ⇒ một lệnh như vậy đang dở thì ta chờ ở khoá
 năm (rồi đọc giá trị mới), lệnh đến SAU thì chờ ta commit (giá trị của họ nằm SAU bản ta ghi, không bị đè) — gồm cả dòng MỚI chèn,
-thứ khoá dòng không chặn được. Khoá dòng (``FOR UPDATE`` / ``FOR SHARE``) giữ làm lớp thứ hai cho SQL tay / đường không theo bất
-biến.
+thứ khoá dòng không chặn được. Khoá dòng (``FOR NO KEY UPDATE`` / ``FOR SHARE``) giữ làm lớp thứ hai cho SQL tay / đường không theo
+bất biến.
 
 Vết: mỗi lần sửa / khoá / mở khoá một dòng ``entity_audit_log`` (``entity_type='admission_quota_table'``, ``entity_id`` =
 năm, người, giờ, lý do mở khoá) — cùng giao dịch. Log ứng dụng chỉ năm + số đếm.
@@ -126,10 +133,11 @@ def quota_fingerprint_of(rows: Iterable[Tuple[int, Optional[int]]]) -> str:
     return hashlib.sha256(("%s|%s" % (QUOTA_FINGERPRINT_PREFIX, ",".join(phan))).encode("ascii")).hexdigest()
 
 
-#: Chế độ khoá dòng khi đọc dấu: ``None`` = đọc thường (GET); ``"share"`` = khoá bảng (không ghi dòng học vụ); ``"update"`` = PUT
-#: (sẽ ghi chỉ tiêu thành viên — lấy ``FOR UPDATE`` NGAY câu đầu, không nâng khoá về sau).
+#: Chế độ khoá dòng khi đọc dấu: ``None`` = đọc thường (GET); ``"share"`` = khoá bảng (không ghi dòng học vụ) ⇒ ``FOR SHARE``;
+#: ``"no_key_update"`` = PUT (sẽ ghi chỉ tiêu thành viên — cột không thuộc khoá nào) ⇒ ``FOR NO KEY UPDATE`` NGAY câu đầu, không
+#: nâng khoá về sau; không chặn ``FOR KEY SHARE`` của kiểm khoá ngoại (GĐ2-F1 lượt 3b).
 LOCK_SHARE = "share"
-LOCK_UPDATE = "update"
+LOCK_NO_KEY_UPDATE = "no_key_update"
 
 
 async def read_quota_fingerprint(
@@ -137,17 +145,17 @@ async def read_quota_fingerprint(
 ) -> str:
     """GĐ2-F1 — dấu chỉ tiêu của năm, đọc từ CSDL: MỌI dòng ``offering_academic_info`` có ``academic_year = năm`` (kể cả đã
     xoá mềm; học vụ mới / dời năm cũng làm dấu đổi). ``lock`` ⇒ MỘT câu khoá id tăng dần, gồm thêm ``also_lock_ids`` (thành viên
-    gửi lên — có thể khác năm, dịch vụ báo 400 sau) ⇒ bước ``lock_quota_cells`` sau đó chỉ khoá lại dòng đã giữ, không lấy dòng
-    mới xen giữa, không nâng khoá. Dấu chỉ tính dòng có năm = ``năm`` theo giá trị đọc SAU khoá (dòng vừa bị dời năm không còn
-    tính)."""
+    gửi lên — có thể khác năm, dịch vụ báo 400 sau) ⇒ mọi dòng học vụ giao dịch sẽ ghi đã được khoá ở ĐÚNG câu này, không lấy
+    dòng mới xen giữa, không nâng khoá về sau. Dấu chỉ tính dòng có năm = ``năm`` theo giá trị đọc SAU khoá (dòng vừa bị dời năm
+    không còn tính)."""
     oai = models.OfferingAcademicInfo
     extra = sorted({int(x) for x in also_lock_ids})
     cond = oai.academic_year == academic_year
     if extra:
         cond = or_(cond, oai.id.in_(extra))
     stmt = select(oai.id, oai.academic_year, oai.annual_admission_quota).where(cond).order_by(oai.id)
-    if lock == LOCK_UPDATE:
-        stmt = stmt.with_for_update()
+    if lock == LOCK_NO_KEY_UPDATE:
+        stmt = stmt.with_for_update(key_share=True)  # PostgreSQL: FOR NO KEY UPDATE
     elif lock == LOCK_SHARE:
         stmt = stmt.with_for_update(read=True)
     elif lock is not None:
@@ -309,11 +317,12 @@ async def replace_quota_table(
         mem.offering_academic_info_id: mem.annual_admission_quota for grp in groups for mem in grp.members
     }
 
-    # 1. Khoá năm → [GĐ2-F1 lượt 3] FOR UPDATE học vụ của năm + thành viên, MỘT câu id tăng dần (dấu chỉ tiêu tính từ câu ấy)
-    #    → lock_quota_cells chỉ khoá lại dòng đã giữ → dòng bảng.
+    # 1. Khoá năm → [GĐ2-F1 lượt 3b] FOR NO KEY UPDATE học vụ của năm + thành viên, MỘT câu id tăng dần (dấu chỉ tiêu tính từ câu
+    #    ấy) → dòng bảng. KHÔNG gọi qos.lock_quota_cells ở đây: nó lấy FOR UPDATE ⇒ NÂNG khoá trên dòng thành viên ⇒ lại chặn
+    #    FOR KEY SHARE của kiểm khoá ngoại (chèn học phí / lộ trình / phí trỏ tới học vụ) và mở lại rủi ro vòng chờ. Thứ tự với
+    #    ghi nhận / Phê duyệt (lock_quota_cells FOR UPDATE) vẫn giữ: NO KEY UPDATE xung đột FOR UPDATE, một câu id tăng dần.
     await lock_review_year(db, academic_year)
-    current_fp = await read_quota_fingerprint(db, academic_year, lock=LOCK_UPDATE, also_lock_ids=want.keys())
-    await qos.lock_quota_cells(db, want.keys(), ())
+    current_fp = await read_quota_fingerprint(db, academic_year, lock=LOCK_NO_KEY_UPDATE, also_lock_ids=want.keys())
     table = await _table_for_update(db, academic_year)
     _check_version(table, payload.version)
     _check_quota_fingerprint(
