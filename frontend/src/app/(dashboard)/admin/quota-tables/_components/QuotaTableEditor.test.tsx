@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { http, HttpResponse } from "msw"
+import { QueryClientProvider } from "@tanstack/react-query"
 
 import { API, renderWithClient } from "@/components/document-review/test-helpers"
 import { server } from "@/test/mocks/server"
@@ -143,6 +144,25 @@ describe("QuotaTableEditor — lỗi máy chủ", () => {
     const loi = await screen.findByRole("alert")
     expect(loi).toHaveTextContent(/Nhóm N1 — M1 — Ngành Một: chỉ tiêu năm còn trống/)
     expect(onSaved).not.toHaveBeenCalled()
+  })
+
+  it("bảng được làm mới sau lỗi (phiên bản mới) ⇒ bấm Lưu lần nữa VẪN gửi phiên bản lúc mở (không đè bản chưa xem)", async () => {
+    batPut(409, { reason_code: "quota_table_stale", error_code: "QUOTA_TABLE_STALE", current_version: 5, detail: "x" })
+    const u = userEvent.setup()
+    const props = {
+      year: 2026, initialGroups: NHOM, options: LUA_CHON, labelOf, onCancel: vi.fn(), onSaved: vi.fn(),
+    }
+    const { queryClient, rerender } = renderWithClient(<QuotaTableEditor version={3} {...props} />)
+    await u.click(screen.getByTestId("luu-bang"))
+    await screen.findByRole("alert")
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <QuotaTableEditor version={5} {...props} />
+      </QueryClientProvider>,
+    )
+    await u.click(screen.getByTestId("luu-bang"))
+    await waitFor(() => expect(than).toHaveLength(2))
+    expect(than.map((t) => t.version)).toEqual([3, 3])
   })
 
   it("409 quota_table_stale ⇒ câu tải lại, giữ bản nháp", async () => {

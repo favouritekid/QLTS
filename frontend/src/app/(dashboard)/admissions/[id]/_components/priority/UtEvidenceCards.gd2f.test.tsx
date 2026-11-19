@@ -239,7 +239,8 @@ describe("UtEvidenceCards GĐ2-F1 — từ chối có cam kết", () => {
     await u.click(screen.getByTestId("ut-reject-submit"))
     const loi = await screen.findByRole("alert")
     expect(loi).toHaveTextContent(/không tự duyệt hay từ chối/)
-    expect(screen.getByTestId("ut-reject-dialog-04")).toBeInTheDocument()
+    // ResponsiveDialogContent không chuyển data-testid ⇒ kiểm hộp còn mở qua ô lý do.
+    expect(screen.getByTestId("ut-reject-reason-input")).toHaveValue(LY_DO)
   })
 })
 
