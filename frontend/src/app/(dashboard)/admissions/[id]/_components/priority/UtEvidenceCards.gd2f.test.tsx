@@ -244,6 +244,39 @@ describe("UtEvidenceCards GĐ2-F1 — từ chối có cam kết", () => {
   })
 })
 
+describe("UtEvidenceCards GĐ2-F1 — 'Đã nhận bản giấy' ở tab Ưu tiên (owner 19-11 câu 2)", () => {
+  const URL_GIAY = `${API}/api/v2/admissions/42/priority-evidence/04/paper-submitted`
+  const chuaCoDong = { status: "missing", document_id: null, document_file_path: null }
+
+  it.each([
+    ["false", false],
+    ["null", null],
+    ["thiếu khoá", undefined],
+  ])("cờ can_mark_paper_submitted = %s ⇒ KHÔNG nút trong thẻ", (_ten, co) => {
+    ve(hoSo({ ...chuaCoDong, can_mark_paper_submitted: co }))
+    expect(screen.queryByTestId("priority-evidence-paper-04")).toBeNull()
+  })
+
+  it("cờ bật ⇒ nút trong thẻ; xác nhận ⇒ gọi ĐÚNG route POST …/paper-submitted MỘT lần, không thân", async () => {
+    const goi: Array<{ method: string; body: string }> = []
+    server.use(
+      http.post(URL_GIAY, async ({ request }) => {
+        goi.push({ method: request.method, body: await request.text() })
+        return HttpResponse.json({ id: 42 })
+      }),
+    )
+    const u = userEvent.setup()
+    ve(hoSo({ ...chuaCoDong, can_mark_paper_submitted: true }))
+    const the = screen.getByTestId("ut-evidence-card-04")
+    expect(the).toContainElement(screen.getByTestId("priority-evidence-paper-04"))
+    await u.click(screen.getByTestId("priority-evidence-paper-04"))
+    expect(goi).toEqual([])
+    await u.click(screen.getByTestId("priority-evidence-paper-confirm-04"))
+    await waitFor(() => expect(goi).toHaveLength(1))
+    expect(goi[0]).toEqual({ method: "POST", body: "" })
+  })
+})
+
 describe("UtEvidenceCards GĐ2-F1 — nhãn theo dữ liệu máy chủ", () => {
   it("bản giấy đã ghi nhận (paper_submitted, không tệp) ⇒ nhãn 'Duyệt (bản giấy)'", () => {
     ve(hoSo({ status: "paper_submitted", document_file_path: null, document_id: 77 }))

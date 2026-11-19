@@ -54,6 +54,7 @@ import {
 import { Textarea } from "@/components/ui/textarea"
 
 import { UnknownSubmitterAckFields } from "@/components/document-review/UnknownSubmitterAckFields"
+import { PriorityEvidencePaperButton } from "@/components/documents/PriorityEvidencePaperButton"
 import {
   useRejectObjectEvidence,
   useUntickPriorityEvidence,
@@ -372,6 +373,10 @@ function UtEvidenceCardItem({
           </Button>
         </div>
       )}
+
+      {/* GĐ2-F1 (owner 19-11 câu 2): "Đã nhận bản giấy" CẢ ở tab Ưu tiên — CÙNG thành phần với tab Giấy tờ (cùng hook,
+          cùng route POST …/paper-submitted, cùng cờ máy chủ can_mark_paper_submitted); không đường ghi riêng. */}
+      <PriorityEvidencePaperButton profile={profile} subCode={subCode} />
 
       {/* GĐ2-F1: máy chủ báo người xem KHÔNG được duyệt / từ chối mã này (vd chính là người tải / người nhận) ⇒ không
           nút, hiện lý do. */}
