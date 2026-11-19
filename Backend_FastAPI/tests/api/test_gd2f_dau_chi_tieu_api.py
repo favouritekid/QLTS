@@ -64,17 +64,22 @@ async def _tao_bang(client, h, hoc_vu) -> None:
 
 # ── hàm băm (không CSDL) ───────────────────────────────────────────────────────────────────────────────────────────
 def test_dau_khong_phu_thuoc_thu_tu_va_la_sha256_hex():
-    d = quota_fingerprint_of([(2, 5), (1, None)])
-    assert d == quota_fingerprint_of([(1, None), (2, 5)])
+    d = quota_fingerprint_of([(2, 5, False), (1, None, False)])
+    assert d == quota_fingerprint_of([(1, None, False), (2, 5, False)])
     assert re.fullmatch(r"[0-9a-f]{64}", d)
 
 
 def test_dau_phan_biet_trong_voi_0():
-    assert quota_fingerprint_of([(1, None)]) != quota_fingerprint_of([(1, 0)])
+    assert quota_fingerprint_of([(1, None, False)]) != quota_fingerprint_of([(1, 0, False)])
 
 
 def test_dau_doi_khi_nam_co_them_hoc_vu():
-    assert quota_fingerprint_of([(1, 5)]) != quota_fingerprint_of([(1, 5), (2, None)])
+    assert quota_fingerprint_of([(1, 5, False)]) != quota_fingerprint_of([(1, 5, False), (2, None, False)])
+
+
+def test_dau_doi_khi_hoc_vu_bi_xoa_mem():
+    """Luật C: cờ xoá mềm nằm trong dấu — cùng (id, chỉ tiêu) mà khác cờ xoá ⇒ dấu khác."""
+    assert quota_fingerprint_of([(1, 5, False)]) != quota_fingerprint_of([(1, 5, True)])
 
 
 # ── 1–3: tuần tự qua request thật ──────────────────────────────────────────────────────────────────────────────────

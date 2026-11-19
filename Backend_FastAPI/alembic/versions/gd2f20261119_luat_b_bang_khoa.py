@@ -1,4 +1,5 @@
-"""GĐ2-F1 — luật B (owner chốt 19-11): khoá bảng chỉ tiêu năm ĐÓNG BĂNG chỉ tiêu nhưng vẫn cho cấu hình học phí sớm.
+"""GĐ2-F1 — luật B + luật C (owner chốt 19-11): khoá bảng chỉ tiêu năm ĐÓNG BĂNG chỉ tiêu (và tập ngành có hiệu lực) nhưng vẫn
+cho cấu hình học phí sớm.
 
 Revision ID: gd2f20261119
 Revises: gd2a20261118
@@ -10,6 +11,11 @@ Thay hàm + trigger ``trg_chan_sua_chi_tieu_nganh_khi_bang_khoa`` trên ``offeri
 * R1 — ``INSERT`` học vụ CÓ chỉ tiêu (kể cả 0; trống ≠ 0) cho năm đã khoá ⇒ chặn; chỉ tiêu TRỐNG ⇒ cho.
 * R2 — đổi chỉ tiêu học vụ của năm đã khoá ⇒ chặn (như GĐ2-A).
 * R3 — chuyển năm học vụ có chỉ tiêu (OLD hoặc NEW khác NULL) VÀO hoặc RA năm đã khoá ⇒ chặn, kể cả khi con số không đổi.
+* Luật C (owner chốt 19-11) — đổi ``is_deleted`` (xoá mềm / khôi phục) học vụ có chỉ tiêu (cũ HOẶC mới khác NULL, kể cả 0) ở năm
+  đã khoá ⇒ chặn; chỉ tiêu trống ⇒ cho. Trigger theo dõi thêm ``is_deleted``.
+
+Luật C SỬA THẲNG revision này (không thêm revision mới): ``gd2f20261119`` chưa push / deploy ở đâu, không CSDL lâu dài nào đã
+nâng lên nó (CSDL test dựng lại mỗi lượt bằng ``create_all``; CSDL của test migration dùng một lần) ⇒ một revision F1 gọn hơn.
 
 Hai câu chép NGUYÊN từ ``app/models/admission_quota_ddl.py`` (:data:`STATEMENTS_F1`;
 ``tests/unit/test_gd2f_trigger_luat_b_lockin.py`` so từng câu). Hàm kiểm chung ``admission_quota_assert_table_unlocked`` và các
@@ -49,10 +55,11 @@ BEGIN
         RETURN NEW;
     END IF;
     IF NEW.academic_year IS NOT DISTINCT FROM OLD.academic_year THEN
-        IF NEW.annual_admission_quota IS NOT DISTINCT FROM OLD.annual_admission_quota THEN
-            RETURN NEW;
+        IF NEW.annual_admission_quota IS DISTINCT FROM OLD.annual_admission_quota
+           OR (NEW.is_deleted IS DISTINCT FROM OLD.is_deleted
+               AND (OLD.annual_admission_quota IS NOT NULL OR NEW.annual_admission_quota IS NOT NULL)) THEN
+            PERFORM admission_quota_assert_table_unlocked(OLD.academic_year);
         END IF;
-        PERFORM admission_quota_assert_table_unlocked(OLD.academic_year);
         RETURN NEW;
     END IF;
     IF OLD.annual_admission_quota IS NULL AND NEW.annual_admission_quota IS NULL THEN
@@ -67,7 +74,7 @@ $$ LANGUAGE plpgsql
 
 SQL_TRIGGER_ACADEMIC_INFO_F1 = """
 CREATE OR REPLACE TRIGGER trg_chan_sua_chi_tieu_nganh_khi_bang_khoa
-BEFORE INSERT OR UPDATE OF annual_admission_quota, academic_year ON offering_academic_info
+BEFORE INSERT OR UPDATE OF annual_admission_quota, academic_year, is_deleted ON offering_academic_info
 FOR EACH ROW EXECUTE FUNCTION chan_sua_chi_tieu_nganh_khi_bang_khoa()
 """
 
@@ -145,7 +152,7 @@ def _chay(statements, nhan: str, thong_bao: str, chieu: str) -> None:
 
 
 def upgrade() -> None:
-    _chay(UPGRADE_STATEMENTS, "gd2f", "gd2f20261119: trigger luat B (INSERT + academic_year) da cai", "Nâng cấp")
+    _chay(UPGRADE_STATEMENTS, "gd2f", "gd2f20261119: trigger luat B + C (INSERT, academic_year, is_deleted) da cai", "Nâng cấp")
 
 
 def downgrade() -> None:

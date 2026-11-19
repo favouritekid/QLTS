@@ -36,9 +36,10 @@ Lập luận không vòng chờ:
 
 [GĐ2-F1 — điểm chặn Codex] DẤU CHỈ TIÊU (``quota_fingerprint``): đường sửa học vụ cũ đổi ``annual_admission_quota`` mà KHÔNG
 tăng ``version`` của bảng ⇒ chỉ ``version`` không đỡ được "A mở bảng, B sửa ở trang cũ, A lưu bản cũ ⇒ ghi đè B" (kể cả năm
-CHƯA có bảng, ``version`` 0). GET trả dấu = băm (:func:`quota_fingerprint_of`) của (id, chỉ tiêu) MỌI học vụ của năm (NULL ≠ 0);
-PUT / khoá BẮT BUỘC gửi lại dấu lúc mở; dịch vụ đọc lại các dòng ấy dưới khoá SAU khoá năm, TRƯỚC khi ghi — lệch ⇒ 409
-``quota_table_stale``. Từ lượt 3, mọi đường tạo / sửa / dời học vụ cũng lấy khoá năm ⇒ một lệnh như vậy đang dở thì ta chờ ở khoá
+CHƯA có bảng, ``version`` 0). GET trả dấu = băm (:func:`quota_fingerprint_of`) của (id, chỉ tiêu, cờ xoá mềm) MỌI học vụ của năm
+(NULL ≠ 0; cờ xoá mềm từ luật C); PUT / khoá BẮT BUỘC gửi lại dấu lúc mở; dịch vụ đọc lại các dòng ấy dưới khoá SAU khoá năm, TRƯỚC
+khi ghi — lệch ⇒ 409 ``quota_table_stale``. Từ lượt 3, mọi đường tạo / sửa / dời học vụ (luật C: cả xoá mềm / khôi phục, kể cả dây
+chuyền xoá offering) cũng lấy khoá năm ⇒ một lệnh như vậy đang dở thì ta chờ ở khoá
 năm (rồi đọc giá trị mới), lệnh đến SAU thì chờ ta commit (giá trị của họ nằm SAU bản ta ghi, không bị đè) — gồm cả dòng MỚI chèn,
 thứ khoá dòng không chặn được. Khoá dòng (``FOR NO KEY UPDATE`` / ``FOR SHARE``) giữ làm lớp thứ hai cho SQL tay / đường không theo
 bất biến.
@@ -121,16 +122,18 @@ def _not_found(academic_year: int, quota_fingerprint: Optional[str] = None) -> R
 
 
 #: GĐ2-F1 — tiền tố phiên bản công thức dấu chỉ tiêu (đổi công thức ⇒ đổi tiền tố ⇒ mọi dấu cũ lệch — an toàn).
-QUOTA_FINGERPRINT_PREFIX = "qfp-v1"
+QUOTA_FINGERPRINT_PREFIX = "qfp-v2"  # v2 (luật C 19-11): thêm cờ xoá mềm
 
 
-def quota_fingerprint_of(rows: Iterable[Tuple[int, Optional[int]]]) -> str:
+def quota_fingerprint_of(rows: Iterable[Tuple[int, Optional[int], bool]]) -> str:
     """GĐ2-F1 — MỘT hàm băm ổn định cho dấu chỉ tiêu (dùng cho GET và cho kiểm ở PUT / khoá): sha256 hex của danh sách
-    ``(offering_academic_info.id, annual_admission_quota)`` đã sắp theo id. NULL ghi là ``null`` — KHÁC ``0`` (trống ≠ 0,
-    quyết định owner 19-11 câu 4)."""
+    ``(offering_academic_info.id, annual_admission_quota, is_deleted)`` đã sắp theo id. NULL ghi là ``null`` — KHÁC ``0``
+    (trống ≠ 0, quyết định owner 19-11 câu 4). Luật C (owner 19-11): cờ xoá mềm vào dấu — xoá / khôi phục một học vụ (kể cả ở
+    năm CHƯA khoá) sau lúc mở bảng làm dấu đổi ⇒ khoá bảng / lưu bảng không chạy trên tập ngành có hiệu lực cũ. BẮT BUỘC đủ
+    ba trường (không mặc định) ⇒ nơi gọi không thể lặng lẽ bỏ cờ."""
     phan = []
-    for oai_id, quota in sorted(((int(i), q) for i, q in rows), key=lambda x: x[0]):
-        phan.append("%d=%s" % (oai_id, "null" if quota is None else "%d" % int(quota)))
+    for oai_id, quota, deleted in sorted(((int(i), q, bool(x)) for i, q, x in rows), key=lambda r: r[0]):
+        phan.append("%d=%s%s" % (oai_id, "null" if quota is None else "%d" % int(quota), "~xoa" if deleted else ""))
     return hashlib.sha256(("%s|%s" % (QUOTA_FINGERPRINT_PREFIX, ",".join(phan))).encode("ascii")).hexdigest()
 
 
@@ -145,7 +148,7 @@ async def read_quota_fingerprint(
     db: AsyncSession, academic_year: int, *, lock: Optional[str] = None, also_lock_ids: Iterable[int] = ()
 ) -> str:
     """GĐ2-F1 — dấu chỉ tiêu của năm, đọc từ CSDL: MỌI dòng ``offering_academic_info`` có ``academic_year = năm`` (kể cả đã
-    xoá mềm; học vụ mới / dời năm cũng làm dấu đổi). ``lock`` ⇒ MỘT câu khoá id tăng dần, gồm thêm ``also_lock_ids`` (thành viên
+    xoá mềm — kèm cờ xoá mềm từ luật C; học vụ mới / dời năm / xoá / khôi phục cũng làm dấu đổi). ``lock`` ⇒ MỘT câu khoá id tăng dần, gồm thêm ``also_lock_ids`` (thành viên
     gửi lên — có thể khác năm, dịch vụ báo 400 sau) ⇒ mọi dòng học vụ giao dịch sẽ ghi đã được khoá ở ĐÚNG câu này, không lấy
     dòng mới xen giữa, không nâng khoá về sau. Dấu chỉ tính dòng có năm = ``năm`` theo giá trị đọc SAU khoá (dòng vừa bị dời năm
     không còn tính)."""
@@ -154,7 +157,7 @@ async def read_quota_fingerprint(
     cond = oai.academic_year == academic_year
     if extra:
         cond = or_(cond, oai.id.in_(extra))
-    stmt = select(oai.id, oai.academic_year, oai.annual_admission_quota).where(cond).order_by(oai.id)
+    stmt = select(oai.id, oai.academic_year, oai.annual_admission_quota, oai.is_deleted).where(cond).order_by(oai.id)
     if lock == LOCK_NO_KEY_UPDATE:
         stmt = stmt.with_for_update(key_share=True)  # PostgreSQL: FOR NO KEY UPDATE
     elif lock == LOCK_SHARE:
@@ -162,7 +165,9 @@ async def read_quota_fingerprint(
     elif lock is not None:
         raise ValueError(lock)
     rows = (await db.execute(stmt)).all()
-    return quota_fingerprint_of((r.id, r.annual_admission_quota) for r in rows if r.academic_year == academic_year)
+    return quota_fingerprint_of(
+        (r.id, r.annual_admission_quota, r.is_deleted) for r in rows if r.academic_year == academic_year
+    )
 
 
 def _check_quota_fingerprint(expected: str, current: str, *, current_version: int) -> None:
@@ -253,6 +258,21 @@ async def check_academic_info_move_allowed(
     if old_quota is None and new_quota is None:
         return
     if await _locked_years(db, [old_year, new_year]):
+        raise QuotaTableLockedWrite()
+
+
+async def check_academic_info_delete_flag_allowed(
+    db: AsyncSession, rows: Iterable[Tuple[int, Optional[int]]]
+) -> None:
+    """GĐ2-F1 luật C (owner chốt 19-11): xoá mềm / khôi phục học vụ CÓ chỉ tiêu (khác NULL — kể cả 0) khi bảng chỉ tiêu năm đã
+    khoá ⇒ :class:`QuotaTableLockedWrite` (khoá ⇒ ma trận chỉ tiêu và tập ngành có hiệu lực đứng yên; muốn làm thì Admin mở khoá —
+    có lý do, lưu vết — rồi khoá lại). Học vụ chỉ tiêu trống vẫn xoá / khôi phục được.
+
+    ``rows`` = ``(academic_year, annual_admission_quota)`` của các dòng mà cờ ``is_deleted`` SẮP đổi, đọc DƯỚI khoá năm. Gọi SAU
+    ``lock_review_year(s)`` của mọi năm ấy (xoá / khôi phục một học vụ; dây chuyền xoá offering). Tầng chủ sở hữu: trigger
+    ``trg_chan_sua_chi_tieu_nganh_khi_bang_khoa`` (theo dõi ``is_deleted``); đây là lớp kiểm trước, cùng hình dạng phản hồi."""
+    nam = {int(y) for y, q in rows if q is not None}
+    if nam and await _locked_years(db, nam):
         raise QuotaTableLockedWrite()
 
 

@@ -70,7 +70,10 @@ async def test_nang_ha_nang_trigger_luat_b(csdl_truoc):
     try:
         anh_gd2a = await _anh(k)
         x = await _hoc_vu(k, 2026)  # chỉ tiêu 10, năm sẽ khoá
+        y = await _hoc_vu(k, 2026)  # chỉ tiêu 10 — đo luật C (xoá mềm / khôi phục)
         await _khoa_bang(k, 2026)
+        xoa_y = "UPDATE offering_academic_info SET is_deleted = true WHERE id = $1"
+        khoi_phuc_y = "UPDATE offering_academic_info SET is_deleted = false WHERE id = $1"
 
         rc, out = await _alembic(ten, "upgrade", F1)
         assert rc == 0, out[-3000:]
@@ -82,6 +85,8 @@ async def test_nang_ha_nang_trigger_luat_b(csdl_truoc):
         assert await _sqlstate(k, CHEN_CO_CHI_TIEU) == "QLC01"
         # R3: chỉ đổi năm (chỉ tiêu giữ nguyên) RA khỏi năm khoá ⇒ chặn.
         assert await _sqlstate(k, "UPDATE offering_academic_info SET academic_year = 2025 WHERE id = $1", x) == "QLC01"
+        # Luật C: xoá mềm học vụ có chỉ tiêu ở năm khoá ⇒ chặn.
+        assert await _sqlstate(k, xoa_y, y) == "QLC01"
 
         rc, out = await _alembic(ten, "downgrade", GD2A)
         assert rc == 0, out[-3000:]
@@ -90,6 +95,7 @@ async def test_nang_ha_nang_trigger_luat_b(csdl_truoc):
         # Trigger GĐ2-A: INSERT không chạy trigger ⇒ lỗi kế tiếp là khoá ngoại; đổi năm thuần lọt qua.
         assert await _sqlstate(k, CHEN_CO_CHI_TIEU) == "23503"
         assert await _sqlstate(k, "UPDATE offering_academic_info SET academic_year = 2025 WHERE id = $1", x) is None
+        assert await _sqlstate(k, xoa_y, y) is None  # GĐ2-A không theo dõi is_deleted
 
         rc, out = await _alembic(ten, "upgrade", F1)
         assert rc == 0, out[-3000:]
@@ -99,5 +105,8 @@ async def test_nang_ha_nang_trigger_luat_b(csdl_truoc):
         # x đang ở 2025 (lọt qua lúc hạ cấp): chuyển VÀO năm khoá ⇒ chặn lại.
         assert await _sqlstate(k, "UPDATE offering_academic_info SET academic_year = 2026 WHERE id = $1", x) == "QLC01"
         assert await k.fetchval("SELECT academic_year FROM offering_academic_info WHERE id = $1", x) == 2025
+        # y đang xoá mềm (lọt lúc hạ cấp): khôi phục ở năm khoá ⇒ chặn lại.
+        assert await _sqlstate(k, khoi_phuc_y, y) == "QLC01"
+        assert await k.fetchval("SELECT is_deleted FROM offering_academic_info WHERE id = $1", y) is True
     finally:
         await k.close()

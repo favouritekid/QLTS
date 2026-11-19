@@ -91,10 +91,15 @@ async def _dau(sua=None) -> str:
     if not sua:
         async with AsyncSessionLocal() as s:
             return await svc.read_quota_fingerprint(s, NAM)
-    rows = (await _sql("SELECT id, annual_admission_quota FROM offering_academic_info WHERE academic_year = :y", y=NAM)).all()
-    m = {r[0]: r[1] for r in rows}
-    m.update(sua)
-    return svc.quota_fingerprint_of(m.items())
+    rows = (
+        await _sql(
+            "SELECT id, annual_admission_quota, is_deleted FROM offering_academic_info WHERE academic_year = :y", y=NAM
+        )
+    ).all()
+    m = {r[0]: [r[1], r[2]] for r in rows}
+    for i, q in sua.items():
+        m[i][0] = q
+    return svc.quota_fingerprint_of((i, q, x) for i, (q, x) in m.items())
 
 
 async def _gui(version, hoc_vu, *, nhom=None) -> dict:

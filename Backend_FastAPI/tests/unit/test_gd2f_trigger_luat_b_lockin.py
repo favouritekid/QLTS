@@ -47,8 +47,9 @@ def test_ha_cap_tra_dung_ham_va_trigger_gd2a():
 
 
 def test_trigger_f1_theo_doi_insert_va_nam_hoc():
+    """Luật B: INSERT + ``academic_year``; luật C: ``is_deleted``."""
     t = _chuan_hoa(ddl.SQL_TRIGGER_ACADEMIC_INFO_F1)
-    assert "BEFORE INSERT OR UPDATE OF annual_admission_quota, academic_year ON offering_academic_info" in t
+    assert "BEFORE INSERT OR UPDATE OF annual_admission_quota, academic_year, is_deleted ON offering_academic_info" in t
 
 
 def test_khong_co_ky_tu_lam_hong_ddl_hoac_text():

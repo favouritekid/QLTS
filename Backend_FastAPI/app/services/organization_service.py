@@ -1163,6 +1163,30 @@ async def delete_program_offering(
 
         offering_name = db_offering.offering_type
 
+        # GĐ2-F1 luật C (owner 19-11): dây chuyền xoá mềm MỌI học vụ của offering (mọi năm) ⇒ khoá năm của mọi năm có học vụ
+        # (tăng dần) TRƯỚC mọi lệnh ghi; đọc lại tập năm DƯỚI khoá — có năm mới ngoài tập đã khoá (học vụ vừa được dời / tạo ở nơi
+        # khác) ⇒ 409 tải lại (khoá THÊM năm sau khi đã giữ khoá khác phá thứ tự tăng dần ⇒ có thể vòng chờ). Học vụ CÓ chỉ tiêu,
+        # chưa xoá, ở năm có bảng đã khoá ⇒ 409 như trigger, KHÔNG đổi gì (kiểm TRƯỚC khi đụng offering / học vụ; trigger — chủ sở
+        # hữu — chặn thì câu UPDATE rollback trọn, router rollback cả giao dịch).
+        from ..core.review_year_lock import lock_review_years
+        from .admission_quota_table_service import check_academic_info_delete_flag_allowed
+
+        oai = models.OfferingAcademicInfo
+        nam_truoc = set(
+            (await db.execute(select(oai.academic_year).where(oai.offering_id == offering_id).distinct())).scalars()
+        )
+        await lock_review_years(db, nam_truoc)
+        dong_hoc_vu = (
+            await db.execute(
+                select(oai.academic_year, oai.annual_admission_quota, oai.is_deleted).where(oai.offering_id == offering_id)
+            )
+        ).all()
+        if {r.academic_year for r in dong_hoc_vu} - nam_truoc:
+            raise ConflictError(detail="Học vụ của loại hình đào tạo vừa đổi năm ở nơi khác — tải lại rồi làm lại.")
+        await check_academic_info_delete_flag_allowed(
+            db, [(r.academic_year, r.annual_admission_quota) for r in dong_hoc_vu if not r.is_deleted]
+        )
+
         # Soft delete
         db_offering.is_active = False
         db.add(db_offering)
@@ -1215,6 +1239,21 @@ async def get_academic_info_by_id(
             detail=f"Academic info with id {academic_info_id} not found."
         )
     return academic_info
+
+
+async def _academic_info_state_under_year_lock(db: AsyncSession, academic_info_id: int, expected_year: int):
+    """GĐ2-F1 — đọc LẠI (năm, chỉ tiêu, cờ xoá mềm) của dòng bằng câu MỚI, gọi SAU khi đã giữ khoá năm ``expected_year``
+    (READ COMMITTED: ảnh chụp mới). Dòng đã bị dời sang năm khác ở nơi khác ⇒ 409 tải lại — khoá đang giữ không còn là năm của
+    dòng. MỘT chỗ cho sửa / xoá mềm / khôi phục học vụ."""
+    oai = models.OfferingAcademicInfo
+    nam, chi_tieu, da_xoa = (
+        await db.execute(
+            select(oai.academic_year, oai.annual_admission_quota, oai.is_deleted).where(oai.id == academic_info_id)
+        )
+    ).one()
+    if nam != expected_year:
+        raise ConflictError(detail="Học vụ vừa được dời sang năm khác ở nơi khác — tải lại rồi làm lại.")
+    return chi_tieu, bool(da_xoa)
 
 
 async def get_academic_info_by_offering_and_year(
@@ -1448,17 +1487,7 @@ async def update_academic_info(
 
             nam_cu = db_academic_info.academic_year
             await lock_review_years(db, (nam_cu, update_data.get("academic_year")))
-            nam_duoi_khoa, chi_tieu_duoi_khoa = (
-                await db.execute(
-                    select(
-                        models.OfferingAcademicInfo.academic_year, models.OfferingAcademicInfo.annual_admission_quota
-                    ).where(models.OfferingAcademicInfo.id == academic_info_id)
-                )
-            ).one()
-            if nam_duoi_khoa != nam_cu:
-                raise ConflictError(
-                    detail="Học vụ vừa được dời sang năm khác ở nơi khác — tải lại rồi làm lại."
-                )
+            chi_tieu_duoi_khoa, _ = await _academic_info_state_under_year_lock(db, academic_info_id, nam_cu)
             # Luật B (owner 19-11), SAU khoá năm: đổi năm học ⇒ R4 (thành viên nhóm bảng chỉ tiêu ⇒ 409 "gỡ khỏi nhóm trước")
             # rồi R3 (học vụ có chỉ tiêu vào / ra năm đã khoá ⇒ 409 như trigger). Chủ sở hữu R3: trigger CSDL.
             nam_moi = update_data.get("academic_year", nam_cu)
@@ -1588,6 +1617,17 @@ async def delete_academic_info(
                        f"để đảm bảo tính toàn vẹn của báo cáo tài chính và thống kê."
             )
 
+        # GĐ2-F1 luật C (owner 19-11): xoá mềm đổi tập (id, chỉ tiêu, cờ xoá mềm) của năm ⇒ khoá năm TRƯỚC khi chạm dòng (bất biến
+        # ở ``app.core.review_year_lock``), đọc lại dưới khoá; học vụ CÓ chỉ tiêu + bảng năm đã khoá ⇒ 409 như trigger (chủ sở
+        # hữu: trigger CSDL theo dõi ``is_deleted``).
+        from ..core.review_year_lock import lock_review_year
+        from .admission_quota_table_service import check_academic_info_delete_flag_allowed
+
+        await lock_review_year(db, academic_year)
+        chi_tieu, da_xoa = await _academic_info_state_under_year_lock(db, academic_info_id, academic_year)
+        if not da_xoa:
+            await check_academic_info_delete_flag_allowed(db, [(academic_year, chi_tieu)])
+
         # Soft delete - set flag instead of removing from database
         db_academic_info.is_deleted = True
         db_academic_info.updated_at = datetime.now(timezone.utc)  # ✅ FIX: Explicitly update timestamp
@@ -1648,10 +1688,18 @@ async def restore_academic_info(
         offering_id = db_academic_info.offering_id
         academic_year = db_academic_info.academic_year
 
-        if not db_academic_info.is_deleted:
+        # GĐ2-F1 luật C (owner 19-11): khôi phục đổi tập (id, chỉ tiêu, cờ xoá mềm) của năm ⇒ khoá năm TRƯỚC khi chạm dòng, đọc
+        # lại dưới khoá; học vụ CÓ chỉ tiêu + bảng năm đã khoá ⇒ 409 như trigger (chủ sở hữu: trigger CSDL).
+        from ..core.review_year_lock import lock_review_year
+        from .admission_quota_table_service import check_academic_info_delete_flag_allowed
+
+        await lock_review_year(db, academic_year)
+        chi_tieu, da_xoa = await _academic_info_state_under_year_lock(db, academic_info_id, academic_year)
+        if not da_xoa:
             raise BadRequest(
                 detail=f"Bản ghi năm học {academic_year} không bị xóa, không cần khôi phục."
             )
+        await check_academic_info_delete_flag_allowed(db, [(academic_year, chi_tieu)])
 
         # Restore - set flag back to False
         db_academic_info.is_deleted = False
