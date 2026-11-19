@@ -1,5 +1,5 @@
 """GĐ2-A — bảng chỉ tiêu năm / nhóm ngành qua REQUEST THẬT (router → deps → dịch vụ → CSDL thật) + hai phiên CSDL thật cho
-khoá năm. Đặc tả GĐ2 bản 3 §3, §10, §11; ca biên B14–B17, B20, D13, D14. Không dữ liệu thật. Mỗi ca kiểm một bất biến.
+khoá năm và cho khoá dòng bảng ``FOR SHARE`` của trigger (sửa chỉ tiêu ↔ khoá bảng, hai chiều). Đặc tả GĐ2 bản 3 §3, §10, §11; ca biên B14–B17, B20, D13, D14. Không dữ liệu thật. Mỗi ca kiểm một bất biến.
 """
 from __future__ import annotations
 
@@ -382,3 +382,147 @@ async def test_khoa_nam_tuan_tu_hai_lan_tao_bang_cung_nam(admin_user_in_db, hoc_
         await s1.close()
         await s2.close()
     assert (await _sql("SELECT string_agg(code, ',') FROM admission_quota_group")).scalar_one() == "N1"
+
+
+# ── khoá dòng bảng ``FOR SHARE`` trong trigger ↔ lệnh khoá bảng: hai phiên CSDL thật ────────────────────────────────────
+# Guard: ``admission_quota_assert_table_unlocked`` (``app/models/admission_quota_ddl.py``) khoá dòng ``admission_quota_table``
+# của năm ``FOR SHARE``. Hai đường ghi dưới đây KHÔNG lấy khoá năm (advisory) — đường sửa học vụ có sẵn / SQL tay — nên
+# chỉ khoá dòng ấy đứng giữa chúng và lệnh khoá bảng. Mỗi đường đi qua một loại trigger gọi CÙNG hàm kiểm.
+GHI_KHI_KHOA = {
+    "chi_tieu_nganh": (
+        "UPDATE offering_academic_info SET annual_admission_quota = 55 WHERE id = :a",
+        "SELECT annual_admission_quota FROM offering_academic_info WHERE id = :a",
+        50,
+        55,
+    ),
+    "tran_nhom": (
+        "UPDATE admission_quota_group SET ceiling = 121 WHERE academic_year = :y AND code = 'N1'",
+        "SELECT ceiling FROM admission_quota_group WHERE academic_year = :y AND code = 'N1'",
+        120,
+        121,
+    ),
+}
+
+
+def _tham_so_ghi(duong: str, hoc_vu) -> dict:
+    return {"a": hoc_vu["2026"][0]} if duong == "chi_tieu_nganh" else {"y": NAM}
+
+
+async def _tao_bang_nhap(admin_user_in_db, hoc_vu) -> None:
+    """Bảng 2026 ``draft`` version 1 (ngành a = 50 thuộc nhóm N1 trần 120), đã commit."""
+    from app.schemas.admission_quota_table import QuotaTablePut
+    from app.services import admission_quota_table_service as svc
+
+    async with AsyncSessionLocal() as s:
+        await svc.replace_quota_table(s, NAM, QuotaTablePut(**_than(0, hoc_vu)), actor_id=admin_user_in_db["id"])
+        await s.commit()
+    assert tuple(await _bang()) == ("draft", 1)
+
+
+async def _pid(s) -> int:
+    return (await s.execute(text("SELECT pg_backend_pid()"))).scalar_one()
+
+
+def _mo_ta(viec) -> str:
+    if not viec.done():
+        return "việc chưa xong"
+    if viec.cancelled():
+        return "việc bị huỷ"
+    e = viec.exception()
+    if e is None:
+        return "việc ĐÃ XONG không chờ ai"
+    from app.repositories.council_decision_repository import db_error_codes
+
+    return "việc đã lỗi %s %s" % (type(e).__name__, db_error_codes(e))
+
+
+async def _bi_chan_boi(pid_cho: int, pid_giu: int, viec) -> bool:
+    """Hỏi CSDL từ phiên THỨ BA (``pg_blocking_pids``, không hỏi spy): phiên ``pid_cho`` có đang chờ khoá do phiên
+    ``pid_giu`` giữ không. Việc đã xong (không chờ gì) ⇒ False ngay."""
+    for _ in range(100):
+        await asyncio.sleep(0.05)
+        if viec.done():
+            return False
+        async with AsyncSessionLocal() as s3:
+            chan = (await s3.execute(text("SELECT pg_blocking_pids(:p)"), {"p": pid_cho})).scalar_one()
+        if pid_giu in (chan or []):
+            return True
+    return False
+
+
+async def _dong(giu, cho, viec) -> None:
+    """Dọn hai phiên kể cả khi ca đỏ giữa chừng: nhả phiên GIỮ khoá trước để việc đang chờ chạy xong, rồi đóng phiên chờ."""
+    await giu.rollback()
+    await giu.close()
+    if viec is not None:
+        try:
+            await asyncio.wait_for(viec, 10)
+        except (Exception, asyncio.CancelledError):  # kết quả đã được ca kiểm đọc, hoặc ca đã đỏ ở bước trước
+            pass
+    await cho.rollback()
+    await cho.close()
+
+
+@pytest.mark.parametrize("duong", list(GHI_KHI_KHOA))
+async def test_hai_phien_ghi_chi_tieu_truoc_thi_khoa_bang_phai_cho(admin_user_in_db, hoc_vu, duong):
+    """Phiên 1 sửa chỉ tiêu / trần (trigger giữ ``FOR SHARE`` dòng bảng), CHƯA commit. Phiên 2 gọi dịch vụ khoá bảng THẬT ⇒
+    phải CHỜ đúng phiên 1; phiên 1 commit xong thì khoá mới chạy, và bảng khoá mang giá trị MỚI — không có ca "khoá xong
+    rồi chỉ tiêu mới đổi"."""
+    from app.services import admission_quota_table_service as svc
+
+    ghi, doc, cu, moi = GHI_KHI_KHOA[duong]
+    ts = _tham_so_ghi(duong, hoc_vu)
+    await _tao_bang_nhap(admin_user_in_db, hoc_vu)
+    s1, s2 = AsyncSessionLocal(), AsyncSessionLocal()
+    viec = None
+    try:
+        pid1 = await _pid(s1)
+        await s1.execute(text(ghi), ts)  # giữ khoá, CHƯA commit
+        pid2 = await _pid(s2)
+        viec = asyncio.ensure_future(
+            svc.lock_quota_table(s2, NAM, expected_version=1, actor_id=admin_user_in_db["id"])
+        )
+        assert await _bi_chan_boi(pid2, pid1, viec), (
+            "khoá bảng KHÔNG chờ giao dịch đang sửa (%s) — %s" % (duong, _mo_ta(viec))
+        )
+        await s1.commit()
+        await viec
+        await s2.commit()
+    finally:
+        await _dong(s1, s2, viec)
+    assert tuple(await _bang()) == ("locked", 2)
+    assert (await _sql(doc, **ts)).scalar_one() == moi
+
+
+@pytest.mark.parametrize("duong", list(GHI_KHI_KHOA))
+async def test_hai_phien_khoa_bang_truoc_thi_ghi_chi_tieu_cho_roi_bi_chan(admin_user_in_db, hoc_vu, duong):
+    """Phiên 2 khoá bảng qua dịch vụ THẬT (giữ ``FOR UPDATE`` dòng bảng), CHƯA commit. Phiên 1 sửa chỉ tiêu / trần ⇒ trigger
+    phải CHỜ đúng phiên 2; phiên 2 commit xong thì phiên 1 đọc lại dòng, thấy ``locked`` ⇒ SQLSTATE ``QLC01``; giá trị cũ
+    giữ nguyên."""
+    from sqlalchemy.exc import DBAPIError
+
+    from app.models.admission_quota_ddl import SQLSTATE_QUOTA_TABLE_LOCKED
+    from app.repositories.council_decision_repository import db_error_codes
+    from app.services import admission_quota_table_service as svc
+
+    ghi, doc, cu, moi = GHI_KHI_KHOA[duong]
+    ts = _tham_so_ghi(duong, hoc_vu)
+    await _tao_bang_nhap(admin_user_in_db, hoc_vu)
+    s1, s2 = AsyncSessionLocal(), AsyncSessionLocal()
+    viec = None
+    try:
+        pid2 = await _pid(s2)
+        await svc.lock_quota_table(s2, NAM, expected_version=1, actor_id=admin_user_in_db["id"])  # CHƯA commit
+        pid1 = await _pid(s1)
+        viec = asyncio.ensure_future(s1.execute(text(ghi), ts))
+        assert await _bi_chan_boi(pid1, pid2, viec), (
+            "sửa (%s) KHÔNG chờ lệnh khoá bảng đang dở — %s" % (duong, _mo_ta(viec))
+        )
+        await s2.commit()
+        with pytest.raises(DBAPIError) as e:
+            await viec
+        assert db_error_codes(e.value)[0] == SQLSTATE_QUOTA_TABLE_LOCKED
+    finally:
+        await _dong(s2, s1, viec)
+    assert tuple(await _bang()) == ("locked", 2)
+    assert (await _sql(doc, **ts)).scalar_one() == cu
