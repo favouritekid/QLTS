@@ -41,6 +41,14 @@ export function quotaConflictText(reasonCode: string | undefined, data: Record<s
         ". Nhập chỉ tiêu cho mọi ngành (0 chỉ khi chỉ tiêu thật sự bằng 0) rồi khoá lại."
       )
     }
+    case "quota_table_member_deleted": {
+      const ds = ids(data?.offering_academic_info_ids).map(ctx.labelOf)
+      return (
+        "Chưa khoá được: ngành sau đã bị xoá nhưng vẫn nằm trong nhóm — " +
+        (ds.length ? ds.join("; ") : "không rõ ngành") +
+        ". Gỡ khỏi nhóm (lưu bảng) rồi khoá lại."
+      )
+    }
     default:
       return "Không thực hiện được với bảng chỉ tiêu — tải lại bảng để xem trạng thái mới."
   }

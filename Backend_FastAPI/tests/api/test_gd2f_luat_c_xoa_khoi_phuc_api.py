@@ -7,7 +7,9 @@ rồi kiểm trước, cùng thân 409. Xoá / khôi phục đi qua ĐÚNG route
 POST tạo học vụ còn lỗi có từ trước — ngoài phạm vi). Ca hai phiên dừng lệnh xoá / khôi phục NGAY SAU khoá năm (trước khi ghi
 dòng) để đo đúng khoá năm, không lẫn với khoá dòng. Mỗi ca kiểm MỘT bất biến; không dữ liệu thật.
 
-Lưu ý thời gian: dịch vụ cấm xoá học vụ của năm QUÁ KHỨ (luật có từ trước) ⇒ các ca xoá dùng năm ``NAM`` (2026).
+Đồng hồ: dịch vụ cấm xoá học vụ của năm QUÁ KHỨ (luật có từ trước, ``academic_year < datetime.now().year``) ⇒ các ca XOÁ học vụ
+dùng fixture :func:`dong_ho_trong_nam` (đóng băng đồng hồ của ``organization_service`` về giữa năm ``NAM``) — không phụ thuộc
+ngày chạy test (trước đây: từ 01-01-2027 các ca này đỏ).
 """
 from __future__ import annotations
 
@@ -35,6 +37,26 @@ from tests.api.test_gd2a_bang_chi_tieu_api import (  # noqa: F401 — fixture d�
 from tests.api.test_gd2f_luat_b_bang_khoa_api import KHOA_409, _bi_tu_choi_vi_khoa, _dat_chi_tieu, _khoa
 
 pytestmark = pytest.mark.asyncio
+
+#: Năm đồng hồ bị đóng băng về (giữa năm). = ``NAM`` ⇒ học vụ năm ``NAM`` KHÔNG phải năm quá khứ ⇒ xoá được.
+NAM_DONG_HO = NAM
+
+
+@pytest.fixture
+def dong_ho_trong_nam(monkeypatch):
+    """Đóng băng ``datetime.now`` của ``organization_service`` về 15-06 năm :data:`NAM_DONG_HO` (chỉ module ấy, chỉ ca dùng
+    fixture) — luật "không xoá học vụ năm quá khứ" so với năm hiện tại ⇒ ca xoá năm ``NAM`` không được phụ thuộc ngày chạy."""
+    from datetime import datetime as _datetime
+
+    from app.services import organization_service
+
+    class _DongHo(_datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return _datetime(NAM_DONG_HO, 6, 15, 12, 0, tzinfo=tz)
+
+    monkeypatch.setattr(organization_service, "datetime", _DongHo)
+
 
 XOA = "/api/admin/academic-info/%d"
 XOA_CU = "/api/academic-info/%d"
@@ -71,7 +93,9 @@ async def _offering_con_hoat_dong(o: int) -> bool:
 
 # ══ Một học vụ — năm đã khoá ══════════════════════════════════════════════════════════════════════════════════════════
 @pytest.mark.parametrize("chi_tieu, bi_chan", [(50, True), (0, True), (None, False)], ids=["co_chi_tieu", "so_0", "trong"])
-async def test_c_nam_khoa_xoa_hoc_vu(client: AsyncClient, admin_token_headers, admin_user_in_db, hoc_vu, chi_tieu, bi_chan):
+async def test_c_nam_khoa_xoa_hoc_vu(
+    client: AsyncClient, admin_token_headers, admin_user_in_db, hoc_vu, chi_tieu, bi_chan, dong_ho_trong_nam
+):
     d = hoc_vu["2026"][3]
     await _dat_chi_tieu(d, chi_tieu)
     await _khoa(admin_user_in_db, hoc_vu)
@@ -101,7 +125,9 @@ async def test_c_nam_khoa_khoi_phuc_hoc_vu(
         assert await _da_xoa(d) is False
 
 
-async def test_c_nam_khoa_xoa_qua_route_cu_cung_bi_chan(client: AsyncClient, admin_token_headers, admin_user_in_db, hoc_vu):
+async def test_c_nam_khoa_xoa_qua_route_cu_cung_bi_chan(
+    client: AsyncClient, admin_token_headers, admin_user_in_db, hoc_vu, dong_ho_trong_nam
+):
     """Route xoá thứ hai (``DELETE /api/academic-info/{id}``) đi CÙNG hàm dịch vụ ⇒ cùng 409."""
     d = hoc_vu["2026"][3]
     await _dat_chi_tieu(d, 50)
@@ -113,7 +139,7 @@ async def test_c_nam_khoa_xoa_qua_route_cu_cung_bi_chan(client: AsyncClient, adm
 
 @pytest.mark.parametrize("thao_tac", ["xoa", "khoi_phuc"])
 async def test_c_nam_chua_khoa_xoa_khoi_phuc_hoc_vu_co_chi_tieu_thi_duoc(
-    client: AsyncClient, admin_token_headers, admin_user_in_db, hoc_vu, thao_tac
+    client: AsyncClient, admin_token_headers, admin_user_in_db, hoc_vu, thao_tac, dong_ho_trong_nam
 ):
     """Đối chứng: bảng năm còn NHÁP ⇒ xoá / khôi phục học vụ có chỉ tiêu đều được."""
     d = hoc_vu["2026"][3]
@@ -206,7 +232,7 @@ async def test_c_sql_tay_trigger_tu_chan(admin_user_in_db, hoc_vu, ca, sqlstate)
 
 # ══ Dấu chỉ tiêu mang cờ xoá mềm ═════════════════════════════════════════════════════════════════════════════════════
 async def test_c_xoa_mem_nam_chua_khoa_lam_dau_doi_khoa_bang_dau_cu_409(
-    client: AsyncClient, admin_token_headers, admin_user_in_db, hoc_vu
+    client: AsyncClient, admin_token_headers, admin_user_in_db, hoc_vu, dong_ho_trong_nam
 ):
     """Bảng nháp; Admin mở bảng (dấu D0); xoá mềm học vụ ``d`` (chỉ tiêu trống — luật C cho phép) ⇒ dấu GET đổi; khoá bảng với D0
     ⇒ 409 ``quota_table_stale`` (khoá không chạy trên tập ngành có hiệu lực cũ)."""
@@ -224,7 +250,7 @@ async def test_c_xoa_mem_nam_chua_khoa_lam_dau_doi_khoa_bang_dau_cu_409(
 
 # ══ Mở khoá (lý do, vết) ⇒ xoá ⇒ khoá lại ════════════════════════════════════════════════════════════════════════════
 async def test_c_mo_khoa_co_ly_do_roi_xoa_roi_khoa_lai_duoc_va_co_vet(
-    client: AsyncClient, admin_token_headers, admin_user_in_db, hoc_vu
+    client: AsyncClient, admin_token_headers, admin_user_in_db, hoc_vu, dong_ho_trong_nam
 ):
     d = hoc_vu["2026"][3]
     await _dat_chi_tieu(d, 5)
@@ -271,7 +297,9 @@ async def _nguoi(s, admin_user_in_db):
 
 
 @pytest.mark.parametrize("thao_tac", ["xoa", "khoi_phuc"])
-async def test_c_hai_phien_xoa_khoi_phuc_dang_do_thi_khoa_bang_cho_roi_409(admin_user_in_db, hoc_vu, monkeypatch, thao_tac):
+async def test_c_hai_phien_xoa_khoi_phuc_dang_do_thi_khoa_bang_cho_roi_409(
+    admin_user_in_db, hoc_vu, monkeypatch, thao_tac, dong_ho_trong_nam
+):
     """Phiên 1 xoá / khôi phục học vụ ``d`` (chỉ tiêu 5, bảng nháp) và DỪNG ngay sau khoá năm (chưa ghi dòng) ⇒ lệnh khoá bảng
     (dấu lúc mở) CHỜ đúng phiên 1 — khoá năm, không phải khoá dòng; phiên 1 ghi + commit ⇒ khoá bảng 409 (cờ xoá mềm đổi dấu)."""
     from app.services import admission_quota_table_service as svc
@@ -316,7 +344,7 @@ async def test_c_hai_phien_xoa_khoi_phuc_dang_do_thi_khoa_bang_cho_roi_409(admin
     assert await _da_xoa(d) is (thao_tac == "xoa")
 
 
-async def test_c_hai_phien_khoa_bang_dang_do_thi_xoa_cho_roi_bi_chan(admin_user_in_db, hoc_vu):
+async def test_c_hai_phien_khoa_bang_dang_do_thi_xoa_cho_roi_bi_chan(admin_user_in_db, hoc_vu, dong_ho_trong_nam):
     """Phiên 1 khoá bảng, CHƯA commit ⇒ xoá học vụ có chỉ tiêu CHỜ đúng phiên 1; phiên 1 commit ⇒ xoá bị từ chối vì bảng đã khoá;
     dòng không đổi."""
     from app.services import admission_quota_table_service as svc

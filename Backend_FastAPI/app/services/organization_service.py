@@ -1171,6 +1171,10 @@ async def delete_program_offering(
         from ..core.review_year_lock import lock_review_years
         from .admission_quota_table_service import check_academic_info_delete_flag_allowed
 
+        # Codex lượt 3 (owner chốt 20-11): khoá CẤP LOẠI HÌNH ĐẦU TIÊN — lệnh tạo / khôi phục học vụ của loại hình này đang dở thì
+        # chờ nó commit rồi mới đọc tập năm (thấy học vụ mới, khoá luôn năm của nó, kiểm luật C, xoá trọn); lệnh đến SAU thì chờ ta
+        # commit rồi thấy loại hình đã tắt ⇒ 409. Xoá cả khi loại hình đang "Ngừng" (hành vi cũ — chỉ đọc khoá, không đổi luồng).
+        await _lock_offering_row(db, offering_id)
         oai = models.OfferingAcademicInfo
         nam_truoc = set(
             (await db.execute(select(oai.academic_year).where(oai.offering_id == offering_id).distinct())).scalars()
@@ -1239,6 +1243,37 @@ async def get_academic_info_by_id(
             detail=f"Academic info with id {academic_info_id} not found."
         )
     return academic_info
+
+
+class ProgramOfferingInactive(ConflictError):
+    """409 (owner chốt 20-11): loại hình đào tạo đang NGỪNG / đã XOÁ (``program_offering.is_active = false`` — "Xoá loại hình" và
+    ô "Trạng thái: Ngừng" dùng chung cờ) ⇒ không tạo, không khôi phục học vụ dưới nó."""
+
+    error_code = "PROGRAM_OFFERING_INACTIVE"
+
+    def __init__(self):
+        super().__init__(
+            detail="Loại hình đào tạo đang ngừng / đã xoá — bật lại loại hình trước khi tạo / khôi phục học vụ."
+        )
+
+
+async def _lock_offering_row(db: AsyncSession, offering_id: int) -> bool:
+    """GĐ2-F1 (Codex lượt 3, owner chốt 20-11) — KHOÁ CẤP LOẠI HÌNH: ``SELECT is_active FROM program_offering WHERE id = :id
+    FOR NO KEY UPDATE``; trả ``is_active`` đọc DƯỚI khoá. Lấy ĐẦU TIÊN (sau kiểm quyền — chỉ select thường —, TRƯỚC khoá năm) ở
+    tạo / khôi phục học vụ và xoá loại hình ⇒ ba lệnh ấy xếp hàng trên cùng loại hình.
+
+    Vì sao khoá DÒNG ``FOR NO KEY UPDATE`` (không advisory): (1) mọi lệnh ĐỔI dòng loại hình — ô "Ngừng" (PATCH
+    ``update_program_offering``), xoá ngành (UPDATE hàng loạt ``is_active``), chính xoá loại hình — đều UPDATE dòng này ⇒ tự lấy
+    ``FOR NO KEY UPDATE`` (``is_active`` không thuộc khoá nào) ⇒ tự xếp hàng với tạo / khôi phục mà không phải sửa các đường ấy;
+    advisory thì không. (2) Không chặn ``FOR KEY SHARE`` mà kiểm khoá ngoại lấy khi bảng KHÁC chèn / sửa dòng trỏ tới loại hình (hồ
+    sơ, lead…, kể cả chính INSERT học vụ) ⇒ không làm các lệnh ấy chờ. Không có dòng ⇒ 404."""
+    po = models.ProgramOffering
+    row = (
+        await db.execute(select(po.is_active).where(po.id == offering_id).with_for_update(key_share=True))
+    ).one_or_none()
+    if row is None:
+        raise ResourceNotFoundError(detail=f"Program offering with id {offering_id} not found.")
+    return bool(row.is_active)
 
 
 async def _academic_info_state_under_year_lock(db: AsyncSession, academic_info_id: int, expected_year: int):
@@ -1392,6 +1427,10 @@ async def create_academic_info(
         from ..core.review_year_lock import lock_review_year
         from .admission_quota_table_service import check_academic_info_create_allowed
 
+        # Codex lượt 3 (owner chốt 20-11): khoá CẤP LOẠI HÌNH ĐẦU TIÊN (trước khoá năm) ⇒ xếp hàng với xoá loại hình; loại hình
+        # đang ngừng / đã xoá (đọc dưới khoá) ⇒ 409, không tạo.
+        if not await _lock_offering_row(db, academic_info_in.offering_id):
+            raise ProgramOfferingInactive()
         await lock_review_year(db, academic_info_in.academic_year)
         await check_academic_info_create_allowed(
             db, academic_info_in.academic_year, academic_info_in.annual_admission_quota
@@ -1693,6 +1732,10 @@ async def restore_academic_info(
         from ..core.review_year_lock import lock_review_year
         from .admission_quota_table_service import check_academic_info_delete_flag_allowed
 
+        # Codex lượt 3 (owner chốt 20-11): khoá CẤP LOẠI HÌNH ĐẦU TIÊN (trước khoá năm); loại hình đang ngừng / đã xoá ⇒ 409, không
+        # khôi phục. (``offering_id`` của học vụ không đổi được — không schema / đường nào ghi nó ⇒ không cần đọc lại.)
+        if not await _lock_offering_row(db, offering_id):
+            raise ProgramOfferingInactive()
         await lock_review_year(db, academic_year)
         chi_tieu, da_xoa = await _academic_info_state_under_year_lock(db, academic_info_id, academic_year)
         if not da_xoa:

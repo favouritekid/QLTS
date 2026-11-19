@@ -49,6 +49,22 @@ describe("describeQuotaTableError — 409 theo reason_code", () => {
     expect(cau).toMatch(/0 chỉ khi/)
   })
 
+  it("quota_table_member_deleted ⇒ nêu TÊN ngành đã xoá còn trong nhóm + cách gỡ (Codex lượt 3)", () => {
+    const cau = describeQuotaTableError(
+      loi(409, {
+        reason_code: "quota_table_member_deleted",
+        error_code: "QUOTA_TABLE_MEMBER_DELETED",
+        offering_academic_info_ids: [11, 77],
+      }),
+      ctx(),
+    )
+    expect(cau).toMatch(/đã bị xoá nhưng vẫn nằm trong nhóm/)
+    expect(cau).toContain("M1 — Ngành Một")
+    expect(cau).toContain("Học vụ #77")
+    expect(cau).toMatch(/Gỡ khỏi nhóm \(lưu bảng\) rồi khoá lại/)
+    expect(cau).not.toMatch(/quota_table_member_deleted/i)
+  })
+
   it("trigger CSDL (error_code QUOTA_TABLE_LOCKED, không reason_code) ⇒ câu bảng đã khoá", () => {
     expect(describeQuotaTableError(loi(409, { error_code: "QUOTA_TABLE_LOCKED", detail: "x" }), ctx())).toMatch(
       /đã khoá — Admin mở khoá/,

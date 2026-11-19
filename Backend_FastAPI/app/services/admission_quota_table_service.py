@@ -80,6 +80,9 @@ MESSAGES: Dict[str, str] = {
     "quota_table_member_quota_missing": (
         "Có ngành trong bảng chưa có chỉ tiêu năm — nhập chỉ tiêu cho mọi ngành thành viên trước khi khoá."
     ),
+    "quota_table_member_deleted": (
+        "Có ngành đã bị xoá nhưng vẫn nằm trong nhóm của bảng — gỡ khỏi nhóm (lưu bảng) rồi khoá lại."
+    ),
 }
 
 
@@ -505,7 +508,8 @@ async def lock_quota_table(
     db: AsyncSession, academic_year: int, *, expected_version: int, expected_quota_fingerprint: str, actor_id: int
 ) -> Dict[str, Any]:
     """``draft`` → ``locked``. Điều kiện kỹ thuật: mọi ngành thành viên có chỉ tiêu năm (thiếu ⇒ 409 nêu id) — ngành thiếu
-    chỉ tiêu không xét được (đặc tả §5.4 bước 1), khoá bảng như vậy chỉ dời lỗi sang lúc xét.
+    chỉ tiêu không xét được (đặc tả §5.4 bước 1), khoá bảng như vậy chỉ dời lỗi sang lúc xét; không thành viên nào đã xoá mềm
+    (⇒ 409 ``quota_table_member_deleted`` nêu id — Codex lượt 3).
 
     GĐ2-F1: khoá đóng băng ĐÚNG các chỉ tiêu người khoá đã xem ⇒ đòi dấu chỉ tiêu lúc mở (đọc lại ``FOR SHARE`` sau khoá năm,
     TRƯỚC dòng bảng — cùng chiều "học vụ trước bảng" với trigger)."""
@@ -519,6 +523,20 @@ async def lock_quota_table(
     if ACTION_LOCK not in quota_table_actions(table.status):
         raise QuotaTableConflict("quota_table_already_locked")
     m, oai = models.AdmissionQuotaGroupMember, models.OfferingAcademicInfo
+    # GĐ2-F1 (Codex lượt 3, điểm chặn 1): thành viên nhóm đã XOÁ MỀM (năm chưa khoá thì luật C cho xoá) ⇒ ma trận chỉ tiêu đã bỏ
+    # nó khỏi tổng mà nhóm vẫn tính ⇒ không khoá; Admin gỡ khỏi nhóm bằng PUT rồi khoá lại. Đọc DƯỚI khoá năm + ``FOR SHARE``
+    # học vụ của năm (xoá / khôi phục cũng lấy khoá năm ⇒ cờ đứng yên), cùng chỗ kiểm thiếu chỉ tiêu.
+    deleted = sorted(
+        (
+            await db.execute(
+                select(m.offering_academic_info_id)
+                .join(oai, oai.id == m.offering_academic_info_id)
+                .where(m.academic_year == academic_year, oai.is_deleted.is_(True))
+            )
+        ).scalars()
+    )
+    if deleted:
+        raise QuotaTableConflict("quota_table_member_deleted", {"offering_academic_info_ids": deleted})
     missing = sorted(
         (
             await db.execute(

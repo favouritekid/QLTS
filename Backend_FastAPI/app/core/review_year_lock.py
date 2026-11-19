@@ -18,6 +18,15 @@ Không đường nào được khoá dòng học vụ TRƯỚC rồi mới lấy
 khoá năm ngay sau kiểm quyền, khi giao dịch chưa giữ khoá dòng học vụ nào. (Trước luật C, xoá mềm không lấy khoá năm vì không đổi
 ``(id, chỉ tiêu)``; từ luật C cờ xoá mềm vào dấu và bị chặn khi bảng đã khoá ⇒ lấy khoá năm như sửa chỉ tiêu.)
 
+THỨ TỰ KHOÁ TOÀN HỆ (Codex lượt 3, owner chốt 20-11): khoá LOẠI HÌNH (dòng ``program_offering`` ``FOR NO KEY UPDATE`` — chỉ
+ở tạo / khôi phục học vụ và xoá loại hình, ``organization_service._lock_offering_row``) → khoá NĂM (tăng dần) → dòng học vụ → dòng
+bảng chỉ tiêu. Không vòng chờ: (a) đường lấy khoá loại hình lấy ĐÚNG MỘT dòng loại hình và lấy nó TRƯỚC mọi khoá năm — nếu phải
+chờ dòng ấy thì đang chưa giữ khoá nào khác (trước đó chỉ select thường); (b) các đường
+chỉ lấy khoá năm (PUT / khoá / mở khoá bảng, sửa / dời / xoá mềm học vụ) không bao giờ chờ dòng loại hình ở chế độ xung đột — chèn /
+sửa dòng TRỎ tới loại hình (học vụ, hồ sơ, lead…) chỉ lấy ``FOR KEY SHARE``, không xung đột với ``NO KEY UPDATE``; (c) lệnh UPDATE
+dòng loại hình KHÔNG qua khoá năm (ô "Ngừng", xoá ngành hàng loạt) không giữ khoá năm / dòng học vụ nào khi chờ ⇒ chờ nó không
+khép vòng.
+
 Khoá DÒNG học vụ lấy SAU khoá năm dùng chế độ YẾU NHẤT đủ việc, lấy MỘT lần, không nâng trong cùng giao dịch (GĐ2-F1 lượt 3b):
 PUT bảng chỉ tiêu chỉ ghi ``annual_admission_quota`` (không cột nào thuộc khoá duy nhất / khoá ngoại) ⇒ ``FOR NO KEY UPDATE`` —
 đúng chế độ lệnh UPDATE của PostgreSQL tự lấy. Nó vẫn xung đột với ``FOR SHARE`` (khoá bảng), ``FOR NO KEY UPDATE`` (UPDATE chỉ
