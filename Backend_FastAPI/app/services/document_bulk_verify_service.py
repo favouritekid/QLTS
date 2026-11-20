@@ -5,9 +5,15 @@
 
 - Thứ tự khoá dòng ``user`` ↔ dòng lô (F7, 20-11): MỌI đường đi NGƯỜI → LÔ như K4 (``user_deletion_policy``: người
   ``FOR UPDATE`` → xoá lô ``previewed``). Xem trước, chạy lô bước 2 khoá người ``FOR KEY SHARE`` trước dòng lô; chốt lô
-  khoá người ``FOR SHARE`` trước dòng lô (giữ VAI ổn định tới commit — quyền chốt xét bằng vai đọc dưới khoá, Codex 20-11);
-  §5.4 khoá người ``FOR SHARE`` SAU dòng lô nhưng chỉ chạy với lô ``processing`` — K4 thấy lô ấy là ``BLOCK_ACTOR``
-  (409, chỉ đọc) nên không bao giờ xoá dòng lô đó ⇒ không vòng chờ.
+  khoá người ``FOR SHARE`` trước dòng lô (giữ VAI ổn định tới commit — quyền chốt xét bằng vai đọc dưới khoá, Codex 20-11;
+  chốt lô không giữ dòng quyền chéo ⇒ không vòng chờ với Q4 bên dưới); §5.4 khoá người SAU dòng lô nhưng chỉ chạy với lô
+  ``processing`` — K4 thấy lô ấy là ``BLOCK_ACTOR`` (409, chỉ đọc) nên không bao giờ xoá dòng lô đó ⇒ không vòng chờ.
+- Dòng ``user`` ↔ dòng QUYỀN CHÉO (PR-B, Q4): đổi vai / khoá tài khoản đi NGƯỜI → QUYỀN (``document_cross_review_service.
+  revoke_grants_on_account_change``: người ``FOR NO KEY UPDATE`` → quyền ``FOR UPDATE``). Mọi đường duyệt chéo (lẻ, xem
+  trước, §5.4) khoá người bằng ``FOR KEY SHARE`` — KHÔNG xung đột ``FOR NO KEY UPDATE`` — nên dù khoá người trước hay sau
+  dòng quyền cũng không vòng chờ; đổi vai / khoá xếp hàng sau duyệt chéo ở DÒNG QUYỀN (``FOR UPDATE`` ↔ ``FOR SHARE``).
+  ``FOR SHARE`` trên người (bản cũ của lõi / §5.4 khi lô chéo) + giữ dòng quyền ⇒ vòng chờ với Q4; ``FOR SHARE`` trên
+  người TRƯỚC lead ⇒ vòng chờ với giao lead cho chính người ấy (lead ``FOR UPDATE`` → ``UPDATE user.last_assigned_at``).
 - ``preview_batch`` (§5.2): khoá theo người ``(ns_preview, user_id)`` → dọn bản xem trước của CHÍNH người bấm → đếm lại
   (≥ 3 ⇒ 409 ``TOO_MANY_PREVIEWS``) → tính tập giấy (luật ``document_review_rules.decide``, một nguồn với cổng ghi) → giới hạn
   (422, không tự cắt) → chèn dòng lô ``previewed`` + dòng mục. Router commit.
@@ -132,6 +138,35 @@ class BulkVerifyNotConfigured(ServiceUnavailableError):
 class BulkVerifyLockUnavailable(ServiceUnavailableError):
     detail = "Không kiểm được trạng thái khoá của lô — thử lại sau"
     error_code = "BULK_VERIFY_LOCK_UNAVAILABLE"
+
+
+#: Thân 404 chung của luồng duyệt chéo — CÙNG chuỗi với ``deps.CROSS_REVIEW_NOT_FOUND_DETAIL`` (cổng vào). Hai bản (dịch
+#: vụ không import ``deps``) khoá bằng nhau bằng phép so BYTE thân phản hồi ở ``tests/api/test_gd1b_cheo_duoi_khoa.py``.
+CROSS_REVIEW_NOT_FOUND_DETAIL = "Không tìm thấy"
+
+
+class CrossReviewNotFound(ResourceNotFoundError):
+    """404 CÙNG THÂN của luồng duyệt chéo (owner Q1, 20-11): thiếu quyền / ngoài phạm vi / không tồn tại — kể cả khi phát
+    hiện DƯỚI KHOÁ (F2 / F3: quyền hết hạn / bị thu hồi / người đổi vai / bị khoá trong lúc chờ khoá)."""
+
+    detail = CROSS_REVIEW_NOT_FOUND_DETAIL
+    error_code = "RESOURCE_NOT_FOUND"
+
+
+async def cross_denial(
+    db: AsyncSession, actor: Optional[Any], action: str, lead: Optional[Any] = None
+) -> BaseAppException:
+    """F2 / F3 + Q1 — vị từ chéo KHÔNG đạt dưới khoá ⇒ chọn mã lỗi (chỉ ĐỌC, không khoá thêm; quyết định chặn đã xong):
+
+    - người gọi VẪN còn một quyền hợp lệ cho ĐÚNG thao tác (và đúng đơn vị lead, nếu có lead) ⇒ 409
+      ``actor_not_authorized`` — gửi ``grant_id`` sai / cũ (hợp đồng bản 4 §2.2: giao diện làm mới hàng đợi);
+    - không còn ⇒ :class:`CrossReviewNotFound` (404 cùng thân cổng vào — owner Q1: thiếu quyền / ngoài phạm vi)."""
+    if _actor_live(actor) and actor.role == UserRole.OFFICER:
+        for g in await repo.active_grants_for_user(db, actor.id):
+            ok = grant_allows(g, action) if lead is None else cross_grant_authorizes(actor, lead, (g, True), action)
+            if ok:
+                return DocumentTransitionConflict(ACTOR_NOT_AUTHORIZED)
+    return CrossReviewNotFound()
 
 
 def _running() -> BulkBatchConflict:
@@ -260,7 +295,12 @@ async def preview_batch(
     # → xoá lô ``previewed``). Không có bước này thì bước 1 giữ dòng lô cũ (``FOR UPDATE SKIP LOCKED``), K4 khoá người
     # rồi chờ dòng lô ấy, còn bước 5 chèn lô mới cần khoá khoá-ngoại trên dòng người ⇒ bế tắc. Dòng người không còn /
     # không hoạt động ⇒ 409 ``actor_not_authorized`` (mã có sẵn), không chèn gì — thay cho ``23503`` ⇒ 500.
-    if not _actor_live(await repo.lock_user_key_share(db, actor_id)):
+    # Lô CHÉO (PR-B): cùng khoá ``FOR KEY SHARE`` (KHÔNG ``FOR SHARE`` — xem ``repo.lock_user_key_share``); đổi vai / khoá
+    # tài khoản (Q4) xếp hàng sau bản xem trước này ở DÒNG QUYỀN (khoá bên dưới). Mất quyền ⇒ 404 cùng thân (owner Q1).
+    actor_row = await repo.lock_user_key_share(db, actor_id)
+    if not _actor_live(actor_row):
+        if cross:
+            raise CrossReviewNotFound()
         raise DocumentTransitionConflict(ACTOR_NOT_AUTHORIZED)
     # Bước 1 — dọn bản xem trước của CHÍNH người bấm (còn ≤ 2).
     await repo.cleanup_previews(
@@ -272,6 +312,19 @@ async def preview_batch(
 
     # Bước 3 — chọn hồ sơ (phạm vi của người bấm) + tính tập giấy.
     if cross:
+        # Dòng quyền FOR SHARE (thứ tự toàn cục: người → lô → quyền → lead), kiểm lại DƯỚI khoá: đúng người, chưa thu hồi,
+        # còn hạn theo ``clock_timestamp()``, cho phép duyệt, người vẫn là Cán bộ đang hoạt động.
+        grant_row = await repo.lock_grant_share(db, grant.id)
+        if not (
+            grant_row is not None
+            and actor_row.role == UserRole.OFFICER
+            and grant_row[1]
+            and grant_row[0].revoked_at is None
+            and grant_row[0].grantee_user_id == actor_id
+            and grant_allows(grant_row[0], rules.ACTION_VERIFY)
+        ):
+            raise await cross_denial(db, actor_row, rules.ACTION_VERIFY)
+        grant = grant_row[0]
         selected = await repo.select_profile_ids(
             db, coord={"unit_id": grant.unit_id}, statuses=None, profile_ids=profile_ids
         )
@@ -313,26 +366,46 @@ async def preview_batch(
     grant_actions = frozenset({rules.ACTION_VERIFY}) if cross else frozenset()
     items: List[Dict[str, Any]] = []
     excluded: List[Dict[str, Any]] = []
-    for profile in await repo.load_profiles_with_documents(db, selected):
+    own_assigned_excluded = 0
+    profiles = await repo.load_profiles_with_documents(db, selected)
+    locked_leads: Dict[int, models.Lead] = {}
+    if cross:
+        # Q3 "chỉ đếm DƯỚI KHOÁ": lead FOR SHARE (id tăng) — đơn vị / người phụ trách đứng yên tới commit.
+        locked_leads = await repo.lock_leads_share(db, sorted({p.lead_id for p in profiles}))
+    for profile in profiles:
         policy = DocumentActionPolicy.for_(profile, actor)
-        lead = profile.__dict__.get("lead")
+        # F4 (PR-B): kiểm lại PHẠM VI trên lead vừa nạp / vừa khoá trong vòng lặp — câu chọn và câu nạp là hai câu riêng
+        # (READ COMMITTED), lead có thể vừa chuyển đơn vị. Ngoài phạm vi ⇒ BỎ IM LẶNG (như mã không tồn tại): không vào
+        # ``items`` lẫn ``excluded``, không đếm.
+        lead = locked_leads.get(profile.lead_id) if cross else profile.__dict__.get("lead")
+        if cross:
+            if lead is None or lead.deleted_at is not None or lead.unit_id != grant.unit_id:
+                continue
+        elif lead is None or not _actor_authorized(REVIEW_MODE_BATCH, actor, lead, None):
+            continue
         prof_items: List[Dict[str, Any]] = []
         docs = sorted(
             (d for d in profile.documents if d.category == "path" and d.status in ("paper_submitted", "uploaded")),
             key=lambda d: d.id,
         )
+        own_lead = cross and lead.assigned_officer_id == actor_id
+        if own_lead and not officer_can_view_own_lead(actor_row, lead):
+            continue  # Q3: cán bộ không được xem hồ sơ này theo phạm vi thường ⇒ như mã không tồn tại (không đếm)
         for doc in docs:
             if doc.document_type is None:
                 continue
             code, is_extra, is_mandatory, facts = _doc_rule_facts(profile, doc)
+            if own_lead:
+                # Q3 (owner 20-11): hồ sơ do CHÍNH cán bộ phụ trách ⇒ CHỈ đếm số giấy bị loại — KHÔNG mã hồ sơ, mã giấy,
+                # họ tên, loại giấy ở bất kỳ trường nào (kể cả ``excluded``).
+                if not is_extra and (is_mandatory or include_optional):
+                    own_assigned_excluded += 1
+                continue
             base = {"profile_id": profile.id, "document_row_id": doc.id, "document_type_code": code}
             if is_extra:
                 excluded.append({**base, "reason_code": rules.OUTSIDE_CONFIG})
                 continue
             if not is_mandatory and not include_optional:
-                continue
-            if cross and lead is not None and lead.assigned_officer_id == actor_id:
-                excluded.append({**base, "reason_code": ACTOR_NOT_AUTHORIZED})
                 continue
             decision = rules.decide(
                 rules.ACTION_VERIFY, via, policy=policy, actor_id=actor_id, profile_status=profile.status, doc=facts,
@@ -404,6 +477,7 @@ async def preview_batch(
         review_mode=review_mode,
         documents=len(items),
         excluded=len(excluded),
+        own_assigned_excluded=own_assigned_excluded,
     )
     required = sum(1 for it in items if it["is_mandatory"])
     return {
@@ -414,6 +488,8 @@ async def preview_batch(
             "documents": len(items),
             "required": required,
             "optional": len(items) - required,
+            # Q3: "Loại M giấy do bạn phụ trách" — số riêng, KHÔNG gộp vào ``documents`` (= N giấy của danh sách xác nhận).
+            "own_assigned_excluded": own_assigned_excluded,
         },
         "items": items,
         "excluded": excluded,
@@ -425,9 +501,55 @@ async def preview_batch(
 # =====================================================================================================================
 def _actor_live(actor: Optional[Any]) -> bool:
     """MỘT vị từ "người thao tác còn dùng được" (dòng còn + ``status = 'active'``) cho xem trước (bước 0b), chạy lô
-    (bước 2), chốt lô và §5.4 bước 4 — đọc trên dòng VỪA khoá (``User``, hàng ``(id, status)`` của
-    ``repo.lock_user_key_share`` hoặc hàng ``(id, status, role)`` của ``repo.lock_user_role_share``)."""
+    (bước 2), chốt lô, §5.4 bước 4 và lõi ``transition_document`` — đọc trên dòng VỪA khoá (``User`` hoặc hàng
+    ``(id, status, …)`` của ``repo.lock_user_key_share`` / ``repo.lock_user_role_share``)."""
     return actor is not None and actor.status == "active"
+
+
+def grant_allows(grant: Any, action: str) -> bool:
+    """Quyền chéo cho phép ĐÚNG thao tác (``verify`` / ``reject``) — MỘT nguồn cho hàng đợi (``pick_grant_for_action``),
+    cổng vào (deps), xem trước, §5.4 và lõi."""
+    if action == rules.ACTION_VERIFY:
+        return bool(grant.allow_verify)
+    if action == rules.ACTION_REJECT:
+        return bool(grant.allow_reject)
+    return False
+
+
+def cross_grant_authorizes(actor: Optional[Any], lead: Any, grant_row: Optional[Tuple[Any, bool]], action: str) -> bool:
+    """MỘT vị từ "được duyệt chéo ``action`` trên lead này bằng quyền này" (F2 / F3 / Q1, PR-B): người còn dùng được
+    (``_actor_live``) + vai Cán bộ + quyền đúng người, chưa thu hồi, còn hạn (``still_valid`` tính bằng
+    ``clock_timestamp()`` SAU khi đủ khoá), đúng đơn vị lead, cho phép đúng thao tác + lead chưa xoá mềm, KHÔNG do chính
+    người ấy phụ trách.
+
+    Dùng ở: cổng vào duyệt chéo lẻ (``deps``, dòng đọc lúc vào — 404), xem trước lô chéo, §5.4 (``_actor_authorized``,
+    mỗi hồ sơ, dòng vừa khoá) và lõi ``transition_document`` (dòng vừa khoá). ``actor`` / ``lead`` / ``grant`` chỉ cần các
+    thuộc tính (ORM hoặc hàng cột)."""
+    if not _actor_live(actor) or actor.role != UserRole.OFFICER or grant_row is None or lead is None:
+        return False
+    grant, still_valid = grant_row
+    return bool(
+        still_valid
+        and grant.revoked_at is None
+        and grant.grantee_user_id == actor.id
+        and grant.unit_id == lead.unit_id
+        and grant_allows(grant, action)
+        and getattr(lead, "deleted_at", None) is None
+        and lead.assigned_officer_id != actor.id
+    )
+
+
+def officer_can_view_own_lead(actor: Any, lead: Any) -> bool:
+    """Q3 (owner 20-11) — cán bộ được xem hồ sơ của lead này theo phạm vi đọc thường của Cán bộ (``deps.
+    get_admission_for_user_read``: lead CÙNG đơn vị người ấy VÀ do chính người ấy phụ trách). Chỉ khi đạt (cùng các
+    điều kiện khác của xem trước chéo) mới ĐẾM giấy "do bạn phụ trách"; không đạt ⇒ bỏ im lặng như mã không tồn tại.
+    ``tests/api/test_gd1b_cheo_pham_vi_xem_truoc.py`` khoá vị từ này bằng cổng đọc thật qua HTTP."""
+    return bool(
+        actor.unit_id is not None
+        and lead.unit_id == actor.unit_id
+        and lead.assigned_officer_id == actor.id
+        and getattr(lead, "deleted_at", None) is None
+    )
 
 
 def _actor_authorized(
@@ -436,24 +558,14 @@ def _actor_authorized(
     lead: models.Lead,
     grant_row: Optional[Tuple[models.DocumentCrossReviewGrant, bool]],
 ) -> bool:
-    """§5.4 bước 4 — kiểm lại người bấm ở MỖI hồ sơ, trên dòng VỪA KHOÁ."""
+    """§5.4 bước 4 — kiểm lại người bấm ở MỖI hồ sơ, trên dòng VỪA KHOÁ. Lô chéo = ``cross_grant_authorizes`` (verify)."""
     if not _actor_live(actor):
         return False
     if review_mode == REVIEW_MODE_BATCH:
         if actor.role == UserRole.ADMIN:
             return True
         return actor.role == UserRole.MANAGER and actor.unit_id is not None and actor.unit_id == lead.unit_id
-    if actor.role != UserRole.OFFICER or grant_row is None:
-        return False
-    grant, still_valid = grant_row
-    return bool(
-        still_valid
-        and grant.revoked_at is None
-        and grant.grantee_user_id == actor.id
-        and grant.unit_id == lead.unit_id
-        and grant.allow_verify
-        and lead.assigned_officer_id != actor.id
-    )
+    return cross_grant_authorizes(actor, lead, grant_row, rules.ACTION_VERIFY)
 
 
 async def execute_batch(
@@ -614,7 +726,7 @@ async def _process_profile(
             log.warning("bulk_verify_lock_lost", batch_id=str(batch_id), profile_id=profile_id)
             return False
         await repo.set_local_lock_timeout(db, timeout_ms)
-        # … → quyền chéo FOR SHARE → hồ sơ FOR UPDATE → lead FOR SHARE → giấy FOR UPDATE (id tăng) → người bấm FOR SHARE.
+        # … → quyền chéo FOR SHARE → hồ sơ FOR UPDATE → lead FOR SHARE → giấy FOR UPDATE (id tăng).
         grant_row = await repo.lock_grant_share(db, grant_id) if review_mode == REVIEW_MODE_CROSS else None
         try:
             profile = await _lock_profile_for_document_write(db, profile_id)
@@ -622,7 +734,17 @@ async def _process_profile(
             profile = None
         lead = await repo.lock_lead_share(db, profile.lead_id) if profile is not None else None
         versions = await repo.lock_documents(db, profile_id, [d for d, _ in items]) if profile is not None else {}
-        actor = await repo.lock_user_share(db, actor_id)
+        if review_mode == REVIEW_MODE_CROSS:
+            # → người bấm ``FOR KEY SHARE`` (PR-B: KHÔNG ``FOR SHARE`` — lô đang giữ dòng quyền FOR SHARE; đổi vai / khoá Q4
+            # giữ dòng người ``FOR NO KEY UPDATE`` rồi chờ dòng quyền ⇒ ``FOR SHARE`` ở đây là vòng chờ). Q4 xếp hàng ở
+            # dòng quyền: hồ sơ đang ghi commit xong ⇒ Q4 thu hồi + khoá ⇒ hồ sơ KẾ TIẾP thấy ⇒ lô dừng trước khi ghi nó.
+            actor = await repo.lock_user_key_share_entity(db, actor_id)
+            # F2 (PR-B): hạn quyền đọc lại SAU khi đủ khoá — ``clock_timestamp()`` của lần đọc ở trên tính TRƯỚC lúc chờ khoá
+            # hồ sơ / lead / giấy. Dòng quyền đã giữ FOR SHARE ⇒ không chờ thêm.
+            grant_row = await repo.lock_grant_share(db, grant_id)
+        else:
+            # → người bấm ``FOR SHARE`` (CUỐI CÙNG, như bản cũ — lô thường không giữ dòng quyền).
+            actor = await repo.lock_user_share(db, actor_id)
 
         if profile is None or lead is None or lead.deleted_at is not None:
             await repo.write_profile_error(db, batch_id, profile_id, rules.NOT_PENDING, _msg(rules.NOT_PENDING))
@@ -674,6 +796,9 @@ async def _process_profile(
                 code = exc.reason_code
             except PermissionDeniedError:
                 code = rules.NOT_PERMITTED
+            except CrossReviewNotFound:
+                # Lõi chặn duyệt chéo dưới khoá (quyền vừa hết hạn giữa bước 4 và giấy này) ⇒ đúng mã của mục lô.
+                code = ACTOR_NOT_AUTHORIZED
             except ResourceNotFoundError:
                 code = rules.NOT_PENDING
             except ValidationError:

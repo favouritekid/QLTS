@@ -12,7 +12,7 @@ Business Rules:
 - Role priority: admin > manager > officer > user
 """
 
-from typing import Any, Callable, Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from app.core.log_redaction import chu_loi_an_toan  # V6 vòng 5: lỗi CSDL ra ngoài log ⇒ tóm tắt
 import logging
 
@@ -67,6 +67,8 @@ async def remove_role_from_users(
     enforcer: casbin.AsyncEnforcer,
     user_ids: List[int],
     role_to_remove: str,
+    actor_id: Optional[int] = None,  # PR-B Q4: Admin thao tác (``revoked_by_user_id`` khi tự thu hồi quyền duyệt chéo)
+    request_meta: Optional[Any] = None,
 ) -> Tuple[Dict[str, Any], Callable]:
     """
     Remove a specific role from multiple users.
@@ -129,8 +131,15 @@ async def remove_role_from_users(
     reassigned_count = 0
     failed_users = []
 
-    for user_id in user_ids:
+    from app.services.document_cross_review_service import (
+        auto_revoke_reason,
+        revoke_grants_on_account_change,
+    )
+
+    # id TĂNG (PR-B Q4: mỗi người khoá dòng user → dòng quyền chéo; hai lệnh chồng nhau khoá cùng chiều).
+    for user_id in sorted(user_ids):
         user_subject = f"user:{user_id}"
+        pending_role = None  # (user, vai DB mới) — ghi SAU khối nuốt lỗi bên dưới
 
         try:
             from app.services.casbin_service import khoa_enforcer
@@ -185,22 +194,7 @@ async def remove_role_from_users(
 
                 # Extract role name without "role:" prefix for DB
                 db_role_name = highest_priority_role.replace("role:", "")
-                user.role = db_role_name
-                db.add(user)
-
-                # `log` ở module này là `logging.getLogger` CHUẨN, không phải
-                # structlog — nó KHÔNG nhận kwarg tuỳ ý và ném
-                # `TypeError: Logger._log() got an unexpected keyword argument`.
-                # Trường có cấu trúc phải đi qua `extra={...}`.
-                log.info(
-                    "User %s updated",
-                    user_id,
-                    extra={
-                        "removed_role": role_to_remove,
-                        "remaining_roles": remaining_roles,
-                        "db_role": db_role_name,
-                    },
-                )
+                pending_role = (user, db_role_name, remaining_roles)
 
         except Exception as e:
             failed_users.append({"user_id": user_id, "error": chu_loi_an_toan(e)})
@@ -208,6 +202,36 @@ async def remove_role_from_users(
                 "Failed to remove role from user %s",
                 user_id,
                 extra={"error": str(e)},
+            )
+            continue
+
+        if pending_role is not None:
+            user, db_role_name, remaining_roles = pending_role
+            # GĐ1b PR-B Q4 (owner 20-11): vai DB rời Cán bộ ⇒ tự thu hồi quyền duyệt chéo CÙNG giao dịch, TRƯỚC khi ghi vai.
+            # Ngoài khối nuốt lỗi ở trên: nuốt thì router vẫn commit vai mới mà quyền chưa thu hồi / thiếu nhật ký ⇒ ném ra
+            # để router không commit gì (fail-closed).
+            await revoke_grants_on_account_change(
+                db,
+                user_id=user.id,
+                reason=auto_revoke_reason(old_role=user.role, old_status=user.status, new_role=db_role_name),
+                actor_id=actor_id,
+                request_meta=request_meta,
+            )
+            user.role = db_role_name
+            db.add(user)
+
+            # `log` ở module này là `logging.getLogger` CHUẨN, không phải
+            # structlog — nó KHÔNG nhận kwarg tuỳ ý và ném
+            # `TypeError: Logger._log() got an unexpected keyword argument`.
+            # Trường có cấu trúc phải đi qua `extra={...}`.
+            log.info(
+                "User %s updated",
+                user_id,
+                extra={
+                    "removed_role": role_to_remove,
+                    "remaining_roles": remaining_roles,
+                    "db_role": db_role_name,
+                },
             )
 
     # ✅ TRANSACTION FIX: Flush instead of commit

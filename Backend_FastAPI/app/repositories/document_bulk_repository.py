@@ -523,36 +523,85 @@ async def lock_user_key_share(db: AsyncSession, user_id: int) -> Optional[Any]:
     (``user_deletion_policy.assert_user_deletable``) nhưng KHÔNG chặn ``UPDATE`` thường của dòng ``user`` (đăng nhập, đổi
     thông tin = ``FOR NO KEY UPDATE``).
 
-    Trả hàng ``(id, status)`` đọc DƯỚI khoá; ``None`` = dòng không còn (đã xoá). Chỉ chọn CỘT, không nạp thực thể: đối
-    tượng ``User`` của người gọi đang nằm trong phiên (``current_user``) — ``populate_existing`` trên thực thể sẽ làm hết
-    hạn quan hệ đã nạp của nó ⇒ đọc sau đó thành lazy-load ⇒ MissingGreenlet.
+    Trả hàng ``(id, status, role, unit_id)`` đọc DƯỚI khoá; ``None`` = dòng không còn (đã xoá). Chỉ chọn CỘT, không nạp
+    thực thể: đối tượng ``User`` của người gọi đang nằm trong phiên (``current_user``) — ``populate_existing`` trên thực thể
+    sẽ làm hết hạn quan hệ đã nạp của nó ⇒ đọc sau đó thành lazy-load ⇒ MissingGreenlet.
 
     Vì không chặn ``UPDATE`` thường, khoá này cũng KHÔNG giữ được VAI / TRẠNG THÁI: đổi vai, khoá tài khoản vẫn commit
-    được trong lúc khoá còn giữ. Đường nào quyết định GHI theo vai phải dùng ``lock_user_role_share``."""
+    được trong lúc khoá còn giữ. Đường nào quyết định GHI theo vai mà không giữ dòng quyền chéo phải dùng
+    ``lock_user_role_share`` (chốt lô, Admin cấp quyền chéo).
+
+    PR-B: duyệt chéo (lẻ / xem trước / §5.4) khoá người BẰNG khoá này, không ``FOR SHARE``: ``FOR KEY SHARE`` không xung
+    đột ``UPDATE "user"`` (đổi vai / khoá Q4 giữ ``FOR NO KEY UPDATE`` rồi chờ dòng quyền; giao lead giữ lead ``FOR UPDATE``
+    rồi ``UPDATE`` người được giao) ⇒ không vòng chờ. Đổi vai / khoá xếp hàng sau duyệt chéo ở DÒNG QUYỀN; vai đọc ở đây
+    được kiểm lại bằng vị từ chung (``cross_grant_authorizes``) trên dòng quyền đang giữ ``FOR SHARE``."""
     return (
         await db.execute(
-            select(models.User.id, models.User.status)
+            select(models.User.id, models.User.status, models.User.role, models.User.unit_id)
             .where(models.User.id == user_id)
             .with_for_update(read=True, key_share=True)
         )
     ).first()
 
 
+async def lock_user_key_share_entity(db: AsyncSession, user_id: int) -> Optional[models.User]:
+    """Như :func:`lock_user_key_share` nhưng trả THỰC THỂ đọc lại (``populate_existing``) — cho lõi ``transition_document``
+    (luật ``DocumentActionPolicy`` cần đối tượng ``User``), cùng khuôn :func:`lock_user_share`."""
+    return (
+        await db.execute(
+            select(models.User)
+            .where(models.User.id == user_id)
+            .with_for_update(read=True, key_share=True)
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
+
+
 async def lock_user_role_share(db: AsyncSession, user_id: int) -> Optional[Any]:
     """Dòng người dùng ``FOR SHARE`` — chặn MỌI ``UPDATE`` / ``DELETE`` của dòng ấy tới hết giao dịch: đổi vai, khoá tài
     khoản (``FOR NO KEY UPDATE``) và K4 (``FOR UPDATE``) đều phải CHỜ. Vai + trạng thái đọc ở đây vì thế còn đúng tới lúc
-    commit — dùng cho đường quyết định GHI theo VAI hiện hành (chốt lô: Admin chốt lô của người khác; Codex 20-11).
+    commit. MỘT hàm cho hai đường quyết định GHI theo VAI hiện hành (ghép PR-A + PR-B, 21-11):
+    - chốt lô (PR-A, Codex 20-11): Admin chốt lô của người khác — người → lô, không giữ dòng quyền chéo;
+    - Admin CẤP quyền chéo (PR-B, Q4): đọc người được cấp dưới khoá — giữ khoá này không chờ dòng nào khác ngoài dòng
+      quyền mới chèn ⇒ không vòng chờ với đổi vai / khoá (người ``FOR NO KEY UPDATE`` → quyền ``FOR UPDATE``).
 
     Không xung đột với ``FOR SHARE`` / ``FOR KEY SHARE`` khác (§5.4, khoá khoá-ngoại khi ghi ``finalized_by_user_id``).
-    Trả hàng ``(id, status, role)`` đọc DƯỚI khoá; ``None`` = dòng không còn (đã xoá). Chỉ chọn CỘT, không nạp thực thể —
-    cùng lý do MissingGreenlet như ``lock_user_key_share``."""
+    Trả hàng ``(id, status, role, unit_id)`` đọc DƯỚI khoá; ``None`` = dòng không còn (đã xoá). Chỉ chọn CỘT, không nạp
+    thực thể — cùng lý do MissingGreenlet như ``lock_user_key_share``."""
     return (
         await db.execute(
-            select(models.User.id, models.User.status, models.User.role)
+            select(models.User.id, models.User.status, models.User.role, models.User.unit_id)
             .where(models.User.id == user_id)
             .with_for_update(read=True)
         )
     ).first()
+
+
+async def lock_user_no_key_update(db: AsyncSession, user_id: int) -> Optional[Any]:
+    """Dòng người dùng ``FOR NO KEY UPDATE`` — đúng khoá mà ``UPDATE "user"`` (đổi vai / trạng thái) sẽ lấy; lấy TRƯỚC khi
+    khoá dòng quyền chéo (thứ tự toàn cục người → quyền). Không xung đột ``FOR KEY SHARE`` (khoá ngoại), xung đột
+    ``FOR SHARE`` của duyệt chéo / lô chéo đang chạy ⇒ chờ giao dịch ấy commit."""
+    return (
+        await db.execute(
+            select(models.User.id).where(models.User.id == user_id).with_for_update(key_share=True)
+        )
+    ).first()
+
+
+async def lock_leads_share(db: AsyncSession, lead_ids: Sequence[int]) -> Dict[int, models.Lead]:
+    """Lead ``FOR SHARE`` theo id TĂNG, đọc lại dưới khoá (``populate_existing``). Trả ``{id: Lead}`` các dòng còn."""
+    if not lead_ids:
+        return {}
+    rows = (
+        await db.execute(
+            select(models.Lead)
+            .where(models.Lead.id.in_(list(lead_ids)))
+            .order_by(models.Lead.id)
+            .with_for_update(read=True)
+            .execution_options(populate_existing=True)
+        )
+    ).scalars().all()
+    return {r.id: r for r in rows}
 
 
 async def lock_user_share(db: AsyncSession, user_id: int) -> Optional[models.User]:
@@ -639,6 +688,24 @@ async def list_grants(
     if unit_id is not None:
         q = q.where(g.unit_id == unit_id)
     return [(r[0], bool(r[1])) for r in (await db.execute(q.order_by(g.id.desc()).limit(500))).all()]
+
+
+async def lock_active_grants_of_user_for_update(db: AsyncSession, user_id: int) -> List[models.DocumentCrossReviewGrant]:
+    """Mọi quyền CHƯA thu hồi, CHƯA hết hạn (``clock_timestamp()``) của một người — ``FOR UPDATE`` theo id TĂNG (Q4)."""
+    g = models.DocumentCrossReviewGrant
+    return list(
+        (
+            await db.execute(
+                select(g)
+                .where(g.grantee_user_id == user_id, g.revoked_at.is_(None), g.expires_at > func.clock_timestamp())
+                .order_by(g.id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        )
+        .scalars()
+        .all()
+    )
 
 
 async def lock_grant_for_update(db: AsyncSession, grant_id: int) -> Optional[models.DocumentCrossReviewGrant]:

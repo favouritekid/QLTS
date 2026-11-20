@@ -154,19 +154,21 @@ async def test_eligibility_chi_tra_quyen_con_hieu_luc_cua_chinh_nguoi_goi(
     assert r.status_code == 200 and r.json() == {"eligible": False, "grants": []}
 
 
-async def test_can_bo_khong_co_quyen_hang_doi_va_duyet_404(
+async def test_can_bo_khong_co_quyen_hang_doi_va_duyet_404_quan_ly_403(
     client, admin_token_headers, officer_user_in_db, manager_user_in_db, can_bo_cheo, lo_config, lo_routers
 ):
+    """Owner Q1 (20-11, PR-B): Cán bộ không có quyền ⇒ 404; vai khác Cán bộ (ở đây Quản lý) ⇒ 403. Ma trận đủ vai × 8 API:
+    ``test_gd1b_cheo_ma_tran_quyen.py``."""
     p = (await _ho_so(client, admin_token_headers, officer_user_in_db, lo_config))[0]
     d = p["docs"]["A"]
-    for u in (can_bo_cheo, manager_user_in_db):
+    for u, ma in ((can_bo_cheo, 404), (manager_user_in_db, 403)):
         h = await dn(client, u)
-        assert (await client.get(f"{CROSS}/queue", headers=h)).status_code == 404
+        assert (await client.get(f"{CROSS}/queue", headers=h)).status_code == ma
         r = await client.post(
             f"{CROSS}/verify", headers=h,
             json={"grant_id": 1, "profile_id": p["id"], "document_row_id": d.id, "expected_row_version": d.row_version},
         )
-        assert r.status_code == 404, r.text
+        assert r.status_code == ma, r.text
     assert (await giay(p["id"], lo_config["codes"]["A"])).status == "paper_submitted"
 
 

@@ -6,6 +6,13 @@ Nhận ID, không nhận đối tượng nạp sẵn: mọi thứ cần kiểm �
     (dòng lô — người gọi lô giữ) → quyền chéo FOR SHARE → hồ sơ FOR UPDATE → lead FOR SHARE
     → dòng giấy FOR UPDATE → người thao tác FOR SHARE (cuối cùng)
 
+Duyệt CHÉO (PR-B, thứ tự toàn cục ở đầu ``document_bulk_verify_service``): người thao tác FOR KEY SHARE ĐẦU TIÊN (trước
+dòng quyền, cùng chiều Q4: đổi vai / khoá tài khoản khoá dòng người rồi mới thu hồi dòng quyền; ``KEY SHARE`` không xung đột
+``UPDATE "user"`` ⇒ Q4 xếp hàng ở dòng quyền, giao lead cho chính người ấy không vòng chờ). Sau khi đủ khoá: đọc lại hạn quyền bằng
+``clock_timestamp()`` (F2) và kiểm vai + trạng thái + quyền bằng ``cross_grant_authorizes`` (F3 — MỘT vị từ với cổng vào và
+§5.4). Không đạt ⇒ 404 cùng thân cổng vào (owner Q1) — hoặc 409 ``actor_not_authorized`` khi người gọi vẫn còn quyền hợp lệ
+khác (gửi ``grant_id`` sai / cũ, hợp đồng bản 4 §2.2).
+
 Luật quyết định: :mod:`app.services.document_review_rules` (MỘT nguồn với cờ máy chủ §4.7). Ghi có điều kiện
 ``WHERE id AND row_version`` — đúng 1 hàng. Mỗi thao tác đúng MỘT dòng ``document_audit_log`` cùng giao dịch; duyệt giấy có
 tệp ghi thêm MỘT dòng ``document_evidence_file`` (sha256 tính dưới khoá; tệp không còn ⇒ ``file_missing_on_disk``, không duyệt).
@@ -22,7 +29,7 @@ from typing import Any, Awaitable, Callable, Dict, Optional
 from uuid import UUID
 
 import structlog
-from sqlalchemy import select, text, update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -120,26 +127,26 @@ def _resolved_file(profile_id: int, file_path: Optional[str]) -> Optional[str]:
     return abs_path
 
 
-async def _lock_grant(db: AsyncSession, grant_id: int, actor_id: int) -> models.DocumentCrossReviewGrant:
-    """Dòng quyền chéo FOR SHARE; hạn so với ``clock_timestamp()`` SAU khi có khoá (§6, §9: giao dịch bắt đầu trước hạn mà
-    chờ khoá qua hạn vẫn bị chặn)."""
-    row = (
-        await db.execute(
-            select(
-                models.DocumentCrossReviewGrant,
-                (models.DocumentCrossReviewGrant.expires_at > text("clock_timestamp()")).label("still_valid"),
-            )
-            .where(models.DocumentCrossReviewGrant.id == grant_id)
-            .with_for_update(read=True)
-            .execution_options(populate_existing=True)
-        )
-    ).first()
-    if row is None:
-        raise DocumentTransitionConflict(ACTOR_NOT_AUTHORIZED)
-    grant, still_valid = row
-    if grant.grantee_user_id != actor_id or grant.revoked_at is not None or not still_valid:
-        raise DocumentTransitionConflict(ACTOR_NOT_AUTHORIZED)
-    return grant
+async def _lock_grant(db: AsyncSession, grant_id: Optional[int]):
+    """Dòng quyền chéo FOR SHARE ⇒ ``(grant, still_valid)`` hoặc ``None``; ``still_valid`` = ``expires_at >
+    clock_timestamp()`` TẠI LÚC GỌI (§6, §9). Gọi lại SAU khi đủ khoá để đọc hạn mới nhất (F2) — dòng đã giữ ⇒ không chờ.
+    Không tự từ chối: quyết định ở ``cross_grant_authorizes`` (một vị từ)."""
+    if grant_id is None:
+        return None
+    from app.repositories import document_bulk_repository as repo
+
+    return await repo.lock_grant_share(db, grant_id)
+
+
+async def _lock_actor(db: AsyncSession, actor_id: int, *, cross: bool) -> Optional[models.User]:
+    """Người thao tác, đọc lại dưới khoá (``populate_existing``). Duyệt chéo: ``FOR KEY SHARE`` (PR-B — lõi đang giữ dòng
+    quyền FOR SHARE; ``FOR SHARE`` ở người thì vòng chờ với đổi vai / khoá Q4: người ``FOR NO KEY UPDATE`` → quyền
+    ``FOR UPDATE``). Đường khác: ``FOR SHARE`` như bản cũ."""
+    from app.repositories import document_bulk_repository as repo
+
+    if cross:
+        return await repo.lock_user_key_share_entity(db, actor_id)
+    return await repo.lock_user_share(db, actor_id)
 
 
 async def transition_document(
@@ -161,18 +168,19 @@ async def transition_document(
     from app.services.admission_document_policy import DocumentActionPolicy
     from app.services.admission_service import _lock_profile_for_document_write
     from app.services.document_audit_service import log_document_action
+    from app.services.document_bulk_verify_service import _actor_live, cross_denial, cross_grant_authorizes
 
     if via not in rules.VIAS:
         raise ValueError(via)
     meta = request_meta or RequestMeta()
     reason = (reason or "").strip() or None
 
-    # 1. Quyền chéo (nếu có).
-    grant = None
-    if via == rules.VIA_CROSS:
-        if grant_id is None:
-            raise DocumentTransitionConflict(ACTOR_NOT_AUTHORIZED)
-        grant = await _lock_grant(db, grant_id, actor_id)
+    # 0 + 1. Duyệt chéo: người thao tác FOR KEY SHARE TRƯỚC (thứ tự người → quyền như Q4), rồi dòng quyền FOR SHARE.
+    grant_row = None
+    cross = via == rules.VIA_CROSS
+    if cross:
+        await _lock_actor(db, actor_id, cross=True)
+        grant_row = await _lock_grant(db, grant_id)
 
     # 2. Hồ sơ FOR UPDATE (+ làm mới các dòng giấy đã nạp).
     profile = await _lock_profile_for_document_write(db, profile_id)
@@ -188,8 +196,6 @@ async def transition_document(
     ).scalar_one_or_none()
     if lead is None or lead.deleted_at is not None:
         raise ResourceNotFoundError("Admission profile not found")
-    if grant is not None and lead.unit_id != grant.unit_id:
-        raise DocumentTransitionConflict(ACTOR_NOT_AUTHORIZED)
 
     # 4. Dòng giấy FOR UPDATE.
     doc = (
@@ -207,19 +213,18 @@ async def transition_document(
     if doc is None or doc.category != "path" or doc.document_type is None:
         raise ResourceNotFoundError("Document not found")
 
-    # 5. Người thao tác FOR SHARE — CUỐI CÙNG.
-    actor = (
-        await db.execute(
-            select(models.User)
-            .where(models.User.id == actor_id)
-            .with_for_update(read=True)
-            .execution_options(populate_existing=True)
-        )
-    ).scalar_one_or_none()
-    if actor is None or actor.status != "active":
-        raise DocumentTransitionConflict(ACTOR_NOT_AUTHORIZED)
-    if grant is not None and lead.assigned_officer_id == actor_id:
-        # §4.5 / §9: lead đổi người tư vấn sang CHÍNH cán bộ chéo giữa chừng ⇒ không duyệt chéo hồ sơ mình phụ trách.
+    # 5. Người thao tác — CUỐI CÙNG (duyệt chéo: đã giữ FOR KEY SHARE từ bước 0, ở đây đọc lại vai / trạng thái mới nhất).
+    actor = await _lock_actor(db, actor_id, cross=cross)
+    grant = None
+    if cross:
+        # F2: hạn quyền đọc lại SAU khi đủ khoá (``clock_timestamp()`` lúc này, không phải lúc lấy khoá quyền ở bước 1).
+        grant_row = await _lock_grant(db, grant_id)
+        # F3 + Q1: vai + trạng thái + quyền (đúng người / đơn vị / thao tác / chưa thu hồi / còn hạn) + lead không do chính
+        # người ấy phụ trách (§4.5 / §9) — MỘT vị từ với cổng vào và §5.4.
+        if not cross_grant_authorizes(actor, lead, grant_row, action):
+            raise await cross_denial(db, actor, action, lead)
+        grant = grant_row[0]
+    elif not _actor_live(actor):
         raise DocumentTransitionConflict(ACTOR_NOT_AUTHORIZED)
 
     # 6a. Phiên bản dòng — TRƯỚC luật quyết định (§5.9, §9 "hai tab"): người gửi một bản đã cũ (lô / tab khác đã xử lý

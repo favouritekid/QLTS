@@ -154,9 +154,13 @@ class BulkVerifyFinalizeRequest(BaseModel):
 
 class PreviewCounts(BaseModel):
     profiles: int
+    #: N — số giấy của danh sách xác nhận (= ``len(items)``).
     documents: int
     required: int
     optional: int
+    #: Owner Q3 (20-11, PR-B): M — số giấy bị loại vì hồ sơ do CHÍNH cán bộ chéo phụ trách (chỉ số đếm; định danh của nhóm
+    #: này KHÔNG có ở ``items`` / ``excluded``). Lô thường luôn 0.
+    own_assigned_excluded: int = 0
 
 
 class PreviewItem(BaseModel):

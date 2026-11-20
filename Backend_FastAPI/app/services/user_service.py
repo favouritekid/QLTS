@@ -691,6 +691,7 @@ async def update_user(
     avatar_content: Optional[bytes] = None,  # ✅ REFACTORED: bytes instead of UploadFile
     avatar_filename: Optional[str] = None,   # ✅ REFACTORED: filename for validation
     assigned_by_user_id: Optional[int] = None,  # ✅ PHASE 2: Track who made the assignment
+    request_meta: Optional[Any] = None,  # PR-B Q4: IP / User-Agent cho nhật ký tự thu hồi quyền duyệt chéo
 ) -> Tuple[models.User, Callable]:
     """
     ✅ ATOMIC TRANSACTION (v17 + PHASE 2):
@@ -740,6 +741,27 @@ async def update_user(
                 raise DuplicateResourceError(
                     detail="Email already registered by another user"
                 )
+
+        # GĐ1b PR-B Q4 (owner 20-11): đổi vai khỏi Cán bộ / khoá tài khoản ⇒ tự thu hồi MỌI quyền duyệt chéo chưa hết hạn,
+        # CÙNG giao dịch (router commit một lần). Đặt TRƯỚC đồng bộ Casbin (adapter ghi bằng phiên RIÊNG, không rollback
+        # được): lỗi ghi nhật ký thu hồi ⇒ ném ra trước khi Casbin bị đụng ⇒ rollback cả đổi vai / khoá lẫn thu hồi.
+        from app.services.document_cross_review_service import (
+            auto_revoke_reason,
+            revoke_grants_on_account_change,
+        )
+
+        await revoke_grants_on_account_change(
+            db,
+            user_id=db_user.id,
+            reason=auto_revoke_reason(
+                old_role=old_db_role,
+                old_status=db_user.status,
+                new_role=update_data.get("role"),
+                new_status=update_data.get("status"),
+            ),
+            actor_id=assigned_by_user_id,
+            request_meta=request_meta,
+        )
 
         # ✅ ATOMIC FIX: Begin nested transaction (savepoint)
         # This ensures DB + Assignment + Casbin operations are atomic
@@ -1537,6 +1559,7 @@ async def perform_bulk_action(
     user_ids: List[int],
     admin_user: models.User,
     new_status: Optional[str] = None,
+    request_meta: Optional[Any] = None,  # PR-B Q4: IP / User-Agent cho nhật ký tự thu hồi quyền duyệt chéo
 ) -> Tuple[str, Callable]:
     """
     Perform bulk action on users.
@@ -1621,6 +1644,24 @@ async def perform_bulk_action(
             )
 
         elif action == "change_status":
+            # GĐ1b PR-B Q4 (owner 20-11): khoá tài khoản HÀNG LOẠT ⇒ tự thu hồi quyền duyệt chéo của TỪNG người, CÙNG giao
+            # dịch, TRƯỚC khi đổi trạng thái. Đi theo id TĂNG (mỗi người: dòng user → dòng quyền) ⇒ hai lệnh hàng loạt chồng
+            # nhau khoá cùng chiều. Cùng điều kiện bỏ qua với vòng đổi trạng thái bên dưới (tự khoá chính mình).
+            from app.services.document_cross_review_service import (
+                auto_revoke_reason,
+                revoke_grants_on_account_change,
+            )
+
+            for user in sorted(users_to_process, key=lambda u: u.id):
+                if user.id == admin_user.id and new_status in ["banned", "pending"]:
+                    continue
+                await revoke_grants_on_account_change(
+                    db,
+                    user_id=user.id,
+                    reason=auto_revoke_reason(old_role=user.role, old_status=user.status, new_status=new_status),
+                    actor_id=admin_user.id,
+                    request_meta=request_meta,
+                )
             ids_changed = []
             skipped_users = []
             for user in users_to_process:
@@ -1801,6 +1842,8 @@ async def sync_users_to_casbin(
     db: AsyncSession,
     enforcer: casbin.AsyncEnforcer,
     user_ids: Optional[List[int]] = None,
+    actor_id: Optional[int] = None,  # PR-B Q4: Admin bấm đồng bộ (``revoked_by_user_id`` khi tự thu hồi quyền chéo)
+    request_meta: Optional[Any] = None,
 ) -> Dict[str, any]:
     """
     Synchronize user roles from Casbin (source of truth) to database.
@@ -1872,29 +1915,18 @@ async def sync_users_to_casbin(
     synced_count = 0
     failed_users = []
 
-    # Process each user
-    for user in users:
+    from app.services.document_cross_review_service import (
+        auto_revoke_reason,
+        revoke_grants_on_account_change,
+    )
+
+    # Process each user — id TĂNG (PR-B Q4: mỗi người khoá dòng user → dòng quyền; hai lượt đồng bộ khoá cùng chiều).
+    for user in sorted(users, key=lambda u: u.id):
         try:
             # Get highest priority role from Casbin (source of truth)
             casbin_role = await get_highest_priority_role_from_casbin(
                 enforcer, user.id
             )
-
-            # Update DB if role doesn't match
-            if user.role != casbin_role:
-                old_role = user.role
-                user.role = casbin_role
-                db.add(user)
-                synced_count += 1
-
-                log.info(
-                    "User role synced from Casbin to DB",
-                    user_id=user.id,
-                    username=user.username,
-                    old_role=old_role,
-                    new_role=casbin_role
-                )
-
         except Exception as e:
             log.error(
                 "Failed to sync user role from Casbin",
@@ -1908,6 +1940,32 @@ async def sync_users_to_casbin(
                 "username": getattr(user, 'username', 'unknown'),
                 "error": chu_loi_an_toan(e)
             })
+            continue
+
+        # Update DB if role doesn't match
+        if user.role != casbin_role:
+            # GĐ1b PR-B Q4: đổi vai khỏi Cán bộ ⇒ tự thu hồi quyền duyệt chéo CÙNG giao dịch, TRƯỚC khi ghi vai. Lỗi ở
+            # đây KHÔNG bị nuốt thành "failed_users" (bản cũ nuốt mọi lỗi trong vòng): nuốt thì router vẫn commit vai mới
+            # mà quyền chưa thu hồi / thiếu nhật ký ⇒ ném ra để router không commit gì (fail-closed).
+            await revoke_grants_on_account_change(
+                db,
+                user_id=user.id,
+                reason=auto_revoke_reason(old_role=user.role, old_status=user.status, new_role=casbin_role),
+                actor_id=actor_id,
+                request_meta=request_meta,
+            )
+            old_role = user.role
+            user.role = casbin_role
+            db.add(user)
+            synced_count += 1
+
+            log.info(
+                "User role synced from Casbin to DB",
+                user_id=user.id,
+                username=user.username,
+                old_role=old_role,
+                new_role=casbin_role
+            )
 
     # Note: Caller is responsible for db.commit()
 

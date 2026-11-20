@@ -741,6 +741,11 @@ def casbin_allows(
     return bool(enforcer.enforce(casbin_subject(current_user), object_path, action))
 
 
+#: Thân 403 của Casbin — MỘT nguồn, dùng lại ở cổng vai của luồng duyệt chéo (owner Q1, PR-B) để vai bị Casbin chặn (Kế
+#: toán, Cộng tác viên) và vai Casbin cho qua nhưng ``deps`` chặn (Quản lý, Admin) nhận CÙNG thân.
+CASBIN_PERMISSION_DENIED_DETAIL = "You do not have permission for this action."
+
+
 async def check_permission(
     request: Request,
     current_user: models.User = Depends(get_current_active_user)  # ✅ PHASE 1 FIX: was get_current_user
@@ -775,9 +780,7 @@ async def check_permission(
             user_id=current_user.id,
             username=current_user.username,
         )
-        raise PermissionDeniedError(
-            detail="You do not have permission for this action."
-        )
+        raise PermissionDeniedError(detail=CASBIN_PERMISSION_DENIED_DETAIL)
 
     return current_user
 
@@ -4399,27 +4402,67 @@ async def require_cross_review_admin(
     return current_user
 
 
+async def _cross_reviewer_gate(current_user: models.User, db: AsyncSession, action: Optional[str]) -> list:
+    """Owner Q1 (20-11) — cổng vào MỌI API thực hiện duyệt chéo, chạy TRƯỚC mọi lần tra hồ sơ / lô:
+
+    1. vai KHÁC Cán bộ ⇒ **403** (cùng thân 403 của Casbin — Kế toán / Cộng tác viên đã bị Casbin chặn; Quản lý / Admin đi
+       qua Casbin nhờ kế thừa / ký tự đại diện, chặn ở đây);
+    2. Cán bộ không có quyền chéo còn hiệu lực (``clock_timestamp()``) cho ĐÚNG thao tác (``action`` ``None`` = thao tác
+       bất kỳ) ⇒ **404** cùng thân.
+
+    Trả các quyền còn hiệu lực (đã lọc theo thao tác). Đúng ĐƠN VỊ kiểm theo từng API (hồ sơ ở cổng duyệt lẻ, lô ở xem
+    trước); lõi / §5.4 kiểm lại dưới khoá (``cross_grant_authorizes``)."""
+    from ..repositories import document_bulk_repository as bulk_repo
+    from ..services.document_bulk_verify_service import grant_allows
+
+    if current_user.role != UserRole.OFFICER:
+        raise PermissionDeniedError(detail=CASBIN_PERMISSION_DENIED_DETAIL)
+    grants = await bulk_repo.active_grants_for_user(db, current_user.id)
+    if action is not None:
+        grants = [g for g in grants if grant_allows(g, action)]
+    if not grants:
+        raise ResourceNotFoundError(detail=CROSS_REVIEW_NOT_FOUND_DETAIL)
+    return grants
+
+
 async def require_cross_reviewer(
     current_user: models.User = Depends(check_permission),
     db: AsyncSession = Depends(database.get_db),
 ) -> models.User:
-    """Đường duyệt chéo (§6): Cán bộ đang hoạt động có ÍT NHẤT MỘT quyền còn hiệu lực (``clock_timestamp()``). Không đạt ⇒ 404
-    cùng thân (không lộ đường tồn tại). Lõi ``transition_document`` kiểm lại đúng quyền dưới khoá."""
-    from ..repositories import document_bulk_repository as bulk_repo
-
-    if current_user.role != UserRole.OFFICER:
-        raise ResourceNotFoundError(detail=CROSS_REVIEW_NOT_FOUND_DETAIL)
-    if not await bulk_repo.active_grants_for_user(db, current_user.id):
-        raise ResourceNotFoundError(detail=CROSS_REVIEW_NOT_FOUND_DETAIL)
+    """Đường duyệt chéo (§6) không gắn một thao tác (hàng đợi, xem / chốt / liệt kê lô chéo): Cán bộ đang hoạt động có ÍT
+    NHẤT MỘT quyền còn hiệu lực. Vai khác ⇒ 403; Cán bộ không có quyền ⇒ 404 cùng thân (owner Q1)."""
+    await _cross_reviewer_gate(current_user, db, None)
     return current_user
+
+
+async def require_cross_verifier(
+    current_user: models.User = Depends(check_permission),
+    db: AsyncSession = Depends(database.get_db),
+) -> models.User:
+    """Xem trước / chạy lô chéo (thao tác ``verify``): như :func:`require_cross_reviewer` nhưng quyền phải cho DUYỆT."""
+    from ..services.document_review_rules import ACTION_VERIFY
+
+    await _cross_reviewer_gate(current_user, db, ACTION_VERIFY)
+    return current_user
+
+
+def _cross_batch_not_found(exc: Exception) -> Exception:
+    """Lô chéo không có / không phải người tạo / sai đường ⇒ CÙNG thân 404 của luồng chéo (owner Q1: không phân biệt được
+    "không có quyền" với "lô không tồn tại")."""
+    return ResourceNotFoundError(detail=CROSS_REVIEW_NOT_FOUND_DETAIL)
 
 
 async def get_cross_bulk_batch_for_execute(
     batch_id: _GD1B_UUID = Path(..., description="Batch ID (UUID v4)"),
-    current_user: models.User = Depends(require_cross_reviewer),
+    current_user: models.User = Depends(require_cross_verifier),
     db: AsyncSession = Depends(database.get_db),
 ):
-    return await _gd1b_bulk_batch_for(db, batch_id, current_user, allow_admin=False, review_mode="cross")
+    from ..services.document_bulk_verify_service import BatchNotFound
+
+    try:
+        return await _gd1b_bulk_batch_for(db, batch_id, current_user, allow_admin=False, review_mode="cross")
+    except BatchNotFound as exc:
+        raise _cross_batch_not_found(exc)
 
 
 async def get_cross_bulk_batch_for_view(
@@ -4427,20 +4470,50 @@ async def get_cross_bulk_batch_for_view(
     current_user: models.User = Depends(require_cross_reviewer),
     db: AsyncSession = Depends(database.get_db),
 ):
-    return await _gd1b_bulk_batch_for(db, batch_id, current_user, allow_admin=False, review_mode="cross")
+    from ..services.document_bulk_verify_service import BatchNotFound
+
+    try:
+        return await _gd1b_bulk_batch_for(db, batch_id, current_user, allow_admin=False, review_mode="cross")
+    except BatchNotFound as exc:
+        raise _cross_batch_not_found(exc)
 
 
-async def get_cross_review_action_target(
+async def get_cross_review_verify_target(
     body: _CrossReviewActionRequest,
     current_user: models.User = Depends(require_cross_reviewer),
     db: AsyncSession = Depends(database.get_db),
 ) -> _CrossReviewActionRequest:
-    """Duyệt / từ chối chéo lẻ: hồ sơ phải thuộc ĐƠN VỊ của một quyền còn hiệu lực của người gọi, lead chưa xoá mềm, KHÔNG do
-    chính người gọi phụ trách — không thì 404 cùng thân (không lộ hồ sơ của đơn vị khác). Đúng ``grant_id`` / đúng thao tác
-    do lõi kiểm dưới khoá (409 ``actor_not_authorized``)."""
+    """``POST …/cross-review/verify`` — vai (403) đã kiểm ở ``require_cross_reviewer`` TRƯỚC khi tra hồ sơ."""
+    from ..services.document_review_rules import ACTION_VERIFY
+
+    return await get_cross_review_action_target(body, current_user, db, action=ACTION_VERIFY)
+
+
+async def get_cross_review_reject_target(
+    body: _CrossReviewActionRequest,
+    current_user: models.User = Depends(require_cross_reviewer),
+    db: AsyncSession = Depends(database.get_db),
+) -> _CrossReviewActionRequest:
+    """``POST …/cross-review/reject`` — vai (403) đã kiểm ở ``require_cross_reviewer`` TRƯỚC khi tra hồ sơ."""
+    from ..services.document_review_rules import ACTION_REJECT
+
+    return await get_cross_review_action_target(body, current_user, db, action=ACTION_REJECT)
+
+
+async def get_cross_review_action_target(
+    body: _CrossReviewActionRequest,
+    current_user: models.User,
+    db: AsyncSession,
+    *,
+    action: str,
+) -> _CrossReviewActionRequest:
+    """Duyệt / từ chối chéo lẻ (owner Q1): hồ sơ phải tồn tại, lead chưa xoá mềm, KHÔNG do chính người gọi phụ trách, thuộc
+    ĐƠN VỊ của một quyền còn hiệu lực của người gọi cho ĐÚNG ``action`` — MỘT vị từ ``cross_grant_authorizes`` với lõi /
+    §5.4. Không thì 404 cùng thân (không lộ hồ sơ có thật). Đúng ``grant_id`` do lõi kiểm DƯỚI khoá."""
     from sqlalchemy import select as _select
 
     from ..repositories import document_bulk_repository as bulk_repo
+    from ..services.document_bulk_verify_service import cross_grant_authorizes
 
     row = (
         await db.execute(
@@ -4449,12 +4522,10 @@ async def get_cross_review_action_target(
             .where(models.AdmissionProfile.id == body.profile_id)
         )
     ).first()
-    units = {g.unit_id for g in await bulk_repo.active_grants_for_user(db, current_user.id)}
+    grants = await bulk_repo.active_grants_for_user(db, current_user.id)
     if (
         row is None
-        or row.deleted_at is not None
-        or row.unit_id not in units
-        or row.assigned_officer_id == current_user.id
+        or not any(cross_grant_authorizes(current_user, row, (g, True), action) for g in grants)
     ):
         raise ResourceNotFoundError(detail=CROSS_REVIEW_NOT_FOUND_DETAIL)
     return body
