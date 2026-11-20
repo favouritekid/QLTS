@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
 import { render, screen, fireEvent, within, waitFor } from "@/test/utils/test-utils";
 import { AcademicInfoPanel } from "./AcademicInfoPanel";
 import * as UseProgramDataHooks from "@/hooks/admissions/useProgramData";
@@ -428,6 +428,126 @@ describe("AcademicInfoPanel", () => {
       type: "quota-matrix-overview",
       academicYear: 2026,
       academicInfoId: 21,
+    });
+  });
+
+  // ============================================
+  // Chỉ tiêu TRỐNG ≠ 0 (owner chốt 20-11): null = chưa đặt (máy chủ không giới hạn), 0 = CHỦ ĐỘNG đóng ngành (máy chủ
+  // chặn mọi lần Phê duyệt). Form KHÔNG được tự đổi trống thành 0; sửa học phí KHÔNG được chạm chỉ tiêu; tạo mới để trống
+  // ⇒ lưu null. Lỗi cũ: mở sửa gán `quota || 0` và luôn gửi chỉ tiêu; tạo mới mặc định 0 (ô vẫn hiện trống).
+  // ============================================
+  describe("chỉ tiêu trống ≠ 0", () => {
+    beforeAll(() => {
+      // Radix Select trong jsdom: thiếu các hàm con trỏ / cuộn (cùng cách CouncilTemplatePanel.test.tsx)
+      const ep = Element.prototype as unknown as Record<string, unknown>;
+      ep.hasPointerCapture ??= () => false;
+      ep.setPointerCapture ??= () => undefined;
+      ep.releasePointerCapture ??= () => undefined;
+      ep.scrollIntoView ??= () => undefined;
+    });
+
+    const motHocVu = (quota: number | null) => {
+      (UseProgramDataHooks.useOfferingAcademicInfos as any).mockReturnValue({
+        data: [
+          {
+            id: 31,
+            offering_id: 1,
+            academic_year: 2026,
+            tuition_fee_per_year: 10000000,
+            annual_admission_quota: quota,
+            is_published: false,
+          },
+        ],
+        isLoading: false,
+      });
+    };
+
+    /** Mở hộp sửa của học vụ duy nhất, chờ form nạp xong. */
+    const moSua = async () => {
+      const row = screen.getByText("CNTT - Chính quy").closest("tr");
+      fireEvent.click(row!.querySelector("button")!);
+      const w = within(await screen.findByRole("dialog"));
+      await waitFor(() => expect((w.getByLabelText(/Năm học/i) as HTMLInputElement).value).toBe("2026"));
+      return w;
+    };
+
+    const bamCapNhat = async (w: ReturnType<typeof within>) => {
+      fireEvent.click(w.getByRole("button", { name: /cập nhật/i }));
+      await waitFor(() => expect(mockUpdateMutate).toHaveBeenCalledTimes(1));
+      return mockUpdateMutate.mock.calls[0][0].data as Record<string, unknown>;
+    };
+
+    /** Mở hộp tạo mới, chọn loại hình (Radix Select mở bằng phím Enter, chọn bằng click). */
+    const moTao = async () => {
+      fireEvent.click(screen.getByText("Thêm mới"));
+      const w = within(await screen.findByRole("dialog"));
+      fireEvent.keyDown(w.getByRole("combobox"), { key: "Enter" });
+      fireEvent.click(await screen.findByRole("option", { name: /CNTT - Chính quy/ }));
+      return w;
+    };
+
+    const bamThemMoi = async (w: ReturnType<typeof within>) => {
+      fireEvent.click(w.getByRole("button", { name: /^thêm mới$/i }));
+      await waitFor(() => expect(mockCreateMutate).toHaveBeenCalledTimes(1));
+      return mockCreateMutate.mock.calls[0][0] as Record<string, unknown>;
+    };
+
+    it("sửa học vụ chỉ tiêu TRỐNG, chỉ đổi học phí ⇒ ô hiện trống và KHÔNG gửi chỉ tiêu (không thành 0)", async () => {
+      motHocVu(null);
+      render(<AcademicInfoPanel />);
+      const w = await moSua();
+      expect((w.getByLabelText(/Chỉ tiêu/i) as HTMLInputElement).value).toBe("");
+      fireEvent.change(w.getByLabelText(/Học phí/i), { target: { value: "12000000" } });
+      const than = await bamCapNhat(w);
+      expect(than.tuition_fee_per_year).toBe(12000000);
+      expect(than).not.toHaveProperty("annual_admission_quota");
+    });
+
+    it("sửa học vụ chỉ tiêu 0 ⇒ ô hiện 0 (không hiện trống); đổi học phí ⇒ KHÔNG gửi chỉ tiêu", async () => {
+      motHocVu(0);
+      render(<AcademicInfoPanel />);
+      const w = await moSua();
+      expect((w.getByLabelText(/Chỉ tiêu/i) as HTMLInputElement).value).toBe("0");
+      fireEvent.change(w.getByLabelText(/Học phí/i), { target: { value: "12000000" } });
+      const than = await bamCapNhat(w);
+      expect(than).not.toHaveProperty("annual_admission_quota");
+    });
+
+    it("xoá trắng ô chỉ tiêu đang 100 ⇒ gửi null (đặt về trống), không gửi 0", async () => {
+      motHocVu(100);
+      render(<AcademicInfoPanel />);
+      const w = await moSua();
+      fireEvent.change(w.getByLabelText(/Chỉ tiêu/i), { target: { value: "" } });
+      const than = await bamCapNhat(w);
+      expect(than).toHaveProperty("annual_admission_quota");
+      expect(than.annual_admission_quota).toBeNull();
+    });
+
+    it("nhập 0 cho học vụ chỉ tiêu trống ⇒ gửi đúng 0 (chủ động đóng ngành)", async () => {
+      motHocVu(null);
+      render(<AcademicInfoPanel />);
+      const w = await moSua();
+      fireEvent.change(w.getByLabelText(/Chỉ tiêu/i), { target: { value: "0" } });
+      const than = await bamCapNhat(w);
+      expect(than.annual_admission_quota).toBe(0);
+    });
+
+    it("tạo mới để trống chỉ tiêu ⇒ gửi null (lưu trống), không gửi 0", async () => {
+      render(<AcademicInfoPanel />);
+      const w = await moTao();
+      expect((w.getByLabelText(/Chỉ tiêu/i) as HTMLInputElement).value).toBe("");
+      const than = await bamThemMoi(w);
+      expect(than.offering_id).toBe(1);
+      expect(than).toHaveProperty("annual_admission_quota");
+      expect(than.annual_admission_quota).toBeNull();
+    });
+
+    it("tạo mới nhập 0 ⇒ gửi đúng 0", async () => {
+      render(<AcademicInfoPanel />);
+      const w = await moTao();
+      fireEvent.change(w.getByLabelText(/Chỉ tiêu/i), { target: { value: "0" } });
+      const than = await bamThemMoi(w);
+      expect(than.annual_admission_quota).toBe(0);
     });
   });
 });

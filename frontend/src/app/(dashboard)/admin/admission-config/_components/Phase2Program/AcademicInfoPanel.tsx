@@ -59,8 +59,19 @@ interface AcademicInfoFormData {
   offering_id: number | null;
   academic_year: number;
   tuition_fee_per_year?: number;
-  annual_admission_quota?: number;
+  /**
+   * Chỉ tiêu năm. `null` = TRỐNG (chưa đặt — máy chủ không giới hạn); `0` = CHỦ ĐỘNG đóng ngành (máy chủ chặn mọi lần
+   * Phê duyệt). Hai giá trị KHÁC nhau — form không bao giờ tự đổi trống thành 0.
+   */
+  annual_admission_quota: number | null;
   is_published: boolean;
+}
+
+/** Ô số chỉ tiêu → giá trị form: ô rỗng (hoặc không đọc được số) ⇒ `null` (trống), không phải 0. */
+function quotaFromInput(raw: string): number | null {
+  if (raw.trim() === "") return null;
+  const n = Number.parseInt(raw, 10);
+  return Number.isNaN(n) ? null : n;
 }
 
 // ============================================
@@ -89,7 +100,7 @@ export function AcademicInfoPanel() {
     offering_id: null,
     academic_year: new Date().getFullYear(),
     tuition_fee_per_year: 0,
-    annual_admission_quota: 0,
+    annual_admission_quota: null,
     is_published: false,
   });
 
@@ -98,7 +109,7 @@ export function AcademicInfoPanel() {
       offering_id: null,
       academic_year: new Date().getFullYear(),
       tuition_fee_per_year: 0,
-      annual_admission_quota: 0,
+      annual_admission_quota: null,
       is_published: false,
     });
     setEditingItem(null);
@@ -117,7 +128,7 @@ export function AcademicInfoPanel() {
       offering_id: item.offering_id,
       academic_year: item.academic_year,
       tuition_fee_per_year: item.tuition_fee_per_year || 0,
-      annual_admission_quota: item.annual_admission_quota || 0,
+      annual_admission_quota: item.annual_admission_quota ?? null,
       is_published: item.is_published,
     });
     setSemesterTuitions(
@@ -142,7 +153,7 @@ export function AcademicInfoPanel() {
       toast.error("Please enter a valid academic year");
       return;
     }
-    if (formData.annual_admission_quota && formData.annual_admission_quota < 0) {
+    if (formData.annual_admission_quota !== null && formData.annual_admission_quota < 0) {
       toast.error("Admission quota cannot be negative");
       return;
     }
@@ -173,9 +184,13 @@ export function AcademicInfoPanel() {
       } else if (editingItem) {
         const updateData: OfferingAcademicInfoUpdate = {
           tuition_fee_per_year: formData.tuition_fee_per_year,
-          annual_admission_quota: formData.annual_admission_quota,
           is_published: formData.is_published,
         };
+        // Chỉ gửi chỉ tiêu khi người dùng ĐÃ đổi ô (kể cả xoá trắng ⇒ gửi null) — sửa học phí / công bố không được chạm chỉ
+        // tiêu (năm đã khoá bảng chỉ tiêu thì máy chủ còn chặn mọi lệnh đổi chỉ tiêu).
+        if (formData.annual_admission_quota !== (editingItem.annual_admission_quota ?? null)) {
+          updateData.annual_admission_quota = formData.annual_admission_quota;
+        }
         const result = await updateMutation.mutateAsync({
           id: editingItem.id,
           data: updateData,
@@ -602,11 +617,11 @@ export function AcademicInfoPanel() {
                 <Input
                   id="annual_admission_quota"
                   type="number"
-                  value={formData.annual_admission_quota || ""}
+                  value={formData.annual_admission_quota ?? ""}
                   onChange={(e) =>
                     setFormData({
                       ...formData,
-                      annual_admission_quota: e.target.value ? parseInt(e.target.value) : undefined,
+                      annual_admission_quota: quotaFromInput(e.target.value),
                     })
                   }
                   placeholder="e.g., 100"
