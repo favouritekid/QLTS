@@ -14,6 +14,7 @@
 * vị từ "đã lệch" bằng SQL (migration dùng) = kết luận của ``check_lock_and_count_set_rows`` (Python) — một nguồn nghĩa.
 """
 import asyncio
+from datetime import datetime, timezone
 
 import pytest
 from sqlalchemy import text
@@ -79,10 +80,26 @@ async def test_patch_nam_hoc_dong_da_dung_bi_409(client, hs, ad):  # noqa: F811
     assert await _nam(o["ai"]) == 2026
 
 
-async def test_xoa_mem_hoc_vu_da_dung_van_duoc_qd_giu_nguyen(client, hs, ad):  # noqa: F811
+def _dong_bang_dong_ho_dich_vu(monkeypatch, nam: int) -> None:
+    """Đóng băng đồng hồ của ``organization_service`` về 15-06 của ``nam``. Dịch vụ cấm xoá học vụ của năm QUÁ KHỨ theo
+    NGÀY CHẠY (``academic_year < datetime.now().year`` ⇒ 400); học vụ seed thuộc năm cố định ⇒ không đóng băng thì ca xoá
+    đỏ từ ngày 01-01 năm sau dù khoá Hội đồng vẫn đúng. Chỉ thay ``datetime`` của module ấy, không đụng nơi khác."""
+    from app.services import organization_service
+
+    class _DongHo(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(nam, 6, 15, tzinfo=tz or timezone.utc)
+
+    monkeypatch.setattr(organization_service, "datetime", _DongHo)
+
+
+async def test_xoa_mem_hoc_vu_da_dung_van_duoc_qd_giu_nguyen(client, hs, ad, monkeypatch):  # noqa: F811
     # Review max PR #724 (R3, owner 15-11 "không chặn, ghi rõ phạm vi"): khoá chỉ canh đổi nội dung + xoá CỨNG. Xoá MỀM
     # học vụ đã có Quyết định dùng (route thật ⇒ ``is_deleted``) ĐƯỢC; Quyết định vẫn hiệu lực.
     a, o = await _qd_mot_em(client, ad, hs)
+    # Ca này đo khoá Hội đồng, KHÔNG đo luật "năm quá khứ" ⇒ đồng hồ dịch vụ đứng ở chính năm của học vụ.
+    _dong_bang_dong_ho_dich_vu(monkeypatch, await _nam(o["ai"]))
     r = await client.delete("/api/academic-info/%d" % o["ai"], headers=ad)
     assert r.status_code == 204, r.text
     assert await qd._q1("SELECT is_deleted FROM offering_academic_info WHERE id = :a", a=o["ai"]) is True
