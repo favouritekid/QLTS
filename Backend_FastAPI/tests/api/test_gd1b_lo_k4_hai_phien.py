@@ -14,9 +14,10 @@ ngược chiều K4:
   ⇒ bế tắc hoặc ``23503`` ⇒ 500;
 - ca d — người tạo bị khoá tài khoản giữa bước 1 và bước 2 của chạy lô ⇒ §5.3 "kiểm lại người tạo dưới khoá".
 
-Sau sửa: mọi đường lô khoá NGƯỜI ``FOR KEY SHARE`` TRƯỚC dòng lô (cùng chiều K4) rồi kiểm người còn + đang hoạt động;
-không đạt ⇒ 409 ``actor_not_authorized`` (mã có sẵn). Thứ tự khoá toàn cục: người → dòng lô → quyền chéo → hồ sơ → lead →
-giấy → người thao tác ``FOR SHARE`` (cuối; không xung đột với ``FOR KEY SHARE`` đầu).
+Sau sửa: mọi đường lô khoá NGƯỜI TRƯỚC dòng lô (cùng chiều K4) — ``FOR KEY SHARE`` ở xem trước / chạy lô, ``FOR SHARE`` ở
+chốt lô (giữ vai ổn định, ``test_gd1b_lo_chot_ha_vai_hai_phien.py``) — rồi kiểm người còn + đang hoạt động; không đạt ⇒ 409
+``actor_not_authorized`` (mã có sẵn). Thứ tự khoá toàn cục: người → dòng lô → quyền chéo → hồ sơ → lead → giấy → người thao
+tác ``FOR SHARE`` (cuối; không xung đột với khoá người đầu).
 
 Kiểm ngược (bản chép ngoài kho): bỏ khoá người ở xem trước ⇒ a, c đỏ; ở chạy lô ⇒ b, d, f đỏ; khoá người SAU dòng lô ở
 chạy lô ⇒ f đỏ (bế tắc); bỏ khoá người ở chốt lô ⇒ e đỏ.

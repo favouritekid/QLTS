@@ -1424,6 +1424,7 @@ jobs:
               tests/api/test_gd1b_lo_chay.py
               tests/api/test_gd1b_lo_vong_doi.py
               tests/api/test_gd1b_lo_k4_hai_phien.py
+              tests/api/test_gd1b_lo_chot_ha_vai_hai_phien.py
               tests/api/test_gd1b_lo_danh_sach.py
               tests/api/test_gd1b_lo_khoa_tu_van_csdl.py
               tests/api/test_gd1b_cheo_quyen.py

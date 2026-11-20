@@ -4,7 +4,8 @@
 (sha256 ``45b718f6…adad``) §2.1. Mọi bước theo ĐÚNG thứ tự của đặc tả:
 
 - Thứ tự khoá dòng ``user`` ↔ dòng lô (F7, 20-11): MỌI đường đi NGƯỜI → LÔ như K4 (``user_deletion_policy``: người
-  ``FOR UPDATE`` → xoá lô ``previewed``). Xem trước, chạy lô bước 2, chốt lô khoá người ``FOR KEY SHARE`` trước dòng lô;
+  ``FOR UPDATE`` → xoá lô ``previewed``). Xem trước, chạy lô bước 2 khoá người ``FOR KEY SHARE`` trước dòng lô; chốt lô
+  khoá người ``FOR SHARE`` trước dòng lô (giữ VAI ổn định tới commit — quyền chốt xét bằng vai đọc dưới khoá, Codex 20-11);
   §5.4 khoá người ``FOR SHARE`` SAU dòng lô nhưng chỉ chạy với lô ``processing`` — K4 thấy lô ấy là ``BLOCK_ACTOR``
   (409, chỉ đọc) nên không bao giờ xoá dòng lô đó ⇒ không vòng chờ.
 - ``preview_batch`` (§5.2): khoá theo người ``(ns_preview, user_id)`` → dọn bản xem trước của CHÍNH người bấm → đếm lại
@@ -424,8 +425,8 @@ async def preview_batch(
 # =====================================================================================================================
 def _actor_live(actor: Optional[Any]) -> bool:
     """MỘT vị từ "người thao tác còn dùng được" (dòng còn + ``status = 'active'``) cho xem trước (bước 0b), chạy lô
-    (bước 2), chốt lô và §5.4 bước 4 — đọc trên dòng VỪA khoá (``User`` hoặc hàng ``(id, status)`` của
-    ``repo.lock_user_key_share``)."""
+    (bước 2), chốt lô và §5.4 bước 4 — đọc trên dòng VỪA khoá (``User``, hàng ``(id, status)`` của
+    ``repo.lock_user_key_share`` hoặc hàng ``(id, status, role)`` của ``repo.lock_user_role_share``)."""
     return actor is not None and actor.status == "active"
 
 
@@ -867,7 +868,10 @@ async def finalize_batch(
     meta = request_meta or RequestMeta()
     reason = (reason or "").strip() or None
     is_creator = viewer_id == creator_id
-    is_admin = viewer_role == UserRole.ADMIN
+    # 422 TRƯỚC khoá (hợp đồng bản 5 B4 — cùng vị từ với cờ ``finalize_requires_reason``), xét bằng vai đầu yêu cầu. Phép
+    # kiểm này chỉ TỪ CHỐI, không cấp quyền: quyền GHI quyết ở bước 3 bằng vai đọc lại dưới khoá. Người không phải người
+    # tạo chỉ qua được cổng bước 0 khi vai đầu yêu cầu là Admin ⇒ đã bị đòi lý do ở đây ⇒ "Admin chốt lô của người khác
+    # luôn có lý do" vẫn đúng khi bước 3 xét bằng vai hiện hành.
     if _needs_finalize_reason(is_creator=is_creator, viewer_role=viewer_role) and not reason:
         raise BulkVerifyUnprocessable("REASON_REQUIRED", "Admin chốt lô của người khác phải ghi lý do")
 
@@ -892,12 +896,18 @@ async def finalize_batch(
 
     # Bước 3 — ĐÃ giữ khoá: khoá dòng NGƯỜI CHỐT rồi dòng lô (F7, 20-11 — cùng chiều K4: người → lô; bước 4 ghi
     # ``finalized_by_user_id`` = khoá ngoại tới dòng người này), kiểm lại quyền + đọc lại trạng thái DƯỚI khoá.
-    finalizer = await repo.lock_user_key_share(db, viewer_id)
+    # Dòng người khoá ``FOR SHARE``, KHÔNG ``FOR KEY SHARE`` (Codex 20-11): lệnh đổi vai / khoá tài khoản tới sau phải CHỜ
+    # chốt commit, nên vai đọc ở đây còn đúng tới lúc ghi; đổi vai đã commit TRƯỚC bước này thì đọc ra vai MỚI.
+    finalizer = await repo.lock_user_role_share(db, viewer_id)
     locked = await repo.lock_batch_row(db, batch_id)
     if locked is None:
         raise BatchNotFound()
     row = locked[0]
-    if not (row.actor_user_id == viewer_id or is_admin):
+    # Quyền chốt xét bằng VAI HIỆN HÀNH (đọc dưới khoá ở trên), không bằng ``viewer_role`` đọc từ đầu yêu cầu: Admin vừa bị
+    # hạ vai không còn chốt được lô của người khác ⇒ cùng 404 với cổng bước 0. Dòng người không còn / không hoạt động thì
+    # không có vai để xét ở đây — phép kiểm ``_actor_live`` bên dưới trả 409 ``actor_not_authorized`` (như trước).
+    is_admin = finalizer is not None and finalizer.role == UserRole.ADMIN
+    if _actor_live(finalizer) and not (row.actor_user_id == viewer_id or is_admin):
         raise BatchNotFound()
     if row.status == "previewed":
         raise BulkBatchConflict("BATCH_NOT_STARTED", "Lô chưa chạy — không có gì để chốt")
