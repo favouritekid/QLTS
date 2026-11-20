@@ -1275,6 +1275,9 @@ jobs:
           # (`frontend/src/test/mocks/council-luat-may-chu.ts`) CHÉP luật — đổi luật ⇒ đỏ ⇒ rà bảng hợp đồng + MSW cùng lượt.
           # CLAUDE.md §7 (13-11): `tests/unit/test_hop_dong_msw_cau_loi.py` khoá CÂU LỖI + tên loại mẫu / tập trạng thái / trần từ
           # khoá của MSW bằng máy chủ (so trực tiếp; test ghim chỉ canh phía máy chủ đổi). Đọc tệp frontend ⇒ cần checkout cả repo.
+          # Tạo học vụ (19-11): `tests/api/test_tao_hoc_vu_api.py` — request THẬT `POST /api/offerings/{id}/academic-info` và
+          # `POST /api/admin/offerings/{id}/academic-info`: phản hồi thành công + tải lại danh sách thấy học vụ vừa tạo + bấm lại
+          # báo 409 không sinh dòng thứ hai (lỗi 500 khi tuần tự hoá `semester_tuitions` sau commit). Ghim WHOLE-FILE.
           - tier: Tier 5 — Phase 2 engine prereqs
             tests: >-
               tests/unit/test_nginx_template_packaging.py
@@ -1343,6 +1346,7 @@ jobs:
               tests/unit/test_che_log_token_nginx.py
               tests/utils/test_config_loading.py
               tests/unit/test_sentry_khoi_tao.py
+              tests/api/test_tao_hoc_vu_api.py
           # Lát GĐ1 tách khỏi Tier 5 (owner 13-11, PR #724): Tier 5 vốn ~41 phút trên main; 41 tệp GĐ1 thêm ~31,5 phút
           # (đo từ log PR #724, lượt bị huỷ ở trần `timeout-minutes: 75` khi đã chạy 4.087 / 4.183 ca, 0 đỏ).
           # Tách ra thì cả hai dưới trần; wall-clock không tăng (lát dài nhất vẫn là Tier 2a ~51 phút).

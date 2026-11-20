@@ -1369,6 +1369,11 @@ async def create_academic_info(
         await db.flush()
         await db.refresh(db_academic_info)
 
+        # Nạp lại kèm quan hệ — cùng mẫu với create_program_offering / create_major_program. Bản vừa tạo chưa nạp
+        # `semester_tuitions` (quan hệ lazy, thêm 11-04-2026); router commit rồi mới dựng phản hồi, lúc ấy schema đọc quan hệ
+        # này ⇒ nạp lười ngoài greenlet ⇒ MissingGreenlet ⇒ 500 trong khi dòng ĐÃ được ghi. Repo nạp sẵn bằng selectinload.
+        db_academic_info = await get_academic_info_by_id(db, db_academic_info.id)
+
         # ✅ Create post-commit callback
         async def _post_commit():
             """Execute after router commits the transaction."""

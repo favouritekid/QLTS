@@ -344,7 +344,8 @@ export interface OfferingAcademicInfo {
   offering_id: number;
   academic_year: number;
   tuition_fee_per_year?: number;
-  annual_admission_quota?: number;
+  /** `null` = trống (chưa đặt chỉ tiêu, máy chủ không giới hạn) — KHÁC `0` (chủ động đóng ngành). */
+  annual_admission_quota?: number | null;
   is_published: boolean;
   target_audience?: string;
   cutoff_score_previous_year?: number;
@@ -361,13 +362,15 @@ export interface OfferingAcademicInfoCreate {
   offering_id: number;
   academic_year: number;
   tuition_fee_per_year?: number;
-  annual_admission_quota?: number;
+  /** `null` ⇒ lưu trống (chưa đặt chỉ tiêu). */
+  annual_admission_quota?: number | null;
   is_published?: boolean;
 }
 
 export interface OfferingAcademicInfoUpdate {
   tuition_fee_per_year?: number;
-  annual_admission_quota?: number;
+  /** Vắng ⇒ máy chủ GIỮ chỉ tiêu cũ; `null` ⇒ đặt về trống. */
+  annual_admission_quota?: number | null;
   is_published?: boolean;
 }
 
@@ -568,12 +571,14 @@ export interface AcademicInfoCreate {
   offering_id: number;
   academic_year: number;
   tuition_fee_per_year?: number;
-  annual_admission_quota?: number;
+  /** `null` ⇒ lưu trống (chưa đặt chỉ tiêu) — KHÁC `0`. */
+  annual_admission_quota?: number | null;
   is_published?: boolean;
 }
 
 export interface AcademicInfoUpdate {
   tuition_fee_per_year?: number;
-  annual_admission_quota?: number;
+  /** Vắng ⇒ máy chủ GIỮ chỉ tiêu cũ; `null` ⇒ đặt về trống. */
+  annual_admission_quota?: number | null;
   is_published?: boolean;
 }
