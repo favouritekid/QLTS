@@ -1413,6 +1413,7 @@ jobs:
               tests/api/test_gd1b_bang_chung_xoa.py
               tests/api/test_gd1b_bang_chung_toan_ven.py
               tests/api/test_gd1b_tich_hop_dang_ky.py
+              tests/api/test_gd1b_phien_ban_phan_hoi.py
           - tier: Tier 5i — GĐ1b lô duyệt giấy + duyệt chéo
             tests: >-
               tests/unit/test_gd1b_lo_khoa_tu_van.py
@@ -1425,6 +1426,7 @@ jobs:
               tests/api/test_gd1b_lo_danh_sach.py
               tests/api/test_gd1b_lo_khoa_tu_van_csdl.py
               tests/api/test_gd1b_cheo_quyen.py
+              tests/api/test_gd1b_user_agent_dai.py
 
     env:
       APP_ENV: test

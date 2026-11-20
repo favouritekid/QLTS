@@ -372,7 +372,7 @@ async def preview_batch(
             "expires_at": expires_at,
             "status": "previewed",
             "ip_address": meta.ip_address,
-            "user_agent": (meta.user_agent or None) and meta.user_agent[:500],
+            "user_agent": meta.user_agent or None,  # cột tự cắt theo độ dài (TruncatedString, PR-D F12)
         },
         [
             {
@@ -903,7 +903,7 @@ async def finalize_batch(
             reason=reason,
             source="api",
             ip_address=meta.ip_address,
-            user_agent=(meta.user_agent or None) and meta.user_agent[:500],
+            user_agent=meta.user_agent or None,  # cột tự cắt theo độ dài (TruncatedString, PR-D F12)
         )
     log.warning("bulk_verify_finalized", batch_id=str(batch_id), finalized_by=viewer_id, by_admin=is_admin)
     view = await _build_view(db, batch_id, "interrupted", viewer_id=viewer_id, viewer_role=viewer_role)

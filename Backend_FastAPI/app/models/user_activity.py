@@ -3,7 +3,7 @@ from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text, JSON
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
-from .base import Base
+from .base import Base, TruncatedString
 
 
 class UserActivityLog(Base):
@@ -42,8 +42,8 @@ class UserActivityLog(Base):
     # IP address
     ip_address = Column(String(45), nullable=True)
 
-    # User agent
-    user_agent = Column(String(256), nullable=True)
+    # User agent — PR-D (F12): cắt theo độ dài cột ở tầng kiểu (mọi thao tác Admin ghi nhật ký hoạt động; nơi gọi không cắt).
+    user_agent = Column(TruncatedString(256), nullable=True)
 
     # Timestamp (automatically set)
     created_at = Column(
