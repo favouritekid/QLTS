@@ -22,6 +22,7 @@ from datetime import datetime
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import text
 
 from app import models
 from app.database import AsyncSessionLocal
@@ -90,8 +91,11 @@ async def _nganh_rieng(unit_id: int, dong) -> tuple:
     ts = int(datetime.now().timestamp() * 1000)
     async with AsyncSessionLocal() as s:
         async with s.begin():
+            # Dữ liệu nền (``seed_lead_dependencies``) chèn ngành với id TƯỜNG MINH, không đẩy sequence ⇒ tự chọn id kế tiếp.
+            nid = (await s.execute(text("SELECT COALESCE(MAX(id), 0) + 1 FROM major_program"))).scalar_one()
             mp = models.MajorProgram(
-                name=f"Ngành thử xoá {ts}", code=f"G2FX{ts}", degree_level="Cao đẳng", unit_id=unit_id, is_active=True
+                id=nid, name=f"Ngành thử xoá {ts}", code=f"G2FX{ts}", degree_level="Cao đẳng", unit_id=unit_id,
+                is_active=True,
             )
             s.add(mp)
             await s.flush()
