@@ -19,14 +19,19 @@ Không đường nào được khoá dòng học vụ TRƯỚC rồi mới lấy
 khoá năm ngay sau kiểm quyền, khi giao dịch chưa giữ khoá dòng học vụ nào. (Trước luật C, xoá mềm không lấy khoá năm vì không đổi
 ``(id, chỉ tiêu)``; từ luật C cờ xoá mềm vào dấu và bị chặn khi bảng đã khoá ⇒ lấy khoá năm như sửa chỉ tiêu.)
 
-THỨ TỰ KHOÁ TOÀN HỆ (Codex lượt 3, owner chốt 20-11): khoá LOẠI HÌNH (dòng ``program_offering`` ``FOR NO KEY UPDATE`` — chỉ
+THỨ TỰ KHOÁ TOÀN HỆ (Codex lượt 3 + lượt 4, owner chốt 20-11): khoá NGÀNH (dòng ``major_program`` ``FOR NO KEY UPDATE`` — chỉ
+ở tạo loại hình, bật lại loại hình (ngừng → hoạt động) và xoá ngành, một dòng, ``organization_service._lock_major_program_row``)
+→ khoá LOẠI HÌNH (dòng ``program_offering`` ``FOR NO KEY UPDATE`` — chỉ
 ở tạo / khôi phục học vụ (``organization_service._lock_offering_row``, một dòng) và dây chuyền xoá loại hình / xoá ngành (mọi dòng
 của tập, id TĂNG DẦN, MỘT câu)) → khoá NĂM (tăng dần) → dòng học vụ → dòng bảng chỉ tiêu. Không vòng chờ: (a) đường lấy khoá loại
 hình lấy các dòng loại hình TRƯỚC mọi khoá năm, theo id tăng dần trong một câu — chờ dòng loại hình thì chỉ đang giữ dòng loại hình
 id NHỎ hơn (mọi đường khác lấy cùng chiều hoặc chỉ một dòng); (b) các đường
 chỉ lấy khoá năm (PUT / khoá / mở khoá bảng, sửa / dời / xoá mềm học vụ) không bao giờ chờ dòng loại hình ở chế độ xung đột — chèn /
 sửa dòng TRỎ tới loại hình (học vụ, hồ sơ, lead…) chỉ lấy ``FOR KEY SHARE``, không xung đột với ``NO KEY UPDATE``; (c) lệnh UPDATE
-dòng loại hình KHÔNG qua khoá năm (ô "Ngừng") không giữ khoá năm / dòng học vụ nào khi chờ ⇒ chờ nó không khép vòng.
+dòng loại hình KHÔNG qua khoá năm (ô "Ngừng") không giữ khoá năm / dòng học vụ nào khi chờ ⇒ chờ nó không khép vòng; (d) khoá
+ngành luôn lấy khi giao dịch CHƯA giữ khoá loại hình / năm / học vụ nào, và không đường nào giữ khoá loại hình / năm rồi mới chờ
+dòng ngành ở chế độ xung đột — chèn loại hình chỉ lấy ``FOR KEY SHARE`` trên ngành (kiểm khoá ngoại), "Ngừng ngành" (UPDATE dòng
+ngành) không giữ khoá nào khác khi chờ.
 
 Dây chuyền xoá loại hình / xoá ngành khoá DÒNG học vụ bằng MỘT câu ``FOR NO KEY UPDATE ORDER BY id`` TRƯỚC câu UPDATE (Codex
 lượt 3): chỉ ``UPDATE … WHERE offering_id`` thì khoá theo thứ tự QUÉT (vật lý / chỉ mục), có thể ngược chiều id ⇒ vòng chờ ``40P01``

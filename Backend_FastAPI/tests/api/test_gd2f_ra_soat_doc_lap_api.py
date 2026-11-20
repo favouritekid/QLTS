@@ -11,6 +11,8 @@
 5. Ghi qua đối tượng ORM nạp TRƯỚC khoá năm: nạp lại sau khoá — không thì gán trùng ảnh cũ ⇒ không ghi gì mà vẫn báo thành công.
 6. PATCH gửi tường minh ``"academic_year": null`` ⇒ 422.
 7. Xoá loại hình: học vụ vừa bị dời năm ở nơi khác (năm ngoài tập đã khoá) ⇒ 409 tải lại.
+8. (Codex lượt 4, owner chốt 20-11) Ngành "Ngừng" / đã xoá ⇒ không tạo, không bật lại loại hình (409 ``MAJOR_PROGRAM_INACTIVE``);
+   tạo / bật lại loại hình và xoá ngành xếp hàng qua khoá dòng ngành — hai phiên, cả hai thứ tự, kiểm trạng thái cuối.
 
 Ca hai phiên đo "chờ" bằng ``pg_blocking_pids`` từ phiên thứ ba; mọi bước chờ có hạn. Dữ liệu nền dựng bằng SQL / dịch vụ (route
 POST tạo học vụ còn lỗi có từ trước ở lần tạo thành công — ngoài phạm vi). Không dữ liệu thật.
@@ -505,3 +507,209 @@ async def test_hai_phien_doi_nam_hoc_vu_dang_do_thi_xoa_loai_hinh_cho_roi_409_ta
         await _dong(s1, s2, viec)
     dong = (await _sql("SELECT academic_year, is_deleted FROM offering_academic_info WHERE id = :i", i=e)).one()
     assert (tuple(dong), await _loai_hinh_hoat_dong(o)) == ((NAM - 2, False), True)
+
+
+# ══ 8 — Codex lượt 4: ngành Ngừng / đã xoá ⇒ không tạo, không bật lại loại hình; tạo / bật lại / xoá ngành xếp hàng ════
+# Owner chốt 20-11 (cùng khuôn luật loại hình → học vụ): ``major_program.is_active = false`` ("Ngừng" và "Xoá ngành" chung cờ) ⇒
+# tạo loại hình mới / bật lại loại hình (ngừng → hoạt động) 409 ``MAJOR_PROGRAM_INACTIVE``. Ba lệnh lấy khoá DÒNG ngành
+# ``FOR NO KEY UPDATE`` đầu tiên; xoá ngành lấy nó TRƯỚC khi liệt kê loại hình ⇒ không loại hình nào chen vào sau bước liệt kê.
+LOAI_HINH_NGANH = "/api/admin/programs/%d/offerings"
+SUA_LOAI_HINH = "/api/admin/offerings/%d"
+NGANH_NGUNG_409 = {
+    "detail": "Ngành đang ngừng / đã xoá — bật lại ngành trước khi tạo / bật lại loại hình đào tạo.",
+    "error_code": "MAJOR_PROGRAM_INACTIVE",
+}
+
+
+async def _dem_loai_hinh(nganh_id: int) -> tuple:
+    """(số loại hình của ngành, số loại hình đang hoạt động)."""
+    return tuple(
+        (
+            await _sql(
+                "SELECT count(*), count(*) FILTER (WHERE is_active) FROM program_offering WHERE program_id = :n", n=nganh_id
+            )
+        ).one()
+    )
+
+
+def _ten_loai_hinh_moi() -> str:
+    return "G2FN_%d" % int(datetime.now().timestamp() * 1_000_000)
+
+
+async def _tao_loai_hinh(s, admin_user_in_db, nganh_id):
+    from app import schemas
+    from app.services import organization_service
+
+    nguoi = await s.get(models.User, admin_user_in_db["id"])
+    return await organization_service.create_program_offering(
+        s,
+        schemas.ProgramOfferingCreate(offering_type=_ten_loai_hinh_moi(), program_id=nganh_id, duration_semesters=6),
+        current_user=nguoi,
+    )
+
+
+async def _bat_lai_loai_hinh(s, admin_user_in_db, offering_id):
+    from app import schemas
+    from app.services import organization_service
+
+    nguoi = await s.get(models.User, admin_user_in_db["id"])
+    return await organization_service.update_program_offering(
+        s, offering_id, schemas.ProgramOfferingUpdate(is_active=True), current_user=nguoi
+    )
+
+
+async def _tat_nganh(client: AsyncClient, admin_token_headers, nganh_id: int, cach: str) -> None:
+    """"Ngừng ngành" (PUT ``is_active = false`` — KHÔNG dây chuyền) hoặc "Xoá ngành" (DELETE — dây chuyền)."""
+    if cach == "ngung":
+        r = await client.put(NGANH % nganh_id, headers=admin_token_headers, json={"is_active": False})
+        assert r.status_code == 200, r.text
+    else:
+        r = await client.delete(NGANH % nganh_id, headers=admin_token_headers)
+        assert r.status_code == 204, r.text
+    assert (await _sql("SELECT is_active FROM major_program WHERE id = :i", i=nganh_id)).scalar_one() is False
+
+
+async def test_hai_phien_tao_loai_hinh_dang_do_thi_xoa_nganh_cho_roi_xoa_ca_loai_hinh_moi(
+    admin_user_in_db, seed_lead_dependencies
+):
+    """Phiên 1 tạo loại hình mới cho ngành, CHƯA commit ⇒ xoá ngành CHỜ đúng phiên 1 (khoá dòng ngành — chèn loại hình chỉ lấy
+    ``FOR KEY SHARE`` trên ngành, không chặn được ai); phiên 1 commit ⇒ xoá ngành liệt kê SAU khi có khoá, thấy loại hình mới, tắt
+    luôn ⇒ ngành đã xoá, 0 loại hình hoạt động (2 loại hình: cũ + mới)."""
+    nganh, _lh, _hv = await _nganh_rieng(seed_lead_dependencies["unit_id"], [(NAM - 1, None, True)])
+    s1, s2 = AsyncSessionLocal(), AsyncSessionLocal()
+    viec = None
+    try:
+        pid1 = await _pid(s1)
+        await _tao_loai_hinh(s1, admin_user_in_db, nganh)  # CHƯA commit
+        pid2 = await _pid(s2)
+        viec = asyncio.ensure_future(_xoa_nganh(s2, admin_user_in_db, nganh))
+        assert await _bi_chan_boi(pid2, pid1, viec), "xoá ngành KHÔNG chờ lệnh tạo loại hình đang dở — %s" % _mo_ta(viec)
+        await s1.commit()
+        await asyncio.wait_for(viec, 10)
+        await s2.commit()
+    finally:
+        await _dong(s1, s2, viec)
+    nganh_hd = (await _sql("SELECT is_active FROM major_program WHERE id = :i", i=nganh)).scalar_one()
+    assert (nganh_hd, await _dem_loai_hinh(nganh)) == (False, (2, 0))
+
+
+async def test_hai_phien_xoa_nganh_dang_do_thi_tao_loai_hinh_cho_roi_409(admin_user_in_db, seed_lead_dependencies):
+    """Thứ tự ngược: phiên 1 xoá ngành, CHƯA commit ⇒ tạo loại hình CHỜ phiên 1; commit ⇒ tạo đọc ``is_active`` DƯỚI khoá ⇒ 409
+    ``MajorProgramInactive``; không dòng loại hình mới, 0 loại hình hoạt động."""
+    from app.services.organization_service import MajorProgramInactive
+
+    nganh, _lh, _hv = await _nganh_rieng(seed_lead_dependencies["unit_id"], [(NAM - 1, None, True)])
+    s1, s2 = AsyncSessionLocal(), AsyncSessionLocal()
+    viec = None
+    try:
+        pid1 = await _pid(s1)
+        await _xoa_nganh(s1, admin_user_in_db, nganh)  # CHƯA commit
+        pid2 = await _pid(s2)
+        viec = asyncio.ensure_future(_tao_loai_hinh(s2, admin_user_in_db, nganh))
+        assert await _bi_chan_boi(pid2, pid1, viec), "tạo loại hình KHÔNG chờ lệnh xoá ngành đang dở — %s" % _mo_ta(viec)
+        await s1.commit()
+        with pytest.raises(MajorProgramInactive):
+            await asyncio.wait_for(viec, 10)
+    finally:
+        await _dong(s1, s2, viec)
+    assert await _dem_loai_hinh(nganh) == (1, 0)
+
+
+async def test_hai_phien_xoa_nganh_dang_do_thi_bat_lai_loai_hinh_cho_roi_409(admin_user_in_db, seed_lead_dependencies):
+    """Phiên 1 xoá ngành, CHƯA commit; phiên 2 gửi ``is_active = true`` cho loại hình ĐANG hoạt động (ảnh nạp: hoạt động ⇒ tưởng
+    "giữ nguyên") rồi chờ khoá ngành; phiên 1 commit ⇒ nạp lại dưới khoá thấy loại hình đã bị tắt ⇒ đây là BẬT LẠI ⇒ 409.
+    Không khoá ngành hoặc không nạp lại ⇒ loại hình hoạt động lại dưới ngành đã xoá."""
+    from app.services.organization_service import MajorProgramInactive
+
+    nganh, lh, _hv = await _nganh_rieng(seed_lead_dependencies["unit_id"], [(NAM - 1, None, True)])
+    s1, s2 = AsyncSessionLocal(), AsyncSessionLocal()
+    viec = None
+    loi = None
+    try:
+        pid1 = await _pid(s1)
+        await _xoa_nganh(s1, admin_user_in_db, nganh)  # CHƯA commit
+        pid2 = await _pid(s2)
+        viec = asyncio.ensure_future(_bat_lai_loai_hinh(s2, admin_user_in_db, lh[0]))
+        assert await _bi_chan_boi(pid2, pid1, viec), "bật lại loại hình KHÔNG chờ lệnh xoá ngành đang dở — %s" % _mo_ta(viec)
+        await s1.commit()
+        try:
+            await asyncio.wait_for(viec, 10)
+        except MajorProgramInactive as x:
+            loi = x
+        await s2.commit()  # bật lại lọt qua (nếu có) được commit ⇒ trạng thái cuối lộ ra
+    finally:
+        await _dong(s1, s2, viec)
+    assert await _dem_loai_hinh(nganh) == (1, 0)
+    assert isinstance(loi, MajorProgramInactive)
+
+
+async def test_hai_phien_bat_lai_loai_hinh_dang_do_thi_xoa_nganh_cho_roi_tat_ca(admin_user_in_db, seed_lead_dependencies):
+    """Thứ tự ngược: phiên 1 bật lại loại hình đang ngừng (ngành hoạt động), CHƯA commit ⇒ xoá ngành chờ phiên 1; commit ⇒ xoá ngành
+    tắt luôn loại hình vừa bật ⇒ 0 loại hình hoạt động dưới ngành đã xoá."""
+    nganh, lh, _hv = await _nganh_rieng(seed_lead_dependencies["unit_id"], [(NAM - 1, None, False)])
+    s1, s2 = AsyncSessionLocal(), AsyncSessionLocal()
+    viec = None
+    try:
+        pid1 = await _pid(s1)
+        await _bat_lai_loai_hinh(s1, admin_user_in_db, lh[0])  # CHƯA commit
+        pid2 = await _pid(s2)
+        viec = asyncio.ensure_future(_xoa_nganh(s2, admin_user_in_db, nganh))
+        assert await _bi_chan_boi(pid2, pid1, viec), "xoá ngành KHÔNG chờ lệnh bật lại loại hình đang dở — %s" % _mo_ta(viec)
+        await s1.commit()
+        await asyncio.wait_for(viec, 10)
+        await s2.commit()
+    finally:
+        await _dong(s1, s2, viec)
+    assert await _dem_loai_hinh(nganh) == (1, 0)
+
+
+@pytest.mark.parametrize("cach", ["ngung", "da_xoa"])
+async def test_tao_loai_hinh_duoi_nganh_ngung_hoac_da_xoa_409(
+    client: AsyncClient, admin_token_headers, seed_lead_dependencies, cach
+):
+    """Route THẬT ``POST /api/admin/programs/{id}/offerings``: ngành "Ngừng" (PUT) hoặc đã xoá (DELETE) ⇒ 409, không dòng mới."""
+    nganh, _lh, _hv = await _nganh_rieng(seed_lead_dependencies["unit_id"], [(NAM - 1, None, True)])
+    await _tat_nganh(client, admin_token_headers, nganh, cach)
+    truoc = await _dem_loai_hinh(nganh)
+    r = await client.post(
+        LOAI_HINH_NGANH % nganh,
+        headers=admin_token_headers,
+        json={"offering_type": _ten_loai_hinh_moi(), "program_id": nganh, "duration_semesters": 6},
+    )
+    assert (r.status_code, r.json()) == (409, NGANH_NGUNG_409), r.text
+    assert await _dem_loai_hinh(nganh) == truoc
+
+
+@pytest.mark.parametrize("cach", ["ngung", "da_xoa"])
+async def test_bat_lai_loai_hinh_duoi_nganh_ngung_hoac_da_xoa_409_van_tat(
+    client: AsyncClient, admin_token_headers, seed_lead_dependencies, cach
+):
+    """Route THẬT ``PUT /api/admin/offerings/{id}``: loại hình đang ngừng, ngành "Ngừng" hoặc đã xoá ⇒ gửi ``is_active = true``
+    ⇒ 409, loại hình vẫn tắt."""
+    nganh, lh, _hv = await _nganh_rieng(seed_lead_dependencies["unit_id"], [(NAM - 1, None, False)])
+    await _tat_nganh(client, admin_token_headers, nganh, cach)
+    r = await client.put(SUA_LOAI_HINH % lh[0], headers=admin_token_headers, json={"is_active": True})
+    assert (r.status_code, r.json()) == (409, NGANH_NGUNG_409), r.text
+    assert await _loai_hinh_hoat_dong(lh[0]) is False
+
+
+@pytest.mark.parametrize(
+    "nganh_ngung, loai_hinh_hoat_dong",
+    [(True, True), (False, False)],
+    ids=["nganh_ngung_loai_hinh_dang_hoat_dong_sua_truong_khac", "nganh_hoat_dong_bat_lai_loai_hinh"],
+)
+async def test_sua_loai_hinh_khong_phai_bat_lai_duoi_nganh_ngung_van_duoc(
+    client: AsyncClient, admin_token_headers, seed_lead_dependencies, nganh_ngung, loai_hinh_hoat_dong
+):
+    """Không chặn quá tay: form sửa loại hình LUÔN gửi ``is_active``. (1) Ngành "Ngừng" (không dây chuyền) + loại hình đang hoạt
+    động: lưu ``is_active = true`` kèm trường khác ⇒ 200 (không phải bật lại). (2) Ngành hoạt động: bật lại loại hình ⇒ 200."""
+    nganh, lh, _hv = await _nganh_rieng(seed_lead_dependencies["unit_id"], [(NAM - 1, None, loai_hinh_hoat_dong)])
+    if nganh_ngung:
+        await _tat_nganh(client, admin_token_headers, nganh, "ngung")
+        assert await _loai_hinh_hoat_dong(lh[0]) is True  # đối chứng: "Ngừng ngành" không tắt loại hình
+    r = await client.put(
+        SUA_LOAI_HINH % lh[0], headers=admin_token_headers, json={"is_active": True, "duration_semesters": 8}
+    )
+    assert r.status_code == 200, r.text
+    dong = (await _sql("SELECT is_active, duration_semesters FROM program_offering WHERE id = :i", i=lh[0])).one()
+    assert tuple(dong) == (True, 8)

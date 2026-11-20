@@ -926,6 +926,11 @@ async def delete_major_program(
         program_name = db_program.name
         program_code = db_program.code
 
+        # 1b. GĐ2-F1 (Codex lượt 4, owner chốt 20-11): khoá DÒNG ngành TRƯỚC khi liệt kê loại hình ⇒ xếp hàng với tạo loại hình /
+        # bật lại loại hình (cùng khoá) — loại hình tạo / bật lại chen ngang hoặc đã commit trước (ta thấy, xoá luôn), hoặc phải
+        # chờ ta commit rồi nhận 409 ``MajorProgramInactive``. Xoá lại ngành đã tắt vẫn cho như cũ (giá trị trả về không dùng).
+        await _lock_major_program_row(db, program_id)
+
         # 2. GĐ2-F1 (owner chốt 20-11): "Xoá ngành" = xoá TỪNG loại hình của ngành như ``delete_program_offering`` — MỌI loại hình,
         # kể cả loại hình đang "Ngừng" (học vụ của chúng vẫn hiệu lực): khoá loại hình id tăng dần → khoá năm → khoá dòng học vụ
         # id tăng dần → kiểm luật C (học vụ có chỉ tiêu ở năm đã khoá ⇒ 409, KHÔNG đổi gì) → xoá mềm học vụ + tắt loại hình. MỘT
@@ -1013,7 +1018,11 @@ async def create_program_offering(
     """
     try:
         repo = OrganizationRepository(db)
-        
+
+        # GĐ2-F1 (Codex lượt 4, owner chốt 20-11): khoá DÒNG ngành ĐẦU TIÊN, đọc ``is_active`` DƯỚI khoá ⇒ xếp hàng với xoá ngành
+        # (cùng khoá, lấy trước khi liệt kê loại hình). Không có dòng ⇒ 404 như trước.
+        nganh_hoat_dong = await _lock_major_program_row(db, offering_in.program_id)
+
         # Verify program exists
         program = await repo.get_major_program_by_id_full(offering_in.program_id)
         if not program:
@@ -1023,6 +1032,10 @@ async def create_program_offering(
 
         # ✅ IDOR: Must have access to unit managing this program
         await _check_unit_access(db, program.unit_id, current_user)
+
+        # Ngành đang "Ngừng" / đã xoá (chung cờ ``is_active``) ⇒ không tạo loại hình mới.
+        if not nganh_hoat_dong:
+            raise MajorProgramInactive()
 
         # Check duplicate (program_id, offering_type) via repository
         existing = await repo.check_duplicate_offering(
@@ -1094,6 +1107,17 @@ async def update_program_offering(
         await _check_unit_access(db, program.unit_id, current_user)
 
         update_data = offering_in.model_dump(exclude_unset=True)
+
+        # GĐ2-F1 (Codex lượt 4, owner chốt 20-11): BẬT LẠI loại hình (ngừng → hoạt động) dưới ngành "Ngừng" / đã xoá ⇒ 409. Khoá
+        # dòng ngành (như tạo loại hình / xoá ngành) rồi NẠP LẠI loại hình dưới khoá: ảnh nạp trước khoá có thể cũ (xoá ngành vừa
+        # commit đã tắt nó) ⇒ một PATCH tưởng "giữ nguyên hoạt động" thật ra là bật lại. Chỉ chặn đúng phép chuyển ngừng → hoạt
+        # động: form sửa luôn gửi ``is_active`` — loại hình đang hoạt động dưới ngành "Ngừng" (Ngừng ngành không dây chuyền) vẫn
+        # sửa được các trường khác.
+        if update_data.get("is_active") is True:
+            nganh_hoat_dong = await _lock_major_program_row(db, db_offering.program_id)
+            await db.refresh(db_offering, attribute_names=["is_active"])
+            if not db_offering.is_active and not nganh_hoat_dong:
+                raise MajorProgramInactive()
 
         # ✅ SPRINT 3 REFACTORED: Use Repository for duplicate check
         if "offering_type" in update_data and update_data["offering_type"] != db_offering.offering_type:
@@ -1224,13 +1248,44 @@ class ProgramOfferingInactive(ConflictError):
         )
 
 
+class MajorProgramInactive(ConflictError):
+    """409 (Codex lượt 4, owner chốt 20-11): ngành đang NGỪNG / đã XOÁ (``major_program.is_active = false`` — "Xoá ngành" và
+    "Ngừng ngành" dùng chung cờ) ⇒ không tạo loại hình mới, không bật lại loại hình (ngừng → hoạt động) dưới nó."""
+
+    error_code = "MAJOR_PROGRAM_INACTIVE"
+
+    def __init__(self):
+        super().__init__(
+            detail="Ngành đang ngừng / đã xoá — bật lại ngành trước khi tạo / bật lại loại hình đào tạo."
+        )
+
+
+async def _lock_major_program_row(db: AsyncSession, program_id: int) -> bool:
+    """GĐ2-F1 (Codex lượt 4, owner chốt 20-11) — KHOÁ CẤP NGÀNH: ``SELECT is_active FROM major_program WHERE id = :id FOR NO KEY
+    UPDATE``; trả ``is_active`` đọc DƯỚI khoá. Lấy ĐẦU TIÊN (sau các câu đọc thường để kiểm quyền) ở tạo loại hình, bật lại loại
+    hình và xoá ngành ⇒ ba lệnh ấy xếp hàng trên cùng ngành: xoá ngành khoá ngành TRƯỚC khi liệt kê loại hình nên không loại hình
+    nào chen vào sau bước liệt kê.
+
+    Vì sao khoá DÒNG ``FOR NO KEY UPDATE``: (1) chèn loại hình chỉ lấy ``FOR KEY SHARE`` trên dòng ngành (kiểm khoá ngoại) — KHÔNG
+    xung đột với nhau ⇒ phải khoá tường minh ở cả hai phía; (2) không chặn ``FOR KEY SHARE`` của các bảng khác trỏ tới ngành; (3)
+    "Ngừng ngành" (PUT ``update_major_program``) UPDATE dòng này ⇒ tự lấy ``FOR NO KEY UPDATE`` ⇒ tự xếp hàng. Không có dòng ⇒ 404."""
+    mp = models.MajorProgram
+    row = (
+        await db.execute(select(mp.is_active).where(mp.id == program_id).with_for_update(key_share=True))
+    ).one_or_none()
+    if row is None:
+        raise ResourceNotFoundError(detail=f"Major program with id {program_id} not found.")
+    return bool(row.is_active)
+
+
 async def _lock_offering_row(db: AsyncSession, offering_id: int) -> bool:
     """GĐ2-F1 (Codex lượt 3, owner chốt 20-11) — KHOÁ CẤP LOẠI HÌNH: ``SELECT is_active FROM program_offering WHERE id = :id
     FOR NO KEY UPDATE``; trả ``is_active`` đọc DƯỚI khoá. Lấy ĐẦU TIÊN (sau kiểm quyền — chỉ select thường —, TRƯỚC khoá năm) ở
     tạo / khôi phục học vụ và xoá loại hình ⇒ ba lệnh ấy xếp hàng trên cùng loại hình.
 
     Vì sao khoá DÒNG ``FOR NO KEY UPDATE`` (không advisory): (1) mọi lệnh ĐỔI dòng loại hình — ô "Ngừng" (PATCH
-    ``update_program_offering``), xoá ngành (UPDATE hàng loạt ``is_active``), chính xoá loại hình — đều UPDATE dòng này ⇒ tự lấy
+    ``update_program_offering``), xoá ngành và xoá loại hình (dây chuyền ``_soft_delete_offerings_cascade``) — đều khoá / UPDATE
+    dòng này ⇒ tự lấy
     ``FOR NO KEY UPDATE`` (``is_active`` không thuộc khoá nào) ⇒ tự xếp hàng với tạo / khôi phục mà không phải sửa các đường ấy;
     advisory thì không. (2) Không chặn ``FOR KEY SHARE`` mà kiểm khoá ngoại lấy khi bảng KHÁC chèn / sửa dòng trỏ tới loại hình (hồ
     sơ, lead…, kể cả chính INSERT học vụ) ⇒ không làm các lệnh ấy chờ. Không có dòng ⇒ 404."""
