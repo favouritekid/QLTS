@@ -518,6 +518,23 @@ async def lock_documents(db: AsyncSession, profile_id: int, document_row_ids: Se
     return {r.id: r.row_version for r in rows}
 
 
+async def lock_user_key_share(db: AsyncSession, user_id: int) -> Optional[Any]:
+    """Dòng người dùng ``FOR KEY SHARE`` — khoá YẾU NHẤT vẫn xung đột với ``FOR UPDATE`` / ``DELETE`` của K4
+    (``user_deletion_policy.assert_user_deletable``) nhưng KHÔNG chặn ``UPDATE`` thường của dòng ``user`` (đăng nhập, đổi
+    thông tin = ``FOR NO KEY UPDATE``).
+
+    Trả hàng ``(id, status)`` đọc DƯỚI khoá; ``None`` = dòng không còn (đã xoá). Chỉ chọn CỘT, không nạp thực thể: đối
+    tượng ``User`` của người gọi đang nằm trong phiên (``current_user``) — ``populate_existing`` trên thực thể sẽ làm hết
+    hạn quan hệ đã nạp của nó ⇒ đọc sau đó thành lazy-load ⇒ MissingGreenlet."""
+    return (
+        await db.execute(
+            select(models.User.id, models.User.status)
+            .where(models.User.id == user_id)
+            .with_for_update(read=True, key_share=True)
+        )
+    ).first()
+
+
 async def lock_user_share(db: AsyncSession, user_id: int) -> Optional[models.User]:
     return (
         await db.execute(
