@@ -103,6 +103,18 @@ class QuotaGroupOut(BaseModel):
     members: List[QuotaGroupMemberOut]
 
 
+class QuotaYearAcademicInfoOut(BaseModel):
+    """Codex lượt 3 — một học vụ của năm (MỌI dòng của năm, kể cả đã xoá mềm) đọc CÙNG lần với dấu chỉ tiêu."""
+
+    offering_academic_info_id: int
+    offering_id: int
+    major_code: Optional[str] = None
+    major_name: Optional[str] = None
+    offering_type: Optional[str] = None
+    annual_admission_quota: Optional[int] = None
+    is_deleted: bool
+
+
 class QuotaTableOut(BaseModel):
     academic_year: int
     status: str
@@ -115,3 +127,5 @@ class QuotaTableOut(BaseModel):
     #: GĐ2-F1 — dấu chỉ tiêu ngành của năm (mọi học vụ của năm) — gửi lại nguyên văn khi PUT / khoá.
     quota_fingerprint: str
     groups: List[QuotaGroupOut]
+    #: Codex lượt 3 — học vụ của năm CÙNG ảnh với ``quota_fingerprint`` (danh sách chọn + giá trị điền sẵn của trình soạn).
+    academic_infos: List[QuotaYearAcademicInfoOut]

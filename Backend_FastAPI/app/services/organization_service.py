@@ -13,7 +13,7 @@ Handles:
 import json
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Callable, List, Optional, Tuple  # ✅ ADD Callable, Tuple for transaction pattern
+from typing import Callable, Iterable, List, Optional, Tuple  # ✅ ADD Callable, Tuple for transaction pattern
 
 import structlog
 from sqlalchemy import select, update
@@ -926,21 +926,25 @@ async def delete_major_program(
         program_name = db_program.name
         program_code = db_program.code
 
-        # 2. Thực hiện Soft Delete (Set is_active = False)
+        # 2. GĐ2-F1 (owner chốt 20-11): "Xoá ngành" = xoá TỪNG loại hình của ngành như ``delete_program_offering`` — MỌI loại hình,
+        # kể cả loại hình đang "Ngừng" (học vụ của chúng vẫn hiệu lực): khoá loại hình id tăng dần → khoá năm → khoá dòng học vụ
+        # id tăng dần → kiểm luật C (học vụ có chỉ tiêu ở năm đã khoá ⇒ 409, KHÔNG đổi gì) → xoá mềm học vụ + tắt loại hình. MỘT
+        # helper với xoá loại hình (§7). Trước đây chỉ tắt loại hình (UPDATE hàng loạt), không xoá học vụ, không khoá năm.
+        # Bước 1 của thứ tự khoá: MỌI dòng loại hình của ngành FOR NO KEY UPDATE id tăng dần, MỘT câu (helper khoá lại theo id —
+        # cùng giao dịch, không chờ thêm).
+        po = models.ProgramOffering
+        offering_ids = list(
+            (
+                await db.execute(
+                    select(po.id).where(po.program_id == program_id).order_by(po.id).with_for_update(key_share=True)
+                )
+            ).scalars()
+        )
+        await _soft_delete_offerings_cascade(db, offering_ids)
 
-        # 2a. Xóa mềm Ngành học (Level 1)
+        # 2b. Xóa mềm Ngành học (Level 1) — SAU dây chuyền (phép kiểm luật C chạy trước mọi lệnh ghi).
         db_program.is_active = False
         db.add(db_program)
-
-        # 2b. ✅ CASCADE: Xóa mềm hàng loạt Loại hình con (Level 2)
-        # Sử dụng Bulk Update để tối ưu hiệu năng (1 Query duy nhất)
-        stmt_offerings = (
-            update(models.ProgramOffering)
-            .where(models.ProgramOffering.program_id == program_id)
-            .values(is_active=False)
-            .execution_options(synchronize_session=False) # Bỏ qua sync session để nhanh hơn
-        )
-        await db.execute(stmt_offerings)
 
         # ✅ TRANSACTION FIX: Flush instead of commit
         await db.flush()
@@ -1163,46 +1167,9 @@ async def delete_program_offering(
 
         offering_name = db_offering.offering_type
 
-        # GĐ2-F1 luật C (owner 19-11): dây chuyền xoá mềm MỌI học vụ của offering (mọi năm) ⇒ khoá năm của mọi năm có học vụ
-        # (tăng dần) TRƯỚC mọi lệnh ghi; đọc lại tập năm DƯỚI khoá — có năm mới ngoài tập đã khoá (học vụ vừa được dời / tạo ở nơi
-        # khác) ⇒ 409 tải lại (khoá THÊM năm sau khi đã giữ khoá khác phá thứ tự tăng dần ⇒ có thể vòng chờ). Học vụ CÓ chỉ tiêu,
-        # chưa xoá, ở năm có bảng đã khoá ⇒ 409 như trigger, KHÔNG đổi gì (kiểm TRƯỚC khi đụng offering / học vụ; trigger — chủ sở
-        # hữu — chặn thì câu UPDATE rollback trọn, router rollback cả giao dịch).
-        from ..core.review_year_lock import lock_review_years
-        from .admission_quota_table_service import check_academic_info_delete_flag_allowed
-
-        # Codex lượt 3 (owner chốt 20-11): khoá CẤP LOẠI HÌNH ĐẦU TIÊN — lệnh tạo / khôi phục học vụ của loại hình này đang dở thì
-        # chờ nó commit rồi mới đọc tập năm (thấy học vụ mới, khoá luôn năm của nó, kiểm luật C, xoá trọn); lệnh đến SAU thì chờ ta
-        # commit rồi thấy loại hình đã tắt ⇒ 409. Xoá cả khi loại hình đang "Ngừng" (hành vi cũ — chỉ đọc khoá, không đổi luồng).
-        await _lock_offering_row(db, offering_id)
-        oai = models.OfferingAcademicInfo
-        nam_truoc = set(
-            (await db.execute(select(oai.academic_year).where(oai.offering_id == offering_id).distinct())).scalars()
-        )
-        await lock_review_years(db, nam_truoc)
-        dong_hoc_vu = (
-            await db.execute(
-                select(oai.academic_year, oai.annual_admission_quota, oai.is_deleted).where(oai.offering_id == offering_id)
-            )
-        ).all()
-        if {r.academic_year for r in dong_hoc_vu} - nam_truoc:
-            raise ConflictError(detail="Học vụ của loại hình đào tạo vừa đổi năm ở nơi khác — tải lại rồi làm lại.")
-        await check_academic_info_delete_flag_allowed(
-            db, [(r.academic_year, r.annual_admission_quota) for r in dong_hoc_vu if not r.is_deleted]
-        )
-
-        # Soft delete
-        db_offering.is_active = False
-        db.add(db_offering)
-
-        # ✅ CASCADE: Soft delete related academic info
-        stmt_academic = (
-            update(models.OfferingAcademicInfo)
-            .where(models.OfferingAcademicInfo.offering_id == offering_id)
-            .values(is_deleted=True, updated_at=datetime.now(timezone.utc))
-            .execution_options(synchronize_session=False)
-        )
-        await db.execute(stmt_academic)
+        # GĐ2-F1 luật C + Codex lượt 3: dây chuyền xoá loại hình — MỘT helper dùng chung với xoá ngành (§7): khoá loại hình →
+        # khoá năm → khoá dòng học vụ id tăng dần → kiểm luật C → xoá mềm + tắt loại hình. Xoá cả khi loại hình đang "Ngừng".
+        await _soft_delete_offerings_cascade(db, [offering_id])
 
         # ✅ TRANSACTION FIX: Flush instead of commit
         await db.flush()
@@ -1274,6 +1241,58 @@ async def _lock_offering_row(db: AsyncSession, offering_id: int) -> bool:
     if row is None:
         raise ResourceNotFoundError(detail=f"Program offering with id {offering_id} not found.")
     return bool(row.is_active)
+
+
+async def _soft_delete_offerings_cascade(db: AsyncSession, offering_ids: Iterable[int]) -> None:
+    """GĐ2-F1 — MỘT nguồn cho dây chuyền "xoá loại hình": xoá một loại hình (``delete_program_offering``) và xoá ngành = xoá TỪNG
+    loại hình của ngành (``delete_major_program`` — owner chốt 20-11, kể cả loại hình đang "Ngừng"). Một giao dịch, trọn-hoặc-không:
+    mọi phép kiểm chạy TRƯỚC mọi lệnh ghi; trigger (chủ sở hữu luật C) chặn thì câu UPDATE rollback trọn, router rollback cả giao dịch.
+
+    Thứ tự khoá (khớp ``app/core/review_year_lock.py``):
+      1. MỌI dòng ``program_offering`` của tập ``FOR NO KEY UPDATE`` id TĂNG DẦN, MỘT câu — lệnh tạo / khôi phục học vụ của các loại
+         hình này đang dở thì chờ nó commit rồi mới đọc tập năm (thấy học vụ mới); lệnh đến SAU thì chờ ta rồi thấy loại hình tắt;
+      2. đọc tập năm của MỌI học vụ của chúng → 3. khoá năm TĂNG DẦN;
+      4. đọc lại dòng học vụ bằng MỘT câu ``FOR NO KEY UPDATE ORDER BY id`` (Codex lượt 3: chỉ ``UPDATE … WHERE offering_id`` thì
+         khoá theo thứ tự quét — chỉ mục / vật lý — ⇒ có thể vòng chờ ``40P01`` với Phê duyệt hàng loạt, nơi
+         ``lock_quota_cells`` khoá ``FOR UPDATE`` id tăng dần mà không lấy khoá năm); có năm ngoài tập đã khoá (học vụ vừa bị dời
+         năm ở nơi khác) ⇒ 409 tải lại (khoá THÊM năm sau khi đã giữ khoá khác phá thứ tự tăng dần);
+      5. luật C: học vụ có chỉ tiêu khác NULL (kể cả 0), chưa xoá, ở năm có bảng đã khoá ⇒ 409 ``QUOTA_TABLE_LOCKED``, không đổi gì;
+      6. xoá mềm học vụ (dòng đã khoá ở bước 4) + tắt các loại hình."""
+    from ..core.review_year_lock import lock_review_years
+    from .admission_quota_table_service import check_academic_info_delete_flag_allowed
+
+    ids = sorted({int(x) for x in offering_ids})
+    if not ids:
+        return
+    po, oai = models.ProgramOffering, models.OfferingAcademicInfo
+    await db.execute(select(po.id).where(po.id.in_(ids)).order_by(po.id).with_for_update(key_share=True))
+    nam_truoc = set(
+        (await db.execute(select(oai.academic_year).where(oai.offering_id.in_(ids)).distinct())).scalars()
+    )
+    await lock_review_years(db, nam_truoc)
+    dong_hoc_vu = (
+        await db.execute(
+            select(oai.id, oai.academic_year, oai.annual_admission_quota, oai.is_deleted)
+            .where(oai.offering_id.in_(ids))
+            .order_by(oai.id)
+            .with_for_update(key_share=True)
+        )
+    ).all()
+    if {r.academic_year for r in dong_hoc_vu} - nam_truoc:
+        raise ConflictError(detail="Học vụ của loại hình đào tạo vừa đổi năm ở nơi khác — tải lại rồi làm lại.")
+    await check_academic_info_delete_flag_allowed(
+        db, [(r.academic_year, r.annual_admission_quota) for r in dong_hoc_vu if not r.is_deleted]
+    )
+    await db.execute(
+        update(oai)
+        .where(oai.offering_id.in_(ids))
+        .values(is_deleted=True, updated_at=datetime.now(timezone.utc))
+        .execution_options(synchronize_session=False)
+    )
+    # ``evaluate``: đối tượng loại hình đã nạp trong phiên (vd ``db_offering`` của ``delete_program_offering``) cũng thành tắt.
+    await db.execute(
+        update(po).where(po.id.in_(ids)).values(is_active=False).execution_options(synchronize_session="evaluate")
+    )
 
 
 async def _academic_info_state_under_year_lock(db: AsyncSession, academic_info_id: int, expected_year: int):
@@ -1527,6 +1546,10 @@ async def update_academic_info(
             nam_cu = db_academic_info.academic_year
             await lock_review_years(db, (nam_cu, update_data.get("academic_year")))
             chi_tieu_duoi_khoa, _ = await _academic_info_state_under_year_lock(db, academic_info_id, nam_cu)
+            # Codex lượt 3 (rà độc lập): đối tượng ORM nạp TRƯỚC khoá năm mang ảnh cũ; SQLAlchemy bỏ cột có giá trị gán = ảnh nạp ⇒
+            # gán đúng giá trị CŨ mà lệnh khác vừa đổi (vd PUT 50 → 60) thì KHÔNG có cột trong UPDATE ⇒ CSDL giữ 60 mà trả 200.
+            # Nạp lại SAU khoá năm rồi mới gán.
+            await db.refresh(db_academic_info)
             # Luật B (owner 19-11), SAU khoá năm: đổi năm học ⇒ R4 (thành viên nhóm bảng chỉ tiêu ⇒ 409 "gỡ khỏi nhóm trước")
             # rồi R3 (học vụ có chỉ tiêu vào / ra năm đã khoá ⇒ 409 như trigger). Chủ sở hữu R3: trigger CSDL.
             nam_moi = update_data.get("academic_year", nam_cu)
@@ -1666,6 +1689,8 @@ async def delete_academic_info(
         chi_tieu, da_xoa = await _academic_info_state_under_year_lock(db, academic_info_id, academic_year)
         if not da_xoa:
             await check_academic_info_delete_flag_allowed(db, [(academic_year, chi_tieu)])
+        # Codex lượt 3: nạp lại đối tượng ORM SAU khoá năm (ảnh nạp trước khoá có thể cũ ⇒ cờ gán trùng ảnh cũ bị bỏ khỏi UPDATE).
+        await db.refresh(db_academic_info)
 
         # Soft delete - set flag instead of removing from database
         db_academic_info.is_deleted = True
@@ -1743,6 +1768,8 @@ async def restore_academic_info(
                 detail=f"Bản ghi năm học {academic_year} không bị xóa, không cần khôi phục."
             )
         await check_academic_info_delete_flag_allowed(db, [(academic_year, chi_tieu)])
+        # Codex lượt 3: nạp lại đối tượng ORM SAU khoá năm (ảnh nạp trước khoá có thể cũ ⇒ cờ gán trùng ảnh cũ bị bỏ khỏi UPDATE).
+        await db.refresh(db_academic_info)
 
         # Restore - set flag back to False
         db_academic_info.is_deleted = False

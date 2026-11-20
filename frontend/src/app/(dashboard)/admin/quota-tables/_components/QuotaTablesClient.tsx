@@ -9,47 +9,28 @@ import { useMemo, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { readApiError } from "@/lib/error-handler"
-import { useOfferingAcademicInfos, useProgramOfferings } from "@/hooks/admissions/useProgramData"
 import { useQuotaTable } from "@/lib/hooks/use-quota-tables"
 import { draftFromTable, memberLabel } from "@/lib/quota-tables/draft"
 import { describeQuotaTableError } from "@/lib/quota-tables/messages"
+import { parseYearAcademicInfos, type QuotaYearAcademicInfo } from "@/lib/zod/quota-tables"
 
 import { QuotaTableEditor, type MemberOption } from "./QuotaTableEditor"
 import { QuotaTableView } from "./QuotaTableView"
 
-interface AcademicInfoLite {
-  id: number
-  offering_id: number
-  academic_year: number
-  annual_admission_quota?: number | null
-  is_deleted?: boolean
-}
-
-interface OfferingLite {
-  id: number
-  offering_type?: string | null
-  program?: { code?: string | null; name?: string | null } | null
-}
-
-/** Nối học vụ của ĐÚNG năm với tên ngành để hiển thị trong ô chọn — không quyết định ai được vào bảng (máy chủ kiểm). */
-export function buildMemberOptions(infos: unknown, offerings: unknown, year: number): MemberOption[] {
-  const ds = Array.isArray(infos) ? (infos as AcademicInfoLite[]) : []
-  const os = new Map((Array.isArray(offerings) ? (offerings as OfferingLite[]) : []).map((o) => [o.id, o]))
-  return ds
-    .filter((i) => i.academic_year === year && !i.is_deleted)
-    .map((i) => {
-      const o = os.get(i.offering_id)
-      return {
-        offering_academic_info_id: i.id,
-        label: memberLabel({
-          offering_academic_info_id: i.id,
-          major_code: o?.program?.code ?? null,
-          major_name: o?.program?.name ?? null,
-          offering_type: o?.offering_type ?? null,
-        }),
-        annual_admission_quota: typeof i.annual_admission_quota === "number" ? i.annual_admission_quota : null,
-      }
-    })
+/**
+ * Danh sách "thêm ngành" + giá trị điền sẵn — CHỈ từ học vụ máy chủ trả KÈM dấu chỉ tiêu (GET bảng; năm chưa có bảng: thân 404),
+ * cùng một lần đọc với dấu (Codex lượt 3, rà độc lập). Không lấy từ danh mục học vụ (`["academic-infos"]`): bộ đệm ấy có thể cũ
+ * hơn dấu ⇒ điền chỉ tiêu cũ rồi lưu với dấu mới ⇒ máy chủ nhận ⇒ ghi đè im lặng chỉ tiêu người khác vừa sửa. Chỉ lọc để hiển thị
+ * (bỏ học vụ đã xoá mềm) — không quyết định ai được vào bảng (máy chủ kiểm).
+ */
+export function buildMemberOptions(infos: QuotaYearAcademicInfo[]): MemberOption[] {
+  return infos
+    .filter((i) => !i.is_deleted)
+    .map((i) => ({
+      offering_academic_info_id: i.offering_academic_info_id,
+      label: memberLabel(i),
+      annual_admission_quota: i.annual_admission_quota,
+    }))
     .sort((a, b) => a.label.localeCompare(b.label, "vi"))
 }
 
@@ -63,17 +44,6 @@ export function QuotaTablesClient({ initialYear }: { initialYear?: number }) {
   const [mode, setMode] = useState<"view" | "edit">("view")
   const yearOptions = buildYearOptions()
   const table = useQuotaTable(year)
-  const infos = useOfferingAcademicInfos()
-  const offerings = useProgramOfferings()
-
-  const options = useMemo(() => buildMemberOptions(infos.data, offerings.data, year), [infos.data, offerings.data, year])
-  const labels = useMemo(() => {
-    const m = new Map<number, string>()
-    for (const o of options) m.set(o.offering_academic_info_id, o.label)
-    for (const g of table.data?.groups ?? []) for (const x of g.members) m.set(x.offering_academic_info_id, memberLabel(x))
-    return m
-  }, [options, table.data])
-  const labelOf = (id: number) => labels.get(id) ?? `Học vụ #${id}`
 
   const err = table.error ? readApiError(table.error) : null
   const noTable = err?.status === 404
@@ -81,6 +51,21 @@ export function QuotaTablesClient({ initialYear }: { initialYear?: number }) {
   // GĐ2-F1: năm chưa có bảng — máy chủ vẫn trả dấu chỉ tiêu trong thân 404 để tạo bảng (version 0) không đè chỉ tiêu ai vừa sửa.
   const noTableFingerprint =
     noTable && typeof err?.data?.quota_fingerprint === "string" ? err.data.quota_fingerprint : ""
+  // Học vụ của năm CÙNG ảnh với dấu: bảng có (200) ⇒ `academic_infos` của bảng; năm chưa có bảng ⇒ `academic_infos` trong thân 404.
+  const noTableInfos = noTable ? err?.data?.academic_infos : undefined
+  const snapshotInfos = useMemo(
+    () => (data ? data.academic_infos : parseYearAcademicInfos(noTableInfos)),
+    [data, noTableInfos],
+  )
+
+  const options = useMemo(() => buildMemberOptions(snapshotInfos), [snapshotInfos])
+  const labels = useMemo(() => {
+    const m = new Map<number, string>()
+    for (const o of options) m.set(o.offering_academic_info_id, o.label)
+    for (const g of data?.groups ?? []) for (const x of g.members) m.set(x.offering_academic_info_id, memberLabel(x))
+    return m
+  }, [options, data])
+  const labelOf = (id: number) => labels.get(id) ?? `Học vụ #${id}`
 
   return (
     <div className="container mx-auto space-y-6 p-6">

@@ -5,7 +5,8 @@
  *
  * Ô chỉ tiêu ngành / trần nhóm là chuỗi đúng như gõ: TRỐNG ⇒ gửi `null` (máy chủ 422 — chưa nhập), KHÔNG thành 0
  * (quyết định owner 19-11 câu 4). Giao diện không cộng / so chỉ tiêu, không kiểm trùng: máy chủ là chốt (400 / 409 / 422
- * ⇒ câu theo mã). Danh sách ngành để thêm = học vụ của ĐÚNG năm (dữ liệu máy chủ), chỉ lọc để hiển thị.
+ * ⇒ câu theo mã). Danh sách ngành để thêm = học vụ của ĐÚNG năm máy chủ trả KÈM dấu chỉ tiêu (cùng một lần đọc), chỉ lọc để
+ * hiển thị.
  */
 import { useId, useMemo, useState } from "react"
 import { Plus, Trash2 } from "lucide-react"
@@ -28,7 +29,8 @@ import { describeQuotaTableError } from "@/lib/quota-tables/messages"
 export interface MemberOption {
   offering_academic_info_id: number
   label: string
-  /** Chỉ tiêu năm HIỆN CÓ của học vụ (null = chưa có) — điền sẵn vào ô khi thêm ngành, không đặt mặc định. */
+  /** Chỉ tiêu năm HIỆN CÓ của học vụ (null = chưa có) — điền sẵn vào ô khi thêm ngành, không đặt mặc định. PHẢI đọc cùng lần
+   * với `quotaFingerprint` (GET bảng / thân 404 — `academic_infos`), không từ bộ đệm danh mục học vụ. */
   annual_admission_quota: number | null
 }
 
@@ -52,7 +54,7 @@ export function QuotaTableEditor({
   version: versionProp,
   quotaFingerprint: quotaFingerprintProp,
   initialGroups,
-  options,
+  options: optionsProp,
   labelOf,
   onCancel,
   onSaved,
@@ -63,6 +65,9 @@ export function QuotaTableEditor({
   const [version] = useState(versionProp)
   // GĐ2-F1 (điểm chặn Codex): dấu chỉ tiêu cũng CHỐT lúc mở — chỉ tiêu ngành sửa ở trang khác sau đó ⇒ máy chủ 409, không đè.
   const [quotaFingerprint] = useState(quotaFingerprintProp)
+  // Codex lượt 3 (rà độc lập): danh sách "thêm ngành" + chỉ tiêu điền sẵn CHỐT CÙNG LÚC với dấu (cùng một lần đọc GET bảng) —
+  // giá trị điền sẵn không bao giờ mới / cũ hơn dấu sẽ gửi đi.
+  const [options] = useState(optionsProp)
   const [groups, setGroups] = useState<DraftGroup[]>(initialGroups)
   const [error, setError] = useState<string | null>(null)
   const save = useSaveQuotaTable(year)

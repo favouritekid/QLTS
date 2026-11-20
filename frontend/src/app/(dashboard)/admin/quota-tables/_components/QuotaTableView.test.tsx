@@ -27,6 +27,7 @@ function bang(over: Partial<QuotaTableOut> = {}): QuotaTableOut {
     locked_at: null,
     available_actions: ["edit", "lock"],
     quota_fingerprint: FP,
+    academic_infos: [],
     groups: [
       {
         id: 7,

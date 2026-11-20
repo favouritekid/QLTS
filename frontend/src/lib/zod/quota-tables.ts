@@ -44,6 +44,33 @@ export const quotaGroupOutSchema = z
   })
   .strict()
 
+/**
+ * Codex lượt 3 (rà độc lập) — một học vụ của năm (MỌI dòng của năm, kể cả đã xoá mềm), đọc CÙNG lần với `quota_fingerprint`
+ * (`read_quota_snapshot` ở máy chủ). Là nguồn DUY NHẤT của danh sách "thêm ngành" + giá trị điền sẵn trong trình soạn — không
+ * lấy từ bộ đệm danh mục học vụ (`["academic-infos"]`, có thể cũ hơn dấu ⇒ điền chỉ tiêu cũ rồi lưu với dấu mới ⇒ ghi đè im lặng).
+ */
+export const quotaYearAcademicInfoSchema = z
+  .object({
+    offering_academic_info_id: z.number().int(),
+    offering_id: z.number().int(),
+    major_code: z.string().nullable(),
+    major_name: z.string().nullable(),
+    offering_type: z.string().nullable(),
+    /** `null` = ngành CHƯA có chỉ tiêu năm (≠ 0). */
+    annual_admission_quota: z.number().int().nullable(),
+    is_deleted: z.boolean(),
+  })
+  .strict()
+
+export type QuotaYearAcademicInfo = z.infer<typeof quotaYearAcademicInfoSchema>
+
+/** Thân 404 (năm chưa có bảng): danh sách học vụ đọc cùng lần với dấu. Thiếu / sai dạng ⇒ `[]` (không thêm được ngành — không
+ * rơi về nguồn khác). */
+export function parseYearAcademicInfos(raw: unknown): QuotaYearAcademicInfo[] {
+  const r = z.array(quotaYearAcademicInfoSchema).safeParse(raw)
+  return r.success ? r.data : []
+}
+
 export const quotaTableOutSchema = z
   .object({
     academic_year: z.number().int(),
@@ -56,6 +83,8 @@ export const quotaTableOutSchema = z
     /** GĐ2-F1 — dấu chỉ tiêu ngành của năm (mọi học vụ của năm). Gửi lại NGUYÊN VĂN dấu lúc mở khi PUT / khoá. */
     quota_fingerprint: z.string(),
     groups: z.array(quotaGroupOutSchema),
+    /** Codex lượt 3 — học vụ của năm CÙNG ảnh với `quota_fingerprint` (danh sách chọn + giá trị điền sẵn của trình soạn). */
+    academic_infos: z.array(quotaYearAcademicInfoSchema),
   })
   .strict()
 

@@ -116,11 +116,19 @@ class QuotaTableConflict(ConflictError):
         self.error_code = reason_code.upper()
 
 
-def _not_found(academic_year: int, quota_fingerprint: Optional[str] = None) -> ResourceNotFoundError:
+def _not_found(
+    academic_year: int,
+    quota_fingerprint: Optional[str] = None,
+    academic_infos: Optional[List[Dict[str, Any]]] = None,
+) -> ResourceNotFoundError:
     payload: Dict[str, Any] = {"reason_code": "quota_table_not_found"}
     if quota_fingerprint is not None:
         # GĐ2-F1: năm CHƯA có bảng vẫn có dấu chỉ tiêu — giao diện gửi lại khi tạo bảng (``version`` 0).
         payload["quota_fingerprint"] = quota_fingerprint
+    if academic_infos is not None:
+        # Codex lượt 3 (rà độc lập): danh sách học vụ của năm CÙNG ảnh với dấu — trình soạn lấy danh sách chọn + giá trị điền sẵn
+        # từ đây, không từ bộ đệm khác (cũ hơn dấu ⇒ ghi đè im lặng).
+        payload["academic_infos"] = academic_infos
     return ResourceNotFoundError(detail="Năm %d chưa có bảng chỉ tiêu." % academic_year, public_payload=payload)
 
 
@@ -171,6 +179,47 @@ async def read_quota_fingerprint(
     return quota_fingerprint_of(
         (r.id, r.annual_admission_quota, r.is_deleted) for r in rows if r.academic_year == academic_year
     )
+
+
+async def read_quota_snapshot(db: AsyncSession, academic_year: int) -> Tuple[List[Dict[str, Any]], str]:
+    """Codex lượt 3 (rà độc lập, điểm chặn giao diện) — MỘT lần đọc KHÔNG khoá cho GET bảng (kể cả thân 404): danh sách học vụ
+    của năm (đúng TẬP dòng :func:`read_quota_fingerprint` dùng — mọi dòng ``academic_year = năm``, kể cả đã xoá mềm) kèm nhãn
+    ngành / loại hình, VÀ dấu chỉ tiêu băm từ CHÍNH các dòng ấy (:func:`quota_fingerprint_of` — một hàm băm). Danh sách và dấu
+    cùng một ảnh chụp ⇒ trình soạn điền sẵn chỉ tiêu từ đây thì một PUT với dấu này không thể mang giá trị cũ hơn dấu."""
+    oai, po, mp = models.OfferingAcademicInfo, models.ProgramOffering, models.MajorProgram
+    rows = (
+        await db.execute(
+            select(
+                oai.id,
+                oai.offering_id,
+                oai.annual_admission_quota,
+                oai.is_deleted,
+                mp.code.label("major_code"),
+                mp.name.label("major_name"),
+                po.offering_type,
+            )
+            .outerjoin(po, po.id == oai.offering_id)
+            .outerjoin(mp, mp.id == po.program_id)
+            .where(oai.academic_year == academic_year)
+            .order_by(oai.id)
+        )
+    ).all()
+    infos = [
+        {
+            "offering_academic_info_id": r.id,
+            "offering_id": r.offering_id,
+            "major_code": r.major_code,
+            "major_name": r.major_name,
+            "offering_type": r.offering_type,
+            "annual_admission_quota": r.annual_admission_quota,
+            "is_deleted": bool(r.is_deleted),
+        }
+        for r in rows
+    ]
+    fp = quota_fingerprint_of(
+        (x["offering_academic_info_id"], x["annual_admission_quota"], x["is_deleted"]) for x in infos
+    )
+    return infos, fp
 
 
 def _check_quota_fingerprint(expected: str, current: str, *, current_version: int) -> None:
@@ -318,9 +367,9 @@ async def get_quota_table(db: AsyncSession, academic_year: int) -> Dict[str, Any
     :func:`quota_occupancy_service.count_by_group`). Năm chưa có bảng ⇒ 404."""
     t = models.AdmissionQuotaTable
     table = (await db.execute(select(t).where(t.academic_year == academic_year))).scalar_one_or_none()
-    quota_fingerprint = await read_quota_fingerprint(db, academic_year)
+    academic_infos, quota_fingerprint = await read_quota_snapshot(db, academic_year)
     if table is None:
-        raise _not_found(academic_year, quota_fingerprint)
+        raise _not_found(academic_year, quota_fingerprint, academic_infos)
     g, m = models.AdmissionQuotaGroup, models.AdmissionQuotaGroupMember
     oai, po, mp = models.OfferingAcademicInfo, models.ProgramOffering, models.MajorProgram
     groups = (
@@ -377,6 +426,8 @@ async def get_quota_table(db: AsyncSession, academic_year: int) -> Dict[str, Any
         "available_actions": quota_table_actions(table.status),
         "quota_fingerprint": quota_fingerprint,
         "groups": out_groups,
+        # Codex lượt 3: danh sách học vụ của năm CÙNG ảnh với dấu (``read_quota_snapshot``) — nguồn duy nhất cho trình soạn.
+        "academic_infos": academic_infos,
     }
 
 
@@ -510,6 +561,10 @@ async def lock_quota_table(
     """``draft`` → ``locked``. Điều kiện kỹ thuật: mọi ngành thành viên có chỉ tiêu năm (thiếu ⇒ 409 nêu id) — ngành thiếu
     chỉ tiêu không xét được (đặc tả §5.4 bước 1), khoá bảng như vậy chỉ dời lỗi sang lúc xét; không thành viên nào đã xoá mềm
     (⇒ 409 ``quota_table_member_deleted`` nêu id — Codex lượt 3).
+
+    Tầng chủ sở hữu của HAI điều kiện ấy (thiếu chỉ tiêu, thành viên đã xoá mềm) = DỊCH VỤ này, không có trigger: một
+    ``UPDATE admission_quota_table SET status = 'locked'`` bằng SQL tay vượt được cả hai (trigger CSDL chỉ canh "bảng đã khoá thì
+    không đổi").
 
     GĐ2-F1: khoá đóng băng ĐÚNG các chỉ tiêu người khoá đã xem ⇒ đòi dấu chỉ tiêu lúc mở (đọc lại ``FOR SHARE`` sau khoá năm,
     TRƯỚC dòng bảng — cùng chiều "học vụ trước bảng" với trigger)."""

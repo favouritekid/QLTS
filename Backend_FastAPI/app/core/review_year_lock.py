@@ -7,8 +7,9 @@ tăng dần) TRƯỚC khi chạm dòng học vụ:
 * tạo học vụ — ``organization_service.create_academic_info`` (dòng mới đổi tập dòng kể cả khi chỉ tiêu trống);
 * sửa chỉ tiêu / dời năm học vụ — ``organization_service.update_academic_info`` (năm cũ + năm mới);
 * xoá mềm / khôi phục học vụ (luật C, owner 19-11 — cờ ``is_deleted`` nằm trong dấu chỉ tiêu) —
-  ``organization_service.delete_academic_info`` / ``restore_academic_info`` và dây chuyền ``delete_program_offering`` (mọi năm
-  có học vụ của offering, tăng dần);
+  ``organization_service.delete_academic_info`` / ``restore_academic_info`` và dây chuyền xoá loại hình — ``delete_program_offering``
+  và ``delete_major_program`` (owner chốt 20-11: xoá ngành = xoá TỪNG loại hình của ngành, kể cả loại hình đang "Ngừng") qua MỘT
+  helper ``_soft_delete_offerings_cascade`` (mọi năm có học vụ của các loại hình, tăng dần);
 * bảng chỉ tiêu năm — ``admission_quota_table_service`` (PUT / khoá / mở khoá; GĐ2-C: khoá lần xét).
 
 Hệ quả: dấu chỉ tiêu (``admission_quota_table_service.quota_fingerprint_of``) đọc SAU khoá năm không thể bị một lệnh tạo / sửa /
@@ -19,13 +20,17 @@ khoá năm ngay sau kiểm quyền, khi giao dịch chưa giữ khoá dòng họ
 ``(id, chỉ tiêu)``; từ luật C cờ xoá mềm vào dấu và bị chặn khi bảng đã khoá ⇒ lấy khoá năm như sửa chỉ tiêu.)
 
 THỨ TỰ KHOÁ TOÀN HỆ (Codex lượt 3, owner chốt 20-11): khoá LOẠI HÌNH (dòng ``program_offering`` ``FOR NO KEY UPDATE`` — chỉ
-ở tạo / khôi phục học vụ và xoá loại hình, ``organization_service._lock_offering_row``) → khoá NĂM (tăng dần) → dòng học vụ → dòng
-bảng chỉ tiêu. Không vòng chờ: (a) đường lấy khoá loại hình lấy ĐÚNG MỘT dòng loại hình và lấy nó TRƯỚC mọi khoá năm — nếu phải
-chờ dòng ấy thì đang chưa giữ khoá nào khác (trước đó chỉ select thường); (b) các đường
+ở tạo / khôi phục học vụ (``organization_service._lock_offering_row``, một dòng) và dây chuyền xoá loại hình / xoá ngành (mọi dòng
+của tập, id TĂNG DẦN, MỘT câu)) → khoá NĂM (tăng dần) → dòng học vụ → dòng bảng chỉ tiêu. Không vòng chờ: (a) đường lấy khoá loại
+hình lấy các dòng loại hình TRƯỚC mọi khoá năm, theo id tăng dần trong một câu — chờ dòng loại hình thì chỉ đang giữ dòng loại hình
+id NHỎ hơn (mọi đường khác lấy cùng chiều hoặc chỉ một dòng); (b) các đường
 chỉ lấy khoá năm (PUT / khoá / mở khoá bảng, sửa / dời / xoá mềm học vụ) không bao giờ chờ dòng loại hình ở chế độ xung đột — chèn /
 sửa dòng TRỎ tới loại hình (học vụ, hồ sơ, lead…) chỉ lấy ``FOR KEY SHARE``, không xung đột với ``NO KEY UPDATE``; (c) lệnh UPDATE
-dòng loại hình KHÔNG qua khoá năm (ô "Ngừng", xoá ngành hàng loạt) không giữ khoá năm / dòng học vụ nào khi chờ ⇒ chờ nó không
-khép vòng.
+dòng loại hình KHÔNG qua khoá năm (ô "Ngừng") không giữ khoá năm / dòng học vụ nào khi chờ ⇒ chờ nó không khép vòng.
+
+Dây chuyền xoá loại hình / xoá ngành khoá DÒNG học vụ bằng MỘT câu ``FOR NO KEY UPDATE ORDER BY id`` TRƯỚC câu UPDATE (Codex
+lượt 3): chỉ ``UPDATE … WHERE offering_id`` thì khoá theo thứ tự QUÉT (vật lý / chỉ mục), có thể ngược chiều id ⇒ vòng chờ ``40P01``
+với ghi nhận / Phê duyệt hàng loạt (``quota_occupancy_service.lock_quota_cells``: ``FOR UPDATE`` id tăng dần, KHÔNG lấy khoá năm).
 
 Khoá DÒNG học vụ lấy SAU khoá năm dùng chế độ YẾU NHẤT đủ việc, lấy MỘT lần, không nâng trong cùng giao dịch (GĐ2-F1 lượt 3b):
 PUT bảng chỉ tiêu chỉ ghi ``annual_admission_quota`` (không cột nào thuộc khoá duy nhất / khoá ngoại) ⇒ ``FOR NO KEY UPDATE`` —

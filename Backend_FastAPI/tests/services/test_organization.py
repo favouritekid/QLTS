@@ -174,32 +174,32 @@ async def test_delete_program_offering_cascade(mock_db_session, mock_user, mock_
                  new_callable=AsyncMock, 
                  return_value=mock_program)
 
-    # GĐ2-F1 luật C: trước câu UPDATE dây chuyền, dịch vụ đọc tập năm của học vụ (``scalars``), khoá các năm ấy, đọc lại dòng
-    # (``all``) rồi kiểm bảng chỉ tiêu — giả lập offering CHƯA có học vụ nào (tập năm rỗng ⇒ không khoá / không kiểm thêm).
-    # Codex lượt 3: khoá cấp loại hình (dòng program_offering FOR NO KEY UPDATE) lấy ĐẦU TIÊN — giả lập loại hình đang hoạt động.
-    mocker.patch(
-        "app.services.organization_service._lock_offering_row", new_callable=AsyncMock, return_value=True
-    )
+    # GĐ2-F1 luật C + Codex lượt 3 (helper dùng chung ``_soft_delete_offerings_cascade``): khoá dòng loại hình (FOR NO KEY
+    # UPDATE) → đọc tập năm (``scalars``) → khoá năm → đọc lại dòng học vụ FOR NO KEY UPDATE id tăng dần (``all``) → kiểm bảng
+    # chỉ tiêu → UPDATE học vụ → UPDATE loại hình. Giả lập loại hình CHƯA có học vụ (tập năm rỗng ⇒ không khoá / kiểm thêm).
     ket_qua_nam = MagicMock()
     ket_qua_nam.scalars.return_value = []
     ket_qua_dong = MagicMock()
     ket_qua_dong.all.return_value = []
     mock_execute = mocker.patch.object(
-        mock_db_session, "execute", new_callable=AsyncMock, side_effect=[ket_qua_nam, ket_qua_dong, MagicMock()]
+        mock_db_session,
+        "execute",
+        new_callable=AsyncMock,
+        side_effect=[MagicMock(), ket_qua_nam, ket_qua_dong, MagicMock(), MagicMock()],
     )
 
     _, post_commit = await organization_service.delete_program_offering(
         mock_db_session, mock_offering.id, current_user=mock_user
     )
 
-    # Verify soft delete of offering
-    assert mock_offering.is_active is False
+    from sqlalchemy.dialects import postgresql
 
-    # Verify cascade update call was made
-    cau = [str(c.args[0]).lower() for c in mock_execute.call_args_list]
-    assert any(
-        s.startswith("update offering_academic_info") and "is_deleted" in s for s in cau
-    ), cau
+    cau = [str(c.args[0].compile(dialect=postgresql.dialect())).lower() for c in mock_execute.call_args_list]
+    # Khoá loại hình ĐẦU TIÊN.
+    assert cau[0].startswith("select program_offering.id") and "for no key update" in cau[0], cau[0]
+    # Dây chuyền xoá mềm học vụ + tắt loại hình (CSDL thật: tests/api/test_gd2f_thanh_vien_xoa_va_loai_hinh_api.py).
+    assert any(s.startswith("update offering_academic_info") and "is_deleted" in s for s in cau), cau
+    assert any(s.startswith("update program_offering") and "is_active" in s for s in cau), cau
 
 # =============================================================================
 # TESTS: OFFERING ACADEMIC INFO (LEVEL 3)

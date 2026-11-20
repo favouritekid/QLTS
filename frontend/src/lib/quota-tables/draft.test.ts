@@ -36,6 +36,7 @@ const BANG: QuotaTableOut = {
   locked_at: null,
   available_actions: ["edit", "lock"],
   quota_fingerprint: "a".repeat(64),
+  academic_infos: [],
   groups: [
     {
       id: 7,

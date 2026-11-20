@@ -192,6 +192,28 @@ describe("QuotaTableEditor — lỗi máy chủ", () => {
     expect(than.map((t) => t.quota_fingerprint)).toEqual([FP, FP])
   })
 
+  it("Codex lượt 3: danh sách thêm ngành + chỉ tiêu điền sẵn CHỐT lúc mở cùng dấu — bảng làm mới (số mới) không đổi số điền sẵn", async () => {
+    batPut()
+    const u = userEvent.setup()
+    const props = {
+      year: 2026, version: 3, quotaFingerprint: FP, initialGroups: NHOM, labelOf, onCancel: vi.fn(), onSaved: vi.fn(),
+    }
+    const { queryClient, rerender } = renderWithClient(<QuotaTableEditor options={LUA_CHON} {...props} />)
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <QuotaTableEditor
+          options={[{ offering_academic_info_id: 14, label: "M4 — Ngành Bốn", annual_admission_quota: 99 }]}
+          {...props}
+        />
+      </QueryClientProvider>,
+    )
+    await u.selectOptions(screen.getByLabelText("Thêm ngành vào nhóm"), "14")
+    expect(screen.getByLabelText("Chỉ tiêu năm — M4 — Ngành Bốn")).toHaveValue(25)
+    await u.click(screen.getByTestId("luu-bang"))
+    await waitFor(() => expect(than).toHaveLength(1))
+    expect(than[0].quota_fingerprint).toBe(FP)
+  })
+
   it("409 quota_table_stale ⇒ câu tải lại, giữ bản nháp", async () => {
     batPut(409, { reason_code: "quota_table_stale", error_code: "QUOTA_TABLE_STALE", current_version: 5, detail: "x" })
     const u = userEvent.setup()

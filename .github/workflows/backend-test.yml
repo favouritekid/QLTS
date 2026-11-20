@@ -1441,6 +1441,7 @@ jobs:
               tests/api/test_gd2f_luat_b_bang_khoa_api.py
               tests/api/test_gd2f_luat_c_xoa_khoi_phuc_api.py
               tests/api/test_gd2f_thanh_vien_xoa_va_loai_hinh_api.py
+              tests/api/test_gd2f_ra_soat_doc_lap_api.py
               tests/services/test_organization.py
               tests/unit/test_gd2f_trigger_luat_b_lockin.py
               tests/integration/test_gd2f_trigger_luat_b_migration.py
