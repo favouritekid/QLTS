@@ -3210,23 +3210,32 @@ def _compute_frontend_fields(
         if row is None:
             return {
                 "can_verify": False, "can_reject": False, "can_reset": False, "can_view_history": False,
-                "verify_block_reason": None, "requires_ack": False, "reset_requires_reason": False,
-                "reset_keeps_evidence": False, "can_change_format": False,
+                "verify_block_reason": None, "requires_ack": False,
+                "verify_requires_ack": False, "reject_requires_ack": False, "reset_requires_ack": False,
+                "reset_requires_reason": False, "reset_keeps_evidence": False, "can_change_format": False,
             }
         facts = _DocFacts.from_row(row, requires_upload=requires_upload, is_extra=is_extra)
         kw = dict(policy=_doc_policy, actor_id=current_user.id, profile_status=profile.status, doc=facts)
         dv = _decide(_VERIFY, _SINGLE, **kw)
         dr = _decide(_REJECT, _SINGLE, **kw)
         ds = _decide(_RESET, _SINGLE, **kw)
+        # PR-D (F15): yêu cầu cam kết THEO TỪNG thao tác — cùng ``decide`` mà cổng ghi dùng dưới khoá. Đặt lại giấy CHƯA
+        # duyệt không qua cổng người nhận ⇒ không cần cam kết dù Duyệt / Từ chối cần.
+        ack_by_action = {
+            "verify_requires_ack": bool(dv.allowed and dv.requires_ack),
+            "reject_requires_ack": bool(dr.allowed and dr.requires_ack),
+            "reset_requires_ack": bool(ds.allowed and ds.requires_ack),
+        }
         return {
             "can_verify": dv.allowed,
             "can_reject": dr.allowed,
             "can_reset": ds.allowed,
             "can_view_history": bool(_doc_policy.ctx.reviewer_scope),
             "verify_block_reason": None if dv.allowed else dv.block_reason,
-            "requires_ack": bool(
-                (dv.allowed and dv.requires_ack) or (dr.allowed and dr.requires_ack) or (ds.allowed and ds.requires_ack)
-            ),
+            **ack_by_action,
+            # Trường cũ (gộp OR ba thao tác) — GIỮ để giao diện hiện hành không đổi hành vi; giao diện chuyển sang cờ theo
+            # thao tác ở PR giao diện riêng.
+            "requires_ack": any(ack_by_action.values()),
             "reset_requires_reason": ds.allowed,
             "reset_keeps_evidence": bool(ds.allowed and doc_status == "verified" and facts.has_file),
             # Owner 18-11 (Codex 71 điểm 2): hộp Duyệt chỉ cho chọn hình thức khác khi giấy là bản giấy.
