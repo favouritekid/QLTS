@@ -67,6 +67,21 @@ export const priorityEvidenceApi = {
     return data
   },
   /**
+   * GĐ2-0 / GĐ2-F1 — ghi nhận minh chứng ưu tiên nộp bằng BẢN GIẤY (người nhận = người bấm; người nhận KHÔNG được tự
+   * duyệt / từ chối minh chứng ấy). POST không thân:
+   * `/api/v2/admissions/{id}/priority-evidence/{sub_code}/paper-submitted`. Giao diện chỉ gọi khi máy chủ bật
+   * `priority_evidence_documents[*].can_mark_paper_submitted`.
+   */
+  async markPaperSubmitted(
+    profileId: number,
+    subCode: string,
+  ): Promise<AdmissionProfileResponse> {
+    const { data } = await api.post<AdmissionProfileResponse>(
+      `/api/v2/admissions/${profileId}/priority-evidence/${subCode}/paper-submitted`,
+    )
+    return data
+  },
+  /**
    * Q9 #07 Phase E.4 PR-2 — Untick UT code + cascade hard delete.
    *
    * DELETE /api/v2/admissions/{id}/priority-evidence/{sub_code}

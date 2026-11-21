@@ -465,8 +465,10 @@ async def test_get_profile_populates_priority_evidence_documents_when_codes_set(
 
     captured_projection_calls: list = []
 
-    async def fake_populate_projection(db, profile, documents):
+    async def fake_populate_projection(db, profile, documents, current_user=None):
+        # GĐ2-F1: đường GET truyền NGƯỜI XEM (cờ theo mã diện của ``priority_evidence_documents``).
         captured_projection_calls.append({
+            "viewer_id": getattr(current_user, "id", None),
             "profile_id": profile.id,
             "codes": list(profile.priority_object_codes or []),
             "doc_count": len(documents),
@@ -544,6 +546,7 @@ async def test_get_profile_populates_priority_evidence_documents_when_codes_set(
     # Pin contract: projection helper was called from GET path
     assert len(captured_projection_calls) == 1
     assert captured_projection_calls[0]["codes"] == ["07"]
+    assert captured_projection_calls[0]["viewer_id"] == 7
 
     # Pin contract: projection populated transient attrs visible to response
     assert result.priority_evidence_documents == [
@@ -587,7 +590,7 @@ async def test_get_profile_populates_audit_log_alongside_projection(
             )
         ]
 
-    async def fake_projection(db, profile, documents):
+    async def fake_projection(db, profile, documents, current_user=None):
         profile.priority_evidence_documents = []
         profile.priority_object_evidence_display = {}
         profile.missing_priority_evidence_codes = []
@@ -654,7 +657,7 @@ async def test_get_profile_projection_empty_codes_still_populates_empty_list(
 
     helper_called = {"count": 0}
 
-    async def fake_projection(db, profile, documents):
+    async def fake_projection(db, profile, documents, current_user=None):
         helper_called["count"] += 1
         profile.priority_evidence_documents = []
         profile.priority_object_evidence_display = {}

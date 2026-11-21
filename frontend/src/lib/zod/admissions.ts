@@ -173,11 +173,16 @@ export type PriorityObjectEvidenceDisplayEntry = z.infer<
  * `status` semantics:
  *   - missing: chưa upload file
  *   - uploaded: file đã upload, chưa verify
+ *   - paper_submitted: GĐ2-F1 — đã ghi nhận minh chứng bản giấy (không tệp)
  *   - verified: officer đã duyệt
  *   - rejected: officer đã từ chối
  *
  * `verification_status` mirrors evidence dict status (nullable nếu code
  * chưa có entry trong priority_object_evidence).
+ *
+ * GĐ2-F1 — cờ máy chủ theo mã diện cho NGƯỜI XEM (`PriorityEvidenceDocumentItem` Pydantic, `Optional[...] = None`):
+ * `can_mark_paper_submitted`, `requires_ack`, `review_block_reason`. Giao diện hiện nút CHỈ khi cờ bật rõ (`true`) —
+ * thiếu / `null` ⇒ không nút (fail-closed). Để `optional` vì máy chủ cũ (trước GĐ2-F1) không gửi khoá.
  */
 export const priorityEvidenceDocumentItemSchema = z.object({
   // P2 (PR-3 audit): use shared 2-digit regex schema thay vì plain z.string()
@@ -186,10 +191,14 @@ export const priorityEvidenceDocumentItemSchema = z.object({
   label: z.string(),
   document_id: z.number().int().nullable(),
   document_file_path: z.string().nullable(),
-  status: z.enum(["missing", "uploaded", "verified", "rejected"]),
+  status: z.enum(["missing", "uploaded", "paper_submitted", "verified", "rejected"]),
   // P2 (PR-3 audit): tighten to enum thay vì free string. Mirror BE evidence
   // dict status whitelist (nullable nếu code chưa có entry trong evidence).
   verification_status: z.enum(["pending", "verified", "rejected"]).nullable(),
+  can_mark_paper_submitted: z.boolean().nullable().optional(),
+  requires_ack: z.boolean().nullable().optional(),
+  // Pydantic `Optional[str]` (hiện có `own_submission` | `unknown_submitter`); mã lạ ⇒ câu chung, nút vẫn ẩn.
+  review_block_reason: z.string().nullable().optional(),
 }).strict()
 
 export type PriorityEvidenceDocumentItem = z.infer<

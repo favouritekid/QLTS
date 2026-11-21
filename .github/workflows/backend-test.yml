@@ -1428,6 +1428,30 @@ jobs:
               tests/api/test_gd1b_lo_danh_sach.py
               tests/api/test_gd1b_lo_khoa_tu_van_csdl.py
               tests/api/test_gd1b_cheo_quyen.py
+          # GĐ2 — PR đầu (owner GO 18-11): GĐ2-0 quy tắc duyệt minh chứng ưu tiên (C1) + GĐ2-A bảng chỉ tiêu năm / nhóm
+          # ngành. Lát RIÊNG như GĐ1b (ca API trên CSDL thật chậm; gộp vào lát có sẵn dễ chạm trần 75 phút). Ngoài mọi tier
+          # thì required check vẫn xanh mà không chạy (CLAUDE.md §11). Ghim WHOLE-FILE.
+          # `test_priority_evidence_service.py` (tệp cũ, trước đây ngoài mọi tier): GĐ2-0 sửa nó ⇒ cổng độ nhìn thấy đòi phân loại.
+          # `tests/services/test_organization.py` (tệp cũ, ngoài mọi tier): GĐ2-F1 luật C sửa hai ca giả lập ⇒ cùng lý do.
+          - tier: Tier 5j — GĐ2 minh chứng ưu tiên + bảng chỉ tiêu
+            tests: >-
+              tests/unit/test_gd2_minh_chung_uu_tien_luat.py
+              tests/unit/test_priority_evidence_service.py
+              tests/api/test_gd2_minh_chung_uu_tien_api.py
+              tests/unit/test_gd2a_quota_ddl_lockin.py
+              tests/integration/test_gd2a_migration.py
+              tests/integration/test_gd2a_count_by_group_db.py
+              tests/integration/test_gd2a_rang_buoc_db.py
+              tests/api/test_gd2a_bang_chi_tieu_api.py
+              tests/api/test_gd2f_co_may_chu_api.py
+              tests/api/test_gd2f_dau_chi_tieu_api.py
+              tests/api/test_gd2f_luat_b_bang_khoa_api.py
+              tests/api/test_gd2f_luat_c_xoa_khoi_phuc_api.py
+              tests/api/test_gd2f_thanh_vien_xoa_va_loai_hinh_api.py
+              tests/api/test_gd2f_ra_soat_doc_lap_api.py
+              tests/services/test_organization.py
+              tests/unit/test_gd2f_trigger_luat_b_lockin.py
+              tests/integration/test_gd2f_trigger_luat_b_migration.py
 
     env:
       APP_ENV: test
