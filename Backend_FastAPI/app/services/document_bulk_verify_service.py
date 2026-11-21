@@ -3,6 +3,11 @@
 Đặc tả ``DAC-TA-GD1B-DUYET-GIAY-NHANH-BAN3-6-2026-11-17.md`` (sha256 ``9ef02da2…4e2e``) §5.2–§5.8; hợp đồng API GĐ1b bản 4
 (sha256 ``45b718f6…adad``) §2.1. Mọi bước theo ĐÚNG thứ tự của đặc tả:
 
+- Thứ tự khoá dòng ``user`` ↔ dòng lô (F7, 20-11): MỌI đường đi NGƯỜI → LÔ như K4 (``user_deletion_policy``: người
+  ``FOR UPDATE`` → xoá lô ``previewed``). Xem trước, chạy lô bước 2 khoá người ``FOR KEY SHARE`` trước dòng lô; chốt lô
+  khoá người ``FOR SHARE`` trước dòng lô (giữ VAI ổn định tới commit — quyền chốt xét bằng vai đọc dưới khoá, Codex 20-11);
+  §5.4 khoá người ``FOR SHARE`` SAU dòng lô nhưng chỉ chạy với lô ``processing`` — K4 thấy lô ấy là ``BLOCK_ACTOR``
+  (409, chỉ đọc) nên không bao giờ xoá dòng lô đó ⇒ không vòng chờ.
 - ``preview_batch`` (§5.2): khoá theo người ``(ns_preview, user_id)`` → dọn bản xem trước của CHÍNH người bấm → đếm lại
   (≥ 3 ⇒ 409 ``TOO_MANY_PREVIEWS``) → tính tập giấy (luật ``document_review_rules.decide``, một nguồn với cổng ghi) → giới hạn
   (422, không tự cắt) → chèn dòng lô ``previewed`` + dòng mục. Router commit.
@@ -251,6 +256,12 @@ async def preview_batch(
 
     # Bước 0 — tuần tự hoá theo người dùng (tự nhả cuối giao dịch).
     await repo.lock_preview_user(db, BULK_VERIFY_PREVIEW_NS, actor_id)
+    # Bước 0b (F7, 20-11) — dòng người bấm ``FOR KEY SHARE`` TRƯỚC mọi dòng lô: cùng chiều với K4 (người ``FOR UPDATE``
+    # → xoá lô ``previewed``). Không có bước này thì bước 1 giữ dòng lô cũ (``FOR UPDATE SKIP LOCKED``), K4 khoá người
+    # rồi chờ dòng lô ấy, còn bước 5 chèn lô mới cần khoá khoá-ngoại trên dòng người ⇒ bế tắc. Dòng người không còn /
+    # không hoạt động ⇒ 409 ``actor_not_authorized`` (mã có sẵn), không chèn gì — thay cho ``23503`` ⇒ 500.
+    if not _actor_live(await repo.lock_user_key_share(db, actor_id)):
+        raise DocumentTransitionConflict(ACTOR_NOT_AUTHORIZED)
     # Bước 1 — dọn bản xem trước của CHÍNH người bấm (còn ≤ 2).
     await repo.cleanup_previews(
         db, user_id=actor_id, ns=BULK_VERIFY_BATCH_NS, keep=BULK_VERIFY_MAX_LIVE_PREVIEWS - 1, key_of=batch_lock_key
@@ -412,6 +423,13 @@ async def preview_batch(
 # =====================================================================================================================
 # §5.3–§5.5 Chạy lô
 # =====================================================================================================================
+def _actor_live(actor: Optional[Any]) -> bool:
+    """MỘT vị từ "người thao tác còn dùng được" (dòng còn + ``status = 'active'``) cho xem trước (bước 0b), chạy lô
+    (bước 2), chốt lô và §5.4 bước 4 — đọc trên dòng VỪA khoá (``User``, hàng ``(id, status)`` của
+    ``repo.lock_user_key_share`` hoặc hàng ``(id, status, role)`` của ``repo.lock_user_role_share``)."""
+    return actor is not None and actor.status == "active"
+
+
 def _actor_authorized(
     review_mode: str,
     actor: Optional[models.User],
@@ -419,7 +437,7 @@ def _actor_authorized(
     grant_row: Optional[Tuple[models.DocumentCrossReviewGrant, bool]],
 ) -> bool:
     """§5.4 bước 4 — kiểm lại người bấm ở MỖI hồ sơ, trên dòng VỪA KHOÁ."""
-    if actor is None or actor.status != "active":
+    if not _actor_live(actor):
         return False
     if review_mode == REVIEW_MODE_BATCH:
         if actor.role == UserRole.ADMIN:
@@ -458,11 +476,19 @@ async def execute_batch(
         raise _running()
     started = False
     try:
-        # Bước 2 — MỘT giao dịch: khoá dòng lô, kiểm lại người tạo DƯỚI khoá, đổi ``processing``.
+        # Bước 2 — MỘT giao dịch: khoá dòng NGƯỜI TẠO rồi dòng lô, kiểm lại người tạo DƯỚI khoá, đổi ``processing``.
+        # F7 (20-11): người ``FOR KEY SHARE`` TRƯỚC dòng lô — cùng chiều với K4 (người ``FOR UPDATE`` → xoá lô
+        # ``previewed``). Thiếu khoá này: K4 kiểm thấy lô còn ``previewed`` (không chặn), lượt chạy commit ``processing``,
+        # K4 bỏ qua lô ấy rồi xoá người ⇒ khoá ngoại RESTRICT ``23503`` ⇒ 500 thay vì 409. Có khoá: K4 chờ tới khi
+        # ``processing`` đã commit ⇒ thấy lô đã chạy ⇒ 409; K4 tới trước ⇒ lô ``previewed`` đã bị xoá cùng người ⇒ 404.
+        creator = await repo.lock_user_key_share(db, actor_id)
         got = await repo.lock_batch_row(db, batch_id)
         if got is None or got[0].actor_user_id != actor_id or got[0].review_mode != review_mode:
             await _safe_rollback(db)
             raise PreviewGone()
+        if not _actor_live(creator):
+            await _safe_rollback(db)
+            raise DocumentTransitionConflict(ACTOR_NOT_AUTHORIZED)
         row, expired = got
         if row.status != "previewed":
             await _safe_rollback(db)
@@ -842,7 +868,10 @@ async def finalize_batch(
     meta = request_meta or RequestMeta()
     reason = (reason or "").strip() or None
     is_creator = viewer_id == creator_id
-    is_admin = viewer_role == UserRole.ADMIN
+    # 422 TRƯỚC khoá (hợp đồng bản 5 B4 — cùng vị từ với cờ ``finalize_requires_reason``), xét bằng vai đầu yêu cầu. Phép
+    # kiểm này chỉ TỪ CHỐI, không cấp quyền: quyền GHI quyết ở bước 3 bằng vai đọc lại dưới khoá. Người không phải người
+    # tạo chỉ qua được cổng bước 0 khi vai đầu yêu cầu là Admin ⇒ đã bị đòi lý do ở đây ⇒ "Admin chốt lô của người khác
+    # luôn có lý do" vẫn đúng khi bước 3 xét bằng vai hiện hành.
     if _needs_finalize_reason(is_creator=is_creator, viewer_role=viewer_role) and not reason:
         raise BulkVerifyUnprocessable("REASON_REQUIRED", "Admin chốt lô của người khác phải ghi lý do")
 
@@ -865,18 +894,31 @@ async def finalize_batch(
     if not got_lock:
         raise _running()
 
-    # Bước 3 — ĐÃ giữ khoá: khoá dòng lô, kiểm lại quyền + đọc lại trạng thái DƯỚI khoá.
+    # Bước 3 — ĐÃ giữ khoá: khoá dòng NGƯỜI CHỐT rồi dòng lô (F7, 20-11 — cùng chiều K4: người → lô; bước 4 ghi
+    # ``finalized_by_user_id`` = khoá ngoại tới dòng người này), kiểm lại quyền + đọc lại trạng thái DƯỚI khoá.
+    # Dòng người khoá ``FOR SHARE``, KHÔNG ``FOR KEY SHARE`` (Codex 20-11): lệnh đổi vai / khoá tài khoản tới sau phải CHỜ
+    # chốt commit, nên vai đọc ở đây còn đúng tới lúc ghi; đổi vai đã commit TRƯỚC bước này thì đọc ra vai MỚI.
+    finalizer = await repo.lock_user_role_share(db, viewer_id)
     locked = await repo.lock_batch_row(db, batch_id)
     if locked is None:
         raise BatchNotFound()
     row = locked[0]
-    if not (row.actor_user_id == viewer_id or is_admin):
+    # Quyền chốt xét bằng VAI HIỆN HÀNH (đọc dưới khoá ở trên), không bằng ``viewer_role`` đọc từ đầu yêu cầu: Admin vừa bị
+    # hạ vai không còn chốt được lô của người khác ⇒ cùng 404 với cổng bước 0. Dòng người không còn / không hoạt động thì
+    # không có vai để xét ở đây — phép kiểm ``_actor_live`` bên dưới trả 409 ``actor_not_authorized`` (như trước).
+    is_admin = finalizer is not None and finalizer.role == UserRole.ADMIN
+    if _actor_live(finalizer) and not (row.actor_user_id == viewer_id or is_admin):
         raise BatchNotFound()
     if row.status == "previewed":
         raise BulkBatchConflict("BATCH_NOT_STARTED", "Lô chưa chạy — không có gì để chốt")
     if row.status in TERMINAL_STATUSES:
         view = await _build_view(db, batch_id, row.status, viewer_id=viewer_id, viewer_role=viewer_role)
         return {"batch": view, "finalized_now": False}
+
+    # Người chốt bị xoá / khoá tài khoản trong lúc chờ khoá ⇒ 409 ``actor_not_authorized`` (mã có sẵn), không ghi gì —
+    # thay cho ``23503`` ⇒ 500 ở câu ghi ``finalized_by_user_id``.
+    if not _actor_live(finalizer):
+        raise DocumentTransitionConflict(ACTOR_NOT_AUTHORIZED)
 
     # Bước 4 — chốt: KHÔNG ghi giấy nào, chỉ đánh dấu mục chưa chạy.
     await repo.mark_remaining_not_processed(db, batch_id, NOT_PROCESSED_MESSAGE)

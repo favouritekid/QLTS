@@ -61,6 +61,8 @@ ADMISSION_ROUTER_MODULES: Final[frozenset[str]] = frozenset(
         "app.routers.admission_paths",
         # Văn bản Hội đồng (Lần xét tuyển GĐ1) — dưới tiền tố v1 /api/admission-config.
         "app.routers.council_documents",
+        # Lần xét tuyển GĐ2 (GĐ2-A: bảng chỉ tiêu năm / nhóm ngành) — dưới tiền tố v1 /api/admission-config.
+        "app.routers.admission_review",
         "app.routers.admin_backfill",
         "app.routers.admin_priority_config",
         "app.routers.admin_v2_admission_round",
@@ -185,6 +187,10 @@ ADMISSION_WRITE_ROUTES: Final[tuple[tuple[str, str], ...]] = (
     ("POST", "/api/admission-config/council-documents/sets/kiem-truoc"),
     ("POST", "/api/admission-config/council-documents/sets/doi-ma"),
     ("POST", "/api/admission-config/council-documents/sets/tim-ho-so"),
+    # Lần xét tuyển GĐ2-A (18-11): bảng chỉ tiêu năm — sửa / khoá / mở khoá — rà tay từ route thật.
+    ("PUT", "/api/admission-config/quota-tables/{academic_year}"),
+    ("POST", "/api/admission-config/quota-tables/{academic_year}/lock"),
+    ("POST", "/api/admission-config/quota-tables/{academic_year}/unlock"),
     ("POST", "/api/admission-config/criteria"),
     ("DELETE", "/api/admission-config/criteria/{criteria_id}"),
     ("PUT", "/api/admission-config/criteria/{criteria_id}"),
@@ -256,6 +262,8 @@ ADMISSION_WRITE_ROUTES: Final[tuple[tuple[str, str], ...]] = (
     ("POST", "/api/admissions/{profile_id}/unclaim"),
     ("POST", "/api/admissions/{profile_id}/withdraw"),
     ("POST", "/api/v2/admin/admission-backfill-exceptions/bulk-resolve"),
+    # GĐ2-0 (19-11): ghi nhận minh chứng ưu tiên nộp bằng bản giấy — rà tay từ route thật.
+    ("POST", "/api/v2/admissions/{profile_id}/priority-evidence/{sub_code}/paper-submitted"),
     ("PATCH", "/api/v2/admin/admission-backfill-exceptions/{exception_id}/resolve"),
     ("PATCH", "/api/v2/admin/admission-paths/{admission_path_id}/quota"),
     ("POST", "/api/v2/admin/admission-paths/{admission_path_id}/subject-group-configs"),

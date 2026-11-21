@@ -189,6 +189,12 @@ async def test_priority_evidence_upload_rejects_corrupt_image(monkeypatch):
 
     monkeypatch.setattr(admission_service, "get_profile", _mock_get_profile)
 
+    # GĐ2-0: tải minh chứng khoá hồ sơ trước (``_lock_profile_for_document_write``) — trả cùng hồ sơ giả.
+    async def _mock_lock(db_, profile_id):
+        return profile
+
+    monkeypatch.setattr(admission_service, "_lock_profile_for_document_write", _mock_lock)
+
     corrupt_png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
     upload = _upload(corrupt_png, "image/png")
 

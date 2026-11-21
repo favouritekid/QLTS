@@ -107,9 +107,11 @@ async def test_verify_paper_only_when_document_id_none() -> None:
     actor = _make_actor("officer", user_id=7)
     db = _make_db(catalog_rows=[("04", Decimal("1.00"))])
 
+    # GĐ2-0 (câu 1, 2 owner 19-11): KHÔNG có dòng giấy ⇒ không rõ người nhận ⇒ chỉ qua đường cam kết + lý do.
     updated, _ = await verify_object_evidence(
         db, profile, sub_code="04", document_id=None,
         actor=actor, expected_version=5,
+        unknown_submitter_ack=True, reason="Đã đối chiếu bản giấy gốc tại phòng tuyển sinh",
     )
 
     # Contract: paper_only_verification=True khi không có file
@@ -143,6 +145,8 @@ async def test_verify_paper_only_false_when_document_id_provided() -> None:
     doc_row = SimpleNamespace(
         id=42, category="priority_evidence", priority_sub_code="04",
         file_path="uploads/admissions/42/priority_04_xyz.pdf",
+        # GĐ2-0 (C1a): tệp do người KHÁC người duyệt (id 7) tải lên.
+        uploaded_by=99, uploaded_by_unknown=False,
     )
     db = _make_db(catalog_rows=[("04", Decimal("1.00"))], doc_row=doc_row)
 
@@ -182,6 +186,8 @@ async def test_verify_auto_binds_doc_when_payload_null_and_row_exists() -> None:
     doc_row = SimpleNamespace(
         id=99, category="priority_evidence", priority_sub_code="04",
         file_path="uploads/admissions/42/priority_04_uploaded.pdf",
+        # GĐ2-0 (C1a): tệp do người KHÁC người duyệt (id 7) tải lên.
+        uploaded_by=99, uploaded_by_unknown=False,
     )
     db = _make_db(catalog_rows=[("04", Decimal("1.00"))], doc_row=doc_row)
 
@@ -224,6 +230,8 @@ async def test_verify_rejects_mismatched_document_id() -> None:
     doc_row = SimpleNamespace(
         id=99, category="priority_evidence", priority_sub_code="04",
         file_path="uploads/admissions/42/priority_04.pdf",
+        # GĐ2-0 (C1a): tệp do người KHÁC người duyệt (id 7) tải lên.
+        uploaded_by=99, uploaded_by_unknown=False,
     )
     db = _make_db(catalog_rows=[("04", Decimal("1.00"))], doc_row=doc_row)
 

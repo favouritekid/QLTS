@@ -126,6 +126,13 @@ GD1B_CROSS_REVIEW_OBJECTS = (
     ("/api/admissions/cross-review/bulk-verify", "GET"),
 )
 
+# GĐ2-0 (câu 2 owner 19-11) — ghi nhận minh chứng ưu tiên nộp bằng bản giấy: cán bộ ALLOW (Quản lý kế thừa, Admin wildcard),
+# kế toán DENY (kế thừa cán bộ). MỘT nguồn cho hai template; migration ``gd2a20261118`` chép cứng cùng dòng (seed production),
+# ``tests/unit/test_gd2_minh_chung_uu_tien_luat.py`` khoá hai bên bằng nhau.
+GD2_PRIORITY_PAPER_OBJECTS = (
+    ("/api/v2/admissions/*/priority-evidence/*/paper-submitted", "POST"),
+)
+
 
 # =============================================================================
 # CORE ROLE TEMPLATES (Based on system defaults)
@@ -273,6 +280,7 @@ OFFICER_TEMPLATE: PolicyTemplate = {
         # Accountant DENY block đối ứng dưới.
         {"subject": "{role}", "object": "/api/v2/admissions/*/priority-evidence/*/upload",    "action": "POST"},
         {"subject": "{role}", "object": "/api/v2/admissions/*/priority-evidence/*",           "action": "DELETE"},
+        *({"subject": "{role}", "object": o, "action": a} for o, a in GD2_PRIORITY_PAPER_OBJECTS),
         # Wave 1 read endpoints — KV preview + UT catalog. Used by candidate
         # (BASIC_USER_TEMPLATE also has these) AND officer/manager/admin via
         # this template. Accountant DENY block below.
@@ -547,6 +555,7 @@ ACCOUNTANT_TEMPLATE: PolicyTemplate = {
         # role:officer) bounces off deny effect.
         {"subject": "{role}", "object": "/api/v2/admissions/*/priority-evidence/*/upload",    "action": "POST",  "eft": "deny"},
         {"subject": "{role}", "object": "/api/v2/admissions/*/priority-evidence/*",           "action": "DELETE", "eft": "deny"},
+        *({"subject": "{role}", "object": o, "action": a, "eft": "deny"} for o, a in GD2_PRIORITY_PAPER_OBJECTS),
         # Wave 1 read endpoints — accountant không cần xem priority data;
         # separation-of-duties giữ kế toán khỏi admission scoring info.
         {"subject": "{role}", "object": "/api/v2/admissions/*/preview-priority-kv",           "action": "POST",  "eft": "deny"},

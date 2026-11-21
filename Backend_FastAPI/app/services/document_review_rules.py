@@ -1,5 +1,5 @@
 """GĐ1b — luật quyết định duyệt / từ chối / Đặt lại giấy thường: MỘT nguồn cho cờ máy chủ (§4.7) VÀ cổng ghi
-``transition_document`` (§4).
+``transition_document`` (§4). GĐ2-0 (cuối tệp) — luật duyệt minh chứng ưu tiên (quyết định owner C1).
 
 Đặc tả GĐ1b bản 3.6 §4.1 (phạm vi theo ``via``), §4.2 (người nhận / người tải, Đặt lại, X1), §4.6 (hình thức), §4.7 (cờ).
 Hàm thuần — không đọc CSDL. ``transition_document`` gọi :func:`decide` với trạng thái ĐỌC LẠI DƯỚI KHOÁ; phản hồi hồ sơ gọi
@@ -183,3 +183,141 @@ def decide(
     ):
         return Decision(False, MISSING_FORMAT)
     return gate
+
+
+# =====================================================================================================================
+# GĐ2-0 — minh chứng ưu tiên (quyết định owner C1, 17-11: ``QUYET-DINH-OWNER-GD1B-2026-11-17.md`` nhóm C).
+#   (a) người tải minh chứng KHÔNG được tự duyệt;
+#   (b) người duyệt = Quản lý trong đơn vị + Admin, "giống giấy tờ".
+# MỘT nguồn cho: cổng quyền ``deps.require_priority_evidence_reviewer`` (b), cờ ``permissions.verify_priority_object`` của
+# phản hồi hồ sơ (b), cổng người tải trong ``priority_override_service`` (a) và cổng đường cập nhật hồ sơ thường
+# (``admission_service.update_profile``). Hàm thuần — không đọc CSDL.
+# =====================================================================================================================
+
+#: Trạng thái minh chứng ưu tiên ĐÃ QUA người duyệt (``priority_object_evidence[mã].status``). Chỉ đường duyệt / từ chối
+#: (``priority_override_service``) được đặt hai trạng thái này.
+PRIORITY_EVIDENCE_REVIEWED_STATUSES: FrozenSet[str] = frozenset({"verified", "rejected"})
+
+
+def priority_evidence_reviewer(policy: DocumentActionPolicy) -> bool:
+    """C1(b): người được duyệt / từ chối minh chứng ưu tiên = Admin hoặc Quản lý trong đơn vị của hồ sơ — ĐÚNG vị từ
+    ``reviewer_scope`` của giấy tờ (``admission_document_policy._build_context``). Cán bộ (kể cả cán bộ phụ trách hồ sơ)
+    không duyệt. Trạng thái hồ sơ do ``priority_override_service`` xét riêng (giữ nguyên luật cũ)."""
+    return bool(policy.ctx.reviewer_scope)
+
+
+#: Câu 1 owner 19-11 (``gd2\QUYET-DINH-OWNER-GD2-0-A-BON-CAU-2026-11-19.md``) — MỘT chỗ duy nhất quyết TỆP minh chứng không
+#: rõ người tải có được đi đường ngoại lệ "cam kết + lý do" như nút lẻ giấy tờ GĐ1b (N1b A′) hay chặn hẳn tới khi tải lại.
+#: ``True`` = giống GĐ1b (mặc định đang cài). Đảo thành ``False`` ⇒ tệp không rõ người tải bị chặn kể cả khi có cam kết; giấy
+#: (không tệp) không rõ người nhận vẫn đi ngoại lệ (câu 2). Mỗi chiều có test riêng.
+UNKNOWN_UPLOADER_ACK_ALLOWED: bool = True
+
+#: Nguồn của "người gắn với minh chứng" (giống ``DocFacts`` của giấy tờ: có tệp ⇒ người tải; không tệp ⇒ người nhận giấy).
+RECEIVER_UPLOAD = "upload"
+RECEIVER_PAPER = "paper"
+#: Không có dòng giấy minh chứng nào (duyệt theo hồ sơ giấy mà chưa ghi nhận người nhận — mọi lần duyệt giấy trước bản sửa).
+RECEIVER_NONE = "none"
+
+
+@dataclass(frozen=True)
+class PriorityEvidenceFacts:
+    """Sự kiện về dòng giấy minh chứng của MỘT mã diện (``profile_document`` ``category = 'priority_evidence'``).
+
+    "Người gắn với minh chứng" (gọi tắt người nhận) = ``uploaded_by`` nếu dòng CÓ tệp; = ``paper_submitted_by`` nếu dòng KHÔNG
+    tệp (đã ghi nhận bản giấy). Cột NULL ⇒ "không rõ" kể cả khi cờ chưa bật; KHÔNG suy người từ nhật ký (owner 19-11).
+    Không có dòng ⇒ không rõ người nhận (``RECEIVER_NONE``)."""
+
+    has_file: bool
+    receiver_kind: str
+    receiver_id: Optional[int]
+    receiver_unknown: bool
+
+    @classmethod
+    def from_row(cls, doc) -> "PriorityEvidenceFacts":
+        if doc is None:
+            return cls(has_file=False, receiver_kind=RECEIVER_NONE, receiver_id=None, receiver_unknown=True)
+        if getattr(doc, "file_path", None):
+            rid, flag, kind = getattr(doc, "uploaded_by", None), getattr(doc, "uploaded_by_unknown", False), RECEIVER_UPLOAD
+            has_file = True
+        else:
+            rid, flag = getattr(doc, "paper_submitted_by", None), getattr(doc, "paper_submitted_by_unknown", False)
+            kind, has_file = RECEIVER_PAPER, False
+        return cls(has_file=has_file, receiver_kind=kind, receiver_id=rid, receiver_unknown=bool(flag) or rid is None)
+
+
+def decide_priority_evidence(action: str, *, actor_id: int, evidence: PriorityEvidenceFacts) -> Decision:
+    """C1(a) + câu 2, 3 owner 19-11: người tải tệp / người nhận bản giấy KHÔNG tự duyệt và KHÔNG tự từ chối minh chứng ấy
+    (cùng luật ``_receiver_gate`` của giấy tờ — §4.2 GĐ1b). Không rõ người nhận ⇒ chỉ đi được đường ngoại lệ có cam kết +
+    lý do (``requires_ack`` — câu 1, N1b A′); tệp không rõ người tải theo cờ :data:`UNKNOWN_UPLOADER_ACK_ALLOWED`. Cam kết
+    KHÔNG mở đường khi người nhận đã biết là chính người bấm (xét trước)."""
+    if action not in (ACTION_VERIFY, ACTION_REJECT):
+        raise ValueError(action)
+    if not evidence.receiver_unknown and evidence.receiver_id == actor_id:
+        return Decision(False, OWN_SUBMISSION)
+    if evidence.receiver_unknown:
+        if evidence.has_file and not UNKNOWN_UPLOADER_ACK_ALLOWED:
+            return Decision(False, UNKNOWN_SUBMITTER)
+        return Decision(True, None, requires_ack=True)
+    return Decision(True)
+
+
+def priority_evidence_paper_recordable(policy: DocumentActionPolicy, *, has_row: bool) -> bool:
+    """GĐ2-F1 — người xem có được ghi nhận minh chứng ưu tiên nộp bằng BẢN GIẤY cho một mã diện không: chỉ khi mã CHƯA có
+    dòng giấy nào (như ``paper_submitted`` của giấy tờ: chỉ từ ``missing``) và vị từ "ghi nhận bản giấy" của giấy tờ cho
+    phép (hồ sơ ở trạng thái cho sửa giấy + cán bộ phụ trách / Quản lý trong đơn vị / Admin — ``DocumentActionPolicy``).
+
+    MỘT nguồn cho cờ ``priority_evidence_documents[*].can_mark_paper_submitted`` VÀ cổng route
+    ``admission_service.mark_priority_evidence_paper_submitted`` (gọi sau các kiểm có câu báo riêng)."""
+    return (not has_row) and policy.authorize("paper_submitted", "missing", False)
+
+
+def priority_evidence_ack_satisfied(decision: Decision, *, unknown_submitter_ack: bool, reason: Optional[str]) -> bool:
+    """Đường ngoại lệ có cam kết (giống ``transition_document``: ``requires_ack and not (unknown_submitter_ack and reason)``
+    ⇒ chặn): cờ cam kết TƯỜNG MINH + lý do khác rỗng sau khi bỏ khoảng trắng hai đầu. MỘT nguồn cho duyệt và từ chối."""
+    if not decision.requires_ack:
+        return True
+    return bool(unknown_submitter_ack) and bool((reason or "").strip())
+
+
+def _reviewed(entry) -> bool:
+    return isinstance(entry, dict) and entry.get("status") in PRIORITY_EVIDENCE_REVIEWED_STATUSES
+
+
+def _review_identity(entry: dict) -> Tuple:
+    return (entry.get("status"), entry.get("verified_by"), entry.get("rejected_by"), entry.get("document_id"))
+
+
+#: Trường của mục minh chứng mà CHỈ đường duyệt / từ chối / tải lên được ghi (người duyệt, người từ chối, dòng giấy gắn với
+#: lần duyệt, cờ "duyệt theo bản giấy"). Mục CHƯA qua người duyệt gửi qua PUT hồ sơ thường phải để trống các trường này.
+_REVIEW_ONLY_FIELDS = (
+    "document_id", "verified_by", "verified_at", "rejected_by", "rejected_at", "reject_reason", "paper_only_verification",
+)
+
+
+def merge_profile_evidence_update(current: Optional[dict], incoming: Optional[dict]) -> Tuple[dict, list]:
+    """Đường cập nhật hồ sơ thường (``PUT /api/admissions/{id}``, ``AdmissionProfileUpdate.priority_object_evidence``)
+    KHÔNG được đặt / đổi / bỏ trạng thái đã qua người duyệt — lối vào thứ hai của "tự duyệt" (C1) — và KHÔNG được gắn dòng
+    giấy / cờ "duyệt theo bản giấy" / người duyệt vào mục chưa duyệt (câu 2 owner 19-11). Người nhận giấy / người tải nằm ở
+    ``profile_document`` — đường PUT này không ghi bảng ấy.
+
+    Trả ``(bản ghi sẽ lưu, danh sách mã vi phạm)``. Vi phạm = mã mà (i) bản hiện tại HOẶC bản gửi lên ở trạng thái đã duyệt /
+    từ chối và hai bản khác nhau ở (trạng thái, người duyệt, người từ chối, dòng giấy); hoặc (ii) bản gửi lên CHƯA duyệt mà
+    mang giá trị ở một trường chỉ đường duyệt được ghi. Gửi lại NGUYÊN mục đã duyệt là hợp lệ, và bản lưu giữ ĐÚNG mục hiện
+    tại (không nhận các trường khác của thân gửi lên cho mục ấy)."""
+    cur = dict(current or {})
+    inc = dict(incoming or {})
+    bad = []
+    for code in sorted(set(cur) | set(inc)):
+        c, n = cur.get(code), inc.get(code)
+        if not _reviewed(c) and not _reviewed(n):
+            if isinstance(n, dict) and any(n.get(k) for k in _REVIEW_ONLY_FIELDS):
+                bad.append(code)
+            continue
+        if _reviewed(c) and _reviewed(n) and _review_identity(c) == _review_identity(n):
+            continue
+        bad.append(code)
+    merged = dict(inc)
+    for code, c in cur.items():
+        if _reviewed(c):
+            merged[code] = c
+    return merged, bad

@@ -109,6 +109,14 @@ def _find_audit_rows(db):
 REJECT_REASON_VALID = "Document không hợp lệ (10+ chars)"
 
 
+# GĐ2-0 (câu 2 owner 19-11): minh chứng nộp bằng bản giấy đã ghi nhận, người nhận (id 99) KHÁC người bấm (id 7). Không có
+# dòng giấy nào ⇒ "không rõ người nhận" ⇒ phải đi đường cam kết + lý do (câu 1) — ca riêng ở test_gd2_minh_chung_uu_tien_luat.
+_GIAY_NGUOI_NHAN_KHAC = SimpleNamespace(
+    id=55, category="priority_evidence", priority_sub_code="04", file_path=None,
+    paper_submitted_by=99, paper_submitted_by_unknown=False,
+)
+
+
 # ---------------------------------------------------------------------------
 # Version guard
 # ---------------------------------------------------------------------------
@@ -230,6 +238,8 @@ async def test_verify_happy_path_mutates_evidence_and_audit() -> None:
     doc_row = SimpleNamespace(
         id=42, category="priority_evidence", priority_sub_code="04",
         file_path="uploads/admissions/42/priority_04_xyz.pdf",
+        # GĐ2-0 (C1a): tệp do người KHÁC người duyệt (id 7) tải lên.
+        uploaded_by=99, uploaded_by_unknown=False,
     )
     db = _make_db(catalog_rows=[("04", Decimal("1.00"))], doc_row=doc_row)
 
@@ -275,7 +285,7 @@ async def test_verify_happy_path_mutates_evidence_and_audit() -> None:
 async def test_reject_happy_path_mutates_evidence() -> None:
     profile = _make_profile()
     actor = _make_actor("officer", user_id=7)
-    db = _make_db()
+    db = _make_db(doc_row=_GIAY_NGUOI_NHAN_KHAC)
 
     updated, _ = await reject_object_evidence(
         db, profile, sub_code="04",
@@ -315,7 +325,7 @@ async def test_reject_after_verify_recomputes_bucket() -> None:
     actor = _make_actor("officer")
     # Before reject, catalog has both verified. After rejecting "04",
     # only "07" remains verified. Bucket recomputes to UT07=0.50.
-    db = _make_db(catalog_rows=[("07", Decimal("0.50"))])
+    db = _make_db(catalog_rows=[("07", Decimal("0.50"))], doc_row=_GIAY_NGUOI_NHAN_KHAC)
 
     updated, _ = await reject_object_evidence(
         db, profile, sub_code="04",
