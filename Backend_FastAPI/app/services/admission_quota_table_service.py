@@ -267,6 +267,15 @@ async def _locked_years(db: AsyncSession, academic_years: Iterable[Optional[int]
     )
 
 
+async def is_quota_table_locked(db: AsyncSession, academic_year: Optional[int]) -> bool:
+    """N4-2 (owner 20-11) — năm ``academic_year`` có bảng chỉ tiêu ĐÃ KHOÁ không (cùng câu đọc với :func:`_locked_years`).
+    Năm chưa có bảng hoặc bảng nháp ⇒ ``False`` ("chưa khoá").
+
+    CHỈ dùng để chọn câu HƯỚNG DẪN khi Phê duyệt bị chặn vì ngành chỉ tiêu 0 — KHÔNG lấy khoá năm: một lần khoá / mở khoá bảng
+    commit chen giữa chỉ đổi câu hướng dẫn, không đổi quyết định chặn (quyết định đọc chỉ tiêu dưới khoá dòng học vụ)."""
+    return bool(await _locked_years(db, [academic_year]))
+
+
 async def check_academic_info_create_allowed(
     db: AsyncSession, academic_year: int, annual_admission_quota: Optional[int]
 ) -> None:

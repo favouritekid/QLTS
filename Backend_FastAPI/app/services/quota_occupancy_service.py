@@ -421,6 +421,17 @@ async def is_occupying(db: AsyncSession, profile) -> bool:
     return await has_effective_row(db, profile.id)
 
 
+# ═══════════════════════════════ N4 — ngành ĐÓNG tuyển (chỉ tiêu 0) ═══════════════════════════════
+def is_offering_closed(quota: Optional[int]) -> bool:
+    """N4 (owner 20-11, ``gd2/QUYET-DINH-OWNER-H1-VA-N4-2026-11-20.md``; luật 19–20-11 "trống ≠ 0, 0 đóng tuyệt đối") —
+    MỘT nguồn cho câu hỏi "ngành đã ĐÓNG tuyển vì chỉ tiêu năm 0". Hàm thuần: ``quota`` là giá trị đã đọc DƯỚI khoá dòng
+    học vụ của nơi gọi.
+
+    * ``None`` (chỉ tiêu TRỐNG) KHÔNG phải đóng — nút Phê duyệt cũ hiểu là không giới hạn (owner giữ nguyên).
+    * Âm (chỉ có qua SQL tay — cột không có CHECK ≥ 0, lược đồ ``ge=0``) cũng coi là ĐÓNG: chặn chặt hơn, không mở cửa nào."""
+    return quota is not None and quota <= 0
+
+
 # ═══════════════════════════════ THỨ TỰ KHOÁ CHUẨN của dòng chỉ tiêu (F259) ═════════════════
 async def lock_quota_cells(
     db: AsyncSession, oai_ids: Iterable[Optional[int]], path_ids: Iterable[Optional[int]]

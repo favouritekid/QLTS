@@ -1006,8 +1006,10 @@ class TestQuotaZeroBlocks:
     Schema currently allows annual_admission_quota = 0 (ge=0). Conflating
     that with quota = NULL (unlimited) would let staff admit unbounded
     students into a deliberately closed cohort. ADM-026 round-2 fix:
-    quota=0 blocks ALL approves; only NULL means unlimited. Admin bypass
-    with valid reason still works as a documented escape hatch.
+    quota=0 blocks ALL approves; only NULL means unlimited. N4 (owner
+    20-11): Admin bypass KHÔNG còn mở ngành chỉ tiêu 0 khi Phê duyệt (trước
+    đây là "cửa thoát" có chủ ý); chỉ ``/finalize`` giữ cơ chế cũ. Ca HTTP:
+    ``tests/api/test_phe_duyet_nganh_chi_tieu_0_api.py``.
     """
 
     async def test_quota_zero_blocks_approve_without_bypass(
@@ -1040,10 +1042,11 @@ class TestQuotaZeroBlocks:
                         transition="approve",
                     )
 
-    async def test_quota_zero_admin_bypass_still_works(
+    async def test_chi_tieu_0_admin_xin_vuot_van_bi_chan(
         self, setup_test_database, seed_lead_dependencies
     ):
-        """Admin bypass with valid reason is the documented escape."""
+        """N4: Admin ghi lý do xin vượt ở ngành chỉ tiêu 0 VẪN bị chặn (đảo ca cũ
+        ``test_quota_zero_admin_bypass_still_works``)."""
         seeds = await _seed_offering_with_quota(
             quota=0,
             seed_unit_id=seed_lead_dependencies["unit_id"],
@@ -1061,18 +1064,19 @@ class TestQuotaZeroBlocks:
         async with AsyncSessionLocal() as session:
             async with session.begin():
                 profile = await _profile_with_lead(session, pid)
-                # Should NOT raise — admin override on quota=0 cohort.
-                await admission_service._assert_quota_or_bypass(
-                    session,
-                    profile,
-                    admin,
-                    bypass_quota=True,
-                    bypass_reason=(
-                        "Cohort closed (quota=0) but admit per Hiệu Trưởng "
-                        "directive 2026-04-29."
-                    ),
-                    transition="approve",
-                )
+                with pytest.raises(BusinessRuleViolation) as loi:
+                    await admission_service._assert_quota_or_bypass(
+                        session,
+                        profile,
+                        admin,
+                        bypass_quota=True,
+                        bypass_reason=(
+                            "Cohort closed (quota=0) but admit per Hiệu Trưởng "
+                            "directive 2026-04-29."
+                        ),
+                        transition="approve",
+                    )
+                assert str(loi.value).startswith("Ngành đã đóng tuyển (chỉ tiêu 0)"), str(loi.value)
 
     async def test_quota_null_remains_unlimited(
         self, setup_test_database, seed_lead_dependencies

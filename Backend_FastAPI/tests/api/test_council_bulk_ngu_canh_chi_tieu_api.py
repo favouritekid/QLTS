@@ -339,8 +339,9 @@ async def test_r4_dong_nganh_giua_do_va_khoa_khong_duyet_theo_tran_cu(client, hs
     assert giu, "tiền điều kiện: bước dò phải nạp dòng chỉ tiêu"
     kq = r.json()
     assert (kq["success_count"], kq["failed_ids"]) == (0, [p]), kq
-    # ĐÚNG lý do: bị chặn vì trần MỚI (0), không phải vì lý do khác (xung đột ngữ cảnh, ...).
-    assert kq["errors"][str(p)].startswith("Vượt chỉ tiêu tuyển sinh") and " là 0 hồ sơ" in kq["errors"][str(p)], kq
+    # ĐÚNG lý do: bị chặn vì trần MỚI (0), không phải vì lý do khác (xung đột ngữ cảnh, ...). N4 (owner 20-11): trần 0 ⇒
+    # câu "ngành đã đóng tuyển" — câu này CHỈ sinh ra khi chỉ tiêu đọc được ≤ 0 (trần cũ 10 thì mục được duyệt).
+    assert kq["errors"][str(p)].startswith("Ngành đã đóng tuyển (chỉ tiêu 0)"), kq
     assert (await _ban(p))[0] == "submitted"
 
 
