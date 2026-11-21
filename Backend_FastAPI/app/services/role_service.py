@@ -131,108 +131,99 @@ async def remove_role_from_users(
     reassigned_count = 0
     failed_users = []
 
-    from app.services.document_cross_review_service import (
-        auto_revoke_reason,
-        revoke_grants_on_account_change,
-    )
+    from app.repositories import UserRepository
+    from app.services.casbin_service import khoa_enforcer
+    from app.services.document_cross_review_service import revoke_grants_on_account_change
+
+    user_repo = UserRepository(db)
+    db_removed = role_to_remove.replace("role:", "")
 
     # id TĂNG (PR-B Q4: mỗi người khoá dòng user → dòng quyền chéo; hai lệnh chồng nhau khoá cùng chiều).
+    #
+    # Thứ tự cho MỖI người (PR-B lượt 2 — Codex điểm chặn 3, owner câu 7 "gỡ vai mà ghi nhật ký lỗi vẫn phải xử lý được khi
+    # thử lại"): (1) đọc vai Casbin, KHÔNG đổi; (2) tự thu hồi quyền chéo + nhật ký và ghi vai CSDL (cùng giao dịch, lỗi ⇒
+    # ném ra, router không commit); (3) RỒI mới gỡ vai trong Casbin (adapter ghi bằng phiên RIÊNG, không rollback được).
+    # Bản cũ gỡ Casbin TRƯỚC ⇒ nhật ký lỗi làm CSDL rollback mà Casbin đã mất vai ⇒ lần thử lại bỏ qua người này ⇒ quyền
+    # chéo còn nguyên. Người đã qua bước (3) mà giao dịch vẫn rollback (lỗi ở người SAU trong cùng lệnh, hay commit lỗi):
+    # lần thử lại thấy Casbin không còn vai NHƯNG vai CSDL vẫn là vai bị gỡ ⇒ ĐỒNG BỘ LẠI (vai CSDL theo vai Casbin còn lại
+    # + tự thu hồi), không bỏ qua ⇒ Casbin, vai CSDL, dấu thu hồi về nhất quán.
     for user_id in sorted(user_ids):
         user_subject = f"user:{user_id}"
-        pending_role = None  # (user, vai DB mới) — ghi SAU khối nuốt lỗi bên dưới
 
         try:
-            from app.services.casbin_service import khoa_enforcer
-
-            # Lock bao TRỌN đọc snapshot -> gỡ role -> gán lại role dự phòng.
-            # Khoá từng lời gọi là chưa đủ: giữa lúc gỡ và lúc gán lại, người
-            # dùng KHÔNG có role nào; và `current_roles` đọc trước đó mà bị một
-            # lượt reload chen ngang thì quyết định "còn role nào không" dựa
-            # trên ảnh cũ.
+            # Lock bao TRỌN lần đọc snapshot (không đổi gì ở bước này).
             async with khoa_enforcer(enforcer):
-                # Get all current roles for this user
                 current_roles = await enforcer.get_roles_for_user(user_subject)
-
-                # Check if user actually has the role to remove
-                if role_to_remove not in current_roles:
-                    log.warning(
-                        f"User {user_id} doesn't have role {role_to_remove}, skipping"
-                    )
-                    continue
-
-                # Remove the specified role from Casbin
-                await enforcer.remove_grouping_policy(user_subject, role_to_remove)
-                removed_count += 1
-
-                # Get remaining roles after removal
-                remaining_roles = [
-                    r for r in current_roles if r != role_to_remove
-                ]
-
-                # SMART BEHAVIOR: If no roles left, auto-assign role:user
-                if not remaining_roles:
-                    await enforcer.add_grouping_policy(user_subject, "role:user")
-                    remaining_roles = ["role:user"]
-                    reassigned_count += 1
-                    log.info(
-                        f"User {user_id} had no roles left, auto-assigned role:user"
-                    )
-
-            # Update database user.role field to highest priority remaining role
-            # ✅ REFACTORED: Use UserRepository
-            from app.repositories import UserRepository
-            user_repo = UserRepository(db)
-            user = await user_repo.get_by_id(user_id)
-
-            if user:
-                # Find highest priority role from remaining roles
-                highest_priority_role = max(
-                    remaining_roles,
-                    key=lambda r: ROLE_PRIORITY.get(r, 0),
-                    default="role:user",
-                )
-
-                # Extract role name without "role:" prefix for DB
-                db_role_name = highest_priority_role.replace("role:", "")
-                pending_role = (user, db_role_name, remaining_roles)
-
         except Exception as e:
             failed_users.append({"user_id": user_id, "error": chu_loi_an_toan(e)})
-            log.error(
-                "Failed to remove role from user %s",
-                user_id,
-                extra={"error": str(e)},
-            )
+            log.error("Failed to read roles of user %s", user_id, extra={"error": str(e)})
             continue
 
-        if pending_role is not None:
-            user, db_role_name, remaining_roles = pending_role
-            # GĐ1b PR-B Q4 (owner 20-11): vai DB rời Cán bộ ⇒ tự thu hồi quyền duyệt chéo CÙNG giao dịch, TRƯỚC khi ghi vai.
-            # Ngoài khối nuốt lỗi ở trên: nuốt thì router vẫn commit vai mới mà quyền chưa thu hồi / thiếu nhật ký ⇒ ném ra
-            # để router không commit gì (fail-closed).
+        user = await user_repo.get_by_id(user_id)
+        if role_to_remove in current_roles:
+            remaining_roles = [r for r in current_roles if r != role_to_remove]
+        elif user is not None and user.role == db_removed:
+            # Lần trước đã gỡ trong Casbin nhưng CSDL rollback ⇒ đồng bộ lại vai CSDL theo Casbin hiện có.
+            remaining_roles = list(current_roles)
+            log.warning("User %s: Casbin no longer has %s but DB role still does — reconciling", user_id, role_to_remove)
+        else:
+            log.warning(f"User {user_id} doesn't have role {role_to_remove}, skipping")
+            continue
+
+        # Vai CSDL = vai ưu tiên cao nhất còn lại (không còn vai nào ⇒ role:user).
+        highest_priority_role = max(
+            remaining_roles or ["role:user"],
+            key=lambda r: ROLE_PRIORITY.get(r, 0),
+            default="role:user",
+        )
+        db_role_name = highest_priority_role.replace("role:", "")
+
+        if user is not None:
+            # GĐ1b PR-B Q4: vai CSDL rời Cán bộ ⇒ tự thu hồi quyền duyệt chéo CÙNG giao dịch, TRƯỚC khi ghi vai và TRƯỚC khi
+            # đụng Casbin. Ngoài mọi khối nuốt lỗi: lỗi ⇒ ném ra để router không commit gì (fail-closed).
             await revoke_grants_on_account_change(
                 db,
                 user_id=user.id,
-                reason=auto_revoke_reason(old_role=user.role, old_status=user.status, new_role=db_role_name),
+                new_role=db_role_name,
                 actor_id=actor_id,
                 request_meta=request_meta,
             )
             user.role = db_role_name
             db.add(user)
 
-            # `log` ở module này là `logging.getLogger` CHUẨN, không phải
-            # structlog — nó KHÔNG nhận kwarg tuỳ ý và ném
-            # `TypeError: Logger._log() got an unexpected keyword argument`.
-            # Trường có cấu trúc phải đi qua `extra={...}`.
-            log.info(
-                "User %s updated",
-                user_id,
-                extra={
-                    "removed_role": role_to_remove,
-                    "remaining_roles": remaining_roles,
-                    "db_role": db_role_name,
-                },
-            )
+        try:
+            # Lock bao TRỌN đọc lại snapshot -> gỡ role -> gán lại role dự phòng (giữa lúc gỡ và lúc gán lại người dùng
+            # KHÔNG có role nào; một lượt reload chen ngang thì quyết định "còn role nào không" phải dựa trên ảnh MỚI).
+            async with khoa_enforcer(enforcer):
+                current_roles = await enforcer.get_roles_for_user(user_subject)
+                if role_to_remove in current_roles:
+                    await enforcer.remove_grouping_policy(user_subject, role_to_remove)
+                    removed_count += 1
+                if not [r for r in current_roles if r != role_to_remove]:
+                    # SMART BEHAVIOR: If no roles left, auto-assign role:user
+                    await enforcer.add_grouping_policy(user_subject, "role:user")
+                    reassigned_count += 1
+                    log.info(f"User {user_id} had no roles left, auto-assigned role:user")
+        except Exception as e:
+            # Vai CSDL + dấu thu hồi đã ghi (vai CSDL là thứ Casbin dùng làm chủ thể ``role:{user.role}``); Casbin sẽ được
+            # gỡ ở lần thử lại (vai còn trong Casbin ⇒ nhánh thường; thu hồi khi ấy là no-op vì vai CSDL đã đổi).
+            failed_users.append({"user_id": user_id, "error": chu_loi_an_toan(e)})
+            log.error("Failed to remove role from user %s", user_id, extra={"error": str(e)})
+            continue
+
+        # `log` ở module này là `logging.getLogger` CHUẨN, không phải
+        # structlog — nó KHÔNG nhận kwarg tuỳ ý và ném
+        # `TypeError: Logger._log() got an unexpected keyword argument`.
+        # Trường có cấu trúc phải đi qua `extra={...}`.
+        log.info(
+            "User %s updated",
+            user_id,
+            extra={
+                "removed_role": role_to_remove,
+                "remaining_roles": remaining_roles,
+                "db_role": db_role_name,
+            },
+        )
 
     # ✅ TRANSACTION FIX: Flush instead of commit
     await db.flush()

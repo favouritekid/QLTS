@@ -724,6 +724,32 @@ async def update_user(
     try:
         update_data = user_in.model_dump(exclude_unset=True)
 
+        if "email" in update_data and update_data["email"] != db_user.email:
+            existing_user = await get_user_by_email(db, update_data["email"])
+            if existing_user and existing_user.id != user_id_for_logging:
+                raise DuplicateResourceError(
+                    detail="Email already registered by another user"
+                )
+
+        # GĐ1b PR-B Q4 (owner 20-11 / 21-11): đổi vai khỏi Cán bộ / khoá tài khoản ⇒ tự thu hồi MỌI quyền duyệt chéo chưa hết
+        # hạn, CÙNG giao dịch (router commit một lần). Đặt TRƯỚC đồng bộ Casbin (adapter ghi bằng phiên RIÊNG, không rollback
+        # được): lỗi ghi nhật ký thu hồi ⇒ ném ra trước khi Casbin bị đụng ⇒ rollback cả đổi vai / khoá lẫn thu hồi.
+        # Vai / trạng thái CŨ đọc DƯỚI khoá dòng người trong hàm (không dùng ``db_user`` nạp từ đầu yêu cầu).
+        from app.services.document_cross_review_service import revoke_grants_on_account_change
+
+        await revoke_grants_on_account_change(
+            db,
+            user_id=db_user.id,
+            new_role=update_data.get("role"),
+            new_status=update_data.get("status"),
+            actor_id=assigned_by_user_id,
+            request_meta=request_meta,
+        )
+        if "role" in update_data or "status" in update_data:
+            # PR-B lượt 2: đọc lại vai / đơn vị / trạng thái HIỆN HÀNH (dòng đã khoá ở trên) — quyết "vai có đổi không" bên
+            # dưới bằng cùng giá trị với quyết định thu hồi; bản nạp từ đầu yêu cầu có thể đã cũ.
+            await db.refresh(db_user, attribute_names=["role", "unit_id", "status"])
+
         # ✅ PHASE 2: Track role AND unit_id changes BEFORE updating
         old_db_role = db_user.role
         old_db_unit_id = db_user.unit_id
@@ -734,34 +760,6 @@ async def update_user(
         role_changed = new_db_role != old_db_role
         unit_changed = new_db_unit_id != old_db_unit_id
         assignment_changed = role_changed or unit_changed
-
-        if "email" in update_data and update_data["email"] != db_user.email:
-            existing_user = await get_user_by_email(db, update_data["email"])
-            if existing_user and existing_user.id != user_id_for_logging:
-                raise DuplicateResourceError(
-                    detail="Email already registered by another user"
-                )
-
-        # GĐ1b PR-B Q4 (owner 20-11): đổi vai khỏi Cán bộ / khoá tài khoản ⇒ tự thu hồi MỌI quyền duyệt chéo chưa hết hạn,
-        # CÙNG giao dịch (router commit một lần). Đặt TRƯỚC đồng bộ Casbin (adapter ghi bằng phiên RIÊNG, không rollback
-        # được): lỗi ghi nhật ký thu hồi ⇒ ném ra trước khi Casbin bị đụng ⇒ rollback cả đổi vai / khoá lẫn thu hồi.
-        from app.services.document_cross_review_service import (
-            auto_revoke_reason,
-            revoke_grants_on_account_change,
-        )
-
-        await revoke_grants_on_account_change(
-            db,
-            user_id=db_user.id,
-            reason=auto_revoke_reason(
-                old_role=old_db_role,
-                old_status=db_user.status,
-                new_role=update_data.get("role"),
-                new_status=update_data.get("status"),
-            ),
-            actor_id=assigned_by_user_id,
-            request_meta=request_meta,
-        )
 
         # ✅ ATOMIC FIX: Begin nested transaction (savepoint)
         # This ensures DB + Assignment + Casbin operations are atomic
@@ -1647,10 +1645,7 @@ async def perform_bulk_action(
             # GĐ1b PR-B Q4 (owner 20-11): khoá tài khoản HÀNG LOẠT ⇒ tự thu hồi quyền duyệt chéo của TỪNG người, CÙNG giao
             # dịch, TRƯỚC khi đổi trạng thái. Đi theo id TĂNG (mỗi người: dòng user → dòng quyền) ⇒ hai lệnh hàng loạt chồng
             # nhau khoá cùng chiều. Cùng điều kiện bỏ qua với vòng đổi trạng thái bên dưới (tự khoá chính mình).
-            from app.services.document_cross_review_service import (
-                auto_revoke_reason,
-                revoke_grants_on_account_change,
-            )
+            from app.services.document_cross_review_service import revoke_grants_on_account_change
 
             for user in sorted(users_to_process, key=lambda u: u.id):
                 if user.id == admin_user.id and new_status in ["banned", "pending"]:
@@ -1658,10 +1653,13 @@ async def perform_bulk_action(
                 await revoke_grants_on_account_change(
                     db,
                     user_id=user.id,
-                    reason=auto_revoke_reason(old_role=user.role, old_status=user.status, new_status=new_status),
+                    new_status=new_status,
                     actor_id=admin_user.id,
                     request_meta=request_meta,
                 )
+                # PR-B lượt 2: trạng thái HIỆN HÀNH (dòng vừa khoá) cho phép so "có đổi không" ở vòng dưới — cùng giá trị với
+                # quyết định thu hồi; bản nạp từ đầu yêu cầu có thể đã cũ.
+                await db.refresh(user, attribute_names=["status", "role"])
             ids_changed = []
             skipped_users = []
             for user in users_to_process:
@@ -1915,10 +1913,7 @@ async def sync_users_to_casbin(
     synced_count = 0
     failed_users = []
 
-    from app.services.document_cross_review_service import (
-        auto_revoke_reason,
-        revoke_grants_on_account_change,
-    )
+    from app.services.document_cross_review_service import revoke_grants_on_account_change
 
     # Process each user — id TĂNG (PR-B Q4: mỗi người khoá dòng user → dòng quyền; hai lượt đồng bộ khoá cùng chiều).
     for user in sorted(users, key=lambda u: u.id):
@@ -1950,7 +1945,7 @@ async def sync_users_to_casbin(
             await revoke_grants_on_account_change(
                 db,
                 user_id=user.id,
-                reason=auto_revoke_reason(old_role=user.role, old_status=user.status, new_role=casbin_role),
+                new_role=casbin_role,
                 actor_id=actor_id,
                 request_meta=request_meta,
             )

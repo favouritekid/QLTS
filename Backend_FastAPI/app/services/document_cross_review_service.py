@@ -219,44 +219,55 @@ def auto_revoke_reason(
     new_role: Any = None,
     new_status: Optional[str] = None,
 ) -> Optional[str]:
-    """MỘT vị từ Q4 "thay đổi tài khoản này có kéo theo tự thu hồi quyền duyệt chéo không" + câu lý do (``None`` = không):
+    """MỘT vị từ Q4 "thay đổi tài khoản này có kéo theo tự thu hồi quyền duyệt chéo không" + câu lý do (``None`` = không).
+    Owner chốt 21-11 (câu 1, 2):
 
-    - trạng thái ĐỔI sang khác ``active`` ⇒ "tài khoản bị khoá";
-    - vai ĐỔI sang khác Cán bộ ⇒ "tài khoản đổi vai từ <vai cũ> sang <vai mới>".
+    - trạng thái từ ``active`` sang BẤT KỲ trạng thái khác (kể cả chờ duyệt) ⇒ "Tự thu hồi: tài khoản bị khoá";
+    - vai từ Cán bộ sang vai khác ⇒ "Tự thu hồi: tài khoản đổi vai từ Cán bộ sang <vai mới thực tế>";
+    - một thao tác vừa khoá vừa đổi vai ⇒ ghi CẢ HAI câu (nối bằng "; ").
 
-    ``new_role`` / ``new_status`` = ``None`` ⇒ không đổi. Đổi đơn vị của Cán bộ, khoá tạm do nhập sai mật khẩu (Redis), xoá
-    tài khoản: KHÔNG ở đây (câu hỏi owner, PR-B)."""
+    ``new_role`` / ``new_status`` = ``None`` ⇒ không đổi. Giá trị cũ phải đọc DƯỚI khoá (``revoke_grants_on_account_change``).
+    KHÔNG thu hồi (owner câu 3, 4, 5): khoá đăng nhập tạm (Redis, không đổi trạng thái), đổi đơn vị của Cán bộ, xoá tài
+    khoản (K4 409)."""
     parts: List[str] = []
-    if new_status is not None and new_status != old_status and new_status != "active":
-        parts.append(AUTO_REVOKE_LOCKED)
-    if new_role is not None and str(new_role) != str(old_role) and str(new_role) != UserRole.OFFICER:
-        parts.append(f"tài khoản đổi vai từ {_role_label(old_role)} sang {_role_label(new_role)}")
-    return AUTO_REVOKE_PREFIX + "; ".join(parts) if parts else None
+    if new_status is not None and old_status == "active" and new_status != "active":
+        parts.append(AUTO_REVOKE_PREFIX + AUTO_REVOKE_LOCKED)
+    if new_role is not None and str(old_role) == UserRole.OFFICER and str(new_role) != UserRole.OFFICER:
+        parts.append(AUTO_REVOKE_PREFIX + f"tài khoản đổi vai từ {_role_label(old_role)} sang {_role_label(new_role)}")
+    return "; ".join(parts) if parts else None
 
 
 async def revoke_grants_on_account_change(
     db: AsyncSession,
     *,
     user_id: int,
-    reason: Optional[str],
+    new_role: Any = None,
+    new_status: Optional[str] = None,
     actor_id: Optional[int],
     request_meta: Optional[RequestMeta] = None,
 ) -> List[int]:
     """Q4 — TẦNG CHỦ SỞ HỮU của "đổi vai / khoá tài khoản ⇒ tự thu hồi". Mọi đường đổi vai / trạng thái tài khoản (PUT lẻ,
-    hàng loạt, đồng bộ vai từ Casbin, gỡ vai) gọi hàm này TRONG giao dịch của chính việc đổi, với ``reason`` của
-    :func:`auto_revoke_reason`.
+    hàng loạt, đồng bộ vai từ Casbin, gỡ vai) gọi hàm này TRONG giao dịch của chính việc đổi, TRƯỚC khi ghi vai / trạng
+    thái, truyền giá trị MỚI sắp ghi (``None`` = không đổi).
 
     Thứ tự khoá (toàn cục, đầu ``document_bulk_verify_service``): dòng ``user`` ``FOR NO KEY UPDATE`` (= khoá của lệnh
-    ``UPDATE "user"`` sắp chạy; chờ mọi duyệt chéo / lô chéo đang giữ ``FOR SHARE`` dòng ấy commit) → MỌI quyền chưa thu
-    hồi, chưa hết hạn của người ấy ``FOR UPDATE`` (id tăng) → ghi thu hồi + nhật ký (:func:`_write_revocations`). Không
-    commit; mọi lỗi ném ra ⇒ người gọi KHÔNG commit ⇒ rollback CẢ việc đổi vai / khoá LẪN việc thu hồi. Quyền đã thu hồi
-    không bao giờ được khôi phục (mở khoá / trả vai ⇒ Admin cấp mới). Trả id các quyền vừa thu hồi."""
+    ``UPDATE "user"`` sắp chạy) → MỌI quyền chưa thu hồi, chưa hết hạn của người ấy ``FOR UPDATE`` (id tăng) → ghi thu hồi
+    + nhật ký (:func:`_write_revocations`). Vai / trạng thái CŨ đọc DƯỚI khoá dòng ``user`` (PR-B lượt 2 — cùng khuôn điểm
+    chặn 4 của Codex: không quyết bằng bản đọc từ đầu yêu cầu, vì giữa đó tài khoản có thể vừa được trả vai / mở khoá và
+    cấp quyền mới). Không commit; mọi lỗi ném ra ⇒ người gọi KHÔNG commit ⇒ rollback CẢ việc đổi vai / khoá LẪN việc thu
+    hồi. Quyền đã thu hồi không bao giờ được khôi phục (mở khoá / trả vai ⇒ Admin cấp mới). Trả id các quyền vừa thu hồi."""
+    if new_role is None and new_status is None:
+        return []
+    with db.no_autoflush:  # đọc dòng TRONG CSDL (giá trị cũ), không xả trước thay đổi đang chờ của chính người ấy
+        locked = await repo.lock_user_no_key_update(db, user_id)
+    if locked is None:
+        return []
+    reason = auto_revoke_reason(old_role=locked.role, old_status=locked.status, new_role=new_role, new_status=new_status)
     if reason is None:
         return []
     if actor_id is None:
         # Không có người thao tác thì không ghi được ``revoked_by_user_id`` đúng khuôn — fail-closed.
-        raise RuntimeError("revoke_grants_on_account_change: thiếu người thao tác (Admin)")
-    await repo.lock_user_no_key_update(db, user_id)
+        raise RuntimeError("revoke_grants_on_account_change: thiếu người thao tác")
     grants = await repo.lock_active_grants_of_user_for_update(db, user_id)
     if grants:
         await _write_revocations(db, grants, admin_id=actor_id, reason=reason, meta=request_meta or RequestMeta())

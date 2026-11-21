@@ -22,7 +22,10 @@ import pytest_asyncio
 from app.repositories import document_bulk_repository as bulk_repo
 from tests.api.gd1b_cheo_tro_giup import (  # noqa: F401
     KHONG_TON_TAI,
+    THAN_404,
+    KhoaHo,
     bi_chan_boi_pid,
+    can_bo_cheo,
     cap,
     hang,
     ho_so,
@@ -36,6 +39,7 @@ from tests.api.gd1b_lo_tro_giup import (  # noqa: F401
     NHAN,
     PidTheoNhan,
     boc,
+    dang_nhap,
     dn,
     dong_muc,
     lo_config,
@@ -195,3 +199,40 @@ async def test_f4_lo_thuong_quan_ly_lead_chuyen_don_vi_giua_cau_chon_va_cau_nap_
     j = r.json()
     assert j["items"] == [] and j["excluded"] == [], j
     assert j["counts"]["own_assigned_excluded"] == 0
+
+
+async def test_quyen_cuoi_cung_het_han_trong_luc_cho_khoa_lead_thi_404_khong_tao_lo(
+    client, admin_token_headers, admin_user_in_db, officer_user_in_db, can_bo_cheo, lo_config, lo_routers
+):
+    """Codex lượt 1 PR-B, điểm chặn 2: xem trước chéo kiểm hạn quyền ở bước 3, rồi CHỜ khoá lead (phiên A giữ lead FOR
+    UPDATE — phiên thứ ba xác nhận bằng ``pg_blocking_pids``). Quyền cuối cùng hết hạn trong lúc chờ ⇒ thả A ⇒ 404 cùng thân,
+    KHÔNG tạo lô (đếm dòng lô từ phiên riêng)."""
+    p = (await ho_so(client, admin_token_headers, officer_user_in_db, lo_config, tien_to="hhxt"))[0]
+    gid = await cap(client, admin_user_in_db, can_bo_cheo["id"], lo_config["unit_id"], verify=True)
+    lead_id = (await hang("SELECT lead_id FROM admission_profile WHERE id = :p", p=p["id"]))[0]["lead_id"]
+    dem_lo = "SELECT count(*) FROM document_bulk_batch WHERE actor_user_id = :u"
+    truoc = (await hang(dem_lo, u=can_bo_cheo["id"]))[0]["count"]
+    cb, hb = await dang_nhap(can_bo_cheo)
+    a = await KhoaHo("SELECT id FROM lead WHERE id = :l FOR UPDATE", l=lead_id).giu()
+    try:
+        await sql(
+            "UPDATE document_cross_review_grant SET expires_at = clock_timestamp() + interval '3 seconds' WHERE id = :g",
+            g=gid,
+        )
+        with PidTheoNhan() as ghi:
+            viec = asyncio.create_task(_goi_nhan("B", lambda: cb.post(
+                f"{CROSS}/bulk-verify/preview", headers=hb, json={"profile_ids": [p["id"]], "grant_id": gid})))
+            assert await bi_chan_boi_pid(viec, ghi, "B", [a.pid]) == "chan", "xem trước phải chờ khoá lead (A giữ)"
+            for _ in range(100):
+                if (await hang("SELECT clock_timestamp() > expires_at AS het FROM document_cross_review_grant WHERE id = :g",
+                               g=gid))[0]["het"]:
+                    break
+                await asyncio.sleep(0.1)
+            assert not viec.done(), "xem trước phải còn chờ khoá lead tới lúc quyền đã hết hạn"
+            await a.tha()
+            r = await asyncio.wait_for(viec, 30)
+    finally:
+        await a.tha()
+        await cb.aclose()
+    assert r.status_code == 404 and r.json() == THAN_404, r.text
+    assert (await hang(dem_lo, u=can_bo_cheo["id"]))[0]["count"] == truoc

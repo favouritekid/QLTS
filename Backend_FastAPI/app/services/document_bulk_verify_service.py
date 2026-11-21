@@ -36,6 +36,7 @@ import json
 import time
 from collections import OrderedDict
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence, Tuple
 from uuid import UUID, uuid4
 
@@ -161,12 +162,35 @@ async def cross_denial(
     - người gọi VẪN còn một quyền hợp lệ cho ĐÚNG thao tác (và đúng đơn vị lead, nếu có lead) ⇒ 409
       ``actor_not_authorized`` — gửi ``grant_id`` sai / cũ (hợp đồng bản 4 §2.2: giao diện làm mới hàng đợi);
     - không còn ⇒ :class:`CrossReviewNotFound` (404 cùng thân cổng vào — owner Q1: thiếu quyền / ngoài phạm vi)."""
-    if _actor_live(actor) and actor.role == UserRole.OFFICER:
-        for g in await repo.active_grants_for_user(db, actor.id):
-            ok = grant_allows(g, action) if lead is None else cross_grant_authorizes(actor, lead, (g, True), action)
-            if ok:
-                return DocumentTransitionConflict(ACTOR_NOT_AUTHORIZED)
+    if await has_cross_right(db, actor, action, lead):
+        return DocumentTransitionConflict(ACTOR_NOT_AUTHORIZED)
     return CrossReviewNotFound()
+
+
+def unit_scope(unit_id: Optional[int]) -> Any:
+    """"Lead giả" cho câu hỏi quyền theo ĐƠN VỊ (không gắn hồ sơ cụ thể — vd đơn vị của một lô chéo): đúng đơn vị, không ai
+    phụ trách, chưa xoá — để ``cross_grant_authorizes`` (MỘT vị từ) trả lời "quyền này có phủ đơn vị ấy cho thao tác ấy"."""
+    return SimpleNamespace(unit_id=unit_id, assigned_officer_id=None, deleted_at=None)
+
+
+async def has_cross_right(db: AsyncSession, actor: Optional[Any], action: str, lead: Optional[Any] = None) -> bool:
+    """Người gọi còn ÍT NHẤT MỘT quyền chéo còn hiệu lực (``clock_timestamp()``) cho ĐÚNG thao tác — và, khi có ``lead``
+    (hoặc :func:`unit_scope`), đúng ĐƠN VỊ của nó — theo ``cross_grant_authorizes``. Chỉ đọc. MỘT nguồn cho: phân loại
+    409 / 404 dưới khoá (:func:`cross_denial`), cổng lô chéo (``deps``: tra / chạy / chốt lô đúng đơn vị của lô), chốt lô
+    chéo dưới khoá, danh sách lô chéo."""
+    if not (_actor_live(actor) and actor.role == UserRole.OFFICER):
+        return False
+    for g in await repo.active_grants_for_user(db, actor.id):
+        if grant_allows(g, action) if lead is None else cross_grant_authorizes(actor, lead, (g, True), action):
+            return True
+    return False
+
+
+async def cross_batch_unit(db: AsyncSession, batch: Any) -> Optional[int]:
+    """Đơn vị của một lô chéo = đơn vị ghi trên quyền dùng để tạo lô (``document_bulk_batch.grant_id``). Chỉ đọc."""
+    if batch is None or batch.grant_id is None:
+        return None
+    return await repo.grant_unit_id(db, batch.grant_id)
 
 
 def _running() -> BulkBatchConflict:
@@ -256,6 +280,17 @@ async def emit_bulk_verify_finished(user_id: int, batch_id: UUID) -> None:
 # =====================================================================================================================
 # §5.2 Xem trước — TẠO lô
 # =====================================================================================================================
+async def _recheck_preview_grant(db: AsyncSession, actor_row: Any, grant_id: int, unit_id: int) -> Any:
+    """Xem trước lô chéo — dòng quyền FOR SHARE, kiểm DƯỚI khoá bằng ``cross_grant_authorizes`` (MỘT vị từ) trên đơn vị
+    của chính quyền ấy, ``still_valid`` tính bằng ``clock_timestamp()`` TẠI LÚC GỌI. Gọi ở bước 3 và gọi LẠI sau khi
+    khoá lead (điểm chặn 2). Không đạt ⇒ ném lỗi của ``cross_denial`` (409 còn quyền khác đúng đơn vị / 404)."""
+    grant_row = await repo.lock_grant_share(db, grant_id)
+    scope = unit_scope(unit_id if grant_row is None else grant_row[0].unit_id)
+    if not cross_grant_authorizes(actor_row, scope, grant_row, rules.ACTION_VERIFY):
+        raise await cross_denial(db, actor_row, rules.ACTION_VERIFY, unit_scope(unit_id))
+    return grant_row[0]
+
+
 async def preview_batch(
     db: AsyncSession,
     *,
@@ -314,17 +349,7 @@ async def preview_batch(
     if cross:
         # Dòng quyền FOR SHARE (thứ tự toàn cục: người → lô → quyền → lead), kiểm lại DƯỚI khoá: đúng người, chưa thu hồi,
         # còn hạn theo ``clock_timestamp()``, cho phép duyệt, người vẫn là Cán bộ đang hoạt động.
-        grant_row = await repo.lock_grant_share(db, grant.id)
-        if not (
-            grant_row is not None
-            and actor_row.role == UserRole.OFFICER
-            and grant_row[1]
-            and grant_row[0].revoked_at is None
-            and grant_row[0].grantee_user_id == actor_id
-            and grant_allows(grant_row[0], rules.ACTION_VERIFY)
-        ):
-            raise await cross_denial(db, actor_row, rules.ACTION_VERIFY)
-        grant = grant_row[0]
+        grant = await _recheck_preview_grant(db, actor_row, grant.id, grant.unit_id)
         selected = await repo.select_profile_ids(
             db, coord={"unit_id": grant.unit_id}, statuses=None, profile_ids=profile_ids
         )
@@ -372,6 +397,10 @@ async def preview_batch(
     if cross:
         # Q3 "chỉ đếm DƯỚI KHOÁ": lead FOR SHARE (id tăng) — đơn vị / người phụ trách đứng yên tới commit.
         locked_leads = await repo.lock_leads_share(db, sorted({p.lead_id for p in profiles}))
+        # Codex lượt 1 PR-B, điểm chặn 2: khoá lead có thể phải CHỜ (lead đang bị giữ) — hạn quyền đọc ở bước 3 tính TRƯỚC lần
+        # chờ ấy. Đọc lại theo đồng hồ CSDL SAU khi có khoá lead, TRƯỚC khi dựng items / excluded / M (dòng quyền đã giữ
+        # FOR SHARE ⇒ không chờ thêm). Hết hạn ⇒ 404 (hoặc 409 nếu còn quyền khác đúng đơn vị) — không tạo lô.
+        grant = await _recheck_preview_grant(db, actor_row, grant.id, grant.unit_id)
     for profile in profiles:
         policy = DocumentActionPolicy.for_(profile, actor)
         # F4 (PR-B): kiểm lại PHẠM VI trên lead vừa nạp / vừa khoá trong vòng lặp — câu chọn và câu nạp là hai câu riêng
@@ -608,6 +637,17 @@ async def execute_batch(
         if expired:
             await _safe_rollback(db)
             raise BulkBatchConflict("PREVIEW_EXPIRED", "Bản xem trước đã hết hạn — xem trước lại")
+        if review_mode == REVIEW_MODE_CROSS:
+            # Codex lượt 1 PR-B, điểm chặn 1: lô chéo chỉ chạy khi quyền của CHÍNH lô (đúng đơn vị của lô, cho DUYỆT) còn
+            # hiệu lực — kiểm DƯỚI khoá (người → lô → quyền, cùng thứ tự toàn cục), TRƯỚC khi đổi sang ``processing``. Không
+            # đạt ⇒ lô vẫn ``previewed``; 409 nếu còn quyền khác đúng đơn vị (owner câu 9: làm mới / xem trước lại), 404 cùng
+            # thân nếu không (như lô không tồn tại).
+            grant_row = await repo.lock_grant_share(db, row.grant_id) if row.grant_id is not None else None
+            scope = unit_scope(None if grant_row is None else grant_row[0].unit_id)
+            if not cross_grant_authorizes(creator, scope, grant_row, rules.ACTION_VERIFY):
+                denial = await cross_denial(db, creator, rules.ACTION_VERIFY, scope)
+                await _safe_rollback(db)
+                raise denial
         n_items = await repo.count_batch_items(db, batch_id)
         if confirmation_text != confirmation_sentence(n_items):
             await _safe_rollback(db)
@@ -988,8 +1028,10 @@ async def finalize_batch(
     viewer_role: str,
     reason: Optional[str],
     request_meta: Optional[RequestMeta] = None,
+    cross_route: bool = False,
 ) -> Dict[str, Any]:
-    """Bước 0 (quyền TRƯỚC khoá: người tạo / Admin) do deps làm. Router commit."""
+    """Bước 0 (quyền TRƯỚC khoá: người tạo / Admin) do deps làm. Router commit. ``cross_route`` = gọi từ đường lô CHÉO
+    (người tạo là Cán bộ chéo): owner câu 10 (21-11) — vẫn phải còn quyền duyệt đúng đơn vị của lô, kiểm lại dưới khoá."""
     meta = request_meta or RequestMeta()
     reason = (reason or "").strip() or None
     is_creator = viewer_id == creator_id
@@ -1034,6 +1076,15 @@ async def finalize_batch(
     is_admin = finalizer is not None and finalizer.role == UserRole.ADMIN
     if _actor_live(finalizer) and not (row.actor_user_id == viewer_id or is_admin):
         raise BatchNotFound()
+    if cross_route and _actor_live(finalizer):
+        # Owner câu 10 + Codex lượt 1 PR-B điểm chặn 1: lô chéo — người chốt còn quyền DUYỆT ĐÚNG đơn vị của lô (đọc sau khi
+        # giữ người FOR SHARE + dòng lô; dòng quyền của lô FOR SHARE — cùng thứ tự người → lô → quyền). Không ⇒ 404 cùng
+        # thân cổng lô chéo, TRƯỚC mọi kết luận về trạng thái (không lộ "chưa chạy" / "đã xong").
+        grant_row = await repo.lock_grant_share(db, row.grant_id) if row.grant_id is not None else None
+        if grant_row is None or not await has_cross_right(
+            db, finalizer, rules.ACTION_VERIFY, unit_scope(grant_row[0].unit_id)
+        ):
+            raise CrossReviewNotFound()
     if row.status == "previewed":
         raise BulkBatchConflict("BATCH_NOT_STARTED", "Lô chưa chạy — không có gì để chốt")
     if row.status in TERMINAL_STATUSES:
@@ -1113,6 +1164,13 @@ async def list_batches(
     if scope == "all" and not _can_view_all_batches(viewer_role, allow_scope_all=allow_scope_all):
         raise PermissionDeniedError(detail="Chỉ Admin xem được danh sách lô của mọi người")
     after = _decode_cursor(cursor)
+    grant_unit_ids = None
+    if review_mode == REVIEW_MODE_CROSS:
+        # Codex lượt 1 PR-B điểm chặn 1 (vá nhánh danh sách): danh sách lô chéo chỉ gồm lô thuộc đơn vị người gọi CÒN quyền
+        # duyệt — cùng điều kiện với cổng tra / chạy / chốt (``deps._cross_batch_in_scope``), không liệt kê lô mở ra là 404.
+        grant_unit_ids = sorted(
+            {g.unit_id for g in await repo.active_grants_for_user(db, viewer_id) if grant_allows(g, rules.ACTION_VERIFY)}
+        )
     rows = await repo.list_batches(
         db,
         actor_user_id=None if scope == "all" else viewer_id,
@@ -1120,6 +1178,7 @@ async def list_batches(
         window_days=BULK_VERIFY_LIST_WINDOW_DAYS,
         after=after,
         limit=limit + 1,
+        grant_unit_ids=grant_unit_ids,
     )
     has_more = len(rows) > limit
     rows = rows[:limit]

@@ -32,8 +32,9 @@ SO_DUONG_GHI = {
     # Xoá vai TUỲ BIẾN: vai hệ thống (gồm Cán bộ) bị chặn ở STEP 1 ⇒ người bị đổi KHÔNG phải Cán bộ ⇒ không thể có quyền
     # chéo còn hiệu lực (quyền chỉ cấp cho Cán bộ đang hoạt động; rời Cán bộ ở mọi đường khác đều tự thu hồi).
     ("services/role_service.py", "delete_role_atomic"): "KHONG_NOI",
-    # Gắn tài khoản vào hồ sơ CTV: chỉ tài khoản vai user / collaborator (``deps.COLLABORATOR_LINKABLE_ROLES``) ⇒ không phải
-    # Cán bộ ⇒ không thể có quyền chéo.
+    # Gắn tài khoản vào hồ sơ CTV: chỉ tài khoản vai user / collaborator (``COLLABORATOR_LINKABLE_ROLES``) ⇒ không phải Cán
+    # bộ ⇒ không thể có quyền chéo. PR-B lượt 2 (Codex điểm chặn 4): dòng người KHOÁ + đọc lại vai / đơn vị NGAY trước khi
+    # ghi vai (``collaborator_link_target_allowed``) — vừa thành Cán bộ ⇒ 404 như luật liên kết hiện có.
     ("services/collaborator_service.py", "create_collaborator"): "KHONG_NOI",
     # Tự sửa hồ sơ cá nhân: chỉ email / họ tên / số điện thoại (setattr có lọc trường) — không vai, không trạng thái.
     ("services/user_service.py", "update_profile"): "KHONG_NOI",

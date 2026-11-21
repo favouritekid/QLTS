@@ -3499,10 +3499,9 @@ async def get_collaborator_for_user(
     raise ResourceNotFoundError("Collaborator not found")
 
 
-# Vai trò được phép GẮN vào một hồ sơ CTV qua ``user_id``. create_collaborator
-# ĐỔI User.role của người đó thành 'collaborator', mà Casbin lấy subject =
-# role:{User.role} ⇒ gắn một tài khoản nhân sự là tước quyền của họ.
-COLLABORATOR_LINKABLE_ROLES = frozenset({UserRole.USER, UserRole.COLLABORATOR})
+# Vai trò được phép GẮN vào một hồ sơ CTV qua ``user_id`` — MỘT nguồn ở ``app/core/constants.py`` (giữ tên ở đây cho nơi
+# đã tham chiếu). Vị từ đầy đủ (vai + đơn vị): ``collaborator_service.collaborator_link_target_allowed``.
+from .constants import COLLABORATOR_LINKABLE_ROLES  # noqa: E402,F401
 
 
 async def validate_collaborator_create(
@@ -3530,10 +3529,12 @@ async def validate_collaborator_create(
         if current_user.role == UserRole.MANAGER and data.unit_id not in (None, caller_unit):
             raise ResourceNotFoundError("Organization unit not found")
     if data.user_id is not None:
+        from ..services.collaborator_service import collaborator_link_target_allowed
+
+        # Cổng sớm (không khoá). Dịch vụ KHOÁ + đọc lại bằng CÙNG vị từ ngay trước khi ghi vai (PR-B lượt 2, Codex điểm
+        # chặn 4): giữa cổng này và lúc ghi, tài khoản có thể vừa thành Cán bộ và được cấp quyền duyệt chéo.
         target = await db.get(models.User, data.user_id)
-        if target is None or target.role not in COLLABORATOR_LINKABLE_ROLES:
-            raise ResourceNotFoundError(f"User {data.user_id} not found")
-        if caller_unit is not None and target.unit_id != caller_unit:
+        if not collaborator_link_target_allowed(target, current_user):
             raise ResourceNotFoundError(f"User {data.user_id} not found")
 
 
@@ -4452,17 +4453,34 @@ def _cross_batch_not_found(exc: Exception) -> Exception:
     return ResourceNotFoundError(detail=CROSS_REVIEW_NOT_FOUND_DETAIL)
 
 
+async def _cross_batch_in_scope(db: AsyncSession, batch_id: _GD1B_UUID, current_user: models.User):
+    """Cổng lô CHÉO (tra / chạy / chốt) — Codex lượt 1 PR-B điểm chặn 1 + owner câu 10: lô phải của chính người gọi VÀ người
+    gọi còn quyền DUYỆT đúng ĐƠN VỊ của lô (đơn vị ghi trên quyền tạo lô). Còn quyền ở đơn vị KHÁC không mở được lô cũ.
+    Kiểm TRƯỚC khi trả chi tiết (mã hồ sơ / mã giấy) hoặc đổi trạng thái. Không đạt ⇒ 404 CÙNG THÂN như lô không tồn tại."""
+    from ..services.document_bulk_verify_service import (
+        BatchNotFound,
+        cross_batch_unit,
+        has_cross_right,
+        unit_scope,
+    )
+    from ..services.document_review_rules import ACTION_VERIFY
+
+    try:
+        batch = await _gd1b_bulk_batch_for(db, batch_id, current_user, allow_admin=False, review_mode="cross")
+    except BatchNotFound as exc:
+        raise _cross_batch_not_found(exc)
+    unit_id = await cross_batch_unit(db, batch)
+    if unit_id is None or not await has_cross_right(db, current_user, ACTION_VERIFY, unit_scope(unit_id)):
+        raise _cross_batch_not_found(None)
+    return batch
+
+
 async def get_cross_bulk_batch_for_execute(
     batch_id: _GD1B_UUID = Path(..., description="Batch ID (UUID v4)"),
     current_user: models.User = Depends(require_cross_verifier),
     db: AsyncSession = Depends(database.get_db),
 ):
-    from ..services.document_bulk_verify_service import BatchNotFound
-
-    try:
-        return await _gd1b_bulk_batch_for(db, batch_id, current_user, allow_admin=False, review_mode="cross")
-    except BatchNotFound as exc:
-        raise _cross_batch_not_found(exc)
+    return await _cross_batch_in_scope(db, batch_id, current_user)
 
 
 async def get_cross_bulk_batch_for_view(
@@ -4470,12 +4488,7 @@ async def get_cross_bulk_batch_for_view(
     current_user: models.User = Depends(require_cross_reviewer),
     db: AsyncSession = Depends(database.get_db),
 ):
-    from ..services.document_bulk_verify_service import BatchNotFound
-
-    try:
-        return await _gd1b_bulk_batch_for(db, batch_id, current_user, allow_admin=False, review_mode="cross")
-    except BatchNotFound as exc:
-        raise _cross_batch_not_found(exc)
+    return await _cross_batch_in_scope(db, batch_id, current_user)
 
 
 async def get_cross_review_verify_target(

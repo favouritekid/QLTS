@@ -229,6 +229,7 @@ async def finalize_cross_bulk_verify_batch(
         viewer_role=viewer_role,
         reason=body.reason,
         request_meta=_meta(request),
+        cross_route=True,
     )
     await db.commit()
     return result

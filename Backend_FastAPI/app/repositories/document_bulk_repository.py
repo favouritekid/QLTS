@@ -579,11 +579,14 @@ async def lock_user_role_share(db: AsyncSession, user_id: int) -> Optional[Any]:
 
 async def lock_user_no_key_update(db: AsyncSession, user_id: int) -> Optional[Any]:
     """Dòng người dùng ``FOR NO KEY UPDATE`` — đúng khoá mà ``UPDATE "user"`` (đổi vai / trạng thái) sẽ lấy; lấy TRƯỚC khi
-    khoá dòng quyền chéo (thứ tự toàn cục người → quyền). Không xung đột ``FOR KEY SHARE`` (khoá ngoại), xung đột
-    ``FOR SHARE`` của duyệt chéo / lô chéo đang chạy ⇒ chờ giao dịch ấy commit."""
+    khoá dòng quyền chéo (thứ tự toàn cục người → quyền). Không xung đột ``FOR KEY SHARE`` (khoá ngoại, duyệt chéo), xung
+    đột ``FOR SHARE`` (cấp quyền chéo, chốt lô) ⇒ chờ giao dịch ấy commit. Trả hàng ``(id, role, status)`` đọc DƯỚI khoá
+    (``None`` = dòng không còn) — Q4 quyết thu hồi bằng giá trị này, không bằng bản đọc từ đầu yêu cầu."""
     return (
         await db.execute(
-            select(models.User.id).where(models.User.id == user_id).with_for_update(key_share=True)
+            select(models.User.id, models.User.role, models.User.status)
+            .where(models.User.id == user_id)
+            .with_for_update(key_share=True)
         )
     ).first()
 
@@ -626,14 +629,19 @@ async def list_batches(
     window_days: int,
     after: Optional[Tuple[datetime, UUID]],
     limit: int,
+    grant_unit_ids: Optional[Sequence[int]] = None,
 ) -> List[models.DocumentBulkBatch]:
-    """Thứ tự ổn định ``created_at DESC, batch_id DESC``; con trỏ = (created_at, batch_id) của dòng cuối trang trước."""
+    """Thứ tự ổn định ``created_at DESC, batch_id DESC``; con trỏ = (created_at, batch_id) của dòng cuối trang trước.
+    ``grant_unit_ids`` (lô chéo): chỉ lô tạo bằng quyền ghi đơn vị thuộc danh sách này."""
     t = models.DocumentBulkBatch
     conds = [t.created_at >= func.clock_timestamp() - literal_column(f"interval '{int(window_days)} days'")]
     if actor_user_id is not None:
         conds.append(t.actor_user_id == actor_user_id)
     if review_mode is not None:
         conds.append(t.review_mode == review_mode)
+    if grant_unit_ids is not None:
+        g = models.DocumentCrossReviewGrant
+        conds.append(t.grant_id.in_(select(g.id).where(g.unit_id.in_(list(grant_unit_ids)))))
     if after is not None:
         c_at, c_id = after
         conds.append(
@@ -688,6 +696,13 @@ async def list_grants(
     if unit_id is not None:
         q = q.where(g.unit_id == unit_id)
     return [(r[0], bool(r[1])) for r in (await db.execute(q.order_by(g.id.desc()).limit(500))).all()]
+
+
+async def grant_unit_id(db: AsyncSession, grant_id: int) -> Optional[int]:
+    """Đơn vị ghi trên một quyền chéo (đọc, không khoá) — đơn vị của lô chéo tạo bằng quyền ấy."""
+    return (
+        await db.execute(select(models.DocumentCrossReviewGrant.unit_id).where(models.DocumentCrossReviewGrant.id == grant_id))
+    ).scalar_one_or_none()
 
 
 async def lock_active_grants_of_user_for_update(db: AsyncSession, user_id: int) -> List[models.DocumentCrossReviewGrant]:
