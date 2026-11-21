@@ -1050,15 +1050,35 @@ async def check_enrollment_fee_eligibility(
 
     The caller (enroll_profile) checks ENABLE_FEE_VERIFICATION first;
     this function is only called when verification is enabled.
+
+    GĐ2-B (owner K2 21-11; đặc tả GĐ2-B bản 4 §4.3, M22): chế độ kiểm bằng
+    ``fee_gate_rules.require_fee_gate_mode`` — nhánh rõ từng chế độ, giá trị lạ
+    ⇒ 503 (thất bại an toàn), KHÔNG lặng lẽ rơi về ``legacy`` như ``else`` cũ.
+    Phần đánh giá khoản đi qua ``fee_gate_rules.evaluate_selected_fee`` — CÙNG
+    hàm với máy xét mới; cách CHỌN khoản của cổng nhập học giữ nguyên.
     """
     from app.config import settings
+    from app.services import fee_gate_rules
+    from app.utils.exceptions import ServiceUnavailableError
 
-    mode = settings.ADMISSION_FEE_GATE_MODE
+    try:
+        mode = fee_gate_rules.require_fee_gate_mode(settings.ADMISSION_FEE_GATE_MODE)
+    except fee_gate_rules.FeeGateModeInvalid:
+        log.error("Fee gate mode invalid — enrollment refused", profile_id=profile_id)
+        raise ServiceUnavailableError(
+            detail=(
+                "Cấu hình chế độ cổng học phí trên máy chủ không hợp lệ — chưa cho nhập học. "
+                "Báo quản trị hệ thống."
+            ),
+            public_payload={"reason_code": fee_gate_rules.FEE_GATE_MODE_INVALID},
+        )
 
-    if mode == "semester_hk1":
+    if mode == fee_gate_rules.FEE_GATE_MODE_SEMESTER_HK1:
         await _check_fee_gate_semester_hk1(db, profile_id)
-    else:
+    elif mode == fee_gate_rules.FEE_GATE_MODE_LEGACY:
         await _check_fee_gate_legacy(db, profile_id)
+    else:  # không tới được — require_fee_gate_mode đã lọc; giữ thất bại an toàn
+        raise fee_gate_rules.FeeGateModeInvalid(mode)
 
 
 async def _check_fee_gate_legacy(
@@ -1073,7 +1093,8 @@ async def _check_fee_gate_legacy(
     enrollment gate check.
     """
     from app.repositories.fee_repository import FeeRepository
-    from app.models.finance.fee import FeeTypeEnum, FeeStatusEnum
+    from app.models.finance.fee import FeeTypeEnum
+    from app.services import fee_gate_rules
 
     fee_repo = FeeRepository(db)
 
@@ -1095,7 +1116,10 @@ async def _check_fee_gate_legacy(
 
     fee = fees[0]
 
-    if fee.status not in (FeeStatusEnum.paid.value, FeeStatusEnum.waived.value):
+    # GĐ2-B K2: đánh giá khoản đã chọn bằng MỘT hàm chung với máy xét mới (``legacy``: paid / waived).
+    if not fee_gate_rules.evaluate_selected_fee(
+        fee_gate_rules.FEE_GATE_MODE_LEGACY, status=fee.status, paid_amount=fee.paid_amount
+    ).cleared:
         remaining = fee.remaining_amount
         log.warning(
             "Fee gate check failed: Tuition fee not cleared",
@@ -1132,7 +1156,8 @@ async def _check_fee_gate_semester_hk1(
     - Partial payment: remainder stays as HK1 debt, does NOT block
     """
     from app.repositories.fee_repository import FeeRepository
-    from app.models.finance.fee import FeeTypeEnum, FeeStatusEnum
+    from app.models.finance.fee import FeeTypeEnum
+    from app.services import fee_gate_rules
 
     fee_repo = FeeRepository(db)
 
@@ -1154,7 +1179,12 @@ async def _check_fee_gate_semester_hk1(
 
     fee = fees[0]
 
-    if fee.status in (FeeStatusEnum.paid.value, FeeStatusEnum.waived.value):
+    # GĐ2-B K2: đánh giá khoản đã chọn bằng MỘT hàm chung với máy xét mới (``semester_hk1``).
+    verdict = fee_gate_rules.evaluate_selected_fee(
+        fee_gate_rules.FEE_GATE_MODE_SEMESTER_HK1, status=fee.status, paid_amount=fee.paid_amount
+    ).verdict
+
+    if verdict == fee_gate_rules.VERDICT_CLEARED:
         log.info(
             "HK1 fee gate check passed",
             profile_id=profile_id,
@@ -1163,7 +1193,7 @@ async def _check_fee_gate_semester_hk1(
         )
         return
 
-    if fee.status == FeeStatusEnum.partial.value and fee.paid_amount > 0:
+    if verdict == fee_gate_rules.VERDICT_PARTIAL_ACCEPTED:
         log.info(
             "HK1 fee gate check passed: partial payment accepted",
             profile_id=profile_id,

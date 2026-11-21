@@ -45,6 +45,29 @@ from app.utils.exceptions import ServiceError
 
 ISOLATION_LEVEL = "repeatable read"
 
+# ═══════════════════ vị từ "dân tộc Kinh hoặc trống" — MỘT nguồn (GĐ1 bản in + GĐ2-B) ═══════════════════
+#: Tên dân tộc KHÔNG thuộc diện ưu tiên dân tộc: "Kinh" hoặc trống. Tên so ĐÚNG như bộ xuất (không cắt khoảng trắng,
+#: phân biệt hoa thường). MỘT nguồn cho: cột ``ut_ma`` / ``diem_ut`` của :data:`SQL_PRINT_FIGURES` (bản in GĐ1 — chữ SQL
+#: dựng từ hằng này, khớp từng byte bản trước) và bước 0 của ưu tiên dân tộc v2 ở máy xét GĐ2-B
+#: (``admission_review_rules.ethnic_priority`` gọi :func:`is_kinh_or_blank`). Test AST ``test_gd2b_vi_tu_mot_nguon.py`` khoá.
+NON_PRIORITY_ETHNICITY_NAMES: Tuple[str, ...] = ("Kinh", "")
+#: Biểu thức tên dân tộc của hồ sơ (tên danh mục, không có thì chữ trên hồ sơ, không có thì trống) — cùng chữ cột ``dan_toc``.
+SQL_ETHNICITY_NAME = "COALESCE(dtoc.name, p.ethnicity, '')"
+
+
+def is_kinh_or_blank(ethnicity_name: Optional[str]) -> bool:
+    """Vị từ Python của :data:`SQL_KINH_OR_BLANK`: ``ethnicity_name`` là giá trị ĐÃ ``COALESCE`` như
+    :data:`SQL_ETHNICITY_NAME` (``None`` đọc như trống — đúng ``COALESCE(…, '')``)."""
+    return (ethnicity_name if ethnicity_name is not None else "") in NON_PRIORITY_ETHNICITY_NAMES
+
+
+#: Vị từ SQL — ``COALESCE(dtoc.name, p.ethnicity, '') IN ('Kinh', '')``.
+SQL_KINH_OR_BLANK = "%s IN (%s)" % (
+    SQL_ETHNICITY_NAME,
+    ", ".join("'%s'" % name.replace("'", "''") for name in NON_PRIORITY_ETHNICITY_NAMES),
+)
+_KINH_OR_BLANK_TOKEN = "__SQL_KINH_OR_BLANK__"
+
 
 @dataclass(frozen=True)
 class TransactionInfo:
@@ -241,10 +264,10 @@ SELECT
             WHERE pac.area_code = p.priority_resolution_snapshot->>'kv_resolved'
             ORDER BY pac.effective_from DESC NULLS LAST, pac.id DESC LIMIT 1), '0') AS diem_kv,
   -- đối tượng ưu tiên của em dân tộc thiểu số theo HỘ KHẨU (xã thường trú KV1 hay không)
-  CASE WHEN COALESCE(dtoc.name, p.ethnicity, '') IN ('Kinh', '') THEN ''
+  CASE WHEN __SQL_KINH_OR_BLANK__ THEN ''
        WHEN kvx.area_code = 'KV1' THEN '01'
        ELSE '06' END AS ut_ma,
-  CASE WHEN COALESCE(dtoc.name, p.ethnicity, '') IN ('Kinh', '') THEN '0'
+  CASE WHEN __SQL_KINH_OR_BLANK__ THEN '0'
        WHEN kvx.area_code = 'KV1' THEN '2.00'
        ELSE '1.00' END AS diem_ut,
   COALESCE(giay.s_phieu, 'missing') AS s_phieu,
@@ -285,7 +308,7 @@ LEFT JOIN administrative_nodes tinh
        ON tinh.code = xa.province_code AND tinh.level = 'PROVINCE'
       AND tinh.is_active AND tinh.valid_to IS NULL
 ORDER BY chon.stt
-"""
+""".replace(_KINH_OR_BLANK_TOKEN, SQL_KINH_OR_BLANK)
 )
 
 

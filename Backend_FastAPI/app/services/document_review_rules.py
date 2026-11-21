@@ -50,6 +50,83 @@ def config_facts(applied_rules: Optional[dict], doc_code: str, *, has_file: bool
     return False, bool((doc_configs.get(doc_code) or {}).get("requires_upload", True))
 
 
+# =====================================================================================================================
+# GĐ2-B — E4 bước 1: cấu hình giấy bắt buộc của hồ sơ (đặc tả GĐ2-B bản 4 §6.2 E4; Codex lượt 2 + lượt 3).
+# =====================================================================================================================
+
+#: Ảnh chụp ``applied_rules`` không phải object, hoặc THIẾU khoá ``mandatory_docs`` / ``doc_configs`` ⇒ cấu hình MẤT.
+DOCUMENT_CONFIG_MISSING = "document_config_missing"
+#: Hai khoá có mà sai kiểu, có mã trùng, ``is_mandatory`` không phải boolean JSON, hoặc hai tập mã bắt buộc LỆCH ⇒ HỎNG.
+DOCUMENT_CONFIG_INVALID = "document_config_invalid"
+
+
+@dataclass(frozen=True)
+class RequiredDocuments:
+    """Kết quả đọc cấu hình giấy bắt buộc của MỘT hồ sơ. ``error`` khác ``None`` ⇒ ``codes`` là ``None`` (không biết giấy nào
+    bắt buộc — KHÔNG được coi là đủ giấy). ``codes = ()`` là "đã cấu hình KHÔNG cần giấy bắt buộc" (hợp lệ). ``material``: phần
+    ảnh chụp ĐÃ DÙNG để quyết (``mandatory_docs`` nguyên + ``is_mandatory`` từng mục, bỏ nhãn) — JSON thuần, cho ``row_hash``
+    của máy xét (đổi cấu hình giấy ⇒ đổi băm; đổi nhãn giấy ⇒ không)."""
+
+    codes: Optional[Tuple[str, ...]]
+    error: Optional[str]
+    material: object = None
+
+
+#: Đánh dấu "khoá vắng" trong ``RequiredDocuments.material`` (khác giá trị ``null``).
+CONFIG_KEY_ABSENT = "<absent>"
+
+
+def required_document_codes(applied_rules: object) -> RequiredDocuments:
+    """Danh sách mã giấy bắt buộc theo ảnh chụp cấu hình giấy của hồ sơ — MỘT nguồn cho máy xét GĐ2-B (E4 bước 1).
+
+    ``create_profile`` và đường đổi bộ giấy dựng CẢ HAI khoá từ CÙNG một danh sách giấy đã giải (``admission_service``:
+    ``mandatory_docs`` = mã có ``is_mandatory``; ``doc_configs`` = mọi giấy kèm ``is_mandatory``) ⇒ khi mã đúng thì hai tập
+    luôn bằng nhau. Luật (fail-closed — không ép kiểu, không đoán):
+
+    * không phải object, hoặc thiếu khoá ``mandatory_docs`` hoặc ``doc_configs`` ⇒ :data:`DOCUMENT_CONFIG_MISSING`
+      (KHÁC ``config_facts`` / ``_doc_rule_facts`` ở trên: khoá thiếu KHÔNG được đọc thành ``[]`` / ``{}``);
+    * ``mandatory_docs`` không phải danh sách các chuỗi khác rỗng, hoặc có mã trùng; ``doc_configs`` không phải object; một giá
+      trị của ``doc_configs`` không phải object; ``is_mandatory`` của nó thiếu hoặc KHÔNG phải boolean JSON (``null``, chuỗi
+      ``"true"`` / ``"false"``, số 0 / 1 đều hỏng — Codex lượt 3 GIỮ) ⇒ :data:`DOCUMENT_CONFIG_INVALID`;
+    * M = tập mã trong ``mandatory_docs``, D = tập mã của ``doc_configs`` có ``is_mandatory`` là ``true``; M ≠ D theo BẤT KỲ
+      chiều nào ⇒ :data:`DOCUMENT_CONFIG_INVALID` (bản 4 — Codex lượt 2);
+    * hợp lệ ⇒ ``codes`` = M sắp tăng dần (có thể rỗng: M = D = ∅ là cấu hình hợp lệ, E4 đạt riêng bước này).
+
+    Hàm thuần — không đọc CSDL. Đây là nơi DUY NHẤT của các module GĐ2-B đọc khoá ``mandatory_docs`` (test AST khoá) — kể cả
+    phần ``material`` cho ``row_hash``."""
+    if not isinstance(applied_rules, dict):
+        return RequiredDocuments(None, DOCUMENT_CONFIG_MISSING, {"kind": type(applied_rules).__name__})
+    raw_configs = applied_rules.get("doc_configs", CONFIG_KEY_ABSENT)
+    material = {
+        "mandatory_docs": applied_rules.get("mandatory_docs", CONFIG_KEY_ABSENT),
+        "doc_configs": {
+            str(k): (v.get("is_mandatory", CONFIG_KEY_ABSENT) if isinstance(v, dict) else {"raw": v})
+            for k, v in raw_configs.items()
+        }
+        if isinstance(raw_configs, dict)
+        else raw_configs,
+    }
+    if "mandatory_docs" not in applied_rules or "doc_configs" not in applied_rules:
+        return RequiredDocuments(None, DOCUMENT_CONFIG_MISSING, material)
+    mandatory = applied_rules["mandatory_docs"]
+    configs = applied_rules["doc_configs"]
+    if not isinstance(mandatory, list) or not all(isinstance(c, str) and c.strip() for c in mandatory):
+        return RequiredDocuments(None, DOCUMENT_CONFIG_INVALID, material)
+    if len(set(mandatory)) != len(mandatory):
+        return RequiredDocuments(None, DOCUMENT_CONFIG_INVALID, material)
+    if not isinstance(configs, dict):
+        return RequiredDocuments(None, DOCUMENT_CONFIG_INVALID, material)
+    marked = set()
+    for code, item in configs.items():
+        if not isinstance(item, dict) or type(item.get("is_mandatory")) is not bool:
+            return RequiredDocuments(None, DOCUMENT_CONFIG_INVALID, material)
+        if item["is_mandatory"] is True:
+            marked.add(code)
+    if set(mandatory) != marked:
+        return RequiredDocuments(None, DOCUMENT_CONFIG_INVALID, material)
+    return RequiredDocuments(tuple(sorted(mandatory)), None, material)
+
+
 @dataclass(frozen=True)
 class DocFacts:
     """Sự kiện về MỘT dòng giấy thường cần cho quyết định."""
