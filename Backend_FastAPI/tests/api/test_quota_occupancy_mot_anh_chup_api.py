@@ -228,7 +228,7 @@ async def test_phe_duyet_cu_khong_duyet_vuot_khi_huy_hieu_luc_chen_giua(  # noqa
     async def chen():
         await _huy_hieu_luc_phien_khac(x["id"], nguoi)
 
-    async def doi_khong_khoa(db, *, set_row_ids, returning_profile_ids):
+    async def doi_khong_khoa(db, **_):
         return qos.QuotaChange((), (), (), (), {})  # bên ghi B → A KHÔNG khoá ô (xem docstring)
 
     monkeypatch.setattr(qd_vb, "lock_quota_for_change", doi_khong_khoa)

@@ -8,12 +8,14 @@ của giao dịch request (lỗi ⇒ không còn hàng nào), router commit. Rà
 / cờ con theo cha / không xoá" do CSDL giữ (tầng chủ sở hữu — U1–U4, K2, K4, K5); service kiểm TRƯỚC để
 trả 409 có số dòng, và dịch vi phạm của CSDL (hai phiên cùng qua phép kiểm) thành 409 cố định.
 
-Thứ tự khoá TOÀN CỤC (đặc tả 8.5, BS §4.6; PR-1 GĐ1 — owner 21-11 C1 / C2): lượt gửi (chỉ ghi nhận) → GỐC CHUỖI
+Thứ tự khoá TOÀN CỤC (đặc tả 8.5, BS §4.6; PR-1 GĐ1 — owner 21-11 C1 / C2; Codex PR-1 lượt 2 P2 — khớp đặc tả GĐ2 bản 3 §9):
+KHOÁ NĂM CHIA SẺ của mọi năm thao tác có thể chạm (``quota_occupancy_service.lock_years_of_change`` — câu khoá ĐẦU TIÊN, khi
+chưa giữ khoá dòng nào; bất biến ở ``app.core.review_year_lock``) → lượt gửi (chỉ ghi nhận) → GỐC CHUỖI
 (:func:`_lock_chain_root`; ghi nhận bổ sung / điều chỉnh: gốc là đầu vào, khoá trước) → văn bản khác của chuỗi (văn bản
 gỡ / văn bản đích) → mục chờ → bộ → hồ sơ (id tăng dần, một câu) → [chặng 2b] dòng chỉ tiêu: ``offering_academic_info``
 → ``admission_path`` (id tăng dần, MỖI THAO TÁC MỘT LẦN — ``quota_occupancy_service.lock_quota_cells``, THỨ TỰ CHUẨN F259):
-ghi nhận khoá ô CHỤP của dòng sắp chiếm chỗ (``lock_quota_of_set_rows``); điều chỉnh / huỷ hiệu lực / huỷ ghi nhận khoá
-HỢP ô chụp của dòng thêm / bật lại với ô HIỆN TẠI (Phần A) của em mất dòng hiệu lực (``lock_quota_for_change`` — C2). Phê
+cả bốn thao tác khoá qua ``lock_quota_for_change`` HỢP ô chụp của dòng ghi nhận / thêm / bật lại, ô HIỆN TẠI (Phần A) của em
+mất dòng hiệu lực (C2) và ô MẤT chỗ — ô chụp của dòng tắt / bị bỏ, ô Phần A của em được thêm dòng (C2-1). Phê
 duyệt cũ (hồ sơ → học vụ), Phê duyệt hàng loạt (mọi hồ sơ → mọi học vụ, trước mục đầu) và công bố (hồ sơ → mọi ô của mọi
 nguyện vọng) đi CÙNG đoạn hồ sơ → ô chỉ tiêu, không khoá văn bản ⇒ không vòng chờ (F259); bên bị PostgreSQL chọn huỷ ở
 trường hợp khác ⇒ 409 "thử lại" (đổi so với BS §4.6 "không khoá dòng chỉ tiêu" — lý do: ``DAC-TA-F230-2B-BO-SUNG-2026-11-10.md``;
@@ -62,8 +64,7 @@ from app.services.council_set_gate_service import (
 from app.services.quota_occupancy_service import (
     SQLSTATE_DEADLOCK,
     CONFLICT_MESSAGE,
-    over_quota_warnings,
-    lock_quota_of_set_rows,
+    lock_years_of_change,
     lock_quota_for_change,
     quota_warnings_after_change,
     check_lock_and_count_set_rows,
@@ -431,10 +432,11 @@ async def record_decision(
     """Ghi nhận MỘT Quyết định trúng tuyển / bổ sung đã ký từ bộ ``set_id`` (đặc tả mục 5.3). Trả
     ``(văn bản, cảnh báo vượt chỉ tiêu — N9, rỗng khi không ô nào vượt, lap_lai)``; router commit.
 
-    Vòng giao diện (đặc tả bản 2 mục 3.7.3): ``ma_luot_gui`` (do ``POST /sets/{id}/luot-ghi-nhan`` cấp) — câu CSDL ĐẦU
-    TIÊN khoá lượt ``cho_gui`` (đầu thứ tự khoá chung); câu CUỐI chốt ``da_ghi``. Lượt không còn ``cho_gui`` ⇒ nhánh
-    CHỈ ĐỌC: gửi lặp đúng nội dung ⇒ trả lại văn bản cũ (``lap_lai`` = True, cảnh báo đọc từ sự kiện đã lưu); còn
-    lại 409."""
+    Vòng giao diện (đặc tả bản 2 mục 3.7.3): ``ma_luot_gui`` (do ``POST /sets/{id}/luot-ghi-nhan`` cấp) — câu khoá DÒNG
+    đầu tiên khoá lượt ``cho_gui`` (ngay sau khoá năm chia sẻ — P2); câu CUỐI chốt ``da_ghi``. Lượt không còn ``cho_gui`` ⇒
+    nhánh CHỈ ĐỌC (không khoá dòng nào; chỉ còn khoá năm CHIA SẺ đã lấy trước khi biết nhánh — không chặn ghi nhận khác, nhả khi
+    router kết thúc giao dịch ngay): gửi lặp đúng nội dung ⇒ trả lại văn bản cũ (``lap_lai`` = True, cảnh báo đọc từ sự kiện
+    đã lưu); còn lại 409."""
     number = check_decision_number(decision_number)
     date_value = check_date(signing_date)
     b = check_scan(scan)
@@ -467,7 +469,9 @@ async def record_decision(
     )
     repo = CouncilDecisionRepository(db)
     try:
-        # Lượt gửi: câu CSDL ĐẦU TIÊN, GIỮ ``cho_gui`` (F265) — đầu thứ tự khoá chung.
+        # P2 (Codex PR-1 lượt 2): khoá NĂM chia sẻ của dòng bộ + hồ sơ của bộ — TRƯỚC mọi khoá dòng (đặc tả GĐ2 §9).
+        years = await lock_years_of_change(db, set_ids=[set_id])
+        # Lượt gửi: câu khoá DÒNG đầu tiên, GIỮ ``cho_gui`` (F265) — ngay sau khoá năm.
         submission = await submission_service.lock_pending_submission(db, code=code, set_id=set_id)
         if submission is None:
             # F272: nhánh CHỈ ĐỌC — không khoá thêm gì, router kết thúc giao dịch ngay.
@@ -507,8 +511,15 @@ async def record_decision(
             current = await repo.lock_profiles(pids)
             if set(current) != set(pids):
                 raise DataValidationError("Có hồ sơ của bộ không còn — không ghi nhận được.")
-            # Chặng 2b: dòng sắp chiếm chỗ (Phần B) ⇒ khoá dòng chỉ tiêu SAU hồ sơ (thứ tự chung).
-            await lock_quota_of_set_rows(db, [d.id for d in row])
+            # Chặng 2b: dòng sắp chiếm chỗ (Phần B) ⇒ khoá dòng chỉ tiêu SAU hồ sơ (thứ tự chung) — ô chụp của dòng, CÙNG ô Phần
+            # A mà em của bộ đang được đếm (em "Đã duyệt" chuyển A → B: ô ấy MẤT chỗ — C2-1, Codex PR-1 lượt 2).
+            change = await lock_quota_for_change(
+                db,
+                locked_years=years,
+                set_row_ids=[d.id for d in row],
+                returning_profile_ids=(),
+                entering_profile_ids=pids,
+            )
             # Q-J1 (owner 10-11): dòng bộ thiếu khoá đếm / lệch chuỗi ⇒ CHẶN (dưới khoá, trước ghi).
             await check_lock_and_count_set_rows(db, [(d.stt, d.id) for d in row])
             blocked = _block_by_state(row, await decision_state(db, pids))
@@ -552,7 +563,7 @@ async def record_decision(
             # N9 (đặc tả 5.3): ĐÃ chèn dòng — đếm lại các ô của dòng vừa ghi (cùng giao dịch, dưới khoá dòng
             # chỉ tiêu) ⇒ cảnh báo ô bị vượt, KHÔNG chặn (giấy đã ký). Vòng giao diện 3.8: cảnh báo LƯU vào sự
             # kiện ghi nhận (cùng giao dịch) — đọc lại trả đúng bản đã lưu, không tính lại.
-            warnings = await over_quota_warnings(db, [d.id for d in row])
+            warnings = await quota_warnings_after_change(db, change)
             await repo.add_objects(
                 _scan(decision.id, b),
                 _event(
@@ -651,7 +662,9 @@ async def record_adjustment_decision(
     repo = CouncilDecisionRepository(db)
     try:
         async with db.begin_nested():
-            # C1: văn bản của route LÀ gốc chuỗi (phải là trúng tuyển) — khoá TRƯỚC mọi khoá khác, đọc chuỗi / dòng bỏ SAU khoá.
+            # P2 (Codex PR-1 lượt 2): khoá NĂM chia sẻ (dòng bộ THÊM + dòng BỎ + hồ sơ của chúng) — TRƯỚC mọi khoá dòng.
+            years = await lock_years_of_change(db, set_ids=[set_id], row_ids=removed_ids)
+            # C1: văn bản của route LÀ gốc chuỗi (phải là trúng tuyển) — khoá TRƯỚC mọi khoá dòng khác, đọc chuỗi / dòng bỏ SAU khoá.
             root = await repo.lock_decision(root_id)
             if root is None:
                 raise ResourceNotFoundError("Không có Quyết định này.")
@@ -696,11 +709,14 @@ async def record_adjustment_decision(
             # Chặng 2b + C2 (owner 21-11): MỘT lần khoá dòng chỉ tiêu (thứ tự chuẩn F259, SAU hồ sơ) cho ô CHỤP của dòng THÊM
             # (Phần B) ∪ ô HIỆN TẠI (Phần A) của em bị BỎ mà không có dòng thêm trong cùng văn bản — em ấy (vẫn chiếm chỗ) quay
             # về được đếm theo ngành / đường xét hiện tại; số "trước" đếm DƯỚI khoá. (Trước C2: "dòng BỎ chỉ trả chỗ" — sai khi ô
-            # hiện tại ≠ ô chụp.)
+            # hiện tại ≠ ô chụp.) C2-1 (Codex PR-1 lượt 2): CÙNG ô MẤT chỗ — ô chụp của dòng BỎ, ô Phần A của em được THÊM.
             change = await lock_quota_for_change(
                 db,
+                locked_years=years,
                 set_row_ids=[d.id for d in added_rows],
                 returning_profile_ids=sorted(set(removed_pids) - set(added_pids)),
+                released_set_row_ids=[d.set_row_id for d in removed_rows],
+                entering_profile_ids=added_pids,
             )
             # Q-J1: dòng THÊM phải đủ khoá đếm + khớp chuỗi (dưới khoá, trước ghi).
             await check_lock_and_count_set_rows(db, [(d.stt, d.id) for d in added_rows])
@@ -807,6 +823,8 @@ async def cancel_effect(
     repo = CouncilDecisionRepository(db)
     try:
         async with db.begin_nested():
+            # P2 (Codex PR-1 lượt 2): khoá NĂM chia sẻ (dòng của văn bản đích + dòng nó đã bỏ) — TRƯỚC mọi khoá dòng.
+            years = await lock_years_of_change(db, decision_ids=[decision_id])
             # C1 (owner 21-11 — CHẶN F230): gốc chuỗi TRƯỚC, rồi văn bản đích. Trước đây văn bản con (bổ sung / điều chỉnh)
             # chỉ khoá chính nó ⇒ chen với điều chỉnh bỏ dòng của nó / huỷ ghi nhận văn bản huỷ của nó.
             _, x = await _lock_chain_root(repo, decision_id)
@@ -835,11 +853,14 @@ async def cancel_effect(
             pids = [d.profile_id for d in effective_rows + dropped_rows if d.profile_id is not None]
             await repo.lock_profiles(pids)
             # C2 (owner 21-11): dòng hiệu lực của x TẮT ⇒ em (vẫn chiếm chỗ) quay về đếm theo ô HIỆN TẠI (Phần A) ⇒ khoá các ô ấy
-            # MỘT lần (sau hồ sơ, thứ tự chuẩn), số "trước" đếm DƯỚI khoá, TRƯỚC khi ghi. (Em đã bị x bỏ: không đổi đếm.)
+            # MỘT lần (sau hồ sơ, thứ tự chuẩn), số "trước" đếm DƯỚI khoá, TRƯỚC khi ghi. (Em đã bị x bỏ: không đổi đếm.) C2-1
+            # (Codex PR-1 lượt 2): CÙNG ô chụp của các dòng tắt — ô ấy MẤT chỗ (chỉ khoá, không cảnh báo).
             change = await lock_quota_for_change(
                 db,
+                locked_years=years,
                 set_row_ids=(),
                 returning_profile_ids=[d.profile_id for d in effective_rows if d.profile_id is not None],
+                released_set_row_ids=[d.set_row_id for d in effective_rows],
             )
             open_holds = await repo.open_holds(pids)
             other_effective = await repo.effective_rows_of_profiles(
@@ -925,6 +946,9 @@ async def revoke_record(
     figures: Dict[str, Any] = {}
     try:
         async with db.begin_nested():
+            # P2 (Codex PR-1 lượt 2): khoá NĂM chia sẻ (dòng của văn bản gỡ, dòng nó đã bỏ, dòng của văn bản đích nếu nó là văn
+            # bản huỷ) — TRƯỚC mọi khoá dòng.
+            years = await lock_years_of_change(db, decision_ids=[decision_id])
             # C1 (owner 21-11 — CHẶN F230): gốc chuỗi TRƯỚC, rồi văn bản gỡ, rồi văn bản đích (văn bản huỷ); đọc chuỗi SAU khoá
             # gốc. Trước đây chỉ khoá x (+ đích) ⇒ huỷ ghi nhận văn bản huỷ của QĐ con chen với huỷ hiệu lực QĐ gốc ⇒ con hiệu
             # lực dưới gốc đã hết hiệu lực.
@@ -964,9 +988,15 @@ async def revoke_record(
             returning = sorted({d.profile_id for d in switched_off if d.profile_id is not None} - set(pids))
             current = await repo.lock_profiles(pids + [m.profile_id for m in item if m.profile_id] + returning)
             # Chặng 2b + C2: MỘT lần khoá dòng chỉ tiêu (thứ tự chuẩn F259, SAU hồ sơ) — ô CHỤP của dòng BẬT LẠI (Phần B) ∪ ô
-            # HIỆN TẠI của em quay về Phần A; số "trước" đếm DƯỚI khoá.
+            # HIỆN TẠI của em quay về Phần A; số "trước" đếm DƯỚI khoá. C2-1 (Codex PR-1 lượt 2): CÙNG ô MẤT chỗ — ô chụp của dòng
+            # TẮT, ô Phần A mà em của dòng BẬT LẠI đang được đếm (A → B).
             change = await lock_quota_for_change(
-                db, set_row_ids=[d.set_row_id for d in reactivated], returning_profile_ids=returning
+                db,
+                locked_years=years,
+                set_row_ids=[d.set_row_id for d in reactivated],
+                returning_profile_ids=returning,
+                released_set_row_ids=[d.set_row_id for d in switched_off],
+                entering_profile_ids=pids,
             )
             # Q-J1: dòng BẬT LẠI phải đủ khoá đếm + khớp chuỗi (dưới khoá, trước ghi).
             await check_lock_and_count_set_rows(db, [(d.stt, d.set_row_id) for d in reactivated])

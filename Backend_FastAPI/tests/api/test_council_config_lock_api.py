@@ -276,8 +276,9 @@ async def test_thao_tac_giu_khoa_truoc_thi_sua_cau_hinh_bi_chan(client, hs, ad, 
         a=o["ai"],
     ) == 0
     diem = _Diem()
-    # PR-1 GĐ1 (C2): điều chỉnh khoá dòng chỉ tiêu qua ``lock_quota_for_change`` (hợp ô chụp + ô hiện tại, MỘT lần).
-    ten_khoa = "lock_quota_of_set_rows" if thao_tac == "ghi_nhan" else "lock_quota_for_change"
+    # PR-1 GĐ1 (C2; Codex lượt 2 C2-1): ghi nhận và điều chỉnh khoá dòng chỉ tiêu qua ``lock_quota_for_change`` (hợp mọi ô đổi
+    # số, MỘT lần).
+    ten_khoa = "lock_quota_for_change"
     goc = getattr(qd_vb, ten_khoa)
 
     async def boc(*a_, **kw):

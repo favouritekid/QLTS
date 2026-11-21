@@ -1,9 +1,10 @@
 # app/repositories/council_decision_repository.py
 """Truy cập dữ liệu ghi nhận Quyết định đã ký (F230 — lượt I). Chỉ SQL / ORM; luật nghiệp vụ ở
-``app/services/council_decision_service.py``. Khoá luôn theo thứ tự: GỐC CHUỖI (C1 — owner 21-11:
+``app/services/council_decision_service.py``. Khoá luôn theo thứ tự: [khoá năm chia sẻ —
+``quota_occupancy_service.lock_years_of_change``, PR-1 GĐ1 P2] → GỐC CHUỖI (C1 — owner 21-11:
 :meth:`CouncilDecisionRepository.chain_root_id` rồi ``lock_decision``) → văn bản khác của chuỗi → mục chờ → bộ →
 hồ sơ (id tăng dần) — đặc tả mục 2.2 / 2.5 / 8.5 (BS §4.6) — rồi dòng chỉ tiêu (chặng 2b, MỘT lần:
-``quota_occupancy_service.lock_quota_of_set_rows`` / ``lock_quota_for_change``)."""
+``quota_occupancy_service.lock_quota_for_change``)."""
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from sqlalchemy import select, text

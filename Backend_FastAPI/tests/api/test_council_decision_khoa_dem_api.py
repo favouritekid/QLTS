@@ -136,10 +136,9 @@ async def test_q_j1_thieu_dong_nguon_chan(client, hs):  # noqa: F811
 
 def test_q_j1_mot_ham_kiem_o_ba_thao_tac_duoi_khoa_truoc_ghi():
     """Kiểm kê (đọc nguồn): ba thao tác gọi ĐÚNG MỘT lần ``check_lock_and_count_set_rows`` — SAU khi khoá dòng chỉ tiêu
-    (ghi nhận: ``lock_quota_of_set_rows``; điều chỉnh / huỷ ghi nhận: ``lock_quota_for_change`` — PR-1 GĐ1 C2), TRƯỚC lệnh
-    ghi đầu tiên của thao tác."""
+    (``lock_quota_for_change`` — PR-1 GĐ1 C2; ghi nhận dùng nó từ Codex lượt 2 C2-1), TRƯỚC lệnh ghi đầu tiên của thao tác."""
     ghi_dau = {
-        "record_decision": ("lock_quota_of_set_rows(", "await repo.add_objects(decision)"),
+        "record_decision": ("lock_quota_for_change(", "await repo.add_objects(decision)"),
         "record_adjustment_decision": ("lock_quota_for_change(", "await repo.add_objects(decision)"),
         "revoke_record": ("lock_quota_for_change(", 'x.trang_thai = "huy_ghi_nhan"'),
     }

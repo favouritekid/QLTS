@@ -215,6 +215,11 @@ def _nguon() -> dict:
 #:     câu dừng khi nhập ngày ký = ``SIGNING_BEFORE_MINUTES_MESSAGE`` ghép hai ngày dd/mm/yyyy (``SIGNING_BEFORE_MINUTES_DATES``)
 #:     + ``ngay_ky`` / ``ngay_bien_ban`` (ISO) trong phản hồi — MSW CHƯA sinh câu ghép (phụ lục giao diện); câu
 #:     bước dựng bộ (``MINUTES_AFTER_DECISION_MESSAGE``, ``luatThamSoQuyetDinh`` chép) GIỮ nguyên.
+#: 21-11-2026 — PR-1 GĐ1 lượt 2 (Codex C2-1 / C2-2 / P2): ``qd.ghi_nhan_quyet_dinh`` và ``qd.huy_ghi_nhan`` lấy khoá năm chia sẻ ở
+#:   đầu thao tác + khoá cả ô mất chỗ qua ``lock_quota_for_change`` (ghi nhận bỏ ``lock_quota_of_set_rows`` /
+#:   ``over_quota_warnings``) — thứ tự khoá và tập ô, KHÔNG đổi thân yêu cầu / thứ tự kiểm / câu lỗi mà MSW chép (``luatGhiNhan``,
+#:   ``luatHuyGhiNhan``) ⇒ MSW không phải sửa. Lỗi mới duy nhất: 409 câu "thử lại" sẵn có (``CONFLICT_MESSAGE``) khi năm hồ sơ
+#:   đổi giữa lúc đọc phạm vi và lúc khoá — lỗi tranh chấp, không phải luật thân yêu cầu.
 GHIM = {
     "bo.CAU_DOI_TU_LUC_KIEM": "236fff0ad0195cf0",
     "bo.MA_LOI_DOI_TU_LUC_KIEM": "111c5b69b272ed2c",
@@ -247,8 +252,8 @@ GHIM = {
     "qd._gia_tri_json": "2e6e814855b117b3",
     "qd._so_chua_dung": "2b64bc35e8577a50",
     "qd._so_tham_so": "717d87883731d6cc",  # PR-1 GĐ1 C12 + Q2 — MSW luatGhiNhan CHƯA chép (phụ lục giao diện)
-    "qd.ghi_nhan_quyet_dinh": "ad8d9ea16ca62c50",
-    "qd.huy_ghi_nhan": "6f0159f447eb1811",  # PR-1 GĐ1 C1 / C2 / C7 — luật thân yêu cầu không đổi
+    "qd.ghi_nhan_quyet_dinh": "bb2243f74b834cdc",  # PR-1 GĐ1 lượt 2 — khoá năm + ô mất chỗ; luật thân yêu cầu không đổi
+    "qd.huy_ghi_nhan": "f098a9950890b8fc",  # PR-1 GĐ1 C1 / C2 / C7 + lượt 2 (khoá năm, ô mất chỗ) — luật thân yêu cầu không đổi
     "qd.kiem_ngay": "ff50f4a05fb99172",  # review max PR #724 R7: ngày ký không sau hôm nay (giờ VN), câu = hằng nguyên văn — MSW chép cùng lượt
     "qd.kiem_scan": "a51c3ba6959c9bf3",
     "qd.kiem_so_quyet_dinh": "2d53d20a2e55808d",  # R7 cấm 0 đầu; Codex 42 F337: "0" một chữ số nhận — MSW chép cùng lượt

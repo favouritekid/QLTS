@@ -18,6 +18,18 @@ CĐ chính quy), ``lead.offering_id`` của P = ngành của ô Y (Dược CĐ c
   đúng phiên thao tác (``pg_blocking_pids``) rồi bị chặn "Vượt chỉ tiêu"; ô Y không vượt.
 * C2-một-lần-khoá — điều chỉnh vừa THÊM (ô id cao) vừa BỎ (ô hiện tại id thấp) chen với Phê duyệt hàng loạt khoá [thấp,
   cao]: không vòng chờ (không câu "thử lại").
+
+Codex PR-1 lượt 2 (21-11):
+
+* C2-1 — hai văn bản KHÁC chuỗi cùng chạm ô Y (hai phiên): A (điều chỉnh bỏ tên P ⇒ P về Y, đã đọc số trước 2 / 1 dưới khoá)
+  ↔ B trả 1 chỗ ở Y — năm đường: dòng chụp Y TẮT (huỷ hiệu lực, huỷ ghi nhận, điều chỉnh bỏ tên) hoặc em đang được đếm ở Y
+  (Phần A) được THÊM dòng chụp ô khác (ghi nhận, khôi phục bằng huỷ ghi nhận văn bản huỷ). B phải khoá Y (ô MẤT chỗ) ⇒ CHỜ A
+  ⇒ A cảnh báo "2 → 3" (đã lưu trong sự kiện), Y cuối 2. Mã cũ: B không khoá Y ⇒ trả chỗ giữa chừng ⇒ A so 2 với 2, mất cảnh báo.
+* C2-2 — MỘT văn bản vừa bỏ P (về Y) vừa thêm Q vào Y (ô hai vai): MỘT cảnh báo đủ ``o_hien_tai`` / ``da_dung_truoc`` / câu
+  owner "1 → 3" (khuôn "30 → 32").
+* P2 — tạo học vụ Y (ngành mới, có chỉ tiêu) chen GIỮA lúc văn bản dò ô và lúc ghi (hai phiên): lệnh tạo phải CHỜ văn bản
+  (khoá năm chia sẻ ↔ độc quyền) ⇒ văn bản ghi khi Y chưa có ⇒ không cảnh báo (nhất quán). Mã cũ: Y commit trước khi văn bản
+  ghi mà vắng khỏi tập khoá + cảnh báo ⇒ văn bản làm Y 1 → 2 / 1 im lặng.
 """
 import asyncio
 
@@ -26,6 +38,7 @@ import pytest
 from app.database import AsyncSessionLocal
 from app.services import quota_occupancy_service as qos
 from tests.api import test_council_decisions_api as qd
+from tests.api.test_tao_hoc_vu_api import _tao_loai_hinh
 from tests.api.test_council_decision_hai_phien_api import (
     _ban,
     _boc,
@@ -295,3 +308,169 @@ async def test_c2_dieu_chinh_them_o_cao_bo_o_thap_va_duyet_hang_loat_khong_vong_
     assert r_dc.status_code == 201, r_dc.text
     assert r_lo.status_code == 200 and (r_lo.json()["success_count"], r_lo.json()["failed_ids"]) == (2, []), r_lo.text
     assert do == "chan", "phép đo không hợp lệ: lô không chờ khoá ô của điều chỉnh"
+
+
+# ═══════════════════════════════ Codex PR-1 lượt 2 — dữ liệu chung ═══════════════════════════════
+#: Em thứ hai của các ca dưới: loại hình liên thông — nguyện vọng in ở ô W (Ô tô CĐ liên thông) ≠ X (ô chụp của P) ≠ Y.
+Q = "loai_hinh_lien_thong"
+
+
+async def _bo_nganh_lead(pid):
+    """Lead không trỏ ngành ⇒ em không được đếm ở ô ngành Phần A nào (chỉ còn chiều nguyện vọng — không ``admitted``)."""
+    await qd._sql(
+        "UPDATE lead SET offering_id = NULL WHERE id = (SELECT lead_id FROM admission_profile WHERE id = :p)", p=pid
+    )
+
+
+async def _dong_hieu_luc(pid):
+    return await qd._q1(
+        "SELECT id FROM council_decision_row WHERE profile_id = :p AND trang_thai_cha = 'hieu_luc' "
+        "AND bi_bo_boi_id IS NULL",
+        p=pid,
+    )
+
+
+# ═══════════════════════════════ C2-1: hai văn bản khác chuỗi cùng chạm ô Y ═══════════════════════
+#: đường B trả 1 chỗ ở Y → (mã HTTP mong đợi, loại sự kiện ghi cảnh báo của B)
+DUONG_TRA_CHO = {
+    "huy_hieu_luc": (201, "huy_hieu_luc"),
+    "huy_ghi_nhan": (200, "huy_ghi_nhan"),
+    "dieu_chinh_bo_ten": (201, "ghi_nhan_dieu_chinh"),
+    "ghi_nhan": (201, "ghi_nhan"),
+    "khoi_phuc": (200, "huy_ghi_nhan"),
+}
+
+
+async def _chuan_bi_tra_cho(client, ad, hs, duong):  # noqa: F811
+    """Chuỗi THỨ HAI (khác chuỗi của P) sao cho thao tác B trả đúng 1 chỗ ở Y. Trả (hàm gửi B, id văn bản B ghi sự kiện —
+    None khi phải đọc từ phản hồi)."""
+    q = hs[Q][1]
+    if duong in ("huy_hieu_luc", "huy_ghi_nhan", "dieu_chinh_bo_ten"):
+        # Q giữ chỗ ở Y bằng dòng CHỤP Y (Phần B); lead Q không trỏ ngành ⇒ dòng tắt thì Q không về Y.
+        await _chuyen_sang_duoc_cd(hs, Q)
+        _, r2 = await qd._qd_cua_bo(client, ad, hs, [Q], "502")
+        await _bo_nganh_lead(q)
+        if duong == "huy_hieu_luc":
+            return lambda: qd._huy_hieu_luc(client, ad, r2["id"], "702"), None
+        if duong == "huy_ghi_nhan":
+            return lambda: qd._huy_ghi_nhan(client, ad, r2["id"], "502"), r2["id"]
+        dong_q = await qd._dong_cua(r2["id"], q)
+        return lambda: qd._dieu_chinh(client, ad, r2["id"], "802", bo_dong=[dong_q]), None
+    # Q (Đã duyệt) được đếm ở Y bằng Phần A (lead → ngành Y); B đưa Q sang Phần B ở ô chụp W ⇒ Y mất 1 chỗ.
+    y = await _o_y(hs)
+    if duong == "ghi_nhan":
+        bo2 = await qd._bo_ok(client, ad, hs, [Q])
+        await _gan_nganh(q, y["off"])
+        return lambda: qd._ghi(client, ad, bo2["id"], so="502", so_hs=1), None
+    _, r2 = await qd._qd_cua_bo(client, ad, hs, [Q], "502")
+    rh = await qd._huy_hieu_luc(client, ad, r2["id"], "702")
+    assert rh.status_code == 201, rh.text
+    await _gan_nganh(q, y["off"])
+    return lambda: qd._huy_ghi_nhan(client, ad, rh.json()["id"], "702"), rh.json()["id"]
+
+
+@pytest.mark.parametrize("duong", list(DUONG_TRA_CHO))
+async def test_c2_1_hai_van_ban_khac_chuoi_tra_cho_va_dua_ve_cung_o_y_khong_mat_canh_bao(  # noqa: F811
+    client, hs, ad, duong
+):
+    # Ô Y chỉ tiêu 1, đang 2 / 1 (em đơn vị khác ở Phần A + chỗ mà B sẽ trả). A = điều chỉnh bỏ tên P (lead P → Y) — phiên
+    # ba giữ DÒNG Quyết định của P ⇒ A dừng ở câu ghi, ĐÃ khoá ô (X — ô chụp của P, Y — ô hiện tại) và đã đếm số trước = 2. B
+    # (chuỗi khác) trả 1 chỗ ở Y: phải khoá Y (ô MẤT chỗ) ⇒ CHỜ A. Kết cục tuần tự A → B: A cảnh báo "2 → 3", B không cảnh báo,
+    # Y cuối 2 / 1. Mã cũ (B không khoá ô mất chỗ): B commit giữa chừng (Y = 1) ⇒ A ghi (Y = 2) rồi so 2 với 2 ⇒ MẤT cảnh báo.
+    lam_b, id_su_kien_b = await _chuan_bi_tra_cho(client, ad, hs, duong)
+    _, r1 = await qd._qd_cua_bo(client, ad, hs, [SACH[0]], "501")
+    y = await _dat_o_y(hs, 1, SACH[0], "don_vi_khac")
+    truoc = await _dem_nganh(y)
+    assert truoc[0] == 2, "tiền điều kiện: ô Y 2 / 1 trước hai văn bản — %r" % (truoc,)
+    dong_p = await _dong_hieu_luc(hs[SACH[0]][1])
+    async with PhienBa() as ba:
+        await ba.khoa("council_decision_row", [dong_p])
+        t_a = asyncio.create_task(qd._dieu_chinh(client, ad, r1["id"], "801", bo_dong=[dong_p]))
+        pid_a = await cho_bi_chan_boi(ba.pid, t_a)
+        assert pid_a is not None, "phép đo không hợp lệ: A không tới câu ghi dòng"
+        t_b = asyncio.create_task(lam_b())
+        pid_b = await cho_bi_chan_boi(pid_a, t_b)
+        chan_b = await chan_cua(pid_b)
+        await ba.tha()
+        r_a, r_b = await asyncio.gather(t_a, t_b)
+    assert r_a.status_code == 201, r_a.text
+    ma_b, loai_su_kien_b = DUONG_TRA_CHO[duong]
+    assert r_b.status_code == ma_b, r_b.text
+    cb_a = r_a.json()["canh_bao_vuot_chi_tieu"]
+    assert cb_a == [_canh_bao_y(y, 1, 2, 3, truoc[1], truoc[2] + 1)], (
+        "A làm Y tăng 2 → 3 / 1 phải cảnh báo (B trả chỗ TRƯỚC hoặc SAU cả lần so của A, không giữa chừng): %r" % cb_a
+    )
+    assert await _canh_bao_da_luu(r_a.json()["id"], "ghi_nhan_dieu_chinh") == _bo_none(cb_a)
+    assert r_b.json()["canh_bao_vuot_chi_tieu"] == [], r_b.text
+    assert await _canh_bao_da_luu(id_su_kien_b or r_b.json()["id"], loai_su_kien_b) == []
+    assert (await _dem_nganh(y))[0] == 2, "ô Y cuối: 2 / 1"
+    assert chan_b == [pid_a], "phép đo: B phải chờ ĐÚNG phiên A ở ô Y — %r" % (chan_b,)
+
+
+# ═══════════════════════════════ C2-2: một văn bản, ô Y hai vai ═════════════════════════════════
+async def test_c2_2_mot_van_ban_vua_bo_ve_y_vua_them_vao_y_mot_canh_bao_du_thong_tin(client, hs, ad):  # noqa: F811
+    # Ô Y chỉ tiêu 1, đang 1 / 1 (em đơn vị khác, Phần A). Điều chỉnh của chuỗi P: BỎ P (lead P → Y ⇒ P về Y, ô HIỆN TẠI) và
+    # THÊM Q (nguyện vọng in ở Y ⇒ ô CHỤP Y; lead Q không trỏ ngành). Y vừa là ô chụp vừa là ô hiện tại ⇒ MỘT cảnh báo, đủ
+    # ``o_hien_tai`` / ``da_dung_truoc`` / câu owner "1 → 3 … vượt 2" (khuôn "30 → 32"). Mã cũ: loại Y khỏi tập ô hiện tại TRƯỚC
+    # khi đếm số trước ⇒ cảnh báo chỉ theo luật ô chụp, thiếu số trước + câu.
+    _, r1 = await qd._qd_cua_bo(client, ad, hs, [SACH[0]], "501")
+    await _chuyen_sang_duoc_cd(hs, Q)
+    await _bo_nganh_lead(hs[Q][1])
+    bd = await qd._bo_ok(client, ad, hs, [Q], duong="/decisions/%d/bo-dieu-chinh" % r1["id"])
+    y = await _dat_o_y(hs, 1, SACH[0], "don_vi_khac")
+    assert await _dem_nganh(y) == (1, 0, 1), "tiền điều kiện: ô Y 1 / 1"
+    dong_p = await _dong_hieu_luc(hs[SACH[0]][1])
+    r = await qd._dieu_chinh(client, ad, r1["id"], "801", bo_dong=[dong_p], set_id=bd["id"], so_hs=1)
+    assert r.status_code == 201, r.text  # K-1: vẫn ghi văn bản đã ký
+    assert await _dem_nganh(y) == (3, 1, 3), "Y: 1 → 3 (P về Phần A + Q chiếm chỗ chụp)"
+    cb = r.json()["canh_bao_vuot_chi_tieu"]
+    assert cb == [_canh_bao_y(y, 1, 1, 3, 1, 3)], r.text
+    assert await _canh_bao_da_luu(r.json()["id"], "ghi_nhan_dieu_chinh") == _bo_none(cb)
+
+
+# ═══════════════════════════════ P2: học vụ Y xuất hiện giữa lúc dò và lúc ghi ══════════════════
+async def test_p2_tao_hoc_vu_y_giua_luc_do_va_luc_ghi_phai_cho_van_ban(client, hs, ad):  # noqa: F811
+    # Ngành MỚI (loại hình mới, CHƯA có học vụ năm 2026); lead của P và em đơn vị khác trỏ ngành ấy ⇒ khi P về Phần A, ô ngành
+    # của P là học vụ (ngành mới, 2026) — lúc A dò thì CHƯA có. A = điều chỉnh bỏ tên P, dừng ở câu ghi (phiên ba) sau khi đã dò +
+    # khoá ô. C = tạo học vụ (ngành mới, 2026, chỉ tiêu 1) qua route thật. Đúng: C CHỜ A (khoá năm) ⇒ A ghi khi Y chưa có ⇒ không
+    # cảnh báo; C tạo Y sau. Mã cũ (không khoá năm): C commit TRƯỚC khi A ghi ⇒ A làm Y 1 → 2 / 1 mà Y vắng khỏi tập khoá + cảnh
+    # báo ⇒ im lặng.
+    _, r1 = await qd._qd_cua_bo(client, ad, hs, [SACH[0]], "501")
+    off = await _tao_loai_hinh(client, ad)
+    for nhan in (SACH[0], "don_vi_khac"):
+        await _gan_nganh(hs[nhan][1], off)
+    assert await qd._q1(
+        "SELECT count(*) FROM offering_academic_info WHERE offering_id = :o AND academic_year = 2026", o=off
+    ) == 0, "tiền điều kiện: ngành mới chưa có học vụ 2026"
+    dong_p = await _dong_hieu_luc(hs[SACH[0]][1])
+    async with PhienBa() as ba:
+        await ba.khoa("council_decision_row", [dong_p])
+        t_a = asyncio.create_task(qd._dieu_chinh(client, ad, r1["id"], "801", bo_dong=[dong_p]))
+        pid_a = await cho_bi_chan_boi(ba.pid, t_a)
+        assert pid_a is not None, "phép đo không hợp lệ: A không tới câu ghi dòng"
+        t_c = asyncio.create_task(
+            client.post(
+                "/api/admin/offerings/%d/academic-info" % off,
+                json={"offering_id": off, "academic_year": 2026, "annual_admission_quota": 1, "is_published": False},
+                headers=ad,
+            )
+        )
+        pid_c = await cho_bi_chan_boi(pid_a, t_c)
+        tao_xong_truoc = t_c.done()  # C đã commit khi A còn chưa ghi
+        chan_c = await chan_cua(pid_c)
+        await ba.tha()
+        r_a, r_c = await asyncio.gather(t_a, t_c)
+    assert r_a.status_code == 201, r_a.text
+    assert r_c.status_code == 201, r_c.text
+    y_moi = r_c.json()["id"]
+    cb = r_a.json()["canh_bao_vuot_chi_tieu"]
+    assert await _canh_bao_da_luu(r_a.json()["id"], "ghi_nhan_dieu_chinh") == _bo_none(cb)
+    async with AsyncSessionLocal() as db:
+        assert await qos.count_by_offering_year(db, offering_id=off, academic_year=2026) == 2  # P + em đơn vị khác
+    assert [c.get("academic_info_id") for c in cb] == ([y_moi] if tao_xong_truoc else []), (
+        "học vụ Y (chỉ tiêu 1) commit %s khi A ghi; A làm Y 1 → 2 — cảnh báo của A: %r"
+        % ("TRƯỚC" if tao_xong_truoc else "SAU", cb)
+    )
+    assert not tao_xong_truoc and chan_c == [pid_a], (
+        "phép đo: lệnh tạo học vụ phải CHỜ đúng phiên A (khoá năm) — xong trước: %s, bị chặn bởi: %r" % (tao_xong_truoc, chan_c)
+    )

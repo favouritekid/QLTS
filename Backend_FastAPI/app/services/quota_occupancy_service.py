@@ -32,6 +32,8 @@ giữa ⇒ đếm 0 (B→A) hoặc 2 (A→B) cho cùng một em. Một câu ⇒ 
 B → A (C2 — owner 21-11): em mất dòng hiệu lực mà vẫn chiếm chỗ được đếm lại theo ô HIỆN TẠI (Phần A,
 :func:`part_a_cells_of_profiles`) — ô ấy có thể KHÁC ô chụp và có thể thành vượt ⇒ điều chỉnh / huỷ hiệu lực / huỷ ghi nhận
 khoá ô hiện tại cùng ô chụp (:func:`lock_quota_for_change`) và cảnh báo đúng ô tăng (:func:`quota_warnings_after_change`).
+Ô MẤT chỗ (ô chụp của dòng tắt / bị bỏ; ô Phần A của em được thêm dòng — A → B) cũng vào tập khoá (C2-1, Codex PR-1 lượt 2):
+không thì một văn bản khác chuỗi đang so "trước / sau" ở ô ấy đọc số trước khi ta trả chỗ và mất cảnh báo.
 
 Dòng bộ THIẾU khoá đếm / lệch chuỗi cấu hình: owner chốt 10-11 (Q-J1) — CHẶN tại ba thao tác sinh / khôi phục
 dòng B (ghi nhận, dòng thêm khi điều chỉnh, dòng bật lại khi huỷ ghi nhận) bằng MỘT hàm
@@ -40,20 +42,27 @@ CSDL) không khớp nơi cần khoá ấy và mỗi lần đếm gặp thì ghi 
 
 Khoá — THỨ TỰ CHUẨN cho cả giao dịch (F259): mọi hồ sơ (id tăng dần) TRƯỚC, rồi mọi dòng chỉ tiêu qua
 :func:`lock_quota_cells` (``offering_academic_info`` id tăng dần MỘT câu, RỒI ``admission_path`` id tăng dần
-MỘT câu). Các hàm đếm KHÔNG khoá. Ghi nhận (làm TĂNG Phần B) khoá qua :func:`lock_quota_of_set_rows`; điều chỉnh /
-huỷ hiệu lực / huỷ ghi nhận khoá HỢP ô chụp của dòng thêm / bật lại với ô hiện tại của em quay về Phần A bằng MỘT lần
+MỘT câu). Các hàm đếm KHÔNG khoá. Bốn thao tác Quyết định (ghi nhận / bổ sung, điều chỉnh, huỷ hiệu lực, huỷ ghi
+nhận) khoá HỢP mọi ô đổi số — ô chụp của dòng thêm / bật lại, ô hiện tại của em quay về Phần A, ô mất chỗ — bằng MỘT lần
 :func:`lock_quota_cells` (:func:`lock_quota_for_change`); Phê duyệt hàng loạt và công bố nhiều nguyện vọng khoá TRƯỚC mọi
 dòng chỉ tiêu sẽ dùng (cùng hàm) rồi mới xét — giữ nguyên thứ tự xét nguyện vọng nghiệp vụ.
+
+Dò ô theo CẶP (loại hình, năm) — ô ngành của Phê duyệt cũ — đọc tập học vụ của năm; lệnh tạo / dời năm học vụ đổi tập ấy (P2 —
+Codex PR-1 lượt 2). Bốn thao tác Quyết định lấy KHOÁ NĂM CHIA SẺ của mọi năm có thể chạm Ở ĐẦU thao tác
+(:func:`lock_years_of_change`, trước mọi khoá dòng — bất biến + thứ tự ở ``app.core.review_year_lock``) ⇒ tập học vụ đúng tới
+lúc ghi; :func:`lock_quota_for_change` kiểm lại năm thật (dưới khoá hồ sơ) nằm trong tập đã khoá, không thì 409 "thử lại".
 """
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, FrozenSet, Iterable, List, Optional, Sequence, Set, Tuple
 
 import structlog
-from sqlalchemy import Integer, String, cast, distinct, func, select, text, tuple_, union_all
+from sqlalchemy import Integer, String, cast, distinct, func, or_, select, text, tuple_, union_all
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
+from app.core.review_year_lock import lock_review_years_shared
 from app.models.council_document import (
     EFFECTIVE_ROW_CONDITION,
+    CouncilDecision,
     CouncilDecisionRow,
     CouncilDocumentSetRow,
 )
@@ -242,7 +251,7 @@ def _part_a_legacy(path_condition, exclude_profile_id: Optional[int]):
 
 
 async def part_a_cells_of_profiles(
-    db: AsyncSession, profile_ids: Iterable[Optional[int]]
+    db: AsyncSession, profile_ids: Iterable[Optional[int]], *, counted_now: bool = False
 ) -> Tuple[Set[int], Set[int]]:
     """C2 (owner 21-11): (id ``offering_academic_info``, id ``admission_path``) mà các hồ sơ ``profile_ids`` sẽ được đếm ở
     **Phần A** nếu KHÔNG còn dòng Quyết định hiệu lực — "ô HIỆN TẠI" của em bị bỏ tên / văn bản bị huỷ / bị huỷ ghi nhận.
@@ -255,13 +264,18 @@ async def part_a_cells_of_profiles(
       ``admitted`` + học vụ của đường xét ấy;
     * kiểu cũ (:func:`_part_a_legacy`): đường xét ``applied_rules->>'admission_path_id'`` + học vụ của nó.
 
-    Gọi SAU khi đã khoá hồ sơ (trạng thái / nguyện vọng không đổi dưới tay). Hai chiều mới của #733 (nhóm ngành) CHƯA có ở đây."""
+    ``counted_now`` = True (C2-1 — ô MẤT chỗ khi em được THÊM dòng hiệu lực, A → B): chỉ em ĐANG được đếm ở Phần A (thêm đúng
+    ``no_effective_row`` của các hàm đếm) — em đã có dòng hiệu lực thì không chiếm ô Phần A nào để mất.
+
+    Gọi SAU khi đã khoá hồ sơ (trạng thái / nguyện vọng / dòng hiệu lực không đổi dưới tay) và SAU khoá năm của các hồ sơ
+    (:func:`lock_years_of_change` — câu dò học vụ theo ngành + năm dưới đây đọc tập học vụ của năm, P2). Hai chiều mới của #733
+    (nhóm ngành) CHƯA có ở đây."""
     ids = sorted({int(p) for p in profile_ids if p is not None})
     if not ids:
         return set(), set()
     ap, lead = models.AdmissionProfile, models.Lead
     oai, path, c = models.OfferingAcademicInfo, models.AdmissionPath, models.AdmissionProfileChoice
-    occupying = (ap.id.in_(ids), ap.status.in_(OCCUPYING_STATUSES))
+    occupying = (ap.id.in_(ids), ap.status.in_(OCCUPYING_STATUSES)) + ((no_effective_row(ap.id),) if counted_now else ())
     ai_ids = set(
         (
             await db.execute(
@@ -512,8 +526,8 @@ async def quota_cells_of_set_rows(
 ) -> Tuple[Set[int], Set[int]]:
     """(id ``offering_academic_info``, id ``admission_path``) mà các dòng bộ chiếm ở Phần B — học vụ theo
     ``academic_info_id`` CHỤP và theo cặp ``offering_id`` + năm CHỤP (phủ cả hai cách Phê duyệt cũ chọn dòng),
-    đường xét theo ``admission_path_id`` CHỤP. MỘT nguồn cho khoá (:func:`lock_quota_of_set_rows`) và cảnh
-    báo vượt chỉ tiêu (:func:`canh_bao_vuot_chi_tieu`)."""
+    đường xét theo ``admission_path_id`` CHỤP. MỘT nguồn cho ô chụp của dòng sắp chiếm chỗ và ô mất chỗ của dòng sắp tắt
+    (:func:`lock_quota_for_change` — khoá + cảnh báo). Câu dò theo cặp đọc tập học vụ của năm CHỤP ⇒ gọi SAU khoá năm (P2)."""
     ids = sorted({int(x) for x in set_row_ids if x is not None})
     if not ids:
         return set(), set()
@@ -541,23 +555,68 @@ async def quota_cells_of_set_rows(
     return ai_ids, {k.admission_path_id for k in lock if k.admission_path_id is not None}
 
 
-async def lock_quota_of_set_rows(db: AsyncSession, set_row_ids: Iterable[int]) -> None:
-    """``FOR UPDATE`` các dòng chỉ tiêu mà các dòng bộ ``set_row_ids`` sẽ chiếm ở Phần B — qua THỨ TỰ CHUẨN
-    (:func:`lock_quota_cells`). Gọi SAU khi đã khoá hồ sơ ⇒ ghi nhận và lần đếm của Phê duyệt cũ / công bố
-    tuần tự hoá: lần đếm thấy dòng mới, hoặc ghi nhận chờ lần duyệt commit."""
-    ai_ids, path_ids = await quota_cells_of_set_rows(db, set_row_ids)
-    await lock_quota_cells(db, ai_ids, path_ids)
+def _ids(values: Iterable[Optional[int]]) -> List[int]:
+    return sorted({int(x) for x in values if x is not None})
+
+
+async def _years_of(db: AsyncSession, set_row_ids: Sequence[int], profile_ids: Sequence[int]) -> Set[int]:
+    """Năm mà bước dò ô theo cặp (loại hình, năm) đọc: năm CHỤP của dòng bộ (:func:`quota_cells_of_set_rows`) + năm hồ sơ
+    (:func:`part_a_cells_of_profiles` — ``lead.offering_id`` + ``admission_profile.academic_year``)."""
+    years: Set[int] = set()
+    if set_row_ids:
+        b = CouncilDocumentSetRow
+        years |= set((await db.execute(select(b.academic_year).where(b.id.in_(set_row_ids)).distinct())).scalars())
+    if profile_ids:
+        ap = models.AdmissionProfile
+        years |= set((await db.execute(select(ap.academic_year).where(ap.id.in_(profile_ids)).distinct())).scalars())
+    return {int(y) for y in years if y is not None}
+
+
+async def lock_years_of_change(
+    db: AsyncSession,
+    *,
+    set_ids: Iterable[Optional[int]] = (),
+    decision_ids: Iterable[Optional[int]] = (),
+    row_ids: Iterable[Optional[int]] = (),
+) -> FrozenSet[int]:
+    """P2 (Codex PR-1 GĐ1 lượt 2, 21-11): KHOÁ NĂM CHIA SẺ (``app.core.review_year_lock.lock_review_years_shared`` — MỘT định
+    nghĩa) của mọi năm mà một thao tác Quyết định CÓ THỂ chạm, gọi Ở ĐẦU thao tác — TRƯỚC mọi khoá dòng (lượt gửi, gốc chuỗi, …,
+    hồ sơ, ô chỉ tiêu). Lệnh tạo / dời năm / xoá / khôi phục học vụ (khoá năm ĐỘC QUYỀN) không chen được giữa bước dò ô theo cặp
+    (loại hình, năm) và lúc commit ⇒ không có học vụ "vừa xuất hiện" vắng khỏi tập khoá + cảnh báo.
+
+    Phạm vi đọc TRƯỚC khoá (tập rộng, chưa khoá gì): dòng bộ của ``set_ids`` (ghi nhận; dòng THÊM của điều chỉnh); dòng
+    Quyết định ``row_ids`` (dòng BỎ của điều chỉnh); mọi dòng của văn bản ``decision_ids`` + dòng nó đã bỏ + dòng của văn bản đích
+    nếu nó là văn bản huỷ (huỷ hiệu lực / huỷ ghi nhận) — năm chụp của dòng bộ nguồn và năm của hồ sơ. Trả tập năm đã khoá cho
+    :func:`lock_quota_for_change` kiểm lại dưới khoá hồ sơ."""
+    r, b, cd = CouncilDecisionRow, CouncilDocumentSetRow, CouncilDecision
+    sets, decisions, rows = _ids(set_ids), _ids(decision_ids), _ids(row_ids)
+    pairs: List[Any] = []
+    conditions = []
+    if decisions:
+        targets = select(cd.huy_qd_id).where(cd.id.in_(decisions), cd.huy_qd_id.is_not(None))
+        conditions += [r.decision_id.in_(decisions), r.decision_id.in_(targets), r.bi_bo_boi_id.in_(decisions)]
+    if rows:
+        conditions.append(r.id.in_(rows))
+    if conditions:
+        pairs += (await db.execute(select(r.set_row_id, r.profile_id).where(or_(*conditions)))).all()
+    if sets:
+        pairs += (await db.execute(select(b.id, b.profile_id).where(b.set_id.in_(sets)))).all()
+    years = await _years_of(db, _ids(p[0] for p in pairs), _ids(p[1] for p in pairs))
+    await lock_review_years_shared(db, years)
+    return frozenset(years)
 
 
 class QuotaChange:
-    """Các ô chỉ tiêu mà MỘT thao tác ghi văn bản (điều chỉnh / huỷ hiệu lực / huỷ ghi nhận) làm đổi số đếm — MỘT nguồn cho
-    khoá (:func:`lock_quota_for_change`) và cảnh báo (:func:`quota_warnings_after_change`), như :func:`quota_cells_of_set_rows`
-    cho ghi nhận.
+    """Các ô chỉ tiêu mà MỘT thao tác ghi văn bản (ghi nhận / bổ sung, điều chỉnh, huỷ hiệu lực, huỷ ghi nhận) làm TĂNG số đếm —
+    MỘT nguồn cho khoá (:func:`lock_quota_for_change`) và cảnh báo (:func:`quota_warnings_after_change`).
 
-    * ``snapshot_*``: ô CHỤP của dòng sắp chiếm chỗ (Phần B — dòng thêm / dòng bật lại) ⇒ cảnh báo khi VƯỢT sau ghi (N9 / K-1);
-    * ``current_*``: ô HIỆN TẠI (Phần A) của em sắp mất dòng hiệu lực mà vẫn chiếm chỗ, TRỪ ô đã ở ``snapshot_*`` (C2) ⇒ cảnh
-      báo khi số chính TĂNG so với ``before`` VÀ vượt;
-    * ``before``: {(``"nganh"`` | ``"duong_xet"``, id): số chính} TRƯỚC khi ghi, đếm DƯỚI khoá — chỉ ô ``current_*`` có chỉ tiêu."""
+    * ``snapshot_*``: ô CHỤP của dòng sắp chiếm chỗ (Phần B — dòng ghi nhận / thêm / bật lại) ⇒ cảnh báo khi VƯỢT sau ghi (N9 /
+      K-1);
+    * ``current_*``: ô HIỆN TẠI (Phần A) của em sắp mất dòng hiệu lực mà vẫn chiếm chỗ — KỂ CẢ ô cũng là ô chụp (ô HAI VAI —
+      C2-2) ⇒ cảnh báo khi số chính TĂNG so với ``before`` VÀ vượt (ô hai vai: vượt là báo, như ô chụp), bản ghi mang số trước;
+    * ``before``: {(``"nganh"`` | ``"duong_xet"``, id): số chính} TRƯỚC khi ghi, đếm DƯỚI khoá — mọi ô ``current_*`` có chỉ tiêu.
+
+    Ô MẤT chỗ (C2-1) chỉ được KHOÁ (không cảnh báo — số đếm ở đó không tăng vì chúng) nên không nằm ở đây."""
 
     __slots__ = ("snapshot_ai_ids", "snapshot_path_ids", "current_ai_ids", "current_path_ids", "before")
 
@@ -572,21 +631,47 @@ class QuotaChange:
 async def lock_quota_for_change(
     db: AsyncSession,
     *,
+    locked_years: Iterable[int],
     set_row_ids: Iterable[Optional[int]],
     returning_profile_ids: Iterable[Optional[int]],
+    released_set_row_ids: Iterable[Optional[int]] = (),
+    entering_profile_ids: Iterable[Optional[int]] = (),
 ) -> QuotaChange:
-    """C2 (owner 21-11 — CHẶN F230): khoá các ô chỉ tiêu bị ảnh hưởng — ô CHỤP của dòng ``set_row_ids`` sắp chiếm chỗ ∪ ô
-    HIỆN TẠI (:func:`part_a_cells_of_profiles`) của em ``returning_profile_ids`` sắp mất dòng hiệu lực — bằng MỘT lần
-    :func:`lock_quota_cells` (gọi hai lần, ô chụp rồi ô hiện tại, là phá thứ tự tăng dần F259 ⇒ vòng chờ với Phê duyệt hàng
-    loạt / công bố đang khoá [thấp, cao]); rồi đếm số "trước" DƯỚI khoá. Nơi gọi: SAU khi khoá hồ sơ, TRƯỚC mọi câu ghi.
+    """C2 (owner 21-11 — CHẶN F230): khoá MỌI ô chỉ tiêu mà thao tác làm đổi số đếm bằng MỘT lần :func:`lock_quota_cells`
+    (gọi nhiều lần là phá thứ tự tăng dần F259 ⇒ vòng chờ với Phê duyệt hàng loạt / công bố đang khoá [thấp, cao]); rồi đếm số
+    "trước" DƯỚI khoá. Nơi gọi: SAU khi khoá hồ sơ, TRƯỚC mọi câu ghi.
 
-    Vì sao khoá cả ô hiện tại: Phê duyệt cũ / công bố đồng thời ở ô ấy phải CHỜ thao tác này commit rồi mới đếm (thấy em đã về
-    Phần A) — không thì cả hai cùng thấy còn chỗ và ô vượt mà không ai được cảnh báo."""
-    snapshot_ai, snapshot_path = await quota_cells_of_set_rows(db, set_row_ids)
-    current_ai, current_path = await part_a_cells_of_profiles(db, returning_profile_ids)
-    await lock_quota_cells(db, snapshot_ai | current_ai, snapshot_path | current_path)
-    current_ai -= snapshot_ai
-    current_path -= snapshot_path
+    Ô TĂNG (cảnh báo — :class:`QuotaChange`):
+
+    * ô CHỤP của dòng ``set_row_ids`` sắp chiếm chỗ (ghi nhận / thêm / bật lại);
+    * ô HIỆN TẠI (:func:`part_a_cells_of_profiles`) của em ``returning_profile_ids`` sắp mất dòng hiệu lực (B → A). Vì sao khoá:
+      Phê duyệt cũ / công bố đồng thời ở ô ấy phải CHỜ thao tác này commit rồi mới đếm (thấy em đã về Phần A).
+
+    Ô MẤT chỗ (C2-1 — Codex PR-1 lượt 2; chỉ khoá): ô CHỤP của dòng ``released_set_row_ids`` sắp tắt / bị bỏ, và ô Phần A mà em
+    ``entering_profile_ids`` ĐANG được đếm (sắp được thêm dòng hiệu lực, A → B — ``counted_now``). Vì sao khoá: một văn bản KHÁC
+    chuỗi đang so "trước / sau" ở cùng ô (đã đọc 31 / 30 dưới khoá) phải thấy chỗ ta trả TRƯỚC hoặc SAU cả lần so — không thì nó
+    trả 1 chỗ giữa chừng, văn bản kia đưa em về (31) rồi so 31 với 31 và mất cảnh báo.
+
+    P2: ``locked_years`` = tập năm :func:`lock_years_of_change` đã khoá ở đầu thao tác (bắt buộc — không thể quên khoá năm). Năm
+    THẬT của dòng bộ + hồ sơ (đọc lại dưới khoá hồ sơ) ngoài tập ấy (hồ sơ vừa đổi năm ở nơi khác) ⇒ 409 "thử lại": khoá thêm năm
+    sau khi đã giữ khoá dòng là phá thứ tự."""
+    gain, lost = _ids(set_row_ids), _ids(released_set_row_ids)
+    returning, entering = _ids(returning_profile_ids), _ids(entering_profile_ids)
+    missing = await _years_of(db, gain + lost, returning + entering) - set(locked_years)
+    if missing:
+        log.warning("quota_nam_ngoai_khoa_nam", years=sorted(missing))
+        raise ConflictError(CONFLICT_MESSAGE)
+    snapshot_ai, snapshot_path = await quota_cells_of_set_rows(db, gain)
+    current_ai, current_path = await part_a_cells_of_profiles(db, returning)
+    lost_ai, lost_path = await quota_cells_of_set_rows(db, lost)
+    leaving_ai, leaving_path = await part_a_cells_of_profiles(db, entering, counted_now=True)
+    await lock_quota_cells(
+        db,
+        snapshot_ai | current_ai | lost_ai | leaving_ai,
+        snapshot_path | current_path | lost_path | leaving_path,
+    )
+    # C2-2 (Codex PR-1 lượt 2): đếm trước MỌI ô hiện tại — KỂ CẢ ô hai vai (cũng là ô chụp); bỏ ô ấy khỏi tập TRƯỚC khi đếm thì
+    # cảnh báo của nó thiếu số trước + câu owner.
     return QuotaChange(
         snapshot_ai,
         snapshot_path,
@@ -606,7 +691,7 @@ async def check_lock_and_count_set_rows(
     db: AsyncSession, row: Sequence[Tuple[int, Optional[int]]]
 ) -> None:
     """Q-J1 (owner chốt 10-11): MỘT hàm kiểm cho ba thao tác sinh / khôi phục dòng Phần B — ghi nhận, dòng
-    THÊM khi điều chỉnh, dòng BẬT LẠI khi huỷ ghi nhận. Gọi DƯỚI khoá (sau :func:`lock_quota_of_set_rows`),
+    THÊM khi điều chỉnh, dòng BẬT LẠI khi huỷ ghi nhận. Gọi DƯỚI khoá (sau :func:`lock_quota_for_change`),
     TRƯỚC khi ghi. ``dong`` = [(số dòng, id dòng bộ nguồn)].
 
     Chặn (409, nêu SỐ DÒNG — không tên, không CCCD) khi một dòng:
@@ -679,28 +764,20 @@ async def check_lock_and_count_set_rows(
 
 
 # ═══════════════════════════════ N9 — cảnh báo vượt chỉ tiêu (không chặn) ═══════════════════
-async def over_quota_warnings(
-    db: AsyncSession, set_row_ids: Iterable[Optional[int]]
-) -> List[Dict[str, Any]]:
-    """N9 (đặc tả 5.3): sau khi ghi (cùng giao dịch, dưới khoá dòng chỉ tiêu), các ô chỉ tiêu mà dòng bộ
-    chiếm (:func:`quota_cells_of_set_rows` — cùng nguồn với khoá) bị VƯỢT thì trả cảnh báo; KHÔNG chặn.
-
-    "Vượt" = số đã dùng > chỉ tiêu — ĐÚNG nghĩa sẵn có của phần mềm (Phê duyệt cũ / công bố chặn khi
-    ``đã dùng + 1 > chỉ tiêu`` ⇒ bằng chỉ tiêu là ĐẦY, chưa vượt). Chỉ tiêu NULL = không giới hạn ⇒ không xét.
-    Số đã dùng đếm qua ĐÚNG các hàm đếm của module (một nguồn): ô ngành (học vụ, chỉ tiêu năm) có HAI cách
-    đếm đang dùng — công bố (:func:`count_by_academic_info`) và Phê duyệt cũ (:func:`count_by_offering_year`)
-    — trả cả hai, vượt ở cách nào cũng báo; ô đường xét theo :func:`count_by_path`. Chỉ id + số đếm."""
-    ai_ids, path_ids = await quota_cells_of_set_rows(db, set_row_ids)
-    return await _cell_warnings(db, ai_ids, path_ids, set(), set(), {})
-
-
 async def quota_warnings_after_change(db: AsyncSession, change: QuotaChange) -> List[Dict[str, Any]]:
-    """Cảnh báo vượt chỉ tiêu SAU khi ghi (cùng giao dịch, dưới khoá của :func:`lock_quota_for_change`) — KHÔNG chặn (K-1):
+    """Cảnh báo vượt chỉ tiêu SAU khi ghi (cùng giao dịch, dưới khoá của :func:`lock_quota_for_change`) — KHÔNG chặn (K-1).
+    MỘT hàm cho cả bốn thao tác Quyết định (ghi nhận / bổ sung dùng nó từ PR-1 GĐ1 lượt 2 — trước đó ``over_quota_warnings``):
 
-    * ô CHỤP của dòng thêm / bật lại: ĐÚNG luật N9 của :func:`over_quota_warnings` (vượt sau ghi ⇒ báo);
+    * N9 (đặc tả 5.3) — ô CHỤP của dòng ghi nhận / thêm / bật lại: VƯỢT sau ghi ⇒ báo. "Vượt" = số đã dùng > chỉ tiêu — ĐÚNG nghĩa
+      sẵn có của phần mềm (Phê duyệt cũ / công bố chặn khi ``đã dùng + 1 > chỉ tiêu`` ⇒ bằng chỉ tiêu là ĐẦY, chưa vượt). Chỉ
+      tiêu NULL = không giới hạn ⇒ không xét. Số đã dùng đếm qua ĐÚNG các hàm đếm của module (một nguồn): ô ngành (học vụ, chỉ
+      tiêu năm) có HAI cách đếm đang dùng — công bố (:func:`count_by_academic_info`) và Phê duyệt cũ
+      (:func:`count_by_offering_year`) — trả cả hai, vượt ở cách nào cũng báo; ô đường xét theo :func:`count_by_path`;
     * C2 (owner 21-11) — ô HIỆN TẠI của em quay về Phần A: chỉ báo ô mà số chính TĂNG (so ``change.before``) VÀ vượt — "chỉ
       đúng ô tăng số chỗ đã dùng"; 29 / 30 → 30 / 30 là đầy, KHÔNG báo. Bản ghi mang thêm ``o_hien_tai``, ``da_dung_truoc``
-      và câu owner ``cau`` (ô ngành :data:`CURRENT_CELL_OVER_QUOTA_MESSAGE`, ô đường xét :data:`CURRENT_PATH_OVER_QUOTA_MESSAGE`)."""
+      và câu owner ``cau`` (ô ngành :data:`CURRENT_CELL_OVER_QUOTA_MESSAGE`, ô đường xét :data:`CURRENT_PATH_OVER_QUOTA_MESSAGE`);
+    * C2-2 (Codex PR-1 lượt 2) — ô HAI VAI (vừa ô chụp vừa ô hiện tại, vd văn bản vừa bỏ một em về Y vừa thêm một em vào Y): MỘT
+      bản ghi — vượt là báo (luật ô chụp), mang đủ ``o_hien_tai`` / ``da_dung_truoc`` / ``cau`` (vd 30 → 32)."""
     return await _cell_warnings(
         db,
         change.snapshot_ai_ids,
@@ -795,8 +872,9 @@ async def _cell_warnings(
     current_path_ids: Iterable[int],
     before: Dict[Tuple[str, int], int],
 ) -> List[Dict[str, Any]]:
-    """MỘT chỗ dựng cảnh báo vượt cho :func:`over_quota_warnings` và :func:`quota_warnings_after_change` (ô ngành trước, rồi
-    ô đường xét; id tăng dần). Ô hiện tại (không thuộc ô chụp) có số "trước" ⇒ chỉ báo khi số chính TĂNG."""
+    """MỘT chỗ dựng cảnh báo vượt cho :func:`quota_warnings_after_change` (ô ngành trước, rồi ô đường xét; id tăng dần). Ô
+    CHỈ là ô hiện tại có số "trước" ⇒ chỉ báo khi số chính TĂNG; ô hai vai (cũng là ô chụp) vượt là báo; mọi ô có số "trước"
+    (``before`` — chỉ ô hiện tại) mang ``o_hien_tai`` / ``da_dung_truoc`` / ``cau``."""
     snapshot_ai, snapshot_path = set(snapshot_ai_ids), set(snapshot_path_ids)
     ai_ids = snapshot_ai | set(current_ai_ids)
     path_ids = snapshot_path | set(current_path_ids)
@@ -818,10 +896,10 @@ async def _cell_warnings(
                 "da_dung_phe_duyet_cu": approved_count,
                 "nhan": cell.ten,
             }
-            prior = None if cell.id in snapshot_ai else before.get(("nganh", cell.id))
+            prior = before.get(("nganh", cell.id))
             if prior is not None:
-                if used <= prior:
-                    continue  # C2: ô hiện tại không TĂNG ⇒ không phải ô thao tác này làm vượt
+                if used <= prior and cell.id not in snapshot_ai:
+                    continue  # C2: ô CHỈ là ô hiện tại, không TĂNG ⇒ không phải ô thao tác này làm vượt
                 entry.update(
                     o_hien_tai=True,
                     da_dung_truoc=prior,
@@ -843,10 +921,10 @@ async def _cell_warnings(
                 "da_dung": n,
                 "nhan": p.display_name,
             }
-            prior = None if p.id in snapshot_path else before.get(("duong_xet", p.id))
+            prior = before.get(("duong_xet", p.id))
             if prior is not None:
-                if n <= prior:
-                    continue  # C2: ô hiện tại không TĂNG
+                if n <= prior and p.id not in snapshot_path:
+                    continue  # C2: ô CHỈ là ô hiện tại, không TĂNG
                 entry.update(
                     o_hien_tai=True,
                     da_dung_truoc=prior,
