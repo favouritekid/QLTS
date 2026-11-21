@@ -470,11 +470,19 @@ async def test_dong_bo_dung_qua_cong_luon_du_khoa_dem_va_dung_chuoi(client, hs, 
 
 
 def test_thu_tu_khoa_ghi_nhan_ho_so_truoc_dong_chi_tieu():
-    """Kiểm kê thứ tự khoá trong MÃ (đọc nguồn): ở ba thao tác làm tăng Phần B, ``lock_quota_of_set_rows`` đứng
-    SAU ``lock_profiles`` (thứ tự chung hồ sơ → học vụ → đường xét)."""
+    """Kiểm kê thứ tự khoá trong MÃ (đọc nguồn): ở mọi thao tác đổi số chỗ (ghi nhận; điều chỉnh / huỷ hiệu lực / huỷ ghi
+    nhận — PR-1 GĐ1 C2), lần khoá dòng chỉ tiêu xuất hiện ĐÚNG MỘT lần và đứng SAU ``lock_profiles`` (thứ tự chung hồ sơ →
+    học vụ → đường xét). Ghi nhận khoá ô chụp (``lock_quota_of_set_rows``); ba thao tác kia khoá hợp ô chụp + ô hiện tại
+    (``lock_quota_for_change``) — không thao tác nào gọi cả hai, không gọi thẳng ``lock_quota_cells``."""
     import inspect
 
-    for ham in (qd_vb.record_decision, qd_vb.record_adjustment_decision, qd_vb.revoke_record):
+    for ham, khoa in (
+        (qd_vb.record_decision, "lock_quota_of_set_rows("),
+        (qd_vb.record_adjustment_decision, "lock_quota_for_change("),
+        (qd_vb.cancel_effect, "lock_quota_for_change("),
+        (qd_vb.revoke_record, "lock_quota_for_change("),
+    ):
         nguon = inspect.getsource(ham)
-        assert nguon.count("lock_quota_of_set_rows(") == 1, ham.__name__
-        assert nguon.index("repo.lock_profiles(") < nguon.index("lock_quota_of_set_rows("), ham.__name__
+        so_lan = {k: nguon.count(k) for k in ("lock_quota_of_set_rows(", "lock_quota_for_change(", "lock_quota_cells(")}
+        assert so_lan == {k: int(k == khoa) for k in so_lan}, (ham.__name__, so_lan)
+        assert nguon.index("repo.lock_profiles(") < nguon.index(khoa), ham.__name__

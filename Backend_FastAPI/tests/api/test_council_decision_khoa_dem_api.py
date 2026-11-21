@@ -136,14 +136,15 @@ async def test_q_j1_thieu_dong_nguon_chan(client, hs):  # noqa: F811
 
 def test_q_j1_mot_ham_kiem_o_ba_thao_tac_duoi_khoa_truoc_ghi():
     """Kiểm kê (đọc nguồn): ba thao tác gọi ĐÚNG MỘT lần ``check_lock_and_count_set_rows`` — SAU khi khoá dòng chỉ tiêu
-    (``lock_quota_of_set_rows``), TRƯỚC lệnh ghi đầu tiên của thao tác."""
+    (ghi nhận: ``lock_quota_of_set_rows``; điều chỉnh / huỷ ghi nhận: ``lock_quota_for_change`` — PR-1 GĐ1 C2), TRƯỚC lệnh
+    ghi đầu tiên của thao tác."""
     ghi_dau = {
-        "record_decision": "await repo.add_objects(decision)",
-        "record_adjustment_decision": "await repo.add_objects(decision)",
-        "revoke_record": 'x.trang_thai = "huy_ghi_nhan"',
+        "record_decision": ("lock_quota_of_set_rows(", "await repo.add_objects(decision)"),
+        "record_adjustment_decision": ("lock_quota_for_change(", "await repo.add_objects(decision)"),
+        "revoke_record": ("lock_quota_for_change(", 'x.trang_thai = "huy_ghi_nhan"'),
     }
-    for ten, moc_ghi in ghi_dau.items():
+    for ten, (moc_khoa, moc_ghi) in ghi_dau.items():
         nguon = inspect.getsource(getattr(qd_vb, ten))
         assert nguon.count("check_lock_and_count_set_rows(") == 1, ten
         i = nguon.index("check_lock_and_count_set_rows(")
-        assert nguon.index("lock_quota_of_set_rows(") < i < nguon.index(moc_ghi), ten
+        assert nguon.index(moc_khoa) < i < nguon.index(moc_ghi), ten

@@ -8,16 +8,21 @@ của giao dịch request (lỗi ⇒ không còn hàng nào), router commit. Rà
 / cờ con theo cha / không xoá" do CSDL giữ (tầng chủ sở hữu — U1–U4, K2, K4, K5); service kiểm TRƯỚC để
 trả 409 có số dòng, và dịch vi phạm của CSDL (hai phiên cùng qua phép kiểm) thành 409 cố định.
 
-Thứ tự khoá (đặc tả 8.5, BS §4.6): văn bản → mục chờ → bộ → hồ sơ (id tăng dần, một câu) → [chặng 2b]
-dòng chỉ tiêu mà các dòng sắp chiếm chỗ (Phần B): ``offering_academic_info`` → ``admission_path`` (id tăng
-dần — ``quota_occupancy_service.lock_quota_of_set_rows`` → ``lock_quota_cells``, THỨ TỰ CHUẨN). Phê duyệt cũ,
-Phê duyệt hàng loạt (khoá trước cả lô) và công bố (khoá trước mọi nguyện vọng) đi CÙNG thứ tự ⇒ không vòng chờ
-(F259); bên bị PostgreSQL chọn huỷ ở trường hợp khác ⇒ 409 "thử lại" (đổi so với BS §4.6 "không khoá dòng
-chỉ tiêu" — lý do: ``DAC-TA-F230-2B-BO-SUNG-2026-11-10.md``; lượt K: ``DAC-TA-F230-SUA-CUOI-BO-SUNG-2026-11-10.md``).
+Thứ tự khoá TOÀN CỤC (đặc tả 8.5, BS §4.6; PR-1 GĐ1 — owner 21-11 C1 / C2): lượt gửi (chỉ ghi nhận) → GỐC CHUỖI
+(:func:`_lock_chain_root`; ghi nhận bổ sung / điều chỉnh: gốc là đầu vào, khoá trước) → văn bản khác của chuỗi (văn bản
+gỡ / văn bản đích) → mục chờ → bộ → hồ sơ (id tăng dần, một câu) → [chặng 2b] dòng chỉ tiêu: ``offering_academic_info``
+→ ``admission_path`` (id tăng dần, MỖI THAO TÁC MỘT LẦN — ``quota_occupancy_service.lock_quota_cells``, THỨ TỰ CHUẨN F259):
+ghi nhận khoá ô CHỤP của dòng sắp chiếm chỗ (``lock_quota_of_set_rows``); điều chỉnh / huỷ hiệu lực / huỷ ghi nhận khoá
+HỢP ô chụp của dòng thêm / bật lại với ô HIỆN TẠI (Phần A) của em mất dòng hiệu lực (``lock_quota_for_change`` — C2). Phê
+duyệt cũ (hồ sơ → học vụ), Phê duyệt hàng loạt (mọi hồ sơ → mọi học vụ, trước mục đầu) và công bố (hồ sơ → mọi ô của mọi
+nguyện vọng) đi CÙNG đoạn hồ sơ → ô chỉ tiêu, không khoá văn bản ⇒ không vòng chờ (F259); bên bị PostgreSQL chọn huỷ ở
+trường hợp khác ⇒ 409 "thử lại" (đổi so với BS §4.6 "không khoá dòng chỉ tiêu" — lý do: ``DAC-TA-F230-2B-BO-SUNG-2026-11-10.md``;
+lượt K: ``DAC-TA-F230-SUA-CUOI-BO-SUNG-2026-11-10.md``).
 
 Ba thao tác sinh / khôi phục dòng Phần B (ghi nhận, điều chỉnh có dòng thêm, huỷ ghi nhận có dòng bật lại) gọi
 ``check_lock_and_count_set_rows`` DƯỚI khoá, TRƯỚC khi ghi (Q-J1 — owner 10-11: dòng bộ thiếu khoá đếm ⇒ 409 nêu số
-dòng). Ghi nhận trả cảnh báo vượt chỉ tiêu theo ngành / đường xét (N9 — không chặn).
+dòng). Ghi nhận trả cảnh báo vượt chỉ tiêu theo ngành / đường xét (N9 — không chặn); điều chỉnh / huỷ hiệu lực / huỷ ghi
+nhận trả thêm cảnh báo cho ô HIỆN TẠI vừa tăng vì em quay về Phần A (C2 — K-1: cảnh báo, không từ chối giấy đã ký).
 
 Không log dữ liệu cá nhân: chỉ id + số đếm. Lỗi chỉ nêu số dòng (``stt``) + id văn bản, không CCCD.
 """
@@ -59,6 +64,8 @@ from app.services.quota_occupancy_service import (
     CONFLICT_MESSAGE,
     over_quota_warnings,
     lock_quota_of_set_rows,
+    lock_quota_for_change,
+    quota_warnings_after_change,
     check_lock_and_count_set_rows,
 )
 from app.utils.datetime_helpers import today_vn
@@ -252,13 +259,28 @@ def _compare_params(
             % ", ".join(mismatch),
             public_payload={"truong_lech": mismatch},
         )
+    # C12 + Q2 (owner 21-11): tham số CỦA TỜ GIẤY (trường bộ đã in; trường bộ để trống lấy giá trị Admin gõ; số / ngày = số /
+    # ngày ký) qua ĐÚNG phép kiểm của bước dựng bộ (``DecisionParams._check_cap`` — MỘT nguồn, cùng phần đổi lỗi với tái dựng):
+    # khai nửa cặp đợt / tháng ⇒ DỪNG, nêu trường thiếu (không suy tháng từ ngày ký); ngày ký trước ngày Biên bản (in sẵn HAY
+    # Admin gõ theo giấy — owner 21-11) ⇒ DỪNG, câu owner "Ngày ký Quyết định phải bằng hoặc sau ngày Biên bản. Ngày ký: …; ngày
+    # Biên bản: …." + hai trường ``ngay_ky``, ``ngay_bien_ban``; trùng ngày ⇒ đạt. 400, không ghi gì.
+    render_service.check_decision_param_values(
+        {
+            **{t: set_params[t] if set_params.get(t) is not None else paper.get(t) for t in PAPER_PARAM_FIELDS},
+            "so_quyet_dinh": number,
+            "ngay_quyet_dinh": signing_date,
+        }
+    )
     return paper or None
 
 
-async def _check_templates_by_signing_date(db: AsyncSession, doc_set: CouncilDocumentSet, signing_date: date) -> None:
-    """BS §3.2 (G10): ba mẫu đúng theo NGÀY KÝ (cùng hàm chọn ``effective_template`` của kho mẫu) phải trùng
-    id + sha ba mẫu bộ đã dùng — "căn cứ trên văn bản theo ngày ký" (J1 dòng 7)."""
-    used_templates = (doc_set.thong_tin_dung or {}).get("mau_da_dung") or {}
+async def templates_off_signing_date(
+    db: AsyncSession, used_templates: Optional[Dict[str, Any]], signing_date: date
+) -> List[str]:
+    """BS §3.2 (G10) — VỊ TỪ CHUNG: loại mẫu mà mẫu đúng theo NGÀY KÝ (cùng hàm chọn ``effective_template`` của kho mẫu)
+    KHÁC id + sha mẫu đã dùng; rỗng = đạt. MỘT nguồn cho ghi nhận (:func:`_check_templates_by_signing_date`) và tái dựng
+    bản ký (U1 — owner 21-11: báo SỚM, trước khi đọc / dựng / ghi bộ; G10 giữ nguyên)."""
+    used_templates = used_templates or {}
     repo = CouncilDocumentRepository(db)
     mismatch = []
     for kind in render_service.TEMPLATE_KINDS:
@@ -266,6 +288,15 @@ async def _check_templates_by_signing_date(db: AsyncSession, doc_set: CouncilDoc
         d = used_templates.get(kind) or {}
         if m is None or d.get("id") != m.id or d.get("sha256") != m.sha256:
             mismatch.append(kind)
+    return mismatch
+
+
+async def _check_templates_by_signing_date(db: AsyncSession, doc_set: CouncilDocumentSet, signing_date: date) -> None:
+    """BS §3.2 (G10): ba mẫu đúng theo NGÀY KÝ (cùng hàm chọn ``effective_template`` của kho mẫu) phải trùng
+    id + sha ba mẫu bộ đã dùng — "căn cứ trên văn bản theo ngày ký" (J1 dòng 7)."""
+    mismatch = await templates_off_signing_date(
+        db, (doc_set.thong_tin_dung or {}).get("mau_da_dung"), signing_date
+    )
     if mismatch:
         raise DataValidationError(
             "Mẫu đúng theo ngày ký khác mẫu bộ đã dùng (%s) — dựng lại bộ với ngày ký trên giấy."
@@ -357,6 +388,26 @@ async def _decision_file_sha(db: AsyncSession, set_id: int) -> str:
     if len(file) != 1:
         raise ServiceError("Bộ không có đúng một tệp Quyết định — không ghi nhận.")
     return file[0].sha256
+
+
+async def _lock_chain_root(
+    repo: CouncilDecisionRepository, decision_id: int
+) -> Tuple[Optional[CouncilDecision], Optional[CouncilDecision]]:
+    """C1 (owner 21-11 — CHẶN F230): khoá GỐC chuỗi TRƯỚC mọi khoá văn bản khác, RỒI khoá văn bản ``decision_id`` (cả hai
+    ``FOR UPDATE`` + đọc lại SAU khoá). Gốc suy từ cột KHÔNG đổi (``goc_id`` / ``huy_qd_id`` — chỉ đặt lúc chèn) nên đọc
+    trước khoá vẫn đúng. Mọi thao tác đổi chuỗi — ghi nhận bổ sung, ghi nhận điều chỉnh (gốc là đầu vào, khoá trước — giữ),
+    huỷ hiệu lực, huỷ ghi nhận (kể cả văn bản huỷ) — tuần tự hoá trên MỘT hàng ⇒ mọi lần đọc chuỗi / dòng / mục chờ SAU hàm này
+    thấy trạng thái đã commit mới nhất (bất biến "văn bản con hiệu lực ⇒ gốc hiệu lực" do service giữ, CSDL không có lớp đỡ).
+    Trả (gốc, văn bản); không có văn bản ⇒ (None, None)."""
+    root_id = await repo.chain_root_id(decision_id)
+    if root_id is None:
+        return None, None
+    root = await repo.lock_decision(root_id)
+    if root is None:
+        return None, None
+    if root_id == decision_id:
+        return root, root
+    return root, await repo.lock_decision(decision_id)
 
 
 # ═══════════════════════════════ ghi nhận trúng tuyển / bổ sung ═══════════════════════════
@@ -600,6 +651,7 @@ async def record_adjustment_decision(
     repo = CouncilDecisionRepository(db)
     try:
         async with db.begin_nested():
+            # C1: văn bản của route LÀ gốc chuỗi (phải là trúng tuyển) — khoá TRƯỚC mọi khoá khác, đọc chuỗi / dòng bỏ SAU khoá.
             root = await repo.lock_decision(root_id)
             if root is None:
                 raise ResourceNotFoundError("Không có Quyết định này.")
@@ -639,21 +691,36 @@ async def record_adjustment_decision(
                 )
             await _number_not_in_use(repo, number, date_value.year)
             added_pids = [d.profile_id for d in added_rows]
-            current = await repo.lock_profiles(
-                added_pids + [d.profile_id for d in removed_rows if d.profile_id is not None]
+            removed_pids = [d.profile_id for d in removed_rows if d.profile_id is not None]
+            current = await repo.lock_profiles(added_pids + removed_pids)
+            # Chặng 2b + C2 (owner 21-11): MỘT lần khoá dòng chỉ tiêu (thứ tự chuẩn F259, SAU hồ sơ) cho ô CHỤP của dòng THÊM
+            # (Phần B) ∪ ô HIỆN TẠI (Phần A) của em bị BỎ mà không có dòng thêm trong cùng văn bản — em ấy (vẫn chiếm chỗ) quay
+            # về được đếm theo ngành / đường xét hiện tại; số "trước" đếm DƯỚI khoá. (Trước C2: "dòng BỎ chỉ trả chỗ" — sai khi ô
+            # hiện tại ≠ ô chụp.)
+            change = await lock_quota_for_change(
+                db,
+                set_row_ids=[d.id for d in added_rows],
+                returning_profile_ids=sorted(set(removed_pids) - set(added_pids)),
             )
-            # Chặng 2b: dòng THÊM chiếm chỗ (Phần B); dòng BỎ chỉ trả chỗ ⇒ không cần khoá.
-            await lock_quota_of_set_rows(db, [d.id for d in added_rows])
             # Q-J1: dòng THÊM phải đủ khoá đếm + khớp chuỗi (dưới khoá, trước ghi).
             await check_lock_and_count_set_rows(db, [(d.stt, d.id) for d in added_rows])
             states = await decision_state(db, added_pids)
             blocked = _block_by_state(added_rows, states, allowed_chain=root.id)
             removed_id_set = set(removed_ids)
+            # C11: dòng hiệu lực của MỌI em đã có tên trong chuỗi — đọc MỘT lần trước vòng lặp (dưới cùng các khoá trên).
+            in_chain = [
+                d.profile_id
+                for d in added_rows
+                if (t := states.get(d.profile_id)) is not None
+                and t.qd_hieu_luc_id is not None
+                and t.qd_chuoi_id == root.id
+            ]
+            old_rows = await repo.effective_rows_of_profiles(in_chain)
             for d in added_rows:  # em có dòng trong chuỗi thì dòng ấy PHẢI nằm trong danh sách bỏ
                 t = states.get(d.profile_id)
                 if t is not None and t.qd_hieu_luc_id is not None and t.qd_chuoi_id == root.id:
-                    old = await repo.effective_rows_of_profiles([d.profile_id])
-                    if old.get(d.profile_id) is None or old[d.profile_id].id not in removed_id_set:
+                    old = old_rows.get(d.profile_id)
+                    if old is None or old.id not in removed_id_set:
                         blocked.append(
                             {
                                 "dong": d.stt,
@@ -693,13 +760,13 @@ async def record_adjustment_decision(
                     ),
                     {"d": decision.id, "ids": removed_ids},
                 )
-            warnings: List[Dict[str, Any]] = []
             if doc_set is not None:  # THÊM sau
                 n = await repo.insert_rows_from_set(decision.id, doc_set.id)
                 if n != len(added_rows):
                     raise ServiceError("Chép dòng bộ sang văn bản thiếu dòng — không ghi.")
-                # K-1 (owner 11-11): dòng THÊM chiếm chỗ (Phần B) ⇒ cảnh báo vượt như ghi nhận, KHÔNG chặn.
-                warnings = await over_quota_warnings(db, [d.id for d in added_rows])
+            # K-1 (owner 11-11) + C2 (owner 21-11): ĐÃ bỏ + thêm (cùng giao dịch, dưới khoá dòng chỉ tiêu) ⇒ cảnh báo vượt cho ô
+            # của dòng THÊM (như ghi nhận) và cho ô HIỆN TẠI vừa TĂNG vì em bị bỏ tên — KHÔNG chặn (giấy đã ký).
+            warnings = await quota_warnings_after_change(db, change)
             await repo.add_objects(
                 _scan(decision.id, b),
                 _event(
@@ -729,18 +796,20 @@ async def cancel_effect(
     signing_date: object,
     scan: object,
     actor_id: int,
-) -> Tuple[CouncilDecision, Dict[str, int]]:
+) -> Tuple[CouncilDecision, Dict[str, int], List[Dict[str, Any]]]:
     """Ghi nhận VĂN BẢN HUỶ của trường trỏ văn bản ``decision_id`` (BS §2; đặc tả 2.3): văn bản đích ⇒
     ``het_hieu_luc`` (CSDL lan xuống dòng — K2); mỗi em có dòng hiệu lực của nó (và, nếu là điều chỉnh,
     em nó đã bỏ mà không còn dòng hiệu lực nào khác) ⇒ nhóm "chờ Admin quyết" (C7). Trả (văn bản huỷ,
-    số đếm)."""
+    số đếm, cảnh báo vượt chỉ tiêu — C2: ô HIỆN TẠI tăng vì em của dòng tắt quay về Phần A; rỗng khi không ô nào)."""
     number = check_decision_number(decision_number)
     date_value = check_date(signing_date)
     b = check_scan(scan)
     repo = CouncilDecisionRepository(db)
     try:
         async with db.begin_nested():
-            x = await repo.lock_decision(decision_id)
+            # C1 (owner 21-11 — CHẶN F230): gốc chuỗi TRƯỚC, rồi văn bản đích. Trước đây văn bản con (bổ sung / điều chỉnh)
+            # chỉ khoá chính nó ⇒ chen với điều chỉnh bỏ dòng của nó / huỷ ghi nhận văn bản huỷ của nó.
+            _, x = await _lock_chain_root(repo, decision_id)
             if x is None:
                 raise ResourceNotFoundError("Không có văn bản này.")
             if x.loai == "van_ban_huy":
@@ -765,6 +834,13 @@ async def cancel_effect(
             dropped_rows = await repo.rows_dropped_by(x.id) if x.loai == "dieu_chinh" else []
             pids = [d.profile_id for d in effective_rows + dropped_rows if d.profile_id is not None]
             await repo.lock_profiles(pids)
+            # C2 (owner 21-11): dòng hiệu lực của x TẮT ⇒ em (vẫn chiếm chỗ) quay về đếm theo ô HIỆN TẠI (Phần A) ⇒ khoá các ô ấy
+            # MỘT lần (sau hồ sơ, thứ tự chuẩn), số "trước" đếm DƯỚI khoá, TRƯỚC khi ghi. (Em đã bị x bỏ: không đổi đếm.)
+            change = await lock_quota_for_change(
+                db,
+                set_row_ids=(),
+                returning_profile_ids=[d.profile_id for d in effective_rows if d.profile_id is not None],
+            )
             open_holds = await repo.open_holds(pids)
             other_effective = await repo.effective_rows_of_profiles(
                 [d.profile_id for d in dropped_rows if d.profile_id is not None]
@@ -811,6 +887,9 @@ async def cancel_effect(
                 "so_muc_cho_moi": len(new),
                 "so_da_o_nhom_cho": already_in_group,
             }
+            # C2 + K-1: x ĐÃ hết hiệu lực (flush ở trên — CSDL lan xuống dòng) ⇒ đếm lại DƯỚI khoá; cảnh báo ô hiện tại tăng
+            # và vượt, KHÔNG chặn (giấy đã ký). Lưu vào sự kiện cùng giao dịch (đặc tả 3.8 — đọc lại không tính lại).
+            warnings = await quota_warnings_after_change(db, change)
             await repo.add_objects(
                 *new.values(),
                 _scan(h.id, b),
@@ -819,12 +898,12 @@ async def cancel_effect(
                     actor_id=actor_id,
                     set_id=x.set_id,
                     decision_id=h.id,
-                    figures=figures,
+                    figures={**figures, "canh_bao_vuot_chi_tieu": warnings},
                 ),
             )
     except DBAPIError as e:
         raise _translate_db_error(db_error_codes(e), "ghi nhận văn bản huỷ") from None
-    return h, figures
+    return h, figures, warnings
 
 
 # ═══════════════════════════════ huỷ ghi nhận (nhập sai) ══════════════════════════════════
@@ -843,10 +922,13 @@ async def revoke_record(
     reason = check_reason(reason, "huỷ ghi nhận")
     confirmed = check_status_confirmation(confirmation)
     repo = CouncilDecisionRepository(db)
-    figures: Dict[str, int] = {}
+    figures: Dict[str, Any] = {}
     try:
         async with db.begin_nested():
-            x = await repo.lock_decision(decision_id)
+            # C1 (owner 21-11 — CHẶN F230): gốc chuỗi TRƯỚC, rồi văn bản gỡ, rồi văn bản đích (văn bản huỷ); đọc chuỗi SAU khoá
+            # gốc. Trước đây chỉ khoá x (+ đích) ⇒ huỷ ghi nhận văn bản huỷ của QĐ con chen với huỷ hiệu lực QĐ gốc ⇒ con hiệu
+            # lực dưới gốc đã hết hiệu lực.
+            _, x = await _lock_chain_root(repo, decision_id)
             if x is None:
                 raise ResourceNotFoundError("Không có văn bản này.")
             if retyped_number != x.so_quyet_dinh:
@@ -876,9 +958,16 @@ async def revoke_record(
                 reactivated = await repo.rows_dropped_by(x.id)
             item = await repo.holds_of_cancelled_decision(x.id) if target is not None else []
             pids = [d.profile_id for d in reactivated if d.profile_id is not None]
-            current = await repo.lock_profiles(pids + [m.profile_id for m in item if m.profile_id])
-            # Chặng 2b: dòng BẬT LẠI chiếm chỗ lại (Phần B) ⇒ khoá dòng chỉ tiêu của chúng.
-            await lock_quota_of_set_rows(db, [d.set_row_id for d in reactivated])
+            # C2 (owner 21-11): dòng hiệu lực CỦA x tắt (trúng tuyển / bổ sung; dòng thêm của điều chỉnh) — em không được bật lại
+            # dòng nào trong cùng thao tác quay về Phần A (ô hiện tại). Văn bản huỷ không có dòng.
+            switched_off = await repo.effective_rows_of_decision(x.id) if target is None else []
+            returning = sorted({d.profile_id for d in switched_off if d.profile_id is not None} - set(pids))
+            current = await repo.lock_profiles(pids + [m.profile_id for m in item if m.profile_id] + returning)
+            # Chặng 2b + C2: MỘT lần khoá dòng chỉ tiêu (thứ tự chuẩn F259, SAU hồ sơ) — ô CHỤP của dòng BẬT LẠI (Phần B) ∪ ô
+            # HIỆN TẠI của em quay về Phần A; số "trước" đếm DƯỚI khoá.
+            change = await lock_quota_for_change(
+                db, set_row_ids=[d.set_row_id for d in reactivated], returning_profile_ids=returning
+            )
             # Q-J1: dòng BẬT LẠI phải đủ khoá đếm + khớp chuỗi (dưới khoá, trước ghi).
             await check_lock_and_count_set_rows(db, [(d.stt, d.set_row_id) for d in reactivated])
             other = await repo.effective_rows_of_profiles(pids)
@@ -893,6 +982,7 @@ async def revoke_record(
                     "hai Quyết định trước." % len(conflicts),
                     public_payload={"dong_xung_dot": conflicts},
                 )
+            confirmed_table: Optional[Dict[str, Any]] = None
             if target is not None:
                 counts: Dict[str, int] = {}
                 row: Dict[str, List[int]] = {}
@@ -904,7 +994,14 @@ async def revoke_record(
                     if s is not None and s not in NON_WARNING_STATUSES:
                         counts[s] = counts.get(s, 0) + 1
                         row.setdefault(s, []).append(d.stt)
-                _check_count_confirmation(counts, row, confirmed, "Huỷ ghi nhận văn bản huỷ")
+                confirmed_counts = _check_count_confirmation(counts, row, confirmed, "Huỷ ghi nhận văn bản huỷ")
+                # C7 (owner 21-11): ĐÚNG bảng đếm Admin vừa xác nhận (số hồ sơ theo loại + số dòng) — lưu vào sự kiện khôi phục
+                # bên dưới, CÙNG giao dịch (khuôn ghi nhận thường ``doi_trang_thai``). Không gì cần xác nhận ⇒ None.
+                if confirmed_counts is not None:
+                    confirmed_table = {
+                        "so_ho_so_theo_loai": confirmed_counts,
+                        "dong_theo_loai": {k: sorted(v) for k, v in sorted(row.items())},
+                    }
             elif confirmed is not None:
                 raise ConflictError("Không còn gì cần xác nhận — gửi lại không kèm xác nhận.")
             time = datetime.now(timezone.utc)
@@ -933,11 +1030,11 @@ async def revoke_record(
                 "so_dong_bat_lai": len(reactivated),
                 "so_muc_cho_vo_hieu": len([m for m in item]),
             }
-            # K-1 (owner 11-11): dòng BẬT LẠI chiếm chỗ lại (Phần B) — đã bật ở trên, cùng giao dịch, dưới khoá
-            # dòng chỉ tiêu (``lock_quota_of_set_rows``) ⇒ cảnh báo vượt như ghi nhận, KHÔNG chặn.
-            warnings = (
-                await over_quota_warnings(db, [d.set_row_id for d in reactivated]) if reactivated else []
-            )
+            if target is not None:
+                figures["xac_nhan"] = confirmed_table  # C7
+            # K-1 (owner 11-11) + C2 (owner 21-11): dòng BẬT LẠI chiếm chỗ lại (Phần B) và em của dòng TẮT quay về ô hiện tại —
+            # đã ghi ở trên, cùng giao dịch, dưới khoá dòng chỉ tiêu (``lock_quota_for_change``) ⇒ cảnh báo vượt, KHÔNG chặn.
+            warnings = await quota_warnings_after_change(db, change)
             await repo.add_objects(
                 _event(
                     "huy_ghi_nhan",

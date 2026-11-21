@@ -896,7 +896,8 @@ async def revoke_council_decision(
     scan: UploadFile = File(...),
     db: AsyncSession = Depends(database.get_db),
 ):
-    h, figures = await decision_service.cancel_effect(
+    # PR-1 GĐ1 (C2 — owner 21-11): huỷ hiệu lực trả cảnh báo ô chỉ tiêu HIỆN TẠI tăng vì em quay về Phần A (khoá cũ của DTO).
+    h, figures, warnings = await decision_service.cancel_effect(
         db,
         decision.id,
         decision_number=so_quyet_dinh,
@@ -911,8 +912,9 @@ async def revoke_council_decision(
         revoking_id=h.id,
         actor=current_user.id,
         new_hold_count=figures.get("so_muc_cho_moi"),
+        over_quota_cell_count=len(warnings),
     )
-    return _recorded_decision_out(h, figures)
+    return _recorded_decision_out(h, figures, warnings=warnings)
 
 
 @router.post(
