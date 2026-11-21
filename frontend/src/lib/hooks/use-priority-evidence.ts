@@ -45,6 +45,11 @@ function invalidateRelated(
   })
 }
 
+/** GĐ2-F1 — lỗi thao tác ⇒ chỉ làm mới chi tiết hồ sơ (cờ máy chủ theo mã diện có thể đã đổi). */
+function refreshDetail(queryClient: ReturnType<typeof useQueryClient>, profileId: number) {
+  queryClient.invalidateQueries({ queryKey: admissionsKeys.detail(profileId) })
+}
+
 export function useVerifyObjectEvidence(profileId: number, subCode: string) {
   const queryClient = useQueryClient()
   return useMutation<
@@ -54,6 +59,8 @@ export function useVerifyObjectEvidence(profileId: number, subCode: string) {
   >({
     mutationFn: (body) => priorityEvidenceApi.verify(profileId, subCode, body),
     onSuccess: (updated) => invalidateRelated(queryClient, profileId, updated),
+    // GĐ2-F1: lỗi (vd 409 OWN_SUBMISSION / UNKNOWN_SUBMITTER) ⇒ làm mới chi tiết để cờ theo mã diện đúng trạng thái mới.
+    onError: () => refreshDetail(queryClient, profileId),
   })
 }
 
@@ -66,6 +73,7 @@ export function useRejectObjectEvidence(profileId: number, subCode: string) {
   >({
     mutationFn: (body) => priorityEvidenceApi.reject(profileId, subCode, body),
     onSuccess: (updated) => invalidateRelated(queryClient, profileId, updated),
+    onError: () => refreshDetail(queryClient, profileId),
   })
 }
 
@@ -85,6 +93,18 @@ export function useUploadPriorityEvidence(profileId: number, subCode: string) {
     mutationFn: ({ file }) =>
       priorityEvidenceApi.upload(profileId, subCode, file),
     onSuccess: (updated) => invalidateRelated(queryClient, profileId, updated),
+  })
+}
+
+/**
+ * GĐ2-F1 — ghi nhận minh chứng bản giấy (người nhận = người bấm). Thành công ⇒ cùng cách làm mới cache như tải tệp.
+ */
+export function useMarkPriorityEvidencePaperSubmitted(profileId: number, subCode: string) {
+  const queryClient = useQueryClient()
+  return useMutation<AdmissionProfileResponse, Error, void>({
+    mutationFn: () => priorityEvidenceApi.markPaperSubmitted(profileId, subCode),
+    onSuccess: (updated) => invalidateRelated(queryClient, profileId, updated),
+    onError: () => refreshDetail(queryClient, profileId),
   })
 }
 

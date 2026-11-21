@@ -2437,6 +2437,10 @@ def _compute_frontend_fields(
         is_manager=is_manager, is_admin=is_admin,
         outstanding_debt_codes=_outstanding_debt_codes,
     )
+    # GĐ2-0 (C1b): vị từ người duyệt minh chứng ưu tiên — MỘT nguồn với ``deps.require_priority_evidence_reviewer``.
+    from .admission_document_policy import DocumentActionPolicy
+    from .document_review_rules import priority_evidence_reviewer as _priority_evidence_reviewer
+
     permissions = {
         "edit": status in ["draft", "rejected", "revision_requested"] and (is_owner or is_manager or is_admin),
         "save": status in ["draft", "rejected", "revision_requested"] and (is_owner or is_manager or is_admin),
@@ -2548,15 +2552,15 @@ def _compute_frontend_fields(
         # Hồ sơ đã công bố ⇒ hộp thoại phải có ô xác nhận (service đòi
         # ``acknowledge_post_publish``). Server nói, FE không tự suy trạng thái.
         "change_applicable_circular_requires_ack": _doi_thong_tu_can_xac_nhan(status),
-        # Q9 #07 Phase E.3 — UT evidence verify/reject (officer write-path).
-        # Used by FE UtEvidenceTab (Step 8 officer-only). Service-layer
+        # Q9 #07 Phase E.3 — UT evidence verify/reject. Service-layer
         # (priority_override_service._evidence_mutation_common_checks) refuses
-        # draft/withdrawn/dropped. Officer scope: assigned to profile;
-        # manager/admin via diamond/wildcard.
-        "verify_priority_object": (
-            is_admin
-            or is_manager
-            or (is_officer and is_owner)
+        # draft/withdrawn/dropped.
+        # GĐ2-0 (C1b, owner 17-11): người duyệt = Admin + Quản lý TRONG ĐƠN VỊ của hồ sơ — CÙNG vị từ với cổng route
+        # ``deps.require_priority_evidence_reviewer`` (``document_review_rules.priority_evidence_reviewer``). Cán bộ
+        # (kể cả cán bộ phụ trách) không còn nút. Luật "người tải không tự duyệt" (C1a) là theo từng mã diện — máy chủ
+        # trả 409 nêu lý do (cờ theo từng mã thuộc giao diện GĐ2-F).
+        "verify_priority_object": _priority_evidence_reviewer(
+            DocumentActionPolicy.for_(profile, current_user)
         ) and status not in ["draft", "withdrawn", "dropped", "withdrawal_pending"],
         # PR-B: admin reverts a pending withdrawal back to draft when the refund
         # was rejected (so the profile is not stuck awaiting a refund).
@@ -3607,12 +3611,52 @@ async def _enrich_priority_evidence_display(
     return enriched
 
 
+#: GĐ2-F1 — cờ máy chủ theo mã diện khi KHÔNG tính được (không có người xem / lỗi): mọi cờ ``None`` ⇒ giao diện không hiện
+#: nút nào dựa trên cờ (fail-closed).
+_PRIORITY_EVIDENCE_NO_FLAGS: Dict[str, Any] = {
+    "can_mark_paper_submitted": None,
+    "requires_ack": None,
+    "review_block_reason": None,
+}
+
+
+def _priority_evidence_item_flags(doc, *, policy, actor_id: int, in_open_catalog: bool) -> Dict[str, Any]:
+    """GĐ2-F1 — cờ theo TỪNG mã diện cho người xem, tính bằng ĐÚNG các hàm luật mà cổng ghi gọi:
+
+    * ``can_mark_paper_submitted`` = ``document_review_rules.priority_evidence_paper_recordable`` (cổng route ghi nhận bản
+      giấy gọi cùng hàm) + mã có hàng danh mục ĐANG MỞ của năm (cùng điều kiện "guard 3" của đường ghi —
+      ``_priority_evidence_write_guards``; danh mục ở đây đọc bằng cùng bộ lọc);
+    * ``requires_ack`` / ``review_block_reason`` = ``document_review_rules.decide_priority_evidence`` với dòng giấy minh chứng
+      VỪA đọc — cổng duyệt / từ chối (``priority_override_service._priority_evidence_row_decided``) gọi cùng hàm với dòng đọc
+      lại dưới khoá. Duyệt và từ chối dùng chung một quyết định (hàm chỉ kiểm tên thao tác)."""
+    from .document_review_rules import (
+        ACTION_VERIFY,
+        PriorityEvidenceFacts,
+        decide_priority_evidence,
+        priority_evidence_paper_recordable,
+    )
+
+    decision = decide_priority_evidence(
+        ACTION_VERIFY, actor_id=actor_id, evidence=PriorityEvidenceFacts.from_row(doc)
+    )
+    return {
+        "can_mark_paper_submitted": bool(in_open_catalog)
+        and priority_evidence_paper_recordable(policy, has_row=doc is not None),
+        "requires_ack": bool(decision.requires_ack),
+        "review_block_reason": None if decision.allowed else decision.block_reason,
+    }
+
+
 async def _populate_priority_evidence_projections(
     db: AsyncSession,
     profile: models.AdmissionProfile,
     documents: List[models.ProfileDocument],
+    current_user: Optional[models.User] = None,
 ) -> None:
     """Phase E.4 — populate 3 TRANSIENT priority evidence projections.
+
+    GĐ2-F1: ``current_user`` (người xem) ⇒ thêm cờ theo mã diện vào ``priority_evidence_documents``
+    (:func:`_priority_evidence_item_flags`); không có ⇒ cờ ``None``.
 
     Sets 3 transient attributes (NOT tracked by SQLAlchemy, KHÔNG persist):
     - ``priority_object_evidence_display``: enriched evidence dict với
@@ -3703,6 +3747,12 @@ async def _populate_priority_evidence_projections(
                 if getattr(doc, "category", None) == "priority_evidence"
                 and getattr(doc, "priority_sub_code", None)
             }
+            # GĐ2-F1: vị từ giấy tờ của người xem — dựng MỘT lần (cần ``profile.lead`` đã nạp, như cờ ``permissions``).
+            viewer_policy = None
+            if current_user is not None:
+                from .admission_document_policy import DocumentActionPolicy
+
+                viewer_policy = DocumentActionPolicy.for_(profile, current_user)
             items: List[Dict[str, Any]] = []
             for code in priority_codes:
                 cat = catalog_by_code.get(code, {})
@@ -3710,14 +3760,28 @@ async def _populate_priority_evidence_projections(
                 evidence_entry = evidence_raw.get(code, {}) if isinstance(
                     evidence_raw.get(code), dict
                 ) else {}
+                flags = dict(_PRIORITY_EVIDENCE_NO_FLAGS)
+                if viewer_policy is not None:
+                    try:
+                        flags = _priority_evidence_item_flags(
+                            doc, policy=viewer_policy, actor_id=current_user.id, in_open_catalog=code in catalog_by_code
+                        )
+                    except Exception as exc:  # noqa: BLE001 — cờ hỏng ⇒ không nút nào (fail-closed), giữ dòng
+                        log.warning(
+                            "priority_evidence_item_flags compute failed",
+                            profile_id=profile.id,
+                            error=str(exc),
+                        )
                 items.append({
                     "sub_code": code,
                     "bonus_points": cat.get("bonus_points", 0.0),
                     "label": cat.get("evidence_doc_type", "(Chưa có catalog)"),
                     "document_id": doc.id if doc else None,
                     "document_file_path": doc.file_path if doc else None,
-                    "status": "uploaded" if doc else "missing",
+                    # GĐ2-F1: dòng không tệp = minh chứng bản giấy đã ghi nhận (route GĐ2-0) — không còn hiện "uploaded".
+                    "status": ("uploaded" if doc.file_path else "paper_submitted") if doc else "missing",
                     "verification_status": evidence_entry.get("status"),
+                    **flags,
                 })
             profile.priority_evidence_documents = items
         else:
@@ -3999,7 +4063,7 @@ async def _populate_response_fields(
     # (Decision #2 inline warning), priority_evidence_documents (G0a DocumentsTab).
     # G2 defensive: helper wraps each compute in try/except → no crash if
     # documents lazy-load fails.
-    await _populate_priority_evidence_projections(db, profile, documents)
+    await _populate_priority_evidence_projections(db, profile, documents, current_user=current_user)
 
     # TUITION_PREPAY_FASTTRACK finding #1 — flag học phí trả trước chưa hoàn
     # khi hồ sơ đã rejected/withdrawn (giữ-chỗ rồi từ chối/rút). Parity:
@@ -5692,7 +5756,7 @@ async def get_profile(
     # this gap — projection logic existed (line 2264) but only fired from
     # ``_populate_response_fields`` callers, leaving the read-side dark.
     profile.priority_audit_log = await _load_priority_audit_log(db, profile.id)
-    await _populate_priority_evidence_projections(db, profile, documents)
+    await _populate_priority_evidence_projections(db, profile, documents, current_user=current_user)
 
     # Parity with mutation responses (reject/withdraw go through
     # ``_populate_response_fields``): GET detail builds via
@@ -6157,13 +6221,35 @@ async def update_profile(
         profile.priority_object_codes = data["priority_object_codes"]
         flag_modified(profile, "priority_object_codes")
     if "priority_object_evidence" in data and data["priority_object_evidence"] is not None:
+        # GĐ2-0 (C1 — owner 17-11): LỐI VÀO THỨ HAI của "tự duyệt minh chứng ưu tiên". Thân PUT này nhận
+        # ``status='verified'`` kèm ``verified_by`` tuỳ ý ⇒ trước bản vá, người sửa được hồ sơ (cán bộ phụ trách, ở
+        # nháp / bị từ chối / yêu cầu bổ sung) tự đặt "đã duyệt" mà không qua Quản lý / Admin — engine cộng điểm theo
+        # đúng trạng thái ấy (``priority_service._resolve_object_bonus``). Trạng thái đã duyệt / từ chối CHỈ đổi qua
+        # đường duyệt (``priority_override_service``); mục đã duyệt giữ NGUYÊN bản đang lưu. Luật MỘT nguồn:
+        # ``document_review_rules.merge_profile_evidence_update``. Giao diện không gửi trường này
+        # (``AdmissionDetailClient`` không nạp lại nó vào form).
+        from .document_review_rules import merge_profile_evidence_update
+
+        _merged_evidence, _reviewed_changes = merge_profile_evidence_update(
+            profile.priority_object_evidence, data["priority_object_evidence"]
+        )
+        if _reviewed_changes:
+            raise BusinessRuleViolation(
+                "Không đặt / đổi / bỏ trạng thái đã duyệt hoặc đã từ chối của minh chứng ưu tiên qua đường cập nhật hồ "
+                "sơ (mã diện %s). Dùng nút Duyệt / Từ chối minh chứng (Quản lý trong đơn vị hoặc Admin) hoặc Bỏ diện."
+                % ", ".join(_reviewed_changes),
+                public_payload={
+                    "reason_code": "priority_evidence_review_via_profile_update",
+                    "sub_codes": _reviewed_changes,
+                },
+            )
         # Phase E.4 G3 — strip display-only fields (verified_by_name +
         # document_file_path) trước khi persist vào JSONB column. Defensive
         # guard nếu FE PATCH lỡ gửi display fields (write schema extra=forbid
         # đã block tại Pydantic boundary, nhưng raw dict path qua model_dump
         # có thể bypass). Persist display fields gây schema drift on re-read.
         profile.priority_object_evidence = _strip_display_fields_from_evidence(
-            data["priority_object_evidence"]
+            _merged_evidence
         )
         flag_modified(profile, "priority_object_evidence")
     # Note: priority_resolution_snapshot KHÔNG set qua candidate payload —
@@ -8628,41 +8714,13 @@ async def upload_priority_evidence_document(
     admission_repo = AdmissionRepository(db)
 
     profile = await get_profile(db, profile_id, current_user)
+    # GĐ2-0 (C1a) + GĐ1b §4.5: khoá hồ sơ TRƯỚC khi đọc lại / ghi dòng giấy minh chứng. Đường duyệt / từ chối giữ khoá hồ
+    # sơ khi xét người tải (``priority_override_service._priority_evidence_row_checked``) ⇒ tải lại không đổi người tải
+    # chen giữa lúc xét và lúc ghi; trạng thái trong JSONB đọc ở dưới là bản SAU khoá (``populate_existing``).
+    profile = await _lock_profile_for_document_write(db, profile_id)
 
-    # Guard 1: profile must be in writeable state
-    if profile.status not in APPLICANT_DOC_MUTATION_STATES:
-        raise BusinessRuleViolation(
-            f"Cannot upload priority evidence trong status '{profile.status}'. "
-            f"Allowed: {sorted(APPLICANT_DOC_MUTATION_STATES)}."
-        )
-
-    # Guard 2: sub_code MUST be in profile.priority_object_codes
-    # Officer ghi nhận diện UT TRƯỚC qua AdmissionProfileUpdate, mới scan giấy.
-    priority_codes = list(profile.priority_object_codes or [])
-    if sub_code not in priority_codes:
-        raise BusinessRuleViolation(
-            f"Sub-code '{sub_code}' không có trong profile.priority_object_codes "
-            f"{priority_codes}. Officer phải ghi nhận diện UT trước khi upload "
-            f"minh chứng."
-        )
-
-    # Guard 3: sub_code MUST exist trong catalog year
-    catalog_check = await db.execute(
-        select(models.PriorityObjectConfig.id)
-        .where(
-            models.PriorityObjectConfig.academic_year == profile.academic_year,
-            models.PriorityObjectConfig.sub_code == sub_code,
-            # Hàng ĐANG MỞ (owner Q10(a)); không ``scalar_one_or_none`` — sau lần xoay mức đầu tiên (đóng hàng cũ
-            # + tạo hàng mới cùng mã cùng năm) có 2 hàng ⇒ MultipleResultsFound ⇒ 500 (review C8 R3).
-            models.PriorityObjectConfig.effective_to.is_(None),
-        )
-        .limit(1)
-    )
-    if catalog_check.scalar_one_or_none() is None:
-        raise BusinessRuleViolation(
-            f"Sub-code '{sub_code}' không có trong PriorityObjectConfig "
-            f"catalog year {profile.academic_year}. Admin cần seed config."
-        )
+    # Guard 1–3: MỘT nguồn với đường ghi nhận bản giấy (GĐ2-0) — ``_priority_evidence_write_guards``.
+    await _priority_evidence_write_guards(db, profile, sub_code, verb="upload")
 
     # File validation (mirror upload_document)
     ALLOWED_CONTENT_TYPES = ["application/pdf", "image/jpeg", "image/png"]
@@ -8764,6 +8822,9 @@ async def upload_priority_evidence_document(
                 status="uploaded",
                 file_path=final_path,
                 uploaded_at=uploaded_at_dt,
+                # GĐ2-0 (C1a): người tải — người này không được tự duyệt / từ chối minh chứng.
+                uploaded_by=current_user.id,
+                uploaded_by_unknown=False,
             )
             db.add(doc_row)
         else:
@@ -8772,6 +8833,9 @@ async def upload_priority_evidence_document(
             doc_row.file_path = final_path
             doc_row.status = "uploaded"
             doc_row.uploaded_at = uploaded_at_dt
+            # GĐ2-0 (C1a): tệp mới ⇒ người tải mới (xoá cờ "không rõ" của tệp cũ).
+            doc_row.uploaded_by = current_user.id
+            doc_row.uploaded_by_unknown = False
             doc_row.verified_at = None
             doc_row.verified_by = None
             doc_row.rejected_at = None
@@ -8920,6 +8984,116 @@ async def upload_priority_evidence_document(
             delete_file_inside_profile_dir(old_file_path, profile_id=profile_id)
 
     return profile, finalize
+
+
+async def _priority_evidence_write_guards(db: AsyncSession, profile, sub_code: str, *, verb: str) -> None:
+    """Ba điều kiện chung của MỌI đường ghi dòng giấy minh chứng ưu tiên (tải tệp, ghi nhận bản giấy — GĐ2-0): hồ sơ ở trạng
+    thái cho sửa giấy; mã diện đã được ghi nhận trên hồ sơ; danh mục năm có hàng ĐANG MỞ của mã. Gọi SAU khi khoá hồ sơ."""
+    from .admission_document_policy import APPLICANT_DOC_MUTATION_STATES
+
+    # Guard 1: profile must be in writeable state
+    if profile.status not in APPLICANT_DOC_MUTATION_STATES:
+        raise BusinessRuleViolation(
+            f"Cannot {verb} priority evidence trong status '{profile.status}'. "
+            f"Allowed: {sorted(APPLICANT_DOC_MUTATION_STATES)}."
+        )
+
+    # Guard 2: sub_code MUST be in profile.priority_object_codes
+    # Officer ghi nhận diện UT TRƯỚC qua AdmissionProfileUpdate, mới scan giấy.
+    priority_codes = list(profile.priority_object_codes or [])
+    if sub_code not in priority_codes:
+        raise BusinessRuleViolation(
+            f"Sub-code '{sub_code}' không có trong profile.priority_object_codes "
+            f"{priority_codes}. Officer phải ghi nhận diện UT trước khi upload "
+            f"minh chứng."
+        )
+
+    # Guard 3: sub_code MUST exist trong catalog year
+    catalog_check = await db.execute(
+        select(models.PriorityObjectConfig.id)
+        .where(
+            models.PriorityObjectConfig.academic_year == profile.academic_year,
+            models.PriorityObjectConfig.sub_code == sub_code,
+            # Hàng ĐANG MỞ (owner Q10(a)); không ``scalar_one_or_none`` — sau lần xoay mức đầu tiên (đóng hàng cũ
+            # + tạo hàng mới cùng mã cùng năm) có 2 hàng ⇒ MultipleResultsFound ⇒ 500 (review C8 R3).
+            models.PriorityObjectConfig.effective_to.is_(None),
+        )
+        .limit(1)
+    )
+    if catalog_check.scalar_one_or_none() is None:
+        raise BusinessRuleViolation(
+            f"Sub-code '{sub_code}' không có trong PriorityObjectConfig "
+            f"catalog year {profile.academic_year}. Admin cần seed config."
+        )
+
+
+async def mark_priority_evidence_paper_submitted(
+    db: AsyncSession,
+    profile_id: int,
+    sub_code: str,
+    current_user: models.User,
+) -> models.AdmissionProfile:
+    """GĐ2-0 (câu 2 owner 19-11, ``gd2\\QUYET-DINH-OWNER-GD2-0-A-BON-CAU-2026-11-19.md``): ghi nhận minh chứng ưu tiên nộp
+    bằng BẢN GIẤY — tạo dòng ``profile_document`` (``category='priority_evidence'``, KHÔNG tệp, ``status='paper_submitted'``)
+    với ``paper_submitted_by`` = người bấm (= "người nhận giấy", như giấy tờ GĐ1b). Người nhận KHÔNG được duyệt / từ chối
+    minh chứng ấy (``document_review_rules.decide_priority_evidence``).
+
+    Chỉ khi mã diện CHƯA có dòng giấy nào (giống thao tác ``paper_submitted`` của giấy tờ: chỉ từ ``missing``) — đổi người nhận
+    không có đường: Bỏ diện (xoá dòng) rồi ghi nhận lại, hoặc tải tệp (người tải thành người gắn với minh chứng). Không đổi
+    trạng thái minh chứng trong JSONB (như tải tệp lần đầu). Khoá hồ sơ TRƯỚC câu ghi dòng giấy (GĐ1b §4.5)."""
+    from .admission_document_policy import DocumentActionPolicy
+    from .document_review_rules import priority_evidence_paper_recordable
+
+    profile = await get_profile(db, profile_id, current_user)
+    # GĐ2-F1: vị từ dựng NGAY sau ``get_profile`` (``lead`` đã nạp) — khoá hồ sơ bên dưới ``populate_existing`` có thể làm
+    # hết hạn quan hệ ``lead``. Trạng thái hồ sơ đọc lại dưới khoá vẫn do ``_priority_evidence_write_guards`` xét trước.
+    viewer_policy = DocumentActionPolicy.for_(profile, current_user)
+    profile = await _lock_profile_for_document_write(db, profile_id)
+    await _priority_evidence_write_guards(db, profile, sub_code, verb="record paper")
+
+    existing = (
+        await db.execute(
+            select(models.ProfileDocument.id)
+            .where(
+                models.ProfileDocument.profile_id == profile_id,
+                models.ProfileDocument.category == "priority_evidence",
+                models.ProfileDocument.priority_sub_code == sub_code,
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        raise BusinessRuleViolation(
+            "Mã diện %s đã có minh chứng (tệp hoặc bản giấy đã ghi nhận) — muốn đổi thì Bỏ diện rồi ghi nhận lại, hoặc tải "
+            "tệp." % sub_code
+        )
+    # GĐ2-F1: CÙNG hàm với cờ ``priority_evidence_documents[*].can_mark_paper_submitted`` — cờ và cổng không lệch nhau.
+    # Các kiểm có câu riêng ở trên đi trước; tới đây chỉ còn phạm vi người bấm ⇒ 404 như IDOR.
+    if not priority_evidence_paper_recordable(viewer_policy, has_row=existing is not None):
+        raise PermissionDeniedError("Không có quyền ghi nhận minh chứng bản giấy cho hồ sơ này.")
+    now = datetime.now(timezone.utc)
+    db.add(
+        models.ProfileDocument(
+            profile_id=profile_id,
+            document_type_id=None,
+            category="priority_evidence",
+            priority_sub_code=sub_code,
+            status="paper_submitted",
+            file_path=None,
+            paper_submitted_at=now,
+            paper_submitted_by=current_user.id,
+            paper_submitted_by_unknown=False,
+        )
+    )
+    profile.updated_at = now
+    await db.flush()
+    log.info(
+        "Priority evidence paper recorded",
+        profile_id=profile_id,
+        sub_code=sub_code,
+        user_id=current_user.id,
+    )
+    return profile
 
 
 async def confirm_document_format(

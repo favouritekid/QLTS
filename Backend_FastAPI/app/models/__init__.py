@@ -68,6 +68,14 @@ from .council_document import (
 # K-2 (owner 11-11): trigger khoá cấu hình đã được Quyết định dùng — bản cho create_all() (bản thật: migration
 # hdts20261111). Import để listener after_create được gắn.
 from . import council_config_lock_ddl  # noqa: E402,F401
+# GĐ2-A: bảng chỉ tiêu năm / nhóm ngành + trigger chặn sửa khi bảng đã khoá (bản cho create_all(); bản thật: migration
+# gd2a20261118).
+from .admission_quota_table import (  # noqa: E402
+    AdmissionQuotaGroup,
+    AdmissionQuotaGroupMember,
+    AdmissionQuotaTable,
+)
+from . import admission_quota_ddl  # noqa: E402,F401
 
 # Admission Config Domain (Phase 1: Relational admission system)
 from .admission_config import (
@@ -252,6 +260,9 @@ __all__ = [
     "CouncilDecisionSubmission",
     "CouncilDecisionHold",
     "CouncilDocumentEvent",
+    "AdmissionQuotaTable",
+    "AdmissionQuotaGroup",
+    "AdmissionQuotaGroupMember",
     "ProfileSubjectScore",
     "ProfileDocument",
     "DocumentAuditLog",  # Audit trail for document operations

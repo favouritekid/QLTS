@@ -329,6 +329,15 @@ export const navigationConfig: NavigationConfig = {
           roles: ["admin", "manager"],
         },
         {
+          // GĐ2-F1 — bảng chỉ tiêu năm / nhóm ngành (GĐ2-A). Đặt ngay sau "Cấu hình Tuyển sinh" (cùng mảng cấu hình tuyển
+          // sinh). Chỉ Admin: máy chủ chặn mọi vai khác (Casbin + `require_quota_table_admin` ⇒ 403); `roles` chỉ là bộ
+          // lọc thô của menu như mục "Cấu hình Ưu tiên" — trang tự báo khi máy chủ trả 403.
+          label: "Bảng chỉ tiêu năm",
+          href: "/admin/quota-tables",
+          icon: Target,
+          roles: ["admin"],
+        },
+        {
           // Lần xét tuyển GĐ1 — văn bản Hội đồng. Mục HIỆN THEO CỜ máy chủ (F238): chỉ khi
           // `GET /api/admission-config/council-documents/quyen` trả ít nhất một cờ bật (quản lý
           // chưa gán đơn vị — mọi cờ tắt — không thấy mục). `roles` chỉ là bộ lọc thô để không hỏi

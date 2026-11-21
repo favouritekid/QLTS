@@ -33,6 +33,7 @@ from app.core.deps import (
     get_choice_for_user,
     get_current_active_user,
     require_admin,
+    require_priority_evidence_reviewer,
 )
 from app.services import admission_choice_engine_service as choice_engine
 from app.services.admission_choice_service import AdmissionChoiceService
@@ -1131,7 +1132,8 @@ async def verify_priority_object_evidence(
     sub_code: str,
     payload: schemas.VerifyObjectEvidenceRequest = Body(...),
     db: AsyncSession = Depends(database.get_db),
-    profile: models.AdmissionProfile = Depends(get_admission_for_user),
+    # GĐ2-0 (C1b): phạm vi (404) + chỉ Quản lý trong đơn vị / Admin (403) — ``deps.require_priority_evidence_reviewer``.
+    profile: models.AdmissionProfile = Depends(require_priority_evidence_reviewer),
     current_user: models.User = CasbinAuth,
 ):
     """Officer marks ``priority_object_evidence[sub_code]`` as verified.
@@ -1160,6 +1162,8 @@ async def verify_priority_object_evidence(
             actor=current_user,
             expected_version=payload.version,
             acknowledge_post_publish=payload.acknowledge_post_publish,
+            reason=payload.reason,
+            unknown_submitter_ack=payload.unknown_submitter_ack,
         )
     except PermissionError as exc:
         # Officer/manager attempted post-publish verify; map to 403
@@ -1188,7 +1192,8 @@ async def reject_priority_object_evidence(
     sub_code: str,
     payload: schemas.RejectObjectEvidenceRequest = Body(...),
     db: AsyncSession = Depends(database.get_db),
-    profile: models.AdmissionProfile = Depends(get_admission_for_user),
+    # GĐ2-0 (C1b): cùng cổng với duyệt — ``deps.require_priority_evidence_reviewer``.
+    profile: models.AdmissionProfile = Depends(require_priority_evidence_reviewer),
     current_user: models.User = CasbinAuth,
 ):
     """Officer marks ``priority_object_evidence[sub_code]`` as rejected.
@@ -1212,6 +1217,7 @@ async def reject_priority_object_evidence(
             actor=current_user,
             expected_version=payload.version,
             acknowledge_post_publish=payload.acknowledge_post_publish,
+            unknown_submitter_ack=payload.unknown_submitter_ack,
         )
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc))
@@ -1296,6 +1302,45 @@ async def upload_priority_evidence(
     except BusinessRuleViolation as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except BadRequest as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.post(
+    "/{profile_id}/priority-evidence/{sub_code}/paper-submitted",
+    response_model=schemas.AdmissionProfileResponse,
+    summary="Ghi nhận minh chứng ưu tiên nộp bằng bản giấy (người nhận = người bấm) — GĐ2-0",
+    status_code=status.HTTP_200_OK,
+)
+async def mark_priority_evidence_paper_submitted(
+    profile_id: int,
+    sub_code: str,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = CasbinAuth,
+):
+    """GĐ2-0 (câu 2 owner 19-11): ghi "người nhận giấy" của minh chứng ưu tiên nộp bằng bản giấy — như ``paper_submitted_by``
+    của giấy tờ GĐ1b. Người nhận KHÔNG được duyệt / từ chối minh chứng ấy (``document_review_rules``).
+
+    Security: IDOR qua ``get_profile`` (cùng phạm vi tải minh chứng: cán bộ phụ trách / Quản lý trong đơn vị / Admin);
+    Casbin: dòng template officer (kế thừa manager) + deny accountant (migration ``gd2a20261118``)."""
+    from app.services import admission_service
+
+    try:
+        profile = await admission_service.mark_priority_evidence_paper_submitted(
+            db=db, profile_id=profile_id, sub_code=sub_code, current_user=current_user,
+        )
+        await db.commit()
+        log.info(
+            "admissions_v2.mark_priority_evidence_paper_submitted",
+            profile_id=profile_id,
+            sub_code=sub_code,
+            actor_id=current_user.id,
+        )
+        return await _evidence_response(db, profile.id, current_user)
+    except ResourceNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except PermissionDeniedError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Resource not found")
+    except BusinessRuleViolation as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 

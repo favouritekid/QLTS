@@ -329,6 +329,72 @@ async def count_admitted_by_path(
     return out
 
 
+# ═══════════════════════════════ GĐ2-A — nhóm ngành ════════════════════════════════════════
+def _sum_of_groups(grouped) -> Any:
+    """Tổng cột đếm của một câu ``SELECT khoá, count … GROUP BY khoá`` (Σ theo từng ngành thành viên)."""
+    s = grouped.subquery()
+    return select(func.coalesce(func.sum(list(s.c)[-1]), 0))
+
+
+async def count_by_group(db: AsyncSession, *, group_id: int) -> Dict[str, int]:
+    """GĐ2-A (đặc tả GĐ2 bản 3 §6; ca biên B21): số chỗ đã dùng của MỘT nhóm ngành =
+    ``max(Σ cách đếm công bố, Σ cách đếm Phê duyệt cũ)`` trên các học vụ thành viên của nhóm — mỗi phần là ĐÚNG phép đếm
+    của :func:`count_by_academic_info` (công bố) / :func:`count_by_offering_year` (Phê duyệt cũ) cho từng thành viên,
+    cộng lại. Nhóm không thành viên ⇒ 0.
+
+    MỘT câu SQL (F260): mọi phần A + B của CẢ HAI cách đếm là câu con vô hướng của một câu ngoài ⇒ một ảnh chụp READ
+    COMMITTED; không có ca một em chuyển A↔B giữa hai câu đếm. Không khoá (nơi gọi khoá nếu cần — GĐ2-C khoá năm + mọi
+    ngành của nhóm). Phần C (giữ chỗ của lần xét đã khoá) THÊM ở GĐ2-C cùng bảng giữ chỗ.
+
+    Trả ``{"publish_count", "approved_count", "used"}`` (``used`` = số lớn hơn)."""
+    m = models.AdmissionQuotaGroupMember
+    oai = models.OfferingAcademicInfo
+    path = models.AdmissionPath
+    member_ai = select(m.offering_academic_info_id).where(m.group_id == group_id)
+    member_pairs = (
+        select(oai.offering_id, oai.academic_year)
+        .join(m, m.offering_academic_info_id == oai.id)
+        .where(m.group_id == group_id)
+    )
+    # Cách đếm công bố (Σ count_by_academic_info): mỗi nguyện vọng / hồ sơ kiểu cũ thuộc ĐÚNG một học vụ ⇒ Σ theo thành
+    # viên = đếm trên tập thành viên; Phần B cộng theo TỪNG học vụ (``count(DISTINCT)`` mỗi ô rồi cộng).
+    pub_a1 = _part_a_multi_choice(path.academic_info_id.in_(member_ai), exclude_profile_id=None).join(
+        path, path.id == models.AdmissionProfileChoice.admission_path_id
+    )
+    pub_a2 = _part_a_legacy(
+        lambda column: column.in_(select(path.id).where(path.academic_info_id.in_(member_ai))), None
+    )
+    pub_b = _sum_of_groups(
+        _part_b(CouncilDocumentSetRow.academic_info_id, CouncilDocumentSetRow.academic_info_id.in_(member_ai))
+    )
+    # Cách đếm Phê duyệt cũ (Σ count_by_offering_year): Phần A theo ``lead.offering_id`` + năm của hồ sơ; Phần B theo cặp
+    # ngành + năm CHỤP ở dòng bộ, cộng theo từng cặp.
+    ap = models.AdmissionProfile
+    old_a = (
+        select(func.count(ap.id))
+        .join(models.Lead, ap.lead_id == models.Lead.id)
+        .where(
+            tuple_(models.Lead.offering_id, ap.academic_year).in_(member_pairs),
+            ap.status.in_(OCCUPYING_STATUSES),
+            no_effective_row(ap.id),
+        )
+    )
+    # Mọi thành viên cùng MỘT năm (khoá ngoại ghép năm) ⇒ nhóm theo ``offering_id`` = nhóm theo cặp (ngành, năm).
+    b = CouncilDocumentSetRow
+    old_b = _sum_of_groups(
+        _part_b(b.offering_id, tuple_(b.offering_id, b.academic_year).in_(member_pairs))
+    )
+
+    def _sc(q):
+        return func.coalesce(q.scalar_subquery(), 0)
+
+    publish, approved = (
+        await db.execute(select(_sc(pub_a1) + _sc(pub_a2) + _sc(pub_b), _sc(old_a) + _sc(old_b)))
+    ).one()
+    publish, approved = int(publish or 0), int(approved or 0)
+    return {"publish_count": publish, "approved_count": approved, "used": max(publish, approved)}
+
+
 # ═══════════════════════════════ "đã chiếm chỗ chưa" ═══════════════════════════════════════
 async def has_effective_row(db: AsyncSession, profile_id: int) -> bool:
     return bool(
