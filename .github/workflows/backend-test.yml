@@ -1403,6 +1403,7 @@ jobs:
               tests/integration/test_gd1b_migration.py
               tests/unit/test_gd1b_migration_duong_dan_bang_chung.py
               tests/api/test_gd1b_xoa_tai_khoan.py
+              tests/api/test_gd1b_xoa_tai_khoan_hai_phien.py
               tests/api/test_gd1b_khoa_va_tep.py
               tests/unit/test_gd1b_xoa_tep_trong_thu_muc_ho_so.py
               tests/api/test_gd1b_transition.py
@@ -1422,6 +1423,8 @@ jobs:
               tests/api/test_gd1b_lo_xem_truoc.py
               tests/api/test_gd1b_lo_chay.py
               tests/api/test_gd1b_lo_vong_doi.py
+              tests/api/test_gd1b_lo_k4_hai_phien.py
+              tests/api/test_gd1b_lo_chot_ha_vai_hai_phien.py
               tests/api/test_gd1b_lo_danh_sach.py
               tests/api/test_gd1b_lo_khoa_tu_van_csdl.py
               tests/api/test_gd1b_cheo_quyen.py
