@@ -518,6 +518,43 @@ async def lock_documents(db: AsyncSession, profile_id: int, document_row_ids: Se
     return {r.id: r.row_version for r in rows}
 
 
+async def lock_user_key_share(db: AsyncSession, user_id: int) -> Optional[Any]:
+    """Dòng người dùng ``FOR KEY SHARE`` — khoá YẾU NHẤT vẫn xung đột với ``FOR UPDATE`` / ``DELETE`` của K4
+    (``user_deletion_policy.assert_user_deletable``) nhưng KHÔNG chặn ``UPDATE`` thường của dòng ``user`` (đăng nhập, đổi
+    thông tin = ``FOR NO KEY UPDATE``).
+
+    Trả hàng ``(id, status)`` đọc DƯỚI khoá; ``None`` = dòng không còn (đã xoá). Chỉ chọn CỘT, không nạp thực thể: đối
+    tượng ``User`` của người gọi đang nằm trong phiên (``current_user``) — ``populate_existing`` trên thực thể sẽ làm hết
+    hạn quan hệ đã nạp của nó ⇒ đọc sau đó thành lazy-load ⇒ MissingGreenlet.
+
+    Vì không chặn ``UPDATE`` thường, khoá này cũng KHÔNG giữ được VAI / TRẠNG THÁI: đổi vai, khoá tài khoản vẫn commit
+    được trong lúc khoá còn giữ. Đường nào quyết định GHI theo vai phải dùng ``lock_user_role_share``."""
+    return (
+        await db.execute(
+            select(models.User.id, models.User.status)
+            .where(models.User.id == user_id)
+            .with_for_update(read=True, key_share=True)
+        )
+    ).first()
+
+
+async def lock_user_role_share(db: AsyncSession, user_id: int) -> Optional[Any]:
+    """Dòng người dùng ``FOR SHARE`` — chặn MỌI ``UPDATE`` / ``DELETE`` của dòng ấy tới hết giao dịch: đổi vai, khoá tài
+    khoản (``FOR NO KEY UPDATE``) và K4 (``FOR UPDATE``) đều phải CHỜ. Vai + trạng thái đọc ở đây vì thế còn đúng tới lúc
+    commit — dùng cho đường quyết định GHI theo VAI hiện hành (chốt lô: Admin chốt lô của người khác; Codex 20-11).
+
+    Không xung đột với ``FOR SHARE`` / ``FOR KEY SHARE`` khác (§5.4, khoá khoá-ngoại khi ghi ``finalized_by_user_id``).
+    Trả hàng ``(id, status, role)`` đọc DƯỚI khoá; ``None`` = dòng không còn (đã xoá). Chỉ chọn CỘT, không nạp thực thể —
+    cùng lý do MissingGreenlet như ``lock_user_key_share``."""
+    return (
+        await db.execute(
+            select(models.User.id, models.User.status, models.User.role)
+            .where(models.User.id == user_id)
+            .with_for_update(read=True)
+        )
+    ).first()
+
+
 async def lock_user_share(db: AsyncSession, user_id: int) -> Optional[models.User]:
     return (
         await db.execute(

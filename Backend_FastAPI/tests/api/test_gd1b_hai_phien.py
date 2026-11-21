@@ -222,18 +222,60 @@ async def test_dat_lai_song_song_tai_len_cung_giay_khong_be_tac(
 
 
 # --------------------------------------------------------------------------------------------------------------------
-# Duyệt giấy (GĐ1b) ‖ giao hồ sơ hàng loạt (bulk_assign giữ lead FOR UPDATE, không chờ hồ sơ / giấy).
+# Duyệt giấy (GĐ1b) ‖ giao hồ sơ hàng loạt (bulk_assign: người đích FOR KEY SHARE → lead FOR UPDATE; không chờ hồ sơ / giấy).
+#
+# F18 (20-11): bản cũ giao cho CHÍNH cán bộ đang phụ trách (không đổi gì quan sát được), bỏ qua kết quả đo chặn, chỉ đòi
+# ``< 500`` (``bulk_assign`` nuốt lỗi từng mục vào ``failed_ids`` ⇒ 200 với ``failed_count = 1`` vẫn xanh) và dừng phiên
+# duyệt TRƯỚC khi nó khoá lead. Nay giao cho MỘT cán bộ KHÁC cùng đơn vị, đòi ``success_count == 1`` + lead đổi người phụ
+# trách + giấy đã duyệt, ở HAI điểm dừng của phiên duyệt (A):
+#   - ``sau_lead``  — A ĐANG GIỮ lead FOR SHARE (dừng ở ``log_document_action``, sau khi ghi giấy, chưa commit) ⇒ B PHẢI chờ
+#     A (``pg_blocking_pids``); thả ⇒ lượt giao áp SAU khi duyệt commit, không mất.
+#   - ``truoc_lead`` — A mới giữ HỒ SƠ, CHƯA khoá lead ⇒ B không được tạo vòng chờ với A. Kiểm ngược: ``bulk_assign`` khoá
+#     lead RỒI hồ sơ (ngược thứ tự chung §4.5) ⇒ bế tắc ⇒ ca đỏ. (Khoá hồ sơ TRƯỚC lead — đúng chiều §4.5 — thì chỉ chờ,
+#     không bế tắc: ca vẫn xanh, đúng.)
 # --------------------------------------------------------------------------------------------------------------------
-async def test_duyet_giay_song_song_giao_ho_so_hang_loat_khong_be_tac(
-    client, monkeypatch, admin_token_headers, admin_user_in_db, manager_user_in_db, officer_user_in_db, parity_config
-):
-    from app.services import admission_service
+async def _can_bo_cung_don_vi(ten: str, unit_id: int) -> int:
+    from app.security import get_password_hash
 
-    prof = await _create_profile(client, admin_token_headers, officer_user_in_db, parity_config, "hp_giao")
+    async with csdl.AsyncSessionLocal() as s:
+        async with s.begin():
+            u = models.User(
+                username=ten, email=f"{ten}@example.com", password_hash=get_password_hash("MatKhauThu!F18x9"),
+                full_name=ten, role="officer", status="active", unit_id=unit_id,
+            )
+            s.add(u)
+            await s.flush()
+            return u.id
+
+
+async def _nguoi_phu_trach(profile_id: int):
+    async with csdl.AsyncSessionLocal() as s:
+        return (
+            await s.execute(
+                select(models.Lead.assigned_officer_id)
+                .join(models.AdmissionProfile, models.AdmissionProfile.lead_id == models.Lead.id)
+                .where(models.AdmissionProfile.id == profile_id)
+            )
+        ).scalar_one()
+
+
+@pytest.mark.parametrize("diem_dung", ["sau_lead", "truoc_lead"])
+async def test_duyet_giay_song_song_giao_ho_so_hang_loat_khong_be_tac(
+    diem_dung, client, monkeypatch, admin_token_headers, admin_user_in_db, manager_user_in_db, officer_user_in_db,
+    parity_config, seed_lead_dependencies,
+):
+    from app.services import admission_service, document_audit_service
+
+    prof = await _create_profile(client, admin_token_headers, officer_user_in_db, parity_config, f"hp_giao_{diem_dung}")
     code = parity_config["paper_doc_code"]
     d = await _nhan_giay(officer_user_in_db, prof["id"], code)
+    can_bo_moi = await _can_bo_cung_don_vi(f"hp_giao_moi_{diem_dung}", seed_lead_dependencies["unit_id"])
+    assert await _nguoi_phu_trach(prof["id"]) == officer_user_in_db["id"] != can_bo_moi
     diem = _Diem()
-    _boc(monkeypatch, admission_service, "_lock_profile_for_document_write", diem)
+    if diem_dung == "sau_lead":
+        _boc(monkeypatch, document_audit_service, "log_document_action", diem)
+    else:
+        _boc(monkeypatch, admission_service, "_lock_profile_for_document_write", diem)
 
     ca, ha = await _client(manager_user_in_db)
     cb, hb = await _client(admin_user_in_db)
@@ -246,17 +288,22 @@ async def test_duyet_giay_song_song_giao_ho_so_hang_loat_khong_be_tac(
             await asyncio.wait_for(diem.toi.wait(), 30)
             b = asyncio.create_task(_goi("B", lambda: cb.post(
                 f"{ADMISSIONS}/bulk/assign", headers=hb,
-                json={"profile_ids": [prof["id"]], "officer_id": officer_user_in_db["id"]},
+                json={"profile_ids": [prof["id"]], "officer_id": can_bo_moi},
             )))
-            await _bi_chan_boi(b, ghi, giay=5.0)  # có thể không chặn: bulk_assign chỉ giữ lead
+            tt = await _bi_chan_boi(b, ghi)
             diem.di.set()
             ra, rb = await asyncio.gather(a, b)
     finally:
         diem.di.set()
         await ca.aclose()
         await cb.aclose()
+    if diem_dung == "sau_lead":
+        assert tt == "chan", f"giao hàng loạt (B) phải CHỜ khoá lead mà phiên duyệt (A) đang giữ ({tt})"
     assert ra.status_code == 200, ra.text
-    assert rb.status_code < 500, rb.text
+    assert rb.status_code == 200, rb.text
+    assert (rb.json()["success_count"], rb.json()["failed_count"]) == (1, 0), rb.text
+    assert await _nguoi_phu_trach(prof["id"]) == can_bo_moi
+    assert (await _giay(prof["id"], code)).status == "verified"
 
 
 # --------------------------------------------------------------------------------------------------------------------
