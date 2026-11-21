@@ -266,12 +266,14 @@ async def resource_not_found_handler(
         },
     )
 
+    # GĐ2-F1: ``public_payload`` đi ra như ở ``base_app_exception_handler`` (đổ TRƯỚC, ``detail`` / ``error_code`` ghi đè) —
+    # mặc định rỗng ⇒ mọi 404 khác không đổi; chỉ người ném CHỦ ĐỘNG điền (vd dấu chỉ tiêu của năm chưa có bảng chỉ tiêu).
+    content = dict(getattr(exc, "public_payload", None) or {})
+    content["detail"] = exc.detail
+    content["error_code"] = exc.error_code
     return JSONResponse(
         status_code=status.HTTP_404_NOT_FOUND,
-        content={
-            "detail": exc.detail,
-            "error_code": exc.error_code,
-        },
+        content=content,
     )
 
 
@@ -483,6 +485,19 @@ async def database_error_handler(request: Request, exc: Exception) -> JSONRespon
         return JSONResponse(
             status_code=status.HTTP_409_CONFLICT,
             content={"detail": MESSAGE_CONFIG_IN_USE, "error_code": "CAU_HINH_DA_DUOC_QUYET_DINH_DUNG"},
+        )
+    # GĐ2-A: trigger "bảng chỉ tiêu năm đã khoá" (``app.models.admission_quota_ddl``) — bắt mọi đường sửa chỉ tiêu ngành
+    # / nhóm / trần (kể cả API sửa học vụ có sẵn) ⇒ 409 câu dễ hiểu, cùng cách như K-2.
+    from app.models.admission_quota_ddl import MESSAGE_QUOTA_TABLE_LOCKED, SQLSTATE_QUOTA_TABLE_LOCKED
+
+    if db_error_codes(exc)[0] == SQLSTATE_QUOTA_TABLE_LOCKED:
+        logger.warning(
+            "quota_table_locked_write_blocked",
+            extra={"path": _redact_path(request.url.path), "method": request.method},
+        )
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content={"detail": MESSAGE_QUOTA_TABLE_LOCKED, "error_code": "QUOTA_TABLE_LOCKED"},
         )
     raise exc
 

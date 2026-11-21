@@ -372,6 +372,13 @@ async def test_upload_wrong_status_raises() -> None:
         return profile
 
     admission_service_mod.get_profile = mock_get_profile
+    # GĐ2-0: tải minh chứng khoá hồ sơ trước (``_lock_profile_for_document_write``) — trả cùng hồ sơ giả.
+    original_lock = admission_service_mod._lock_profile_for_document_write
+
+    async def mock_lock(db_, profile_id):
+        return profile
+
+    admission_service_mod._lock_profile_for_document_write = mock_lock
     try:
         with pytest.raises(BusinessRuleViolation, match="enrolled"):
             await admission_service.upload_priority_evidence_document(
@@ -383,6 +390,7 @@ async def test_upload_wrong_status_raises() -> None:
             )
     finally:
         admission_service_mod.get_profile = original
+        admission_service_mod._lock_profile_for_document_write = original_lock
 
 
 async def test_upload_sub_code_not_in_codes_raises() -> None:
@@ -402,6 +410,13 @@ async def test_upload_sub_code_not_in_codes_raises() -> None:
         return profile
 
     admission_service_mod.get_profile = mock_get_profile
+    # GĐ2-0: tải minh chứng khoá hồ sơ trước (``_lock_profile_for_document_write``) — trả cùng hồ sơ giả.
+    original_lock = admission_service_mod._lock_profile_for_document_write
+
+    async def mock_lock(db_, profile_id):
+        return profile
+
+    admission_service_mod._lock_profile_for_document_write = mock_lock
     try:
         with pytest.raises(BusinessRuleViolation, match="priority_object_codes"):
             await admission_service.upload_priority_evidence_document(
@@ -413,6 +428,7 @@ async def test_upload_sub_code_not_in_codes_raises() -> None:
             )
     finally:
         admission_service_mod.get_profile = original
+        admission_service_mod._lock_profile_for_document_write = original_lock
 
 
 async def test_upload_sub_code_not_in_catalog_raises() -> None:
@@ -431,6 +447,13 @@ async def test_upload_sub_code_not_in_catalog_raises() -> None:
         return profile
 
     admission_service_mod.get_profile = mock_get_profile
+    # GĐ2-0: tải minh chứng khoá hồ sơ trước (``_lock_profile_for_document_write``) — trả cùng hồ sơ giả.
+    original_lock = admission_service_mod._lock_profile_for_document_write
+
+    async def mock_lock(db_, profile_id):
+        return profile
+
+    admission_service_mod._lock_profile_for_document_write = mock_lock
     try:
         with pytest.raises(BusinessRuleViolation, match="catalog"):
             await admission_service.upload_priority_evidence_document(
@@ -442,6 +465,7 @@ async def test_upload_sub_code_not_in_catalog_raises() -> None:
             )
     finally:
         admission_service_mod.get_profile = original
+        admission_service_mod._lock_profile_for_document_write = original_lock
 
 
 # ---------------------------------------------------------------------------
@@ -524,6 +548,12 @@ def _setup_upload_mocks(monkeypatch, tmp_path, profile, documents=None):
         return None
 
     monkeypatch.setattr(svc, "get_profile", mock_get_profile)
+
+    # GĐ2-0: tải minh chứng khoá hồ sơ trước (``_lock_profile_for_document_write``) — trả cùng hồ sơ giả.
+    async def mock_lock(db_, pid):
+        return profile
+
+    monkeypatch.setattr(svc, "_lock_profile_for_document_write", mock_lock)
     monkeypatch.setattr(svc, "_sniff_document_signature", mock_sniff)
     monkeypatch.setattr(svc, "_populate_response_fields", mock_populate)
 

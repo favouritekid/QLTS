@@ -714,13 +714,29 @@ class PriorityEvidenceDocumentItem(BaseModel):
         default=None,
         description="S3 file_path nếu uploaded (FE basename extract)"
     )
-    status: Literal["missing", "uploaded", "verified", "rejected"] = Field(
+    # GĐ2-F1: dòng minh chứng KHÔNG tệp (đã ghi nhận bản giấy — route ``…/paper-submitted`` của GĐ2-0) là
+    # ``paper_submitted``, không còn hiện là ``uploaded``.
+    status: Literal["missing", "uploaded", "paper_submitted", "verified", "rejected"] = Field(
         ...,
-        description="Document upload status"
+        description="Document upload status (paper_submitted = paper evidence recorded, no file)"
     )
     verification_status: Optional[str] = Field(
         default=None,
         description="priority_object_evidence[sub_code].status (pending/verified/rejected)"
+    )
+    # GĐ2-F1 — cờ máy chủ theo TỪNG mã diện cho người đang xem (None khi không có người xem). Tính bằng ĐÚNG hàm luật mà cổng
+    # ghi dùng (``document_review_rules``) ⇒ nút giao diện và cổng máy chủ không lệch nhau.
+    can_mark_paper_submitted: Optional[bool] = Field(
+        default=None,
+        description="Viewer may record the paper evidence (POST …/priority-evidence/{code}/paper-submitted)",
+    )
+    requires_ack: Optional[bool] = Field(
+        default=None,
+        description="Uploader / receiver unknown — verify and reject need unknown_submitter_ack + reason",
+    )
+    review_block_reason: Optional[str] = Field(
+        default=None,
+        description="Why verify AND reject are blocked for the viewer: own_submission | unknown_submitter",
     )
 
     model_config = ConfigDict(extra="forbid")
@@ -3002,6 +3018,16 @@ class VerifyObjectEvidenceRequest(BaseModel):
             "Audit log records the flag."
         ),
     )
+    # GĐ2-0 (câu 1 owner 19-11, giống nút lẻ giấy tờ GĐ1b — CÙNG tên trường ``DocumentFormatVerifyRequest``): không rõ người
+    # tải / người nhận ⇒ cần cờ cam kết + lý do (bỏ khoảng trắng hai đầu mà rỗng ⇒ từ chối). Vết: ``priority_audit_log``.
+    reason: Optional[str] = Field(None, max_length=500, description="Required with unknown_submitter_ack")
+    unknown_submitter_ack: bool = Field(False, description="Acknowledge the evidence's uploader / receiver is unknown")
+
+    @field_validator("reason")
+    @classmethod
+    def sanitize_optional_reason(cls, v: Optional[str]) -> Optional[str]:
+        """Như ``DocumentFormatVerifyRequest``: bỏ khoảng trắng hai đầu + escape HTML (XSS)."""
+        return html.escape(v.strip()) if v else v
 
     model_config = ConfigDict(extra="forbid")
 
@@ -3034,6 +3060,8 @@ class RejectObjectEvidenceRequest(BaseModel):
             "Audit log records the flag."
         ),
     )
+    # GĐ2-0 (câu 1 owner 19-11): như ``DocumentRejectRequest`` — lý do từ chối cũng là lý do của đường cam kết.
+    unknown_submitter_ack: bool = Field(False, description="Acknowledge the evidence's uploader / receiver is unknown")
 
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 

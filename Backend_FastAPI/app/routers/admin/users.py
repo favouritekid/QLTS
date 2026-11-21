@@ -1263,22 +1263,29 @@ async def delete_existing_user(
         current_user=current_admin
     )
     username = db_user.username if db_user else f"User#{user_id}"
+    actor_id = current_admin.id
 
-    # ⚠️ IMPORTANT: Log activity BEFORE deleting user to avoid FK constraint violation
-    # The activity_log.target_user_id references user.id, so user must exist when logging
+    # GĐ1b §4.3 / §4.5 mục 4 / §9 (F1, 20-11): khoá + kiểm K4 TRƯỚC (``delete_user`` → ``assert_user_deletable`` khoá
+    # người bị xoá ∪ admin đang hoạt động ``FOR UPDATE ORDER BY id``), ghi nhật ký SAU khi đạt — như đường xoá hàng loạt.
+    # Ghi nhật ký TRƯỚC (bản cũ) làm câu INSERT giữ ``FOR KEY SHARE`` trên dòng người bị xoá + dòng Admin bấm (khoá
+    # ngoại) TRƯỚC khoá K4 ⇒ hai lệnh xoá trùng (bấm đúp / hai tab) hoặc hai Admin xoá hai Admin khác nhau bế tắc
+    # ``40P01`` ⇒ 500; lệnh kia commit trước thì INSERT gặp ``23503`` ⇒ 500 thay vì 404. Đo:
+    # ``tests/api/test_gd1b_xoa_tai_khoan_hai_phien.py``.
+    await user_service.delete_user(db, user_id, actor_id=actor_id)
+
+    # ``target_user_id=None``: dòng người bị xoá đã DELETE trong CHÍNH giao dịch này mà khoá ngoại
+    # ``user_activity_log.target_user_id`` (ON DELETE SET NULL) không deferrable ⇒ ghi id ấy là ``23503``. Dữ liệu lưu
+    # Y HỆT bản cũ: bản cũ ghi id rồi lệnh xoá gán NULL cột này; id người bị xoá vẫn ở ``resource_id`` + ``description``.
     await log_admin_activity(
         db=db,
         request=request,
         action="delete_user",
         resource_type="user",
-        actor_id=current_admin.id,
-        target_user_id=user_id,
+        actor_id=actor_id,
+        target_user_id=None,
         resource_id=user_id,
         description=f"Admin deleted user: {username}",
     )
-
-    # Delete user AFTER logging (service handles cascading deletes)
-    await user_service.delete_user(db, user_id, actor_id=current_admin.id)
 
     await db.commit()
 

@@ -681,6 +681,104 @@ async def _evidence_mutation_common_checks(
         )
 
 
+#: GĐ2-0 (C1a + câu 1, 2 owner 19-11) — câu báo theo mã lý do. Mã lý do + mã lỗi DÙNG CHUNG với giấy tờ GĐ1b
+#: (``own_submission`` / ``unknown_submitter`` ⇒ ``OWN_SUBMISSION`` / ``UNKNOWN_SUBMITTER``, ``document_transition``).
+_PRIORITY_EVIDENCE_REVIEW_MESSAGES = {
+    "own_submission": (
+        "Người tải tệp / người nhận bản giấy minh chứng ưu tiên không tự duyệt / từ chối minh chứng ấy — cần Quản lý trong "
+        "đơn vị hoặc Admin khác."
+    ),
+    "unknown_submitter": (
+        "Không rõ người tải tệp / người nhận bản giấy minh chứng ưu tiên này — Quản lý trong đơn vị hoặc Admin chỉ duyệt / "
+        "từ chối được khi xác nhận cam kết kèm lý do; hoặc tải lại tệp / ghi nhận lại bản giấy để người khác duyệt."
+    ),
+}
+
+
+class PriorityEvidenceReviewConflict(ConflictError):
+    """409 — C1(a): người duyệt / từ chối chính là người tải tệp / người nhận bản giấy, hoặc không rõ người nhận mà thiếu
+    cam kết + lý do. ``error_code`` = mã lý do viết hoa — CÙNG mã của giấy tờ GĐ1b."""
+
+    def __init__(self, reason_code: str):
+        super().__init__(
+            detail=_PRIORITY_EVIDENCE_REVIEW_MESSAGES.get(reason_code, reason_code),
+            public_payload={"reason_code": reason_code},
+        )
+        self.reason_code = reason_code
+        self.error_code = reason_code.upper()
+
+
+async def _priority_evidence_row_decided(
+    db: AsyncSession,
+    profile: models.AdmissionProfile,
+    sub_code: str,
+    actor: models.User,
+    action: str,
+):
+    """GĐ2-0 — TẦNG CHỦ SỞ HỮU của "người tải / người nhận không tự duyệt / từ chối": đọc dòng giấy minh chứng của
+    ``sub_code`` ``FOR UPDATE`` (``populate_existing``) rồi xét bằng luật MỘT nguồn ``document_review_rules``. Nơi gọi đã giữ
+    khoá hồ sơ (``deps.get_admission_for_user``) và MỌI đường ghi dòng giấy minh chứng khoá hồ sơ trước (tải lên, ghi nhận bản
+    giấy: ``_lock_profile_for_document_write``; bỏ diện: cùng dependency) ⇒ người nhận không đổi giữa lúc xét và lúc ghi.
+
+    Trả ``(dòng giấy | None, sự kiện, quyết định)``; ``own_submission`` ném ngay. Không rõ người nhận ⇒ quyết định mang
+    ``requires_ack`` — nơi gọi kiểm cam kết + lý do bằng :func:`_require_ack` (SAU các kiểm đầu vào khác)."""
+    from sqlalchemy import select as _sel
+
+    from app.services import document_review_rules as rules
+
+    doc_row = (
+        await db.execute(
+            _sel(models.ProfileDocument)
+            .where(
+                models.ProfileDocument.profile_id == profile.id,
+                models.ProfileDocument.category == "priority_evidence",
+                models.ProfileDocument.priority_sub_code == sub_code,
+            )
+            .with_for_update(of=models.ProfileDocument)
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
+    facts = rules.PriorityEvidenceFacts.from_row(doc_row)
+    decision = rules.decide_priority_evidence(action, actor_id=actor.id, evidence=facts)
+    if not decision.allowed:
+        _log_blocked(profile, actor, sub_code, action, decision.block_reason)
+        raise PriorityEvidenceReviewConflict(decision.block_reason)
+    return doc_row, facts, decision
+
+
+def _log_blocked(profile, actor, sub_code, action, reason_code) -> None:
+    log.info(
+        "priority_override_service.priority_evidence_review_blocked",
+        profile_id=profile.id,
+        actor_id=actor.id,
+        sub_code=sub_code,
+        action=action,
+        reason_code=reason_code,
+    )
+
+
+def _require_ack(profile, actor, sub_code, action, decision, *, unknown_submitter_ack: bool, reason) -> bool:
+    """Câu 1 owner 19-11 (N1b A′, giống nút lẻ giấy tờ): không rõ người nhận ⇒ phải có cờ cam kết + lý do khác rỗng; thiếu
+    ⇒ 409 ``UNKNOWN_SUBMITTER``. Trả ``True`` khi đường ngoại lệ ĐƯỢC dùng (để ghi vết)."""
+    from app.services import document_review_rules as rules
+
+    if not rules.priority_evidence_ack_satisfied(decision, unknown_submitter_ack=unknown_submitter_ack, reason=reason):
+        _log_blocked(profile, actor, sub_code, action, rules.UNKNOWN_SUBMITTER)
+        raise PriorityEvidenceReviewConflict(rules.UNKNOWN_SUBMITTER)
+    return bool(decision.requires_ack)
+
+
+def _ack_trace(facts, ack_used: bool, reason) -> dict:
+    """Vết của lần duyệt / từ chối (ghi vào ``priority_audit_log.audit_metadata`` — ai = ``actor_id``, lúc nào =
+    ``created_at``, mã diện = ``new_value.sub_code``): nguồn người nhận, có rõ không, có đi đường cam kết không + lý do."""
+    return {
+        "receiver_kind": facts.receiver_kind,
+        "receiver_unknown": facts.receiver_unknown,
+        "unknown_submitter_ack": ack_used,
+        "ack_reason": (reason or "").strip() if ack_used else None,
+    }
+
+
 async def verify_object_evidence(
     db: AsyncSession,
     profile: models.AdmissionProfile,
@@ -690,6 +788,8 @@ async def verify_object_evidence(
     actor: models.User,
     expected_version: int,
     acknowledge_post_publish: bool = False,
+    reason: Optional[str] = None,
+    unknown_submitter_ack: bool = False,
 ) -> Tuple[models.AdmissionProfile, Callable[[], Awaitable[None]]]:
     """Officer verifies UT evidence cho 1 sub_code (Phase E.3).
 
@@ -730,15 +830,9 @@ async def verify_object_evidence(
     # 2. Client null + row exists → auto-bind doc_id=row.id, paper_only=False
     # 3. Client int + row.id match → bind doc_id=row.id, paper_only=False
     # 4. Client int + row.id mismatch (or no row) → BusinessRuleViolation
-    from sqlalchemy import select as _sel
-    doc_q = await db.execute(
-        _sel(models.ProfileDocument).where(
-            models.ProfileDocument.profile_id == profile.id,
-            models.ProfileDocument.category == "priority_evidence",
-            models.ProfileDocument.priority_sub_code == sub_code,
-        )
-    )
-    doc_row = doc_q.scalar_one_or_none()
+    # GĐ2-0 (C1a, câu 2 owner 19-11): CÙNG lần đọc dòng giấy (FOR UPDATE) xét luôn người tải / người nhận ≠ người duyệt.
+    # Dòng KHÔNG tệp (đã ghi nhận bản giấy) ⇒ gắn dòng nhưng vẫn là duyệt theo bản giấy.
+    doc_row, facts, decision = await _priority_evidence_row_decided(db, profile, sub_code, actor, "verify")
 
     if document_id is None:
         if doc_row is not None:
@@ -746,7 +840,7 @@ async def verify_object_evidence(
             # link evidence với file đã upload. Tone neutral cho officer
             # workflow (không buộc client phải pass document_id explicit).
             actual_document_id = doc_row.id
-            paper_only = False
+            paper_only = not facts.has_file
         else:
             # Case 1: true paper-only — no file scanned yet. Officer verify
             # dựa hồ sơ giấy candidate đem đến. Decision #3 default case.
@@ -765,7 +859,12 @@ async def verify_object_evidence(
             )
         # Case 3: client + server match. Bind explicit.
         actual_document_id = doc_row.id
-        paper_only = False
+        paper_only = not facts.has_file
+
+    # Câu 1 owner 19-11: không rõ người nhận ⇒ cam kết + lý do (sau kiểm dòng giấy để lỗi đầu vào báo trước).
+    ack_used = _require_ack(
+        profile, actor, sub_code, "verify", decision, unknown_submitter_ack=unknown_submitter_ack, reason=reason
+    )
 
     now_iso = datetime.now(timezone.utc).isoformat()
     evidence = dict(profile.priority_object_evidence or {})
@@ -807,6 +906,7 @@ async def verify_object_evidence(
             "actor_role": actor.role,
             "ut_verified_bucket": new_bucket,
             "paper_only_verification": paper_only,
+            **_ack_trace(facts, ack_used, reason),
         },
     )
     db.add(audit_row)
@@ -859,8 +959,12 @@ async def reject_object_evidence(
     actor: models.User,
     expected_version: int,
     acknowledge_post_publish: bool = False,
+    unknown_submitter_ack: bool = False,
 ) -> Tuple[models.AdmissionProfile, Callable[[], Awaitable[None]]]:
     """Officer rejects UT evidence cho 1 sub_code (Phase E.3).
+
+    GĐ2-0: lý do từ chối (``reject_reason``) cũng là lý do của đường cam kết khi không rõ người nhận — như ``reason`` của
+    nút lẻ giấy tờ GĐ1b (một trường cho cả hai).
 
     Marks ``priority_object_evidence[sub_code]`` as ``status='rejected'``
     with ``reject_reason`` (min 10 / max 500 chars). Recomputes
@@ -881,7 +985,6 @@ async def reject_object_evidence(
         profile, sub_code, actor, expected_version,
         acknowledge_post_publish=acknowledge_post_publish,
     )
-
     reason_clean = (reject_reason or "").strip()
     if len(reason_clean) < _MIN_REJECT_REASON_LEN:
         raise BusinessRuleViolation(
@@ -893,6 +996,14 @@ async def reject_object_evidence(
             f"Reject reason must not exceed {_MAX_REJECT_REASON_LEN} "
             f"characters (got {len(reason_clean)})"
         )
+
+    # GĐ2-0 (C1a, câu 3 owner 19-11): từ chối cũng là thao tác của người duyệt — người tải / người nhận không tự từ chối
+    # (như giấy tờ, §4.2 GĐ1b); không rõ người nhận ⇒ cam kết + lý do (câu 1).
+    _doc_row, facts, decision = await _priority_evidence_row_decided(db, profile, sub_code, actor, "reject")
+    ack_used = _require_ack(
+        profile, actor, sub_code, "reject", decision,
+        unknown_submitter_ack=unknown_submitter_ack, reason=reason_clean,
+    )
 
     now_iso = datetime.now(timezone.utc).isoformat()
     evidence = dict(profile.priority_object_evidence or {})
@@ -934,6 +1045,7 @@ async def reject_object_evidence(
         audit_metadata={
             "actor_role": actor.role,
             "ut_verified_bucket": new_bucket,
+            **_ack_trace(facts, ack_used, reason_clean),
         },
     )
     db.add(audit_row)

@@ -149,6 +149,9 @@ class OfferingAcademicInfo(Base):
 
     __table_args__ = (
         UniqueConstraint('offering_id', 'academic_year', name='uq_offering_academic_year'),
+        # GĐ2-A (đặc tả GĐ2 bản 3 §3): đích của khoá ngoại GHÉP (học vụ, năm) từ ``admission_quota_group_member`` —
+        # thành viên nhóm chỉ trỏ được học vụ ĐÚNG năm của nhóm. Migration ``gd2a20261118``.
+        UniqueConstraint('id', 'academic_year', name='uq_offering_academic_info_id_year'),
     )
 
     def __repr__(self):

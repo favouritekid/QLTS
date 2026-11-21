@@ -94,6 +94,15 @@ class OfferingAcademicInfoUpdate(BaseModel):
     cutoff_score_previous_year: Optional[Decimal] = Field(None, ge=0)
     applied_discount_policy_ids: Optional[List[int]] = None
 
+    @field_validator("academic_year")
+    @classmethod
+    def _academic_year_not_null(cls, v):
+        """GĐ2-F1 (Codex lượt 3, rà độc lập): gửi TƯỜNG MINH ``"academic_year": null`` ⇒ 422 (cột NOT NULL — trước đây thành viên
+        nhóm nhận 409 sai câu, học vụ khác vỡ NOT NULL ⇒ 500). Không gửi trường ⇒ validator không chạy (giữ năm)."""
+        if v is None:
+            raise ValueError("Năm học không được để trống.")
+        return v
+
 
 
 class OfferingAcademicInfo(OfferingAcademicInfoBase):

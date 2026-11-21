@@ -408,7 +408,10 @@ async def test_accountant_deny_rows_seeded(setup_test_database):
       - GĐ1b (2026-11-17) added 8 deny rows on /api/admissions/cross-review/*
         (duyệt chéo cấp cho cán bộ; accountant kế thừa officer ⇒ deny;
         migration `gd1b20261117`).
-      - Total NOW: 63 deny rows. (Con số này từng ghi 42 trong khi tập
+      - GĐ2-0 (2026-11-19) added 1 deny row on
+        /api/v2/admissions/*/priority-evidence/*/paper-submitted (ghi nhận minh chứng ưu tiên bằng bản giấy — kế toán kế
+        thừa cán bộ ⇒ deny; migration `gd2a20261118`, template `_gd2a20261118_priority_paper`).
+      - Total NOW: 64 deny rows. (Con số này từng ghi 42 trong khi tập
         thật đã là 53 — các wave sau không cập nhật docstring. Đã đếm
         lại theo `expected` bên dưới.)
     """
@@ -500,6 +503,8 @@ async def test_accountant_deny_rows_seeded(setup_test_database):
             # KHÔNG scan/manage UT minh chứng (separation-of-duties).
             ("/api/v2/admissions/*/priority-evidence/*/upload",    "POST"),
             ("/api/v2/admissions/*/priority-evidence/*",           "DELETE"),
+            # GĐ2-0 (2026-11-19) — ghi nhận minh chứng ưu tiên bằng bản giấy: kế toán DENY (migration `gd2a20261118`).
+            ("/api/v2/admissions/*/priority-evidence/*/paper-submitted", "POST"),
             # PR #324 Commit 5 (2026-05-23) — defence-in-depth against
             # keyMatch4 collision on `/api/leads/{id}` matching static
             # routes. Officer-side fix deferred (officer is parent role;

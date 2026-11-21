@@ -105,6 +105,8 @@ async def test_bang_chung_uu_tien_ghi_dung_byte_qua_helper_that(monkeypatch, tmp
 
     # KHÔNG giả _sniff_document_signature / _sniff_and_verify_upload: đường thật tới Pillow.
     monkeypatch.setattr(admission_service, "get_profile", _get_profile)
+    # GĐ2-0: tải minh chứng khoá hồ sơ trước (``_lock_profile_for_document_write``) — trả cùng hồ sơ giả.
+    monkeypatch.setattr(admission_service, "_lock_profile_for_document_write", lambda db_, pid: _get_profile(db_, pid, None))
     monkeypatch.setattr(admission_service, "_populate_response_fields", _populate)
     monkeypatch.setattr(AdmissionRepository, "get_all_documents", _all_docs)
     monkeypatch.chdir(tmp_path)
