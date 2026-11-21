@@ -20,8 +20,19 @@ from sqlalchemy import text
 
 from app.database import AsyncSessionLocal
 from app.services import collaborator_service, user_service
-from tests.api.gd1b_cheo_tro_giup import can_bo_cheo, cap, hang, mot, tao_nguoi  # noqa: F401
-from tests.api.gd1b_lo_tro_giup import CROSS, Diem, boc, dang_nhap, dn, lo_config, lo_routers, sql  # noqa: F401
+from tests.api.gd1b_cheo_tro_giup import bi_chan_boi_pid, can_bo_cheo, cap, hang, mot, tao_nguoi  # noqa: F401
+from tests.api.gd1b_lo_tro_giup import (  # noqa: F401
+    CROSS,
+    NHAN,
+    Diem,
+    PidTheoNhan,
+    boc,
+    dang_nhap,
+    dn,
+    lo_config,
+    lo_routers,
+    sql,
+)
 from tests.api.test_gd1b_cheo_tu_thu_hoi import LY_DO_KHOA, _client_500, _thu_hoi_cua
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
@@ -129,6 +140,49 @@ async def test_lien_ket_ctv_ma_tai_khoan_vua_thanh_can_bo_va_duoc_cap_quyen_thi_
     assert await _vai(t["id"]) == "officer"
     assert await _con_hieu_luc(gid)
     assert await mot("SELECT count(*) FROM collaborator WHERE user_id = :u", u=t["id"]) == 0
+
+
+async def _goi_nhan(nhan, ham):
+    NHAN.set(nhan)
+    return await ham()
+
+
+async def test_lien_ket_ctv_giu_khoa_dong_nguoi_tu_luc_doc_lai_toi_luc_ghi_vai_doi_vai_phai_cho(
+    client, monkeypatch, admin_user_in_db, lo_config, lo_routers
+):
+    """Điểm chặn 4 — phần KHOÁ: yêu cầu liên kết CTV (A) dừng SAU bước đọc lại tài khoản, TRƯỚC khi ghi vai. Lệnh đổi vai
+    tài khoản ấy (C, ``PUT`` của Admin) phải bị CHÍNH A chặn (phiên thứ ba, ``pg_blocking_pids``) — nên không thể có "vừa
+    thành Cán bộ và được cấp quyền" chen giữa lúc A kiểm và lúc A ghi vai. Thả A ⇒ A liên kết (vai lúc khoá là ``user``) rồi
+    C mới đổi vai."""
+    from app.repositories.collaborator_repository import CollaboratorRepository
+
+    t = await tao_nguoi("prb_l2_ctv_khoa", "user", lo_config["unit_id"])
+    diem = Diem()
+    boc(monkeypatch, CollaboratorRepository, "get_by_user_id", diem)  # ngay SAU bước khoá + đọc lại tài khoản
+    ca, ha = await dang_nhap(admin_user_in_db)
+    cc, hc = await dang_nhap(admin_user_in_db)
+    try:
+        with PidTheoNhan() as ghi:
+            viec_a = asyncio.create_task(_goi_nhan("A", lambda: ca.post("/api/collaborators", headers=ha, json={
+                "full_name": "CTV PR-B khoá", "phone": "0912000778", "user_id": t["id"], "unit_id": lo_config["unit_id"],
+            })))
+            await asyncio.wait_for(diem.toi.wait(), 30)
+            pid_a = set(ghi.pid.get("A", ()))
+            assert pid_a
+            viec_c = asyncio.create_task(_goi_nhan("C", lambda: cc.put(
+                f"/api/admin/users/{t['id']}", headers=hc, data={"role": "officer"})))
+            assert await bi_chan_boi_pid(viec_c, ghi, "C", pid_a) == "chan", "đổi vai phải chờ yêu cầu liên kết CTV"
+            diem.di.set()
+            r_a = await asyncio.wait_for(viec_a, 30)
+            r_c = await asyncio.wait_for(viec_c, 30)
+    finally:
+        diem.di.set()
+        await ca.aclose()
+        await cc.aclose()
+    assert r_a.status_code == 201, r_a.text
+    assert r_c.status_code == 200, r_c.text
+    assert await mot("SELECT count(*) FROM collaborator WHERE user_id = :u", u=t["id"]) == 1
+    assert await _vai(t["id"]) == "officer"
 
 
 # ---------------------------------------------------------------------------------------------------- owner câu 1
