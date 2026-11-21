@@ -2,8 +2,9 @@
 """GĐ2-A — migration ``gd2a20261118`` trên PostgreSQL THẬT (CSDL dùng một lần), nâng / hạ qua ĐÚNG ``alembic`` (tiến trình
 con ⇒ đúng ``env.py`` AUTOCOMMIT). Khuôn ``test_gd1b_migration.py``.
 
-CSDL trước nâng cấp = ``create_all()`` của model HIỆN TẠI rồi gỡ ĐÚNG phần GĐ2-A (3 bảng, 4 hàm + 4 trigger, ràng buộc
-``uq_offering_academic_info_id_year``) ⇒ mọi thứ khác y như thật. Sau nâng cấp, so lược đồ phần GĐ2-A với một CSDL dựng
+CSDL trước nâng cấp = ``create_all()`` của model HIỆN TẠI rồi gỡ phần GĐ2-B (nối sau, phụ thuộc GĐ2-A —
+:data:`GO_GD2B`) và ĐÚNG phần GĐ2-A (3 bảng, 4 hàm + 4 trigger, ràng buộc ``uq_offering_academic_info_id_year``) ⇒ mọi
+thứ khác y như thật. Sau nâng cấp, so lược đồ phần GĐ2-A với một CSDL dựng
 thẳng từ model: đó là phép khoá "migration = model". Hạ cấp FAIL-CLOSED khi còn dữ liệu; cờ CHO PHÉP mới xoá.
 """
 import asyncio
@@ -34,7 +35,18 @@ HAM = (
     "chan_sua_nhom_chi_tieu_khi_bang_khoa",
     "chan_xoa_bang_chi_tieu_da_khoa",
 )
+#: GĐ2-B (``gd2b20261121``, nối SAU ``gd2f20261119``): bốn bảng lần xét trỏ khoá ngoại vào ``admission_quota_table`` và
+#: ``uq_offering_academic_info_id_year`` ⇒ phải gỡ TRƯỚC phần GĐ2-A (không thì ``DROP TABLE admission_quota_table`` / ``DROP
+#: CONSTRAINT`` đổ vì phụ thuộc). Bỏ bảng là bỏ luôn trigger trên bảng; ràng buộc ``offering_admission_round`` cũng của GĐ2-B.
+#: ``tests/integration/test_gd2b_migration.py`` dùng ĐÚNG danh sách này để dựng CSDL "ở ``gd2f20261119``".
+GO_GD2B = (
+    "DROP TABLE admission_review_row, admission_review_run, admission_review_floor, admission_review_session",
+    "DROP FUNCTION admission_review_assert_session_draft(integer), admission_review_session_guard(), "
+    "admission_review_floor_guard(), admission_review_run_guard(), admission_review_row_guard()",
+    "ALTER TABLE offering_admission_round DROP CONSTRAINT uq_offering_admission_round_id_year",
+)
 GO_GD2A = (
+    *GO_GD2B,
     "DROP TRIGGER trg_chan_sua_chi_tieu_nganh_khi_bang_khoa ON offering_academic_info",
     "DROP TABLE admission_quota_group_member, admission_quota_group, admission_quota_table",
     "DROP FUNCTION chan_sua_chi_tieu_nganh_khi_bang_khoa(), chan_sua_nhom_chi_tieu_khi_bang_khoa(), "
