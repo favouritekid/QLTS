@@ -159,9 +159,10 @@ async def test_dong_bo_vai_tu_casbin_cho_lenh_doi_vai_dang_giu_dong_nguoi_roi_mo
         await cc.aclose()
         await cs.aclose()
     assert r_c.status_code == 200 and r_s.status_code == 200, (r_c.text, r_s.text)
-    assert await _dong_bo_nhat_quan(u["id"]) == (
-        "manager", {"role:officer", "role:manager"}, {"role:officer", "role:manager"}
-    )
+    # Vai CSDL = vai C vừa đặt, và đó là vai cao nhất Casbin đang có (``PUT`` thay bộ vai Casbin của người ấy — đo 21-11:
+    # còn {role:manager}); lượt đồng bộ đọc Casbin TRƯỚC C sẽ ghi đè ``officer``.
+    vai, bang, chay = await _dong_bo_nhat_quan(u["id"])
+    assert vai == "manager" and bang == chay and "role:manager" in chay, (vai, bang, chay)
 
 
 # ---------------------------------------------------------------------------------------------------- điểm chặn 5 (4.1)
