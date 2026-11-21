@@ -683,6 +683,17 @@ async def list_users(
 # --- Hàm Cập nhật User ---
 
 
+def deactivates_account(status_transition: Optional[Dict[str, Any]]) -> bool:
+    """MỘT vị từ "lần cập nhật này đưa tài khoản sang trạng thái KHÔNG hoạt động" cho bước ngắt truy cập của
+    ``PUT /api/admin/users/{id}`` (thu hồi mọi phiên + ngắt socket): trạng thái THỰC SỰ đổi và trạng thái mới khác
+    ``active``. ``status_transition`` = ``{"old", "new"}`` do :func:`update_user` điền từ giá trị đọc DƯỚI khoá dòng người
+    (PR-B lượt 3, Codex lượt 2 điểm chặn 6) — bản nạp từ đầu yêu cầu có thể đã cũ (đọc lúc ``inactive`` → được mở lại →
+    bị khoá lại: so với bản cũ là "không đổi" ⇒ bỏ qua ngắt truy cập)."""
+    if not status_transition:
+        return False
+    return status_transition["new"] != status_transition["old"] and status_transition["new"] != "active"
+
+
 async def update_user(
     db: AsyncSession,
     db_user: models.User,
@@ -692,8 +703,13 @@ async def update_user(
     avatar_filename: Optional[str] = None,   # ✅ REFACTORED: filename for validation
     assigned_by_user_id: Optional[int] = None,  # ✅ PHASE 2: Track who made the assignment
     request_meta: Optional[Any] = None,  # PR-B Q4: IP / User-Agent cho nhật ký tự thu hồi quyền duyệt chéo
+    status_transition_out: Optional[Dict[str, Any]] = None,  # PR-B lượt 3: chuyển trạng thái THỰC TẾ (đọc dưới khoá)
 ) -> Tuple[models.User, Callable]:
     """
+    ``status_transition_out`` (PR-B lượt 3, Codex lượt 2 điểm chặn 6): khi yêu cầu có ``status``, hàm điền
+    ``{"old": <trạng thái đọc DƯỚI khoá dòng người>, "new": <trạng thái mới>}`` — router quyết thu hồi phiên + ngắt socket
+    bằng :func:`deactivates_account` trên CHÍNH giá trị này, không bằng bản nạp từ đầu yêu cầu.
+
     ✅ ATOMIC TRANSACTION (v17 + PHASE 2):
     Update user with atomic DB + Casbin + UserUnitAssignment transaction.
 
@@ -749,6 +765,9 @@ async def update_user(
             # PR-B lượt 2: đọc lại vai / đơn vị / trạng thái HIỆN HÀNH (dòng đã khoá ở trên) — quyết "vai có đổi không" bên
             # dưới bằng cùng giá trị với quyết định thu hồi; bản nạp từ đầu yêu cầu có thể đã cũ.
             await db.refresh(db_user, attribute_names=["role", "unit_id", "status"])
+        if "status" in update_data and status_transition_out is not None:
+            # PR-B lượt 3: trạng thái CŨ = giá trị vừa đọc lại dưới khoá dòng người (khoá giữ tới commit).
+            status_transition_out.update(old=db_user.status, new=update_data["status"])
 
         # ✅ PHASE 2: Track role AND unit_id changes BEFORE updating
         old_db_role = db_user.role
@@ -1913,10 +1932,18 @@ async def sync_users_to_casbin(
     synced_count = 0
     failed_users = []
 
+    from app.repositories import document_bulk_repository as bulk_repo
     from app.services.document_cross_review_service import revoke_grants_on_account_change
 
     # Process each user — id TĂNG (PR-B Q4: mỗi người khoá dòng user → dòng quyền; hai lượt đồng bộ khoá cùng chiều).
     for user in sorted(users, key=lambda u: u.id):
+        # PR-B lượt 3 (vá nhánh cùng khuôn Codex lượt 2 điểm chặn 3): TUẦN TỰ HOÁ THEO TÀI KHOẢN — khoá dòng người TRƯỚC khi
+        # đọc vai Casbin, so với vai CSDL đọc DƯỚI khoá (không với bản nạp đầu lệnh). Một lệnh đổi vai đang giữ dòng người
+        # (đã ghi CSDL, sắp ghi Casbin) ⇒ lượt đồng bộ chờ nó commit rồi mới đọc Casbin — không ghi đè vai CSDL bằng ảnh Casbin
+        # đọc TRƯỚC lệnh ấy.
+        locked = await bulk_repo.lock_user_no_key_update(db, user.id)
+        if locked is None:
+            continue
         try:
             # Get highest priority role from Casbin (source of truth)
             casbin_role = await get_highest_priority_role_from_casbin(
@@ -1937,8 +1964,8 @@ async def sync_users_to_casbin(
             })
             continue
 
-        # Update DB if role doesn't match
-        if user.role != casbin_role:
+        # Update DB if role doesn't match (vai CSDL đọc dưới khoá ở đầu vòng)
+        if locked.role != casbin_role:
             # GĐ1b PR-B Q4: đổi vai khỏi Cán bộ ⇒ tự thu hồi quyền duyệt chéo CÙNG giao dịch, TRƯỚC khi ghi vai. Lỗi ở
             # đây KHÔNG bị nuốt thành "failed_users" (bản cũ nuốt mọi lỗi trong vòng): nuốt thì router vẫn commit vai mới
             # mà quyền chưa thu hồi / thiếu nhật ký ⇒ ném ra để router không commit gì (fail-closed).
@@ -1949,7 +1976,7 @@ async def sync_users_to_casbin(
                 actor_id=actor_id,
                 request_meta=request_meta,
             )
-            old_role = user.role
+            old_role = locked.role
             user.role = casbin_role
             db.add(user)
             synced_count += 1

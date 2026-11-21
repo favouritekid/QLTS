@@ -705,6 +705,15 @@ async def grant_unit_id(db: AsyncSession, grant_id: int) -> Optional[int]:
     ).scalar_one_or_none()
 
 
+async def own_grant_unit_id(db: AsyncSession, grant_id: int, grantee_user_id: int) -> Optional[int]:
+    """Đơn vị ghi trên quyền ``grant_id`` NẾU quyền ấy cấp cho ``grantee_user_id`` (ở mọi trạng thái — kể cả đã thu hồi /
+    hết hạn); quyền của người khác / không có ⇒ ``None``. Đọc, không khoá — chỉ để chọn 409 / 404 (owner câu 9)."""
+    g = models.DocumentCrossReviewGrant
+    return (
+        await db.execute(select(g.unit_id).where(g.id == grant_id, g.grantee_user_id == grantee_user_id))
+    ).scalar_one_or_none()
+
+
 async def lock_active_grants_of_user_for_update(db: AsyncSession, user_id: int) -> List[models.DocumentCrossReviewGrant]:
     """Mọi quyền CHƯA thu hồi, CHƯA hết hạn (``clock_timestamp()``) của một người — ``FOR UPDATE`` theo id TĂNG (Q4)."""
     g = models.DocumentCrossReviewGrant

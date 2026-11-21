@@ -102,7 +102,8 @@ async def list_bulk_verify_batches(
         scope=scope,
         cursor=cursor,
         limit=limit,
-        review_mode=None,
+        # PR-B lượt 3 (Codex điểm chặn 1): lô CHÉO không liệt kê ở đường thường, trừ Admin (X3) — theo ``review_mode`` lưu.
+        review_mode=bulk_service.regular_route_list_mode(current_user.role),
         allow_scope_all=True,
     )
 

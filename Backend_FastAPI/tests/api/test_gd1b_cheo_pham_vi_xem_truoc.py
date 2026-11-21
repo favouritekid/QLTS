@@ -236,3 +236,53 @@ async def test_quyen_cuoi_cung_het_han_trong_luc_cho_khoa_lead_thi_404_khong_tao
         await cb.aclose()
     assert r.status_code == 404 and r.json() == THAN_404, r.text
     assert (await hang(dem_lo, u=can_bo_cheo["id"]))[0]["count"] == truoc
+
+
+# ---------------------------------------------------------------------------------------------------- PR-B lượt 3 (Codex lượt 2)
+async def test_quyen_cu_o_don_vi_a_mat_chi_con_quyen_o_don_vi_b_thi_xem_truoc_cho_a_404_khong_tao_lo(
+    client, admin_token_headers, admin_user_in_db, officer_user_in_db, can_bo_cheo, seed_other_unit, lo_config, lo_routers
+):
+    """Điểm chặn 4a (owner câu 9): xem trước bằng quyền cũ ở đơn vị A (đã thu hồi) khi người gọi CHỈ còn quyền duyệt ở đơn
+    vị B ⇒ 404 cùng thân (thiếu quyền phù hợp ĐÚNG đơn vị), không phải 409; không tạo lô. (409 chỉ khi còn quyền khác hợp lệ
+    ở CHÍNH đơn vị A — ca ``test_lo_cheo_xem_truoc_va_chay_ghi_via_cross_va_grant_id``.)"""
+    p = (await ho_so(client, admin_token_headers, officer_user_in_db, lo_config, tien_to="l3qa"))[0]
+    g_a = await cap(client, admin_user_in_db, can_bo_cheo["id"], lo_config["unit_id"], verify=True)
+    await cap(client, admin_user_in_db, can_bo_cheo["id"], seed_other_unit["unit_id"], verify=True)
+    h = await dn(client, admin_user_in_db)
+    r = await client.post(f"{CROSS}/grants/{g_a}/revoke", headers=h, json={"reason": "Đổi phân công"})
+    assert r.status_code == 200, r.text
+    dem_lo = "SELECT count(*) FROM document_bulk_batch WHERE actor_user_id = :u"
+    truoc = (await hang(dem_lo, u=can_bo_cheo["id"]))[0]["count"]
+    h = await dn(client, can_bo_cheo)
+    r = await client.post(f"{CROSS}/bulk-verify/preview", headers=h, json={"profile_ids": [p["id"]], "grant_id": g_a})
+    assert r.status_code == 404 and r.json() == THAN_404, r.text
+    assert (await hang(dem_lo, u=can_bo_cheo["id"]))[0]["count"] == truoc
+
+
+async def test_m_theo_don_vi_doc_lai_sau_khi_cho_khoa_lead_khong_theo_don_vi_cu(
+    client, officer_user_in_db, seed_other_unit, bo_tri
+):
+    """Điểm chặn 4b (owner câu 8): M chỉ đếm hồ sơ thuộc đơn vị người gọi CÒN được xem. Xem trước (B) chờ khoá lead "của
+    mình" (phiên A giữ ``FOR UPDATE`` — phiên thứ ba xác nhận bằng ``pg_blocking_pids``); trong lúc chờ, cán bộ chuyển sang
+    đơn vị khác (commit — đổi đơn vị không thu hồi quyền, owner câu 4). Thả A ⇒ đơn vị đọc LẠI sau khoá lead ⇒ hồ sơ ấy không
+    còn "được xem" ⇒ M = 0, không lộ ở ``items`` / ``excluded``. Theo đơn vị đọc TRƯỚC lần chờ ⇒ M = 1."""
+    rieng, khac, gid = bo_tri["rieng"], bo_tri["khac"], bo_tri["gid"]
+    lead_id = (await hang("SELECT lead_id FROM admission_profile WHERE id = :p", p=rieng["id"]))[0]["lead_id"]
+    cb, hb = await dang_nhap(officer_user_in_db)
+    a = await KhoaHo("SELECT id FROM lead WHERE id = :l FOR UPDATE", l=lead_id).giu()
+    try:
+        with PidTheoNhan() as ghi:
+            viec = asyncio.create_task(_goi_nhan("B", lambda: cb.post(
+                f"{CROSS}/bulk-verify/preview", headers=hb, json={"profile_ids": [rieng["id"], khac["id"]], "grant_id": gid})))
+            assert await bi_chan_boi_pid(viec, ghi, "B", [a.pid]) == "chan", "xem trước phải chờ khoá lead (A giữ)"
+            await sql("UPDATE \"user\" SET unit_id = :u WHERE id = :id", u=seed_other_unit["unit_id"], id=officer_user_in_db["id"])
+            assert not viec.done(), "xem trước phải còn chờ khoá lead tới lúc đơn vị đã đổi"
+            await a.tha()
+            r = await asyncio.wait_for(viec, 30)
+    finally:
+        await a.tha()
+        await cb.aclose()
+    assert r.status_code == 201, r.text
+    j = r.json()
+    assert j["counts"]["own_assigned_excluded"] == 0, j
+    assert rieng["id"] not in {x["profile_id"] for x in j["items"] + j["excluded"]}, j

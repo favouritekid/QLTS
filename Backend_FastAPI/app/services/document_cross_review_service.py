@@ -307,16 +307,24 @@ async def eligibility(db: AsyncSession, *, user_id: int, role: str) -> Dict[str,
 
 
 async def require_grant_for_action(
-    db: AsyncSession, *, actor_id: int, grant_id: Optional[int], action: str
+    db: AsyncSession, *, actor: Any, grant_id: Optional[int], action: str
 ) -> models.DocumentCrossReviewGrant:
-    """Quyền ĐÚNG ``grant_id`` của người gọi, còn hiệu lực, cho phép ĐÚNG thao tác — không thì 409 ``actor_not_authorized``.
-    (Kiểm sớm cho xem trước lô chéo; khi ghi, lõi kiểm lại dưới khoá.)"""
-    if grant_id is None:
-        raise DocumentTransitionConflict(ACTOR_NOT_AUTHORIZED)
-    for g in await repo.active_grants_for_user(db, actor_id):
-        if g.id == grant_id and _allows(g, action):
-            return g
-    raise DocumentTransitionConflict(ACTOR_NOT_AUTHORIZED)
+    """Quyền ĐÚNG ``grant_id`` của người gọi, còn hiệu lực, cho phép ĐÚNG thao tác (kiểm sớm cho xem trước lô chéo; dưới khoá
+    kiểm lại bằng ``_recheck_preview_grant``). Không đạt ⇒ owner câu 9 (Codex lượt 2 PR-B, điểm chặn 4a), xét ở ĐƠN VỊ ghi
+    trên chính quyền được gửi (quyền của người gọi, mọi trạng thái): còn quyền KHÁC hợp lệ cho đúng thao tác ở đúng đơn vị ấy
+    ⇒ 409 ``actor_not_authorized`` (làm mới, máy chủ không tự chọn quyền thay thế); không còn — kể cả khi chỉ còn quyền ở đơn
+    vị khác — hay mã quyền không phải của người gọi ⇒ 404 cùng thân (``cross_denial``, MỘT vị từ)."""
+    from app.services.document_bulk_verify_service import cross_denial, unit_scope
+
+    unit_id = None
+    if grant_id is not None:
+        for g in await repo.active_grants_for_user(db, actor.id):
+            if g.id == grant_id and _allows(g, action):
+                return g
+        unit_id = await repo.own_grant_unit_id(db, grant_id, actor.id)
+    if unit_id is None:
+        raise CrossReviewNotFound()
+    raise await cross_denial(db, actor, action, unit_scope(unit_id))
 
 
 async def queue(db: AsyncSession, *, actor: models.User, page: int, page_size: int) -> Dict[str, Any]:

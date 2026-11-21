@@ -4390,8 +4390,15 @@ async def get_bulk_batch_for_view(
     current_user: models.User = Depends(require_bulk_verify_reviewer),
     db: AsyncSession = Depends(database.get_db),
 ):
-    """Xem / chốt (§5.6, §5.7): người tạo hoặc Admin (ngoại lệ X3). Mọi chế độ lô (Admin xem cả lô chéo)."""
-    return await _gd1b_bulk_batch_for(db, batch_id, current_user, allow_admin=True, review_mode=None)
+    """Xem / chốt (§5.6, §5.7) trên đường lô THƯỜNG: người tạo hoặc Admin (ngoại lệ X3). Admin thấy lô mọi chế độ (kể cả
+    lô chéo); người khác chỉ lô ``review_mode = batch`` LƯU trong CSDL (PR-B lượt 3, Codex điểm chặn 1 — Cán bộ vừa đổi vai
+    sang Quản lý không xem / chốt được lô CHÉO cũ của mình qua đường này). Không đạt ⇒ 404 cùng thân lô không tồn tại."""
+    from ..services.document_bulk_verify_service import BatchNotFound, regular_route_shows
+
+    batch = await _gd1b_bulk_batch_for(db, batch_id, current_user, allow_admin=True, review_mode=None)
+    if not regular_route_shows(batch.review_mode, current_user.role):
+        raise BatchNotFound()
+    return batch
 
 
 async def require_cross_review_admin(

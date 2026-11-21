@@ -206,9 +206,21 @@ async def test_khoa_tai_khoan_quyet_bang_trang_thai_doc_duoi_khoa_khong_bang_ban
 ):
     """Yêu cầu A nạp tài khoản lúc đang ``inactive`` rồi dừng; yêu cầu B mở lại (``active``) và Admin cấp quyền chéo MỚI;
     thả A (đặt ``inactive``) ⇒ phải tự thu hồi quyền mới (trạng thái đọc dưới khoá là ``active``). Quyết bằng bản đọc đầu
-    yêu cầu (``inactive`` → ``inactive``: "không đổi") ⇒ tài khoản bị khoá mà quyền còn hiệu lực (trái owner câu 2)."""
+    yêu cầu (``inactive`` → ``inactive``: "không đổi") ⇒ tài khoản bị khoá mà quyền còn hiệu lực (trái owner câu 2).
+
+    PR-B lượt 3 (Codex lượt 2 điểm chặn 6): cùng tình huống, router phải NGẮT TRUY CẬP theo chuyển trạng thái THỰC TẾ
+    (``active`` → ``inactive``, đọc dưới khoá): thu hồi MỌI phiên đăng nhập (dòng ``user_session`` — phiên mở sau khi mở lại
+    tài khoản) + ngắt socket của tài khoản. Quyết bằng ``changes`` tính từ bản nạp đầu yêu cầu ⇒ bỏ qua cả hai."""
+    import app.socket_manager as sm
+
     t = await tao_nguoi("prb_l2_canbo_cu", "officer", lo_config["unit_id"])
     await sql("UPDATE \"user\" SET status = 'inactive' WHERE id = :u", u=t["id"])
+    ngat = []
+
+    async def ghi_ngat(user_ids, *a, **kw):
+        ngat.append(user_ids)
+
+    monkeypatch.setattr(sm, "force_disconnect_user_strict", ghi_ngat)
     diem = Diem(lan=1)
     boc(monkeypatch, user_service, "update_user", diem, truoc=True)  # chỉ dừng lần gọi ĐẦU (yêu cầu A)
     ca, ha = await dang_nhap(admin_user_in_db)
@@ -219,6 +231,10 @@ async def test_khoa_tai_khoan_quyet_bang_trang_thai_doc_duoi_khoa_khong_bang_ban
         r = await client.put(f"/api/admin/users/{t['id']}", headers=h, data={"status": "active"})
         assert r.status_code == 200, r.text
         gid = await cap(client, admin_user_in_db, t["id"], lo_config["unit_id"], verify=True)
+        ct, _ht = await dang_nhap(t)  # phiên đăng nhập mở SAU khi tài khoản được mở lại
+        await ct.aclose()
+        phien_mo = 'SELECT count(*) FROM user_session WHERE user_id = :u AND revoked_at IS NULL'
+        assert await mot(phien_mo, u=t["id"]) >= 1, "tiền đề: có phiên đang mở"
         diem.di.set()
         r = await asyncio.wait_for(viec, 30)
     finally:
@@ -228,3 +244,5 @@ async def test_khoa_tai_khoan_quyet_bang_trang_thai_doc_duoi_khoa_khong_bang_ban
     assert await mot('SELECT status FROM "user" WHERE id = :u', u=t["id"]) == "inactive"
     assert not await _con_hieu_luc(gid)
     assert [x["reason"] for x in await _thu_hoi_cua(gid)] == [LY_DO_KHOA]
+    assert await mot(phien_mo, u=t["id"]) == 0, "khoá tài khoản phải thu hồi mọi phiên đăng nhập"
+    assert ngat == [t["id"]], f"khoá tài khoản phải ngắt socket của chính tài khoản ấy: {ngat}"

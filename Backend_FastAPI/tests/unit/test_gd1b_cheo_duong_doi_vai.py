@@ -29,9 +29,10 @@ SO_DUONG_GHI = {
     # Ghi vai cho tài khoản do người gọi truyền vào; người gọi: update_user (ĐÃ nối, trước lời gọi), create_user_by_admin và
     # approve_collaborator (tài khoản MỚI tạo ⇒ chưa thể có quyền chéo) — khoá ở ``test_nguoi_goi_ham_gan_vai``.
     ("services/user_service.py", "_create_or_update_user_assignment"): "KHONG_NOI",
-    # Xoá vai TUỲ BIẾN: vai hệ thống (gồm Cán bộ) bị chặn ở STEP 1 ⇒ người bị đổi KHÔNG phải Cán bộ ⇒ không thể có quyền
-    # chéo còn hiệu lực (quyền chỉ cấp cho Cán bộ đang hoạt động; rời Cán bộ ở mọi đường khác đều tự thu hồi).
-    ("services/role_service.py", "delete_role_atomic"): "KHONG_NOI",
+    # Xoá vai TUỲ BIẾN: vai hệ thống (gồm Cán bộ) bị chặn ở STEP 1. PR-B lượt 3 (Codex lượt 2 điểm chặn 5): khoá dòng người +
+    # đọc lại vai DƯỚI khoá, chỉ người CÒN mang vai bị xoá mới bị đổi — đi qua tự thu hồi (người vừa thành Cán bộ không bị
+    # ghi đè); bước CSDL chạy TRƯỚC lock enforcer (không đảo thứ tự khoá).
+    ("services/role_service.py", "delete_role_atomic"): "NOI",
     # Gắn tài khoản vào hồ sơ CTV: chỉ tài khoản vai user / collaborator (``COLLABORATOR_LINKABLE_ROLES``) ⇒ không phải Cán
     # bộ ⇒ không thể có quyền chéo. PR-B lượt 2 (Codex điểm chặn 4): dòng người KHOÁ + đọc lại vai / đơn vị NGAY trước khi
     # ghi vai (``collaborator_link_target_allowed``) — vừa thành Cán bộ ⇒ 404 như luật liên kết hiện có.

@@ -1073,12 +1073,16 @@ async def update_existing_user(
         avatar_filename = avatar.filename
 
     # Truyền avatar và enforcer vào hàm service
+    # PR-B lượt 3 (Codex lượt 2 điểm chặn 6): chuyển trạng thái THỰC TẾ (đọc dưới khoá dòng người) — quyết ngắt truy cập
+    # bên dưới. ``changes`` (nhật ký / thông báo) vẫn tính từ bản nạp đầu yêu cầu — phần ấy tách việc riêng.
+    status_transition: dict = {}
     updated_user, callback = await user_service.update_user(
         db, db_user, user_in, enforcer=enforcer,
         avatar_content=avatar_content,  # ✅ REFACTORED: Pass bytes instead of UploadFile
         avatar_filename=avatar_filename,  # ✅ REFACTORED: Pass filename
         assigned_by_user_id=current_admin.id,  # ✅ PHASE 2: Track who made the assignment
         request_meta=_request_meta(request),  # GĐ1b PR-B Q4: nhật ký tự thu hồi quyền duyệt chéo
+        status_transition_out=status_transition,
     )
 
     # W8-F.1 fix 2026-05-16: capture ALL needed attrs in plain Python vars
@@ -1099,7 +1103,7 @@ async def update_existing_user(
     # (flush-before-revoke, P0), then revoke all sessions (strict cache cleanup)
     # and force-disconnect live sockets across workers (ACK-confirmed). Any
     # failure rolls back the whole change → fail-closed (status stays unchanged).
-    if "status" in changes and changes["status"]["new"] != "active":
+    if user_service.deactivates_account(status_transition):
         await db.flush()
         try:
             # The post-commit callback it returns (user-wide socket cut) is NOT
