@@ -35,9 +35,21 @@ import hashlib
 import json
 from collections import Counter
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, FrozenSet, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
+from app.models.admission_review import (  # MỘT nguồn danh mục tab / ưu tiên (model L1)
+    ETHNIC_FULL_EVIDENCE,
+    ETHNIC_NOT_APPLICABLE,
+    ETHNIC_PRIORITY_STATES,
+    ETHNIC_PROVISIONAL_BY_COMMUNE,
+    ETHNIC_UNDETERMINED,
+    REVIEW_TAB_AUTO,
+    REVIEW_TAB_INELIGIBLE,
+    REVIEW_TAB_NEEDS_DECISION,
+    REVIEW_TAB_NOT_PASSED,
+    REVIEW_TABS,
+)
 from app.models.finance.fee import FeeStatusEnum
 from app.repositories.council_candidate_repository import is_kinh_or_blank
 from app.services import council_set_gate_service as set_gate
@@ -60,26 +72,15 @@ from app.utils.exceptions import ChoiceTargetLevelNotConfigured, PriorityRateNot
 #: Nhãn bộ luật ghi vào ``admission_review_run.rule_version`` (hợp đồng §3.3 — chuỗi mờ).
 RULE_VERSION = "gd2b-1"
 #: Tiền tố của vật liệu băm ``row_hash`` — đổi khi đổi cách dựng vật liệu.
-ROW_HASH_VERSION = "gd2b-row-v1"
+ROW_HASH_VERSION = "gd2b-row-v2"  # v2 (đợt 1 sau Codex B3): mã giấy bắt buộc đã sắp + trạng thái cấu hình; kv_muc chuẩn hoá số
 
 # ═══════════════════════════════════════════ danh mục giá trị (hợp đồng §4) ═══════════════════════════════════════════
-TAB_AUTO = "auto"
-TAB_NEEDS_DECISION = "needs_decision"
-TAB_NOT_PASSED = "not_passed"
-TAB_INELIGIBLE = "ineligible"
-#: Đúng thứ tự hiển thị của E9.
-REVIEW_TABS: Tuple[str, ...] = (TAB_AUTO, TAB_NEEDS_DECISION, TAB_NOT_PASSED, TAB_INELIGIBLE)
-
-ETHNIC_NOT_APPLICABLE = "not_applicable"
-ETHNIC_FULL_EVIDENCE = "full_evidence"
-ETHNIC_PROVISIONAL_BY_COMMUNE = "provisional_by_commune"
-ETHNIC_UNDETERMINED = "undetermined"
-ETHNIC_PRIORITY_STATES: Tuple[str, ...] = (
-    ETHNIC_NOT_APPLICABLE,
-    ETHNIC_FULL_EVIDENCE,
-    ETHNIC_PROVISIONAL_BY_COMMUNE,
-    ETHNIC_UNDETERMINED,
-)
+# Tab + trạng thái ưu tiên dân tộc: MỘT nguồn ở model L1 (``app.models.admission_review`` — cũng là nguồn của CHECK CSDL); ở
+# đây chỉ là TÊN GỌI KHÁC của CHÍNH đối tượng ấy (đợt 1 sau Codex, phụ lục kỹ thuật §3 điểm 7 — test đồng nhất ``is``).
+TAB_AUTO = REVIEW_TAB_AUTO
+TAB_NEEDS_DECISION = REVIEW_TAB_NEEDS_DECISION
+TAB_NOT_PASSED = REVIEW_TAB_NOT_PASSED
+TAB_INELIGIBLE = REVIEW_TAB_INELIGIBLE
 
 CHOICE_PASSED_FLOOR = "passed_floor"
 CHOICE_BELOW_FLOOR = "below_floor"
@@ -1191,9 +1192,28 @@ def _doc_material(doc: Optional[DocumentRowFacts]) -> Any:
     return {"id": doc.document_id, "status": doc.status, "row_version": doc.row_version, "verified_format": doc.verified_format}
 
 
+#: Trường SỐ lưu dạng CHUỖI trong ``CheckData`` — chuẩn hoá theo giá trị trước khi băm (đợt 1 sau Codex B3: ``kv_muc`` ``"0.5"`` và
+#: ``"0.50"`` là CÙNG điểm khu vực ⇒ cùng băm).
+_CHECK_NUMERIC_TEXT_FIELDS: Tuple[str, ...] = ("kv_muc",)
+
+
+def _numeric_text(value: Any) -> Any:
+    """Chuỗi số ⇒ ``Decimal`` (``_json_value`` viết lại dạng rút gọn); chuỗi KHÔNG phải số giữ nguyên chữ (khác băm với mọi số)."""
+    if isinstance(value, str):
+        try:
+            number = Decimal(value.strip())
+        except (InvalidOperation, ValueError):
+            return value
+        if number.is_finite():
+            return number
+    return value
+
+
 def _check_material(check: set_gate.CheckData) -> Dict[str, Any]:
     data = dataclasses.asdict(check)
     data.pop("stt", None)  # số thứ tự dòng — không phải dữ liệu
+    for field in _CHECK_NUMERIC_TEXT_FIELDS:
+        data[field] = _numeric_text(data.get(field))
     return data
 
 

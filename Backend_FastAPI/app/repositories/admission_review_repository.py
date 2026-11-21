@@ -290,13 +290,35 @@ async def latest_done_run_ids(db: Executor, session_ids: Sequence[int]) -> Dict[
 # ---------------------------------------------------------------------------------------------------------------------
 # Dòng kết quả
 # ---------------------------------------------------------------------------------------------------------------------
+#: Cột chèn của ``admission_review_row`` (mọi cột trừ ``id`` / ``run_id``) — MỌI dòng đưa vào :func:`insert_rows` phải có ĐÚNG tập
+#: khoá này (= ``admission_review_rules.ReviewRow.column_values``; test khoá bằng nhau).
+ROW_INSERT_COLUMNS: Tuple[str, ...] = tuple(c.name for c in W.__table__.columns if c.name not in ("id", "run_id"))
+
+
+class RowColumnsMismatch(ValueError):
+    """Một dòng thiếu / thừa cột so với :data:`ROW_INSERT_COLUMNS` — từ chối cả lô, KHÔNG ghi gì (fail-closed)."""
+
+
 async def insert_rows(db: Executor, run_id: int, rows: Sequence[Mapping[str, Any]]) -> None:
-    """Chèn các dòng của MỘT lượt — một câu nhiều giá trị (số câu SQL không tăng theo từng hồ sơ — BT35). Mỗi phần tử là các cột
-    của ``admission_review_row`` trừ ``id`` / ``run_id``; giá trị JSON phải đã là JSON thuần. Trigger chỉ cho chèn khi lượt
-    ``running``; CHECK giữ dạng dòng."""
+    """Chèn các dòng của MỘT lượt bằng MỘT lệnh ``INSERT`` Core (executemany) — số câu SQL KHÔNG tăng theo số hồ sơ (BT35, K1).
+
+    Đợt 1 sau Codex B1: KHÔNG dùng ``insert(<lớp ORM>)`` — đường "bulk insert" của ORM BỎ khoá có giá trị ``None`` (trừ khi bật
+    ``render_nulls``) rồi gom các dòng LIỀN NHAU cùng tập khoá thành một câu ⇒ hồ sơ được xếp (có ``considered_*``) xen kẽ hồ sơ thiếu
+    điều kiện (``None``) sinh MỘT câu mỗi dòng. Ở đây mọi dòng phải có ĐỦ :data:`ROW_INSERT_COLUMNS` (``None`` ghi thành NULL, JSON
+    ``None`` thành SQL NULL nhờ ``none_as_null``) ⇒ một hình câu duy nhất. Dòng thiếu / thừa cột ⇒ :class:`RowColumnsMismatch`
+    trước khi gửi câu nào. Giá trị JSON phải đã là JSON thuần. Trigger chỉ cho chèn khi lượt ``running``; CHECK giữ dạng dòng."""
     if not rows:
         return
-    await db.execute(insert(W), [{**dict(r), "run_id": int(run_id)} for r in rows])
+    cot = set(ROW_INSERT_COLUMNS)
+    values = []
+    for i, r in enumerate(rows):
+        khoa = set(r)
+        if khoa != cot:
+            raise RowColumnsMismatch(
+                "Dòng %d thiếu cột %s, thừa cột %s" % (i, sorted(cot - khoa), sorted(khoa - cot))
+            )
+        values.append({**{k: r[k] for k in ROW_INSERT_COLUMNS}, "run_id": int(run_id)})
+    await db.execute(insert(W.__table__), values)
 
 
 def _row_filters(

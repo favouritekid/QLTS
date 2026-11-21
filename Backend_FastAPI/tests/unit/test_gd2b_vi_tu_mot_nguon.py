@@ -304,14 +304,46 @@ def test_e2_may_xet_kiem_che_do_truoc_moi_ho_so():
     assert "require_fee_gate_mode" in _ten_goi(_ham(_cay(LUAT), "evaluate_run"))
 
 
-# ═══════════════════════════════════════════ khoá với model L1 (chạy khi đã gộp L1) ═══════════════════════════════════════
-def test_danh_muc_tab_va_uu_tien_bang_model_l1():
-    l1 = pytest.importorskip("app.models.admission_review")
-    assert (tuple(l1.REVIEW_TABS), tuple(l1.ETHNIC_PRIORITY_STATES)) == (R.REVIEW_TABS, R.ETHNIC_PRIORITY_STATES)
+# ═══════════════════════════════════════════ khoá với model L1 (đợt 1 đã gộp L1 + L2 — chạy THẬT, không skip) ═══════════════
+def test_danh_muc_tab_va_uu_tien_la_chinh_doi_tuong_cua_model_l1():
+    """Phụ lục kỹ thuật đợt 1 §3 điểm 7 (+ Codex B4): tab / trạng thái ưu tiên MỘT nguồn ở model L1 — luật L2 trỏ CHÍNH đối tượng
+    (``is``), không bản chép bằng nhau."""
+    from app.models import admission_review as l1
+
+    assert R.REVIEW_TABS is l1.REVIEW_TABS and R.ETHNIC_PRIORITY_STATES is l1.ETHNIC_PRIORITY_STATES
+    assert (R.TAB_AUTO, R.TAB_NEEDS_DECISION, R.TAB_NOT_PASSED, R.TAB_INELIGIBLE) == l1.REVIEW_TABS
+    for ten in ("ETHNIC_NOT_APPLICABLE", "ETHNIC_FULL_EVIDENCE", "ETHNIC_PROVISIONAL_BY_COMMUNE", "ETHNIC_UNDETERMINED"):
+        assert getattr(R, ten) is getattr(l1, ten), ten
+
+
+def test_luat_khong_tu_khai_chu_tab_hay_trang_thai_uu_tien():
+    """Không câu gán cấp module nào trong ``admission_review_rules`` đặt một hằng chuỗi trùng chữ tab / trạng thái ưu tiên (bản
+    chép thứ hai sẽ trôi khỏi CHECK CSDL)."""
+    from app.models import admission_review as l1
+
+    cam = set(l1.REVIEW_TABS) | set(l1.ETHNIC_PRIORITY_STATES)
+    thay = []
+    for n in _cay(LUAT).body:
+        gia = n.value if isinstance(n, (ast.Assign, ast.AnnAssign)) else None
+        if gia is not None:
+            chu = [c.value for c in ast.walk(gia) if isinstance(c, ast.Constant) and isinstance(c.value, str)]
+            thay += [c for c in chu if c in cam]
+    assert thay == []
+
+
+def test_ma_ly_do_che_do_hoc_phi_mot_nguon_o_danh_muc_loi():
+    """``FEE_GATE_MODE_INVALID`` MỘT nguồn ở ``admission_review_errors`` (danh mục lỗi hợp đồng §5); ``fee_gate_rules`` trỏ CHÍNH đối
+    tượng ấy; chữ ``fee_gate_mode_invalid`` không xuất hiện thành hằng ở module ứng dụng nào khác."""
+    from app.services import admission_review_errors as loi
+
+    assert fg.FEE_GATE_MODE_INVALID is loi.FEE_GATE_MODE_INVALID
+    thay = [rel for rel, cay in _moi_tep() if "fee_gate_mode_invalid" in _hang_chuoi(cay)]
+    assert thay == ["services/admission_review_errors.py"], thay
 
 
 def test_cot_cua_dong_ket_qua_bang_cot_bang_l1():
-    l1 = pytest.importorskip("app.models.admission_review")
+    from app.models import admission_review as l1
+
     cot = {c.name for c in l1.AdmissionReviewRow.__table__.columns} - {"id", "run_id"}
     mau = R.ReviewRow(
         profile_id=1, profile_status="submitted", tab=R.TAB_INELIGIBLE, reason_codes=("x",), flags=(), decision_hints=(),

@@ -67,7 +67,18 @@ REVIEW_TAB_INELIGIBLE = "ineligible"
 #: Đúng thứ tự hiển thị / sắp của E9 (hợp đồng §2 E9).
 REVIEW_TABS = (REVIEW_TAB_AUTO, REVIEW_TAB_NEEDS_DECISION, REVIEW_TAB_NOT_PASSED, REVIEW_TAB_INELIGIBLE)  # C nới ``excluded``
 
-ETHNIC_PRIORITY_STATES = ("not_applicable", "full_evidence", "provisional_by_commune", "undetermined")
+#: Trạng thái ưu tiên dân tộc v2 (đặc tả §6.4; hợp đồng §4.6). MỘT nguồn cho CHECK dưới, luật thuần
+#: (``admission_review_rules`` import từ đây — đợt 1 sau Codex) và giao diện API.
+ETHNIC_NOT_APPLICABLE = "not_applicable"
+ETHNIC_FULL_EVIDENCE = "full_evidence"
+ETHNIC_PROVISIONAL_BY_COMMUNE = "provisional_by_commune"
+ETHNIC_UNDETERMINED = "undetermined"
+ETHNIC_PRIORITY_STATES = (
+    ETHNIC_NOT_APPLICABLE,
+    ETHNIC_FULL_EVIDENCE,
+    ETHNIC_PROVISIONAL_BY_COMMUNE,
+    ETHNIC_UNDETERMINED,
+)
 
 # ── Chữ CHECK — MỘT bản; migration chép nguyên (test lock-in so theo tên) ──────────────────────────────────────────────
 CHECK_SESSION_STATUS = "status IN ('draft','cancelled')"
@@ -89,14 +100,17 @@ CHECK_RUN_KIND = "kind IN ('evaluate')"
 CHECK_RUN_STATUS = "status IN ('queued','running','done','failed')"
 #: [ĐX — L1] "CHECK theo trạng thái" (đặc tả §4.2) viết thành bảng kéo theo — trạng thái lạ do ``CHECK_RUN_STATUS`` bắt, không
 #: do ràng buộc này. ``failed`` chỉ tới từ ``running`` (trigger) ⇒ có ``started_at``; ``summary`` / ``quota_view`` chỉ có khi ``done``
-#: (hợp đồng §3.3 "null khi chưa done"); ``error_code`` chỉ khi ``failed``.
+#: (hợp đồng §3.3 "null khi chưa done"); ``error_code`` chỉ khi ``failed``. Đợt 1 sau Codex B3: ``done`` đòi ``summary`` /
+#: ``quota_view`` là JSON OBJECT (``jsonb_typeof = 'object'``) — chặn cả SQL NULL lẫn JSON ``null`` / mảng / số. Có ``IS NOT
+#: NULL`` đứng trước vì ``jsonb_typeof(NULL)`` là NULL và CHECK coi NULL là ĐẠT.
 CHECK_RUN_STATE_COLUMNS = (
     "(status <> 'queued' OR (started_at IS NULL AND finished_at IS NULL AND duration_ms IS NULL "
     "AND summary IS NULL AND quota_view IS NULL AND error_code IS NULL)) "
     "AND (status <> 'running' OR (started_at IS NOT NULL AND finished_at IS NULL AND duration_ms IS NULL "
     "AND summary IS NULL AND quota_view IS NULL AND error_code IS NULL)) "
     "AND (status <> 'done' OR (started_at IS NOT NULL AND finished_at IS NOT NULL AND duration_ms IS NOT NULL "
-    "AND summary IS NOT NULL AND quota_view IS NOT NULL AND error_code IS NULL)) "
+    "AND summary IS NOT NULL AND jsonb_typeof(summary) = 'object' "
+    "AND quota_view IS NOT NULL AND jsonb_typeof(quota_view) = 'object' AND error_code IS NULL)) "
     "AND (status <> 'failed' OR (started_at IS NOT NULL AND finished_at IS NOT NULL AND duration_ms IS NOT NULL "
     "AND summary IS NULL AND quota_view IS NULL AND error_code IS NOT NULL))"
 )

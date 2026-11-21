@@ -13,6 +13,13 @@ Bốn trigger (mỗi bảng một), một hàm kiểm chung:
 * lần xét — không ``DELETE``; dòng ``cancelled`` không sửa được nữa (:data:`SQLSTATE_REVIEW_SESSION_NOT_DRAFT`); năm của lần xét
   không đổi (E4 đọc năm TRƯỚC khi lấy khoá năm — hợp đồng §2 E4 "năm của lần xét không bao giờ đổi"); chuyển sang ``cancelled``
   khi còn dòng sàn ⇒ dừng (P4: lần xét đã huỷ không giữ sàn nào — E5 xoá sàn TRƯỚC rồi mới chuyển trạng thái).
+* **Mức cô lập khi huỷ (đợt 1 sau Codex B2):** chuyển sang ``cancelled`` CHỈ ở ``read committed``
+  (:data:`SQLSTATE_REVIEW_ISOLATION_UNSUPPORTED`). Lý do: phép kiểm "còn sàn" (``EXISTS``) và lệnh xoá sàn của E5 đọc theo ảnh
+  chụp. Ở ``repeatable read`` / ``serializable`` ảnh chụp lấy từ câu đầu giao dịch ⇒ một phiên khác chèn sàn rồi commit SAU mốc ấy
+  (chỉ giữ ``FOR SHARE`` dòng cha — khoá ấy nhả khi commit, không tạo phiên bản dòng mới) thì phiên huỷ KHÔNG thấy sàn mới, vẫn
+  chuyển ``cancelled`` ⇒ sàn mồ côi. Ở ``read committed`` mỗi câu (kể cả câu trong hàm trigger VOLATILE) lấy ảnh chụp MỚI và
+  trigger ``BEFORE UPDATE`` chạy SAU khi đã khoá dòng lần xét ⇒ thấy mọi sàn đã commit. Phía GHI SÀN không cần chặn: ở
+  ``repeatable read`` nếu lần xét đã bị huỷ (dòng có phiên bản mới) sau ảnh chụp thì ``FOR SHARE`` ném lỗi tuần tự hoá ``40001``.
 * lượt chạy — chỉ tạo ở ``queued`` / ``running``; chỉ đi ``queued → running → done / failed``; ``done`` / ``failed`` là cuối (không
   sửa); không ``DELETE``.
 * dòng kết quả — chỉ ``INSERT``, chỉ khi lượt đang ``running`` (đọc dòng lượt ``FOR SHARE`` — cùng lý do như sàn: lệnh chuyển
@@ -25,6 +32,7 @@ SQLSTATE (lớp tự đặt, 5 ký tự; đã kiểm còn trống trong toàn re
 * :data:`SQLSTATE_REVIEW_IMMUTABLE` (``QLC03``) — dữ liệu lần xét bất biến (xoá lần xét, đổi năm, huỷ khi còn sàn, lượt / dòng đã
   xong). Không đường API nào của GĐ2-B tới được (dịch vụ không làm các việc ấy) ⇒ KHÔNG đổi ở handler: gặp là lỗi lập trình ⇒ rơi
   xuống nhánh chung 500 ``INTERNAL_ERROR`` như mọi lỗi CSDL khác (hợp đồng §5 "lỗi không lường; không ghi gì").
+* :data:`SQLSTATE_REVIEW_ISOLATION_UNSUPPORTED` (``QLC04``) — huỷ ở mức cô lập không hỗ trợ; cùng cách xử lý như ``QLC03``.
 
 Bản này cho ``create_all()`` (CSDL test không chạy Alembic — khuôn ``admission_quota_ddl``). Bản thật: migration ``gd2b20261121``
 chép NGUYÊN :data:`STATEMENTS` (``tests/unit/test_gd2b_ddl_lockin.py`` so từng câu sau khi chuẩn hoá khoảng trắng). Migration
@@ -38,6 +46,9 @@ from app.models.base import Base
 SQLSTATE_REVIEW_SESSION_NOT_DRAFT = "QLC02"
 #: Dữ liệu lần xét bất biến — KHÔNG đổi ở handler (500 nếu lọt tới API).
 SQLSTATE_REVIEW_IMMUTABLE = "QLC03"
+#: Huỷ lần xét ở mức cô lập KHÔNG hỗ trợ (khác ``read committed``) — đợt 1 sau Codex B2. KHÔNG đổi ở handler: ứng dụng chạy
+#: ``read committed`` (mặc định CSDL) ⇒ gặp là lỗi lập trình / SQL tay ⇒ 500.
+SQLSTATE_REVIEW_ISOLATION_UNSUPPORTED = "QLC04"
 
 SQL_FN_ASSERT_SESSION_DRAFT = """
 CREATE OR REPLACE FUNCTION admission_review_assert_session_draft(p_session_id integer)
@@ -72,6 +83,10 @@ BEGIN
     IF NEW.academic_year IS DISTINCT FROM OLD.academic_year THEN
         RAISE EXCEPTION 'admission_review_session khong doi nam'
             USING ERRCODE = 'QLC03';
+    END IF;
+    IF NEW.status = 'cancelled' AND current_setting('transaction_isolation') <> 'read committed' THEN
+        RAISE EXCEPTION 'admission_review_session chi huy duoc o read committed'
+            USING ERRCODE = 'QLC04';
     END IF;
     IF NEW.status = 'cancelled' AND EXISTS (
         SELECT 1 FROM admission_review_floor f WHERE f.session_id = OLD.id

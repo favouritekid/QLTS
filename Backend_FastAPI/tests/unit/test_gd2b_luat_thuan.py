@@ -1098,6 +1098,49 @@ def test_bt26_dao_thu_tu_khoan_le_phi_dau_vao_thi_cung_bam():
     assert _bam(_ho_so(app_fees=hai_khoan)) == _bam(_ho_so(app_fees=tuple(reversed(hai_khoan))))
 
 
+# ── Codex B3 (đợt 1): băm ổn định theo GIÁ TRỊ, không theo cách viết ─────────────────────────────────────────────────────────
+SYLL = "so_yeu_ly_lich"
+
+
+def test_b3_dao_thu_tu_ma_giay_bat_buoc_thi_cung_bam():
+    """E4 coi ``mandatory_docs`` là TẬP ⇒ ``[A, B]`` và ``[B, A]`` (cùng ``doc_configs``) cho CÙNG băm."""
+    xuoi = _ho_so(applied_rules=_quy_tac(mandatory=(HOC_BA, SYLL)), docs={HOC_BA: _giay(), SYLL: _giay(doc_id=2)})
+    nguoc = _ho_so(applied_rules=_quy_tac(mandatory=(SYLL, HOC_BA)), docs={HOC_BA: _giay(), SYLL: _giay(doc_id=2)})
+    assert _bam(xuoi) == _bam(nguoc)
+
+
+def test_b3_doi_tap_ma_giay_bat_buoc_thi_doi_bam():
+    """Giá trị nghiệp vụ đổi (thêm một giấy bắt buộc) ⇒ băm đổi."""
+    mot = _ho_so(applied_rules=_quy_tac(mandatory=(HOC_BA,)), docs={HOC_BA: _giay(), SYLL: _giay(doc_id=2)})
+    hai = _ho_so(applied_rules=_quy_tac(mandatory=(HOC_BA, SYLL)), docs={HOC_BA: _giay(), SYLL: _giay(doc_id=2)})
+    assert _bam(mot) != _bam(hai)
+
+
+def test_b3_vat_lieu_cau_hinh_giay_sap_ma_va_giu_phan_biet_thieu_voi_hong():
+    """Vật liệu băm của ``required_document_codes``: danh sách mã ĐÃ SẮP; cấu hình THIẾU và HỎNG mang trạng thái khác nhau ngay trong
+    vật liệu (không chỉ nhờ mã lý do của dòng)."""
+    xuoi = required_document_codes(_quy_tac(mandatory=(HOC_BA, SYLL)))
+    nguoc = required_document_codes(_quy_tac(mandatory=(SYLL, HOC_BA)))
+    assert xuoi.material == nguoc.material and xuoi.material["mandatory_docs"] == sorted([HOC_BA, SYLL])
+    thieu = _quy_tac()
+    del thieu["mandatory_docs"]
+    hong = _quy_tac()
+    hong["mandatory_docs"] = HOC_BA  # chuỗi thay cho danh sách
+    assert (required_document_codes(thieu).material["state"], required_document_codes(hong).material["state"]) == (
+        DOCUMENT_CONFIG_MISSING,
+        DOCUMENT_CONFIG_INVALID,
+    )
+
+
+def test_b3_muc_khu_vuc_viet_0_5_hay_0_50_thi_cung_bam():
+    """``kv_muc`` là chuỗi số: ``"0.5"`` và ``"0.50"`` là CÙNG điểm khu vực ⇒ cùng băm."""
+    assert _bam(_ho_so(kv_muc="0.5")) == _bam(_ho_so(kv_muc="0.50"))
+
+
+def test_b3_muc_khu_vuc_doi_gia_tri_thi_doi_bam():
+    assert _bam(_ho_so(kv_muc="0.5")) != _bam(_ho_so(kv_muc="0.75"))
+
+
 # ═══════════════════════════════════════════ cờ A13 (K4 + biên bản A13) / A19 ═══════════════════════════════════════════
 @pytest.mark.parametrize("trang_thai", qos.OCCUPYING_STATUSES)
 def test_a13_cung_cccd_nam_truoc_dang_chiem_cho_thi_bat_co_kem_trang_thai(trang_thai):

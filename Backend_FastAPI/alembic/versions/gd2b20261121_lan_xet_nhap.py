@@ -125,7 +125,7 @@ CREATE_TABLES = (
 	PRIMARY KEY (id),
 	CONSTRAINT ck_admission_review_run_kind CHECK (kind IN ('evaluate')),
 	CONSTRAINT ck_admission_review_run_status CHECK (status IN ('queued','running','done','failed')),
-	CONSTRAINT ck_admission_review_run_state_columns CHECK ((status <> 'queued' OR (started_at IS NULL AND finished_at IS NULL AND duration_ms IS NULL AND summary IS NULL AND quota_view IS NULL AND error_code IS NULL)) AND (status <> 'running' OR (started_at IS NOT NULL AND finished_at IS NULL AND duration_ms IS NULL AND summary IS NULL AND quota_view IS NULL AND error_code IS NULL)) AND (status <> 'done' OR (started_at IS NOT NULL AND finished_at IS NOT NULL AND duration_ms IS NOT NULL AND summary IS NOT NULL AND quota_view IS NOT NULL AND error_code IS NULL)) AND (status <> 'failed' OR (started_at IS NOT NULL AND finished_at IS NOT NULL AND duration_ms IS NOT NULL AND summary IS NULL AND quota_view IS NULL AND error_code IS NOT NULL))),
+	CONSTRAINT ck_admission_review_run_state_columns CHECK ((status <> 'queued' OR (started_at IS NULL AND finished_at IS NULL AND duration_ms IS NULL AND summary IS NULL AND quota_view IS NULL AND error_code IS NULL)) AND (status <> 'running' OR (started_at IS NOT NULL AND finished_at IS NULL AND duration_ms IS NULL AND summary IS NULL AND quota_view IS NULL AND error_code IS NULL)) AND (status <> 'done' OR (started_at IS NOT NULL AND finished_at IS NOT NULL AND duration_ms IS NOT NULL AND summary IS NOT NULL AND jsonb_typeof(summary) = 'object' AND quota_view IS NOT NULL AND jsonb_typeof(quota_view) = 'object' AND error_code IS NULL)) AND (status <> 'failed' OR (started_at IS NOT NULL AND finished_at IS NOT NULL AND duration_ms IS NOT NULL AND summary IS NULL AND quota_view IS NULL AND error_code IS NOT NULL))),
 	CONSTRAINT ck_admission_review_run_duration CHECK (duration_ms IS NULL OR duration_ms >= 0),
 	CONSTRAINT fk_admission_review_run_session FOREIGN KEY(session_id) REFERENCES admission_review_session (id) ON DELETE RESTRICT,
 	CONSTRAINT fk_admission_review_run_requested_by FOREIGN KEY(requested_by_user_id) REFERENCES "user" (id) ON DELETE RESTRICT
@@ -222,6 +222,10 @@ BEGIN
     IF NEW.academic_year IS DISTINCT FROM OLD.academic_year THEN
         RAISE EXCEPTION 'admission_review_session khong doi nam'
             USING ERRCODE = 'QLC03';
+    END IF;
+    IF NEW.status = 'cancelled' AND current_setting('transaction_isolation') <> 'read committed' THEN
+        RAISE EXCEPTION 'admission_review_session chi huy duoc o read committed'
+            USING ERRCODE = 'QLC04';
     END IF;
     IF NEW.status = 'cancelled' AND EXISTS (
         SELECT 1 FROM admission_review_floor f WHERE f.session_id = OLD.id

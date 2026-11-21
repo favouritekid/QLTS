@@ -502,6 +502,7 @@ async def database_error_handler(request: Request, exc: Exception) -> JSONRespon
     # GĐ2-B: trigger "lần xét không còn nháp" (``app.models.admission_review_ddl`` — ghi điểm sàn khi lần xét không ``draft``,
     # sửa lần xét đã huỷ; bắt cả SQL tay) ⇒ 409 CÙNG ``error_code`` / ``reason_code`` / ``detail`` với lỗi kiểm trước ở dịch vụ
     # (``admission_review_errors.review_session_not_draft`` — MỘT nguồn), KHÔNG có ``status`` (hợp đồng API GĐ2-B bản 4 §1.3).
+    # SQLSTATE ``QLC04`` (huỷ lần xét ở mức cô lập khác ``read committed``) cũng KHÔNG đổi — cùng lý do với ``QLC03`` dưới.
     # SQLSTATE ``QLC03`` (dữ liệu lần xét bất biến: xoá lần xét, đổi năm, huỷ khi còn sàn, lượt / dòng đã xong) CỐ Ý KHÔNG đổi ở
     # đây: không route nào của GĐ2-B làm những việc ấy ⇒ gặp là lỗi lập trình ⇒ rơi xuống ``raise exc`` dưới (500
     # ``INTERNAL_ERROR`` — hợp đồng §5 "lỗi không lường; không ghi gì"), như mọi lỗi CSDL khác.

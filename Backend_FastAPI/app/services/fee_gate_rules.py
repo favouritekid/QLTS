@@ -29,14 +29,16 @@ from decimal import Decimal
 from typing import Any, Optional, Tuple
 
 from app.models.finance.fee import FeeStatusEnum
+from app.services.admission_review_errors import FEE_GATE_MODE_INVALID as _REVIEW_FEE_GATE_MODE_INVALID
 
 FEE_GATE_MODE_LEGACY = "legacy"
 FEE_GATE_MODE_SEMESTER_HK1 = "semester_hk1"
 #: Mọi chế độ hợp lệ — đúng hai giá trị của ``Literal`` ``ADMISSION_FEE_GATE_MODE`` (test khoá bằng nhau).
 FEE_GATE_MODES: Tuple[str, ...] = (FEE_GATE_MODE_LEGACY, FEE_GATE_MODE_SEMESTER_HK1)
 
-#: Mã lý do của lỗi chế độ (cùng chữ với ``reason_code`` 503 ``REVIEW_CONFIG_UNAVAILABLE`` của hợp đồng API GĐ2-B §5).
-FEE_GATE_MODE_INVALID = "fee_gate_mode_invalid"
+#: Mã lý do của lỗi chế độ = ``reason_code`` 503 ``REVIEW_CONFIG_UNAVAILABLE`` của hợp đồng API GĐ2-B §5. MỘT nguồn: danh mục
+#: lỗi ``admission_review_errors`` (đợt 1 sau Codex — tên ở đây là CHÍNH đối tượng ấy; test đồng nhất ``is``).
+FEE_GATE_MODE_INVALID = _REVIEW_FEE_GATE_MODE_INVALID
 
 #: Trạng thái khoản đạt ở MỌI chế độ (đúng tuple cổng nhập học đã dùng — so bằng ``==`` như ``in (…)`` cũ).
 _CLEARED_STATUSES: Tuple[str, ...] = (FeeStatusEnum.paid.value, FeeStatusEnum.waived.value)

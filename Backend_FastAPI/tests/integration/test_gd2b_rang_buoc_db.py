@@ -32,6 +32,7 @@ pytestmark = pytest.mark.integration
 NAM = 2026
 QLC02 = "QLC02"  # lần xét không còn nháp (admission_review_ddl.SQLSTATE_REVIEW_SESSION_NOT_DRAFT)
 QLC03 = "QLC03"  # dữ liệu lần xét bất biến (admission_review_ddl.SQLSTATE_REVIEW_IMMUTABLE)
+QLC04 = "QLC04"  # huỷ ở mức cô lập không hỗ trợ (admission_review_ddl.SQLSTATE_REVIEW_ISOLATION_UNSUPPORTED)
 
 CHEN_LAN_XET = (
     "INSERT INTO admission_review_session (academic_year, admission_round_id, seq_no, created_by_user_id) "
@@ -474,12 +475,29 @@ async def test_luot_dang_chay_thieu_gio_bat_dau_bi_chan(c):
     [
         "UPDATE admission_review_run SET status = 'done', finished_at = now(), duration_ms = 5 WHERE id = :r",
         "UPDATE admission_review_run SET status = 'failed', finished_at = now(), duration_ms = 5 WHERE id = :r",
+        # Đợt 1 sau Codex B3: ``done`` chỉ nhận JSON OBJECT — JSON ``null`` (khác SQL NULL) / mảng đều bị chặn.
+        "UPDATE admission_review_run SET status = 'done', finished_at = now(), duration_ms = 5, "
+        "summary = CAST('null' AS jsonb), quota_view = CAST('{}' AS jsonb) WHERE id = :r",
+        "UPDATE admission_review_run SET status = 'done', finished_at = now(), duration_ms = 5, "
+        "summary = CAST('{}' AS jsonb), quota_view = CAST('[]' AS jsonb) WHERE id = :r",
     ],
-    ids=["done_thieu_ket_qua", "failed_thieu_ma_loi"],
+    ids=["done_thieu_ket_qua", "failed_thieu_ma_loi", "done_summary_json_null", "done_quota_view_mang"],
 )
 async def test_luot_ket_thuc_thieu_cot_bi_chan(c, cau):
     rid = await _luot(c, await _lan_xet(c))
     assert await _loi(c, cau, r=rid) == ("23514", "ck_admission_review_run_state_columns")
+
+
+async def test_luot_chua_xong_ket_qua_json_null_bi_chan(c):
+    """Codex B3 vế "SQL NULL ≠ JSON null" ở lượt CHƯA xong: ``queued`` đòi ``summary`` là SQL NULL — JSON ``null`` (ghi thẳng, không
+    qua ``none_as_null``) bị chặn."""
+    sid = await _lan_xet(c)
+    assert await _loi(
+        c,
+        "INSERT INTO admission_review_run (session_id, kind, status, rule_version, requested_by_user_id, inputs, summary) "
+        "VALUES (:s, 'evaluate', 'queued', 'gd2b-1', :u, CAST('{}' AS jsonb), CAST('null' AS jsonb))",
+        s=sid, u=c.info["d"]["nguoi"],
+    ) == ("23514", "ck_admission_review_run_state_columns")
 
 
 async def test_thoi_luong_am_bi_chan(c):
@@ -817,3 +835,123 @@ async def test_hai_phien_chuyen_done_dang_do_thi_chen_dong_phai_cho_roi_bi_chan(
         assert (
             await k.execute(text("SELECT count(*) FROM admission_review_row WHERE run_id = :r"), {"r": rid})
         ).scalar_one() == 0
+
+
+# ── B2 (Codex đợt 1): "lần xét đã huỷ còn 0 dòng sàn" ở MỌI thứ tự và mức cô lập ─────────────────────────────────────────
+async def _huy_kieu_e5(conn, sid, u):
+    """Đúng thứ tự E5 (đặc tả §6.8): dòng lần xét ``FOR UPDATE`` → xoá mọi sàn → chuyển ``cancelled``."""
+    await conn.execute(text("SELECT id FROM admission_review_session WHERE id = :s FOR UPDATE"), {"s": sid})
+    await conn.execute(text("DELETE FROM admission_review_floor WHERE session_id = :s"), {"s": sid})
+    await conn.execute(text(HUY), {"u": u, "s": sid})
+
+
+async def _mo(muc=None):
+    """Kết nối + giao dịch ở mức cô lập ``muc`` (``None`` = mặc định ``read committed``); ĐO lại mức thật trong giao dịch."""
+    k = await csdl.engine.connect()
+    if muc is not None:
+        await k.execution_options(isolation_level=muc)
+    await k.begin()
+    that = (await k.execute(text("SELECT current_setting('transaction_isolation')"))).scalar_one()
+    assert that == (muc or "READ COMMITTED").lower(), that
+    return k
+
+
+async def _trang_thai_cuoi(sid):
+    """(trạng thái lần xét, số dòng sàn của nó, số lần xét ĐÃ HUỶ còn sàn — bất biến P4, phải 0) đọc từ phiên MỚI."""
+    async with csdl.engine.connect() as k:
+        st = (await k.execute(text("SELECT status FROM admission_review_session WHERE id = :s"), {"s": sid})).scalar_one()
+        n = (
+            await k.execute(text("SELECT count(*) FROM admission_review_floor WHERE session_id = :s"), {"s": sid})
+        ).scalar_one()
+        mo_coi = (
+            await k.execute(
+                text(
+                    "SELECT count(*) FROM admission_review_session s WHERE s.status = 'cancelled' "
+                    "AND EXISTS (SELECT 1 FROM admission_review_floor f WHERE f.session_id = s.id)"
+                )
+            )
+        ).scalar_one()
+    return st, n, mo_coi
+
+
+async def test_hai_phien_rc_chen_san_dang_do_thi_huy_cho_roi_giai_phong_ca_san_moi(nen):
+    """RC, CHÈN TRƯỚC: phiên A chèn sàn (học vụ Y) CHƯA commit (giữ ``FOR SHARE`` dòng lần xét). Phiên B huỷ theo E5 ⇒ B phải CHỜ
+    đúng A ở ``FOR UPDATE``; A commit ⇒ B xoá CẢ sàn mới (câu xoá lấy ảnh chụp sau khi chờ) ⇒ ``cancelled``, 0 dòng sàn."""
+    sid, u = nen["sid"], nen["nguoi"]
+    a, b = await _mo(), await _mo()
+    viec = None
+    try:
+        pa = await _pid(a)
+        await a.execute(text(CHEN_SAN), {"s": sid, "y": NAM, "a": nen["hv"]["Y"], "f": Decimal("14.00"), "u": u})
+        pb = await _pid(b)
+        viec = asyncio.ensure_future(_huy_kieu_e5(b, sid, u))
+        assert await _bi_chan_boi(pb, pa, viec), "huỷ KHÔNG chờ lệnh chèn sàn đang dở"
+        await a.commit()
+        await viec
+        await b.commit()
+    finally:
+        await _don(a, b, viec)
+    assert await _trang_thai_cuoi(sid) == ("cancelled", 0, 0)
+
+
+async def test_rr_huy_co_anh_chup_truoc_khi_san_moi_commit_thi_bi_tu_choi(nen):
+    """Codex B2: phiên huỷ B ở REPEATABLE READ đã lấy ảnh chụp; phiên khác chèn sàn (học vụ Y) rồi COMMIT (chỉ giữ ``FOR SHARE`` dòng
+    lần xét — không tạo phiên bản dòng mới). B chạy E5: ảnh chụp cũ không thấy sàn mới ⇒ nếu cho huỷ thì sàn mồ côi. Trigger chỉ
+    cho huỷ ở ``read committed`` ⇒ ``QLC04``; lần xét vẫn nháp, sàn còn nguyên — không lần xét đã huỷ nào còn sàn."""
+    sid, u = nen["sid"], nen["nguoi"]
+    b = await _mo("REPEATABLE READ")
+    try:
+        assert (
+            await b.execute(text("SELECT count(*) FROM admission_review_floor WHERE session_id = :s"), {"s": sid})
+        ).scalar_one() == 1  # ảnh chụp của B: chỉ sàn X
+        async with csdl.engine.begin() as k:
+            await k.execute(text(CHEN_SAN), {"s": sid, "y": NAM, "a": nen["hv"]["Y"], "f": Decimal("14.00"), "u": u})
+        with pytest.raises(DBAPIError) as e:
+            await _huy_kieu_e5(b, sid, u)
+        assert db_error_codes(e.value)[0] == QLC04
+    finally:
+        await b.rollback()
+        await b.close()
+    assert await _trang_thai_cuoi(sid) == ("draft", 2, 0)
+
+
+async def test_rr_ghi_san_khi_huy_commit_sau_anh_chup_thi_loi_tuan_tu_hoa(nen):
+    """RR, HUỶ TRƯỚC: phiên A (REPEATABLE READ) đã lấy ảnh chụp; phiên B huỷ theo E5 CHƯA commit. A chèn sàn ⇒ CHỜ đúng B; B commit
+    (dòng lần xét có phiên bản mới SAU ảnh chụp của A) ⇒ ``FOR SHARE`` của trigger sàn ném lỗi tuần tự hoá ``40001`` ⇒ không sàn
+    nào chen vào lần xét đã huỷ."""
+    sid, u = nen["sid"], nen["nguoi"]
+    a = await _mo("REPEATABLE READ")
+    b = await _mo()
+    viec = None
+    try:
+        await a.execute(text("SELECT count(*) FROM admission_review_session"))  # lấy ảnh chụp của A
+        pb = await _pid(b)
+        await _huy_kieu_e5(b, sid, u)
+        pa = await _pid(a)
+        viec = asyncio.ensure_future(
+            a.execute(text(CHEN_SAN), {"s": sid, "y": NAM, "a": nen["hv"]["Y"], "f": Decimal("14.00"), "u": u})
+        )
+        assert await _bi_chan_boi(pa, pb, viec), "chèn sàn KHÔNG chờ giao dịch huỷ đang dở"
+        await b.commit()
+        with pytest.raises(DBAPIError) as e:
+            await viec
+        assert db_error_codes(e.value)[0] == "40001"
+    finally:
+        await _don(b, a, viec)
+    assert await _trang_thai_cuoi(sid) == ("cancelled", 0, 0)
+
+
+@pytest.mark.parametrize("muc", ["REPEATABLE READ", "SERIALIZABLE"])
+async def test_huy_o_muc_co_lap_khac_read_committed_bi_tu_choi(nen, muc):
+    """Một phiên, không ai chen: huỷ ở mức cô lập khác ``read committed`` vẫn bị từ chối (``QLC04``) — chặn theo MỨC, không theo
+    việc có tranh chấp hay không."""
+    sid, u = nen["sid"], nen["nguoi"]
+    b = await _mo(muc)
+    try:
+        with pytest.raises(DBAPIError) as e:
+            await _huy_kieu_e5(b, sid, u)
+        assert db_error_codes(e.value)[0] == QLC04
+    finally:
+        await b.rollback()
+        await b.close()
+    assert await _trang_thai_cuoi(sid) == ("draft", 1, 0)

@@ -111,6 +111,26 @@ def test_sqlstate_trigger_khop_hang():
     for cau in (ddl.SQL_FN_SESSION_GUARD, ddl.SQL_FN_RUN_GUARD, ddl.SQL_FN_ROW_GUARD):
         assert "ERRCODE = 'QLC03'" in cau
     assert "QLC03" not in ddl.SQL_FN_ASSERT_SESSION_DRAFT and "QLC02" not in ddl.SQL_FN_RUN_GUARD + ddl.SQL_FN_ROW_GUARD
+    assert ddl.SQLSTATE_REVIEW_ISOLATION_UNSUPPORTED == "QLC04"
+    assert "ERRCODE = 'QLC04'" in ddl.SQL_FN_SESSION_GUARD
+    assert "QLC04" not in ddl.SQL_FN_ASSERT_SESSION_DRAFT + ddl.SQL_FN_FLOOR_GUARD + ddl.SQL_FN_RUN_GUARD + ddl.SQL_FN_ROW_GUARD
+
+
+def test_huy_lan_xet_chi_o_read_committed_va_truoc_phep_kiem_con_san():
+    """Codex B2 (đợt 1): chặn mức cô lập ở bước CHUYỂN ``cancelled`` — đặt TRƯỚC phép kiểm ``EXISTS`` sàn (phép kiểm theo ảnh chụp
+    chỉ đúng ở ``read committed``). Hành vi hai phiên đo ở ``test_gd2b_rang_buoc_db.py``."""
+    s = _chuan_hoa(ddl.SQL_FN_SESSION_GUARD)
+    chan = "IF NEW.status = 'cancelled' AND current_setting('transaction_isolation') <> 'read committed' THEN"
+    assert chan in s
+    assert s.index(chan) < s.index("IF NEW.status = 'cancelled' AND EXISTS")
+
+
+def test_luot_xong_doi_ket_qua_la_json_object():
+    """Codex B3 (đợt 1): lượt ``done`` chỉ nhận ``summary`` / ``quota_view`` là JSON OBJECT — có ``IS NOT NULL`` đứng trước (CHECK
+    coi NULL là đạt; ``jsonb_typeof(NULL)`` là NULL)."""
+    s = _chuan_hoa(m.CHECK_RUN_STATE_COLUMNS)
+    for cot in ("summary", "quota_view"):
+        assert "%s IS NOT NULL AND jsonb_typeof(%s) = 'object'" % (cot, cot) in s, cot
 
 
 @pytest.mark.parametrize(
@@ -120,6 +140,7 @@ def test_sqlstate_trigger_khop_hang():
         # dùng lại cùng mã ⇒ handler đổi nhầm lỗi của người khác thành 409 lần xét.
         ("QLC02", {"app/models/admission_review_ddl.py", "alembic/versions/gd2b20261121_lan_xet_nhap.py"}),
         ("QLC03", {"app/models/admission_review_ddl.py", "alembic/versions/gd2b20261121_lan_xet_nhap.py"}),
+        ("QLC04", {"app/models/admission_review_ddl.py", "alembic/versions/gd2b20261121_lan_xet_nhap.py"}),
         ("QLC12", {"alembic/versions/gd2b20261121_lan_xet_nhap.py"}),
     ],
 )

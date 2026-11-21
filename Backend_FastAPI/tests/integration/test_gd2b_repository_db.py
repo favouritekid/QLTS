@@ -63,17 +63,21 @@ async def test_lan_xet_dang_giu_hoc_vu_sap_theo_so_thu_tu(c):
 
 
 def _dong(c, profile_id, tab, **them):
+    """Một dòng ĐỦ mọi cột của ``repo.ROW_INSERT_COLUMNS`` (đúng hình ``ReviewRow.column_values`` của luật L2): cột không áp dụng
+    là ``None`` — ``insert_rows`` đòi đủ khoá."""
     x = c.info["X"]
     co_nv = tab in ("auto", "needs_decision")
-    d = {
-        "profile_id": profile_id, "profile_status": "submitted", "tab": tab, "reason_codes": [], "flags": [],
-        "decision_hints": [], "per_choice": [{"choice_id": profile_id}] if tab != "ineligible" else [],
-        "row_hash": "%064x" % profile_id,
-    }
+    d = {k: None for k in repo.ROW_INSERT_COLUMNS}
+    d.update(
+        profile_id=profile_id, profile_status="submitted", tab=tab, reason_codes=[], flags=[], decision_hints=[],
+        per_choice=[{"choice_id": profile_id}] if tab != "ineligible" else [], prior_year_findings=[],
+        row_hash="%064x" % profile_id,
+    )
     if co_nv:
         d.update(
             considered_choice_id=profile_id, considered_display_order=1, considered_offering_academic_info_id=x["ai"],
             considered_offering_id=x["off"], considered_admission_path_id=x["path"], considered_major_code="A",
+            review_total=Decimal("15.00"),
         )
     d.update(them)
     return d
@@ -119,6 +123,75 @@ async def test_luot_moi_nhat_va_luot_xong_moi_nhat(c):
         assert ([r.id for r in items], total) == ([r2, r1], 2)
         assert await repo.get_run(db, sid, r1) is not None
         assert await repo.get_run(db, sid + 1000, r1) is None  # lượt không thuộc lần xét ⇒ như không có
+
+
+def _lo_xen_ke(c, n, goc=1000):
+    """``n`` dòng XEN KẼ: hồ sơ được xếp (``auto`` — đủ ``considered_*`` + điểm) và hồ sơ thiếu điều kiện (``ineligible`` — mọi
+    cột NV / điểm ``None``) — đúng ca làm đường bulk ORM tách thành nhiều câu (Codex B1)."""
+    ra = []
+    for i in range(n):
+        if i % 2 == 0:
+            ra.append(_dong(c, goc + i, "auto", review_total=Decimal("16.00"), floor_score=Decimal("15.00")))
+        else:
+            ra.append(_dong(c, goc + i, "ineligible", reason_codes=["thieu_ma_ho_so"], profile_status="submitted"))
+    return ra
+
+
+async def _dem_cau_khi_ghi(c, rows):
+    """Số câu SQL THẬT gửi xuống driver (listener ``before_cursor_execute`` trên kết nối) trong MỘT lần ``insert_rows`` qua
+    ``AsyncSession`` (đường của lượt chạy). Trả danh sách (đầu câu, executemany)."""
+    from sqlalchemy import event
+
+    cau = []
+
+    def nghe(conn, cursor, statement, parameters, context, executemany):
+        cau.append((" ".join(statement.split()[:3]), executemany))
+
+    ket_noi = c.sync_engine  # listener cấp engine: áp cho MỌI kết nối của engine (ca này chỉ dùng kết nối của ``c``)
+    event.listen(ket_noi, "before_cursor_execute", nghe)
+    try:
+        rid = await _luot(c, await _lan_xet(c, so=len(rows)))
+        cau.clear()  # chỉ đếm phần ghi dòng
+        async with AsyncSession(bind=c) as db:
+            await repo.insert_rows(db, rid, rows)
+    finally:
+        event.remove(ket_noi, "before_cursor_execute", nghe)
+    so_dong = (await _x(c, "SELECT count(*) FROM admission_review_row WHERE run_id = :r", r=rid)).scalar_one()
+    return cau, so_dong
+
+
+@pytest.mark.parametrize("n", [10, 200])
+async def test_bt35_ghi_lo_xen_ke_mot_cau_sql_khong_tang_theo_so_ho_so(c, n):
+    """BT35 / K1 — phần đo được ở ĐỢT 1 (tầng repository): ghi ``n`` dòng xen kẽ được xếp / thiếu điều kiện = ĐÚNG MỘT câu
+    ``INSERT`` ở cả 10 và 200 dòng (đo bằng listener, không suy từ một lần gọi hàm). Phép đo nghiệm thu BT35 TOÀN lượt chạy (đọc
+    ảnh chụp + tính lại KV F231 + ghi run / dòng — đặc tả bản 4 :617, owner K1) cần ``run_evaluate`` của L3b ⇒ ĐỢT 2."""
+    cau, so_dong = await _dem_cau_khi_ghi(c, _lo_xen_ke(c, n))
+    assert so_dong == n
+    assert [dau for dau, _ in cau] == ["INSERT INTO admission_review_row"], cau
+
+
+async def test_dong_thieu_hoac_thua_cot_bi_tu_choi_truoc_khi_ghi(c):
+    """Mọi dòng phải đủ ĐÚNG tập cột (một hình câu duy nhất) — thiếu một khoá ⇒ ``RowColumnsMismatch``, không câu nào gửi đi.
+    Dòng THIẾU đứng ĐẦU lô: không có phép kiểm thì câu Core dựng theo khoá của dòng đầu và lô ghi được ÂM THẦM (cột thiếu = NULL)."""
+    rid = await _luot(c, await _lan_xet(c))
+    thieu = _dong(c, 1, "ineligible", reason_codes=["thieu_ma_ho_so"])
+    del thieu["document_gaps"]
+    async with AsyncSession(bind=c) as db:
+        with pytest.raises(repo.RowColumnsMismatch):
+            await repo.insert_rows(db, rid, [thieu, _dong(c, 2, "ineligible", reason_codes=["thieu_ma_ho_so"])])
+    assert (await _x(c, "SELECT count(*) FROM admission_review_row WHERE run_id = :r", r=rid)).scalar_one() == 0
+
+
+def test_cot_chen_dong_bang_cot_cua_luat_l2():
+    """``ROW_INSERT_COLUMNS`` (repository L1) == khoá của ``ReviewRow.column_values`` (luật L2) — hai đầu của MỘT lô ghi."""
+    from app.services import admission_review_rules as R
+
+    mau = R.ReviewRow(
+        profile_id=1, profile_status="submitted", tab=R.TAB_INELIGIBLE, reason_codes=("x",), flags=(), decision_hints=(),
+        document_gaps=None, considered=None, scores=None, floor_score=None, rank_in_major=None, within_seats=None,
+        ethnic_priority_state=None, per_choice=(), prior_year_findings=(), row_hash="0" * 64,
+    )
+    assert set(mau.column_values()) == set(repo.ROW_INSERT_COLUMNS)
 
 
 async def test_document_gaps_none_qua_orm_luu_sql_null(c):

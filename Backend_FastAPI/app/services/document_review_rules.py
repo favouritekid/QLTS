@@ -93,12 +93,19 @@ def required_document_codes(applied_rules: object) -> RequiredDocuments:
     * hợp lệ ⇒ ``codes`` = M sắp tăng dần (có thể rỗng: M = D = ∅ là cấu hình hợp lệ, E4 đạt riêng bước này).
 
     Hàm thuần — không đọc CSDL. Đây là nơi DUY NHẤT của các module GĐ2-B đọc khoá ``mandatory_docs`` (test AST khoá) — kể cả
-    phần ``material`` cho ``row_hash``."""
+    phần ``material`` cho ``row_hash``.
+
+    ``material`` (đợt 1 sau Codex B3): E4 coi ``mandatory_docs`` là TẬP ⇒ danh sách mã (mọi phần tử là chuỗi) đem băm ĐÃ SẮP — đổi
+    thứ tự ``[A, B]`` ↔ ``[B, A]`` KHÔNG đổi băm; phần tử trùng GIỮ (trùng là cấu hình hỏng, vẫn khác băm với bản không trùng).
+    ``doc_configs`` là object ⇒ băm JSON khoá sắp, vốn không phụ thuộc thứ tự. Khoá ``state`` (``ok`` / mã lỗi) giữ phân biệt cấu
+    hình THIẾU với cấu hình HỎNG ngay trong vật liệu băm."""
     if not isinstance(applied_rules, dict):
-        return RequiredDocuments(None, DOCUMENT_CONFIG_MISSING, {"kind": type(applied_rules).__name__})
+        return RequiredDocuments(
+            None, DOCUMENT_CONFIG_MISSING, {"state": DOCUMENT_CONFIG_MISSING, "kind": type(applied_rules).__name__}
+        )
     raw_configs = applied_rules.get("doc_configs", CONFIG_KEY_ABSENT)
     material = {
-        "mandatory_docs": applied_rules.get("mandatory_docs", CONFIG_KEY_ABSENT),
+        "mandatory_docs": _sorted_if_code_list(applied_rules.get("mandatory_docs", CONFIG_KEY_ABSENT)),
         "doc_configs": {
             str(k): (v.get("is_mandatory", CONFIG_KEY_ABSENT) if isinstance(v, dict) else {"raw": v})
             for k, v in raw_configs.items()
@@ -106,25 +113,37 @@ def required_document_codes(applied_rules: object) -> RequiredDocuments:
         if isinstance(raw_configs, dict)
         else raw_configs,
     }
+
+    def _result(codes: Optional[Tuple[str, ...]], error: Optional[str]) -> RequiredDocuments:
+        return RequiredDocuments(codes, error, {**material, "state": error or "ok"})
+
     if "mandatory_docs" not in applied_rules or "doc_configs" not in applied_rules:
-        return RequiredDocuments(None, DOCUMENT_CONFIG_MISSING, material)
+        return _result(None, DOCUMENT_CONFIG_MISSING)
     mandatory = applied_rules["mandatory_docs"]
     configs = applied_rules["doc_configs"]
     if not isinstance(mandatory, list) or not all(isinstance(c, str) and c.strip() for c in mandatory):
-        return RequiredDocuments(None, DOCUMENT_CONFIG_INVALID, material)
+        return _result(None, DOCUMENT_CONFIG_INVALID)
     if len(set(mandatory)) != len(mandatory):
-        return RequiredDocuments(None, DOCUMENT_CONFIG_INVALID, material)
+        return _result(None, DOCUMENT_CONFIG_INVALID)
     if not isinstance(configs, dict):
-        return RequiredDocuments(None, DOCUMENT_CONFIG_INVALID, material)
+        return _result(None, DOCUMENT_CONFIG_INVALID)
     marked = set()
     for code, item in configs.items():
         if not isinstance(item, dict) or type(item.get("is_mandatory")) is not bool:
-            return RequiredDocuments(None, DOCUMENT_CONFIG_INVALID, material)
+            return _result(None, DOCUMENT_CONFIG_INVALID)
         if item["is_mandatory"] is True:
             marked.add(code)
     if set(mandatory) != marked:
-        return RequiredDocuments(None, DOCUMENT_CONFIG_INVALID, material)
-    return RequiredDocuments(tuple(sorted(mandatory)), None, material)
+        return _result(None, DOCUMENT_CONFIG_INVALID)
+    return _result(tuple(sorted(mandatory)), None)
+
+
+def _sorted_if_code_list(value: object) -> object:
+    """Danh sách mà MỌI phần tử là chuỗi ⇒ bản ĐÃ SẮP (giữ phần tử trùng); giá trị khác (khoá vắng, kiểu sai) giữ nguyên — cho
+    vật liệu băm của :func:`required_document_codes`."""
+    if isinstance(value, list) and all(isinstance(c, str) for c in value):
+        return sorted(value)
+    return value
 
 
 @dataclass(frozen=True)
