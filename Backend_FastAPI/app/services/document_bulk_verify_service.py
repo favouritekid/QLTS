@@ -687,6 +687,12 @@ async def execute_batch(
                 denial = await cross_denial(db, creator, rules.ACTION_VERIFY, scope)
                 await _safe_rollback(db)
                 raise denial
+            # PR-B lượt 4 (Codex lượt 4 C1b): khoá dòng quyền có thể phải CHỜ — hạn bản xem trước ở trên tính TRƯỚC lần chờ
+            # ấy. Đọc lại theo đồng hồ CSDL SAU khi đủ khoá, TRƯỚC khi đổi ``processing`` (dòng lô đã giữ ``FOR UPDATE`` ⇒
+            # ``expires_at`` đứng yên).
+            if row.expires_at <= await repo.db_clock(db):
+                await _safe_rollback(db)
+                raise BulkBatchConflict("PREVIEW_EXPIRED", "Bản xem trước đã hết hạn — xem trước lại")
         n_items = await repo.count_batch_items(db, batch_id)
         if confirmation_text != confirmation_sentence(n_items):
             await _safe_rollback(db)

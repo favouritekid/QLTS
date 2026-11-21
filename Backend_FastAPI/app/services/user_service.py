@@ -221,18 +221,23 @@ async def get_highest_priority_role_from_casbin(
     user_id: int
 ) -> str:
     """
-    Lấy role có độ ưu tiên cao nhất từ Casbin cho user.
+    Lấy role có độ ưu tiên cao nhất từ Casbin cho user (đọc BỘ NHỚ enforcer của worker này — chỉ dùng cho báo cáo đọc;
+    đường GHI vai CSDL dùng :func:`highest_priority_role` trên dòng ``casbin_rule``, PR-B lượt 4).
     Returns: "admin" | "manager" | "officer" | "user"
     """
+    user_subject = f"user:{user_id}"
+    return highest_priority_role(await enforcer.get_roles_for_user(user_subject))
+
+
+def highest_priority_role(casbin_roles) -> str:
+    """Vai ưu tiên cao nhất trong một danh sách vai Casbin (``role:<tên>``), bỏ tiền tố; rỗng ⇒ ``"user"``. Bảng ưu tiên
+    GIỮ NGUYÊN bản của module này (thiếu ``role:accountant`` — khác ``role_service.ROLE_PRIORITY``: việc riêng, ngoài PR-B)."""
     ROLE_PRIORITY = {
         "role:admin": 4,
         "role:manager": 3,
         "role:officer": 2,
         "role:user": 1
     }
-
-    user_subject = f"user:{user_id}"
-    casbin_roles = await enforcer.get_roles_for_user(user_subject)
 
     if not casbin_roles:
         return "user"  # Default fallback
@@ -751,8 +756,14 @@ async def update_user(
         # hạn, CÙNG giao dịch (router commit một lần). Đặt TRƯỚC đồng bộ Casbin (adapter ghi bằng phiên RIÊNG, không rollback
         # được): lỗi ghi nhật ký thu hồi ⇒ ném ra trước khi Casbin bị đụng ⇒ rollback cả đổi vai / khoá lẫn thu hồi.
         # Vai / trạng thái CŨ đọc DƯỚI khoá dòng người trong hàm (không dùng ``db_user`` nạp từ đầu yêu cầu).
+        from app.repositories import document_bulk_repository as bulk_repo
         from app.services.document_cross_review_service import revoke_grants_on_account_change
 
+        # PR-B lượt 4 (rà nhánh "CHỈ đổi đơn vị"): khoá dòng người ``FOR NO KEY UPDATE`` cho MỌI lần cập nhật, không chỉ
+        # khi đổi vai / trạng thái. Đổi đơn vị đi qua ``_create_or_update_user_assignment`` — hàm ấy GHI cả ``user.role``
+        # (= vai hiện hành mà hàm này tính) ⇒ tính từ bản nạp đầu yêu cầu thì một lệnh đổi vai đã commit trong lúc ấy bị GHI
+        # ĐÈ bằng vai cũ (vai CSDL quay lại Cán bộ trong khi Casbin + quyền chéo đã theo vai mới).
+        await bulk_repo.lock_user_no_key_update(db, db_user.id)
         await revoke_grants_on_account_change(
             db,
             user_id=db_user.id,
@@ -761,10 +772,9 @@ async def update_user(
             actor_id=assigned_by_user_id,
             request_meta=request_meta,
         )
-        if "role" in update_data or "status" in update_data:
-            # PR-B lượt 2: đọc lại vai / đơn vị / trạng thái HIỆN HÀNH (dòng đã khoá ở trên) — quyết "vai có đổi không" bên
-            # dưới bằng cùng giá trị với quyết định thu hồi; bản nạp từ đầu yêu cầu có thể đã cũ.
-            await db.refresh(db_user, attribute_names=["role", "unit_id", "status"])
+        # PR-B lượt 2 + 4: đọc lại vai / đơn vị / trạng thái HIỆN HÀNH (dòng đã khoá ở trên) — quyết "vai / đơn vị có đổi
+        # không" bên dưới bằng cùng giá trị với quyết định thu hồi; bản nạp từ đầu yêu cầu có thể đã cũ.
+        await db.refresh(db_user, attribute_names=["role", "unit_id", "status"])
         if "status" in update_data and status_transition_out is not None:
             # PR-B lượt 3: trạng thái CŨ = giá trị vừa đọc lại dưới khoá dòng người (khoá giữ tới commit).
             status_transition_out.update(old=db_user.status, new=update_data["status"])
@@ -837,7 +847,9 @@ async def update_user(
                     new_role=new_db_role,
                     new_unit_id=new_db_unit_id,
                     assigned_by_user_id=assigned_by_user_id,
-                    enforcer=enforcer  # ✅ Pass enforcer for Casbin sync
+                    # PR-B lượt 4 (Codex lượt 4 C1a): KHÔNG truyền enforcer — đồng bộ Casbin của hàm này (gỡ / gán qua bộ nhớ
+                    # worker, NUỐT lỗi) bị thay bằng bước (3) bên dưới: ghi ``casbin_rule`` trong giao dịch, lỗi ⇒ không commit.
+                    enforcer=None,
                 )
 
             db.add(db_user)
@@ -845,6 +857,13 @@ async def update_user(
             await db.refresh(db_user)
 
             # (3) Sync Casbin INSIDE the same transaction (if role changed)
+            # PR-B lượt 4 (Codex lượt 3 điểm chặn 1 + Codex lượt 4 C1a, C2): bảng ``casbin_rule`` — nguồn CHUNG mọi worker —
+            # ghi TRONG giao dịch của router, KHÔNG qua bộ nhớ enforcer của worker này (bản riêng, có thể cũ: thiếu vai worker
+            # khác vừa gán ⇒ dòng ấy sót lại). Đọc + KHOÁ ``FOR UPDATE`` mọi dòng ``g, user:<id>, …`` hiện có, xoá ĐÚNG các dòng
+            # ấy theo id (dòng chèn sau lần đọc là thao tác đến sau, không bị xoá), chèn vai mới — người dùng còn đúng MỘT vai
+            # Casbin = vai CSDL mới (như hành vi cũ: gỡ mọi vai rồi gán vai mới). Lỗi ở đây KHÔNG bị nuốt ⇒ ném ra ⇒ router
+            # không commit gì: vai CSDL, tự thu hồi + nhật ký (Q4) và ``casbin_rule`` cùng giữ nguyên. Bộ nhớ enforcer của
+            # worker này nạp lại SAU commit (callback).
             if role_changed and enforcer:
                 log.info(
                     "Role changed, syncing Casbin inside transaction",
@@ -852,37 +871,17 @@ async def update_user(
                     old=old_db_role,
                     new=new_db_role
                 )
+                from app.repositories import UserRepository
 
-                old_casbin_role = f"role:{old_db_role}" if old_db_role else None
-                new_casbin_role = f"role:{new_db_role}"
-
-                from app.services.casbin_service import khoa_enforcer
-
-                # Gỡ role cũ + gán role mới là MỘT thao tác. Tách ra thì có một
-                # khoảnh khắc người dùng KHÔNG có role nào — hoặc, nếu đan lịch
-                # ngược lại, có CẢ HAI.
-                async with khoa_enforcer(enforcer):
-                    # Remove old role grouping (if exists)
-                    if old_casbin_role:
-                        removed = await enforcer.remove_grouping_policy(
-                            user_subject, old_casbin_role
-                        )
-                        log.debug(
-                            "Removed old Casbin grouping policy", removed=removed
-                        )
-
-                    # Add new role grouping
-                    added = await enforcer.add_grouping_policy(
-                        user_subject, new_casbin_role
-                    )
-                log.debug("Added new Casbin grouping policy", added=added)
-
-                # KHÔNG `save_policy()` — xem chú thích ở `create_user_by_admin`.
-
+                grouping_repo = UserRepository(db)
+                rows = await grouping_repo.lock_grouping_rows(db_user.id)
+                await grouping_repo.delete_grouping_ids([row_id for row_id, _ in rows])
+                await grouping_repo.add_grouping(db_user.id, f"role:{new_db_role}")
                 log.info(
-                    "Casbin grouping policy synced successfully (in transaction)",
+                    "Casbin grouping rows replaced (in transaction)",
                     user_id=user_id_for_logging,
-                    new_casbin_role=new_casbin_role
+                    removed=[role for _, role in rows],
+                    new_casbin_role=f"role:{new_db_role}",
                 )
 
             # ✅ If we reach here, all operations succeeded
@@ -894,6 +893,15 @@ async def update_user(
         # ✅ Create post-commit callback
         async def _post_commit():
             """Execute after router commits the transaction."""
+            if role_changed and enforcer:
+                # PR-B lượt 4: ``casbin_rule`` đã đổi TRONG giao dịch vừa commit ⇒ nạp lại bộ nhớ enforcer CỦA WORKER NÀY.
+                # Nạp hỏng chỉ để bộ nhớ worker này cũ (như mọi worker khác) — CSDL đã đúng, không đường đổi vai CSDL nào
+                # quyết từ bộ nhớ ⇒ ghi lỗi, không đổi kết quả đã commit.
+                from app.services.casbin_service import dong_bo_tu_nguon_ben_vung
+
+                loi_nap = await dong_bo_tu_nguon_ben_vung(enforcer)
+                if loi_nap is not None:
+                    log.error("update_user: reload enforcer after commit failed", user_id=user_id_for_logging, error=loi_nap)
             log.info(
                 "User updated successfully with atomic DB+Assignment+Casbin transaction",
                 user_id=user_id_for_logging,
@@ -1944,25 +1952,12 @@ async def sync_users_to_casbin(
         locked = await bulk_repo.lock_user_no_key_update(db, user.id)
         if locked is None:
             continue
-        try:
-            # Get highest priority role from Casbin (source of truth)
-            casbin_role = await get_highest_priority_role_from_casbin(
-                enforcer, user.id
-            )
-        except Exception as e:
-            log.error(
-                "Failed to sync user role from Casbin",
-                user_id=user.id,
-                username=getattr(user, 'username', 'unknown'),
-                error=str(e),
-                exc_info=True
-            )
-            failed_users.append({
-                "user_id": user.id,
-                "username": getattr(user, 'username', 'unknown'),
-                "error": chu_loi_an_toan(e)
-            })
-            continue
+        # PR-B lượt 4 (Codex lượt 3 điểm chặn 3): đối tượng ``user`` nạp TRƯỚC khoá — làm mới dưới khoá, để lệnh gán bên
+        # dưới so với vai HIỆN HÀNH (gán trùng vai cũ của đối tượng ⇒ ORM bỏ UPDATE mà ``synced_count`` vẫn tăng).
+        await db.refresh(user, attribute_names=["role"])
+        # PR-B lượt 4 (Codex lượt 3 điểm chặn 1): vai Casbin đọc từ BẢNG ``casbin_rule`` (nguồn chung mọi worker), không từ
+        # bộ nhớ enforcer của worker này (có thể cũ). Lỗi đọc CSDL ⇒ ném ra (giao dịch không commit gì).
+        casbin_role = highest_priority_role(await repo.grouping_roles(user.id))
 
         # Update DB if role doesn't match (vai CSDL đọc dưới khoá ở đầu vòng)
         if locked.role != casbin_role:

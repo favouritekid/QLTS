@@ -4,9 +4,11 @@
 Điểm chặn 3 (``DELETE /api/admin/roles/{role}/users``): ``check_permission`` lấy vai từ ``user.role`` ⇒ vai CSDL phải tính
 từ CÙNG tập vai Casbin mà lệnh dùng để ghi.
 - Hai lệnh gỡ HAI vai khác nhau của một người chạy chồng nhau ⇒ lệnh sau phải chờ ở DÒNG NGƯỜI (phiên thứ ba,
-  ``pg_blocking_pids``) và KHÔNG đọc vai Casbin trước khi có khoá; kết quả: vai CSDL = vai Casbin (``user``).
-- Một thao tác CHỈ sửa Casbin (không khoá dòng người) chen giữa lúc lệnh gỡ vai ghi CSDL và lúc ghi Casbin ⇒ vai CSDL tính
-  LẠI từ ảnh Casbin lúc ghi.
+  ``pg_blocking_pids``) và KHÔNG đọc vai Casbin (bảng ``casbin_rule``) trước khi có khoá; kết quả: vai CSDL = vai Casbin.
+- PR-B lượt 4 (Codex lượt 3 điểm chặn 2): mọi quyết định (thu hồi + nhật ký, vai CSDL, dòng ``casbin_rule``) tính từ MỘT
+  lần đọc ``casbin_rule`` SAU khoá dòng người; một thao tác CHỈ sửa Casbin commit trước lần đọc ấy được tính vào — tài khoản
+  bắt đầu và kết thúc ở Cán bộ ⇒ quyền chéo còn, không nhật ký đổi vai. (Thay ca lượt 3 "chen giữa lúc ghi CSDL và lúc ghi
+  Casbin": lượt 4 ghi Casbin TRONG giao dịch, dòng ``casbin_rule`` của người ấy bị khoá ``FOR UPDATE`` tới commit.)
 - Vá nhánh cùng khuôn: ``POST /api/admin/users/sync`` cũng khoá dòng người TRƯỚC khi đọc Casbin.
 
 Điểm chặn 5 (``DELETE /api/admin/roles/{role}`` — xoá vai tuỳ biến):
@@ -37,6 +39,7 @@ from tests.api.gd1b_lo_tro_giup import (  # noqa: F401
     lo_config,
     lo_routers,
 )
+from tests.api.test_gd1b_cheo_tu_thu_hoi import _thu_hoi_cua
 from tests.api.test_gd1b_cheo_tu_thu_hoi_2 import _casbin_g, _con_hieu_luc, _vai
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
@@ -62,21 +65,9 @@ async def _dong_bo_nhat_quan(uid):
 async def test_hai_lenh_go_hai_vai_cua_mot_nguoi_tuan_tu_theo_tai_khoan_vai_csdl_khop_casbin(
     client, monkeypatch, admin_user_in_db, lo_config, lo_routers
 ):
-    from app.main import fastapi_app
-
     u = await tao_nguoi("prb_l3_hai_vai", "manager", lo_config["unit_id"])
     await _them_vai_casbin(client, admin_user_in_db, u["id"], "role:officer")
-    assert (await _casbin_g(u["id"]))[1] == {"role:manager", "role:officer"}, "tiền đề: hai vai trong Casbin"
-    enf = fastapi_app.state.enforcer
-    doc_casbin = []
-    goc_doc = enf.get_roles_for_user
-
-    async def dem_doc(sub, *a, **kw):
-        if sub == f"user:{u['id']}":
-            doc_casbin.append(NHAN.get())
-        return await goc_doc(sub, *a, **kw)
-
-    monkeypatch.setattr(enf, "get_roles_for_user", dem_doc)
+    assert (await _casbin_g(u["id"]))[0] == {"role:manager", "role:officer"}, "tiền đề: hai vai trong casbin_rule"
     diem = Diem()
     boc(monkeypatch, bulk_repo, "lock_user_no_key_update", diem)  # P dừng NGAY SAU lần khoá dòng người đầu tiên
     cp, hp = await dang_nhap(admin_user_in_db)
@@ -89,7 +80,8 @@ async def test_hai_lenh_go_hai_vai_cua_mot_nguoi_tuan_tu_theo_tai_khoan_vai_csdl
             assert pid_p
             viec_q = asyncio.create_task(goi("Q", lambda: _go_vai(cq, hq, u["id"], "role:officer")))
             assert await bi_chan_boi_pid(viec_q, ghi, "Q", pid_p) == "chan", "lệnh gỡ vai thứ hai phải chờ ở dòng người"
-            assert "Q" not in doc_casbin, "lệnh thứ hai đọc vai Casbin TRƯỚC khi có khoá dòng người (không tuần tự theo tài khoản)"
+            doc_casbin = [c for c in ghi.cau.get("Q", ()) if "casbin_rule" in c]
+            assert not doc_casbin, "lệnh thứ hai đọc vai Casbin TRƯỚC khi có khoá dòng người (không tuần tự theo tài khoản)"
             diem.di.set()
             r_p = await asyncio.wait_for(viec_p, 30)
             r_q = await asyncio.wait_for(viec_q, 30)
@@ -101,33 +93,40 @@ async def test_hai_lenh_go_hai_vai_cua_mot_nguoi_tuan_tu_theo_tai_khoan_vai_csdl
     assert await _dong_bo_nhat_quan(u["id"]) == ("user", {"role:user"}, {"role:user"})
 
 
-async def test_thao_tac_chi_sua_casbin_chen_giua_thi_vai_csdl_tinh_lai_tu_anh_luc_ghi_casbin(
+async def test_go_vai_quyet_tu_mot_lan_doc_casbin_rule_sau_khoa_bat_dau_va_ket_thuc_o_can_bo_quyen_cheo_con(
     client, monkeypatch, admin_user_in_db, lo_config, lo_routers
 ):
-    """Lệnh gỡ ``role:officer`` (P) đọc ảnh {manager, officer} ⇒ vai CSDL manager, dừng SAU bước CSDL, TRƯỚC khi ghi Casbin.
-    Trong lúc ấy ``DELETE /api/admin/roles/revoke`` (CHỈ Casbin, không khoá dòng người) gỡ ``role:manager``. Thả P ⇒ ảnh
-    lúc ghi là {officer} ⇒ vai CSDL tính lại = ``user``, Casbin = {role:user}. Ghi theo ảnh cũ ⇒ CSDL ``manager`` (quyền
-    Quản lý qua ``check_permission``) mà Casbin không còn vai nào."""
-    u = await tao_nguoi("prb_l3_chen_casbin", "manager", lo_config["unit_id"])
-    await _them_vai_casbin(client, admin_user_in_db, u["id"], "role:officer")
+    """Codex lượt 3 điểm chặn 2. Tài khoản ở Cán bộ (CSDL ``officer``, quyền chéo còn hiệu lực); CHỈ Casbin đổi
+    ``role:officer`` thành ``role:manager`` (owner câu 7: không đổi vai CSDL, không thu hồi). Lệnh gỡ ``role:manager`` (P)
+    dừng NGAY SAU khoá dòng người, TRƯỚC khi đọc ``casbin_rule``; trong lúc ấy CHỈ Casbin gán lại ``role:officer`` (commit).
+    Thả P ⇒ P đọc {manager, officer} ⇒ vai cuối vẫn Cán bộ ⇒ KHÔNG thu hồi, KHÔNG nhật ký; Casbin còn {officer}. Quyết thu
+    hồi từ một lần đọc TRƯỚC khoá (rồi mới đọc lại để ghi Casbin) ⇒ quyền chéo bị thu hồi + nhật ký đổi vai dù vai cuối vẫn
+    là Cán bộ."""
+    u = await tao_nguoi("prb_l4_can_bo_giu", "officer", lo_config["unit_id"])
+    gid = await cap(client, admin_user_in_db, u["id"], lo_config["unit_id"], verify=True)
+    h = await dn(client, admin_user_in_db)
+    r = await client.request("DELETE", "/api/admin/roles/revoke", headers=h, json={"user_id": u["id"], "role": "role:officer"})
+    assert r.status_code == 200, r.text
+    await _them_vai_casbin(client, admin_user_in_db, u["id"], "role:manager")
+    assert await _dong_bo_nhat_quan(u["id"]) == ("officer", {"role:manager"}, {"role:manager"}), "tiền đề"
     diem = Diem()
-    boc(monkeypatch, cross_service, "revoke_grants_on_account_change", diem)
+    boc(monkeypatch, bulk_repo, "lock_user_no_key_update", diem)  # P dừng NGAY SAU khoá dòng người
     cp, hp = await dang_nhap(admin_user_in_db)
     try:
-        viec = asyncio.create_task(_go_vai(cp, hp, u["id"], "role:officer"))
+        viec = asyncio.create_task(_go_vai(cp, hp, u["id"], "role:manager"))
         await asyncio.wait_for(diem.toi.wait(), 30)
-        h = await dn(client, admin_user_in_db)
-        r = await client.request(
-            "DELETE", "/api/admin/roles/revoke", headers=h, json={"user_id": u["id"], "role": "role:manager"}
-        )
-        assert r.status_code == 200, r.text
+        await _them_vai_casbin(client, admin_user_in_db, u["id"], "role:officer")
         diem.di.set()
         r = await asyncio.wait_for(viec, 30)
     finally:
         diem.di.set()
         await cp.aclose()
     assert r.status_code == 200, r.text
-    assert await _dong_bo_nhat_quan(u["id"]) == ("user", {"role:user"}, {"role:user"})
+    assert await _dong_bo_nhat_quan(u["id"]) == ("officer", {"role:officer"}, {"role:officer"})
+    assert await _con_hieu_luc(gid)
+    assert await _thu_hoi_cua(gid) == [
+        {"da_thu_hoi": False, "revoked_by_user_id": None, "actor_user_id": None, "reason": None, "co_luc": False}
+    ], "không được có nhật ký thu hồi"
 
 
 async def test_dong_bo_vai_tu_casbin_cho_lenh_doi_vai_dang_giu_dong_nguoi_roi_moi_doc_casbin(

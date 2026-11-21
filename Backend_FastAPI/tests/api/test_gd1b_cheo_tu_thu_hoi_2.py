@@ -1,7 +1,8 @@
 """GĐ1b PR-B lượt 2 — tự thu hồi quyền duyệt chéo (Q4) — các điểm chặn Codex lượt 1 + owner chốt 21-11.
 
 - Điểm chặn 3 / owner câu 7: gỡ vai Cán bộ HÀNG LOẠT mà ghi nhật ký lỗi (ở người thứ hai) ⇒ 500, không gì commit; THỬ LẠI
-  phải đưa Casbin, vai CSDL, dấu thu hồi + nhật ký về nhất quán — kể cả người thứ nhất mà lần trước Casbin đã gỡ.
+  phải đưa Casbin, vai CSDL, dấu thu hồi + nhật ký về nhất quán. PR-B lượt 4: dòng ``casbin_rule`` ghi TRONG giao dịch ⇒ sau
+  500, Casbin của CẢ HAI người còn nguyên (lượt 2–3: người thứ nhất đã bị gỡ trong Casbin bằng phiên riêng của adapter).
 - Điểm chặn 4: liên kết tài khoản với CTV — giữa cổng kiểm và lúc ghi vai, tài khoản thành Cán bộ và được cấp quyền chéo ⇒
   yêu cầu cũ bị TỪ CHỐI bằng đúng lỗi hiện có của luật liên kết (404), vai và quyền chéo giữ nguyên.
 - Owner câu 1: vừa khoá vừa đổi vai ⇒ ghi CẢ HAI câu lý do. (Câu 6 — người thu hồi = đúng người thực hiện: cả 4 đường
@@ -90,14 +91,13 @@ async def test_go_vai_hang_loat_nhat_ky_loi_o_nguoi_thu_hai_thu_lai_dua_ca_ba_ve
         r = await c.request("DELETE", "/api/admin/roles/role:officer/users", headers=h, json=than)
         assert tiem["so_lan"] == 1, "tiền đề: lỗi phải được tiêm đúng lần ghi nhật ký của người thứ hai"
         assert r.status_code == 500, r.text
-        # Lần 1 rollback: vai CSDL + quyền chéo nguyên; người THỨ NHẤT đã bị gỡ vai trong Casbin (phiên riêng) — đúng tình
-        # huống "thử lại phải đồng bộ lại", người thứ hai Casbin chưa đụng.
+        # Lần 1 rollback TOÀN BỘ (PR-B lượt 4: vai CSDL, quyền chéo VÀ dòng ``casbin_rule`` cùng một giao dịch) — cả hai
+        # người còn nguyên vai Cán bộ ở CSDL, bảng ``casbin_rule`` và bộ nhớ enforcer.
         assert (await _vai(truoc), await _vai(sau)) == ("officer", "officer")
         assert await _con_hieu_luc(g_truoc) and await _con_hieu_luc(g_sau)
-        bang, chay = await _casbin_g(truoc)
-        assert "role:officer" not in bang and "role:officer" not in chay, (bang, chay)
-        bang, chay = await _casbin_g(sau)
-        assert "role:officer" in bang and "role:officer" in chay, (bang, chay)
+        for uid in (truoc, sau):
+            bang, chay = await _casbin_g(uid)
+            assert "role:officer" in bang and "role:officer" in chay, (uid, bang, chay)
         # Thử lại khi nhật ký đã ghi được.
         tiem["bat"] = False
         r = await c.request("DELETE", "/api/admin/roles/role:officer/users", headers=h, json=than)

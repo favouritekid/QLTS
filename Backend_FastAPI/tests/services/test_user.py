@@ -15,7 +15,7 @@ from unittest.mock import patch, MagicMock, AsyncMock
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from app import models
 from app.database import AsyncSessionLocal
@@ -839,6 +839,7 @@ class TestCasbinAndAssignment:
         mock_enforcer = AsyncMock()
         mock_enforcer.add_grouping_policy.return_value = True
         mock_enforcer.remove_grouping_policy.return_value = True
+        uid = regular_user.id
         
         # Act
         updated_user, callback = await user_service.update_user(
@@ -851,9 +852,16 @@ class TestCasbinAndAssignment:
         if callback:
             await callback()
         
-        # Assert - Verify Casbin was called
-        mock_enforcer.remove_grouping_policy.assert_awaited()
-        mock_enforcer.add_grouping_policy.assert_awaited()
+        # Assert — GĐ1b PR-B lượt 4 (Codex lượt 3 điểm chặn 1, lượt 4 C1a): vai Casbin ghi vào BẢNG ``casbin_rule``
+        # TRONG giao dịch (không qua bộ nhớ enforcer — bản riêng từng worker, có thể cũ); SAU commit, callback nạp lại bộ
+        # nhớ enforcer của worker này từ CSDL.
+        mock_enforcer.remove_grouping_policy.assert_not_awaited()
+        mock_enforcer.add_grouping_policy.assert_not_awaited()
+        mock_enforcer.load_policy.assert_awaited()
+        rows = (
+            await db.execute(text("SELECT v1 FROM casbin_rule WHERE ptype = 'g' AND v0 = :s"), {"s": f"user:{uid}"})
+        ).scalars().all()
+        assert list(rows) == ["role:officer"], rows
 
         # `save_policy()` PHẢI KHÔNG được gọi. Ca này trước đây khẳng định
         # ngược lại, tức nó mã hoá một niềm tin đã đo ra là SAI:

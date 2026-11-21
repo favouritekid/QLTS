@@ -191,19 +191,22 @@ async def read_batch_state(db: AsyncSession, batch_id: UUID) -> Optional[Tuple[s
 
 
 async def lock_batch_row(db: AsyncSession, batch_id: UUID) -> Optional[Tuple[models.DocumentBulkBatch, bool]]:
-    """``FOR UPDATE`` dòng lô + cờ hết hạn so với ``clock_timestamp()`` (đọc SAU khi có khoá)."""
+    """``FOR UPDATE`` dòng lô + cờ hết hạn so với ``clock_timestamp()`` đọc SAU khi có khoá.
+
+    PR-B lượt 4 (Codex lượt 3 điểm chặn 4 — rà cùng khuôn): biểu thức hạn đặt TRONG câu khoá có thể được PostgreSQL tính
+    TRƯỚC lúc chờ khoá và trả nguyên giá trị ấy nếu dòng không bị sửa (giao dịch giữ khoá nhả mà không ghi) ⇒ bản xem trước
+    hết hạn trong lúc chờ vẫn bị coi là còn hạn. Đồng hồ CSDL đọc bằng câu RIÊNG sau khi có khoá."""
     row = (
         await db.execute(
-            select(
-                models.DocumentBulkBatch,
-                (models.DocumentBulkBatch.expires_at <= func.clock_timestamp()).label("expired"),
-            )
+            select(models.DocumentBulkBatch)
             .where(models.DocumentBulkBatch.batch_id == batch_id)
-            .with_for_update(of=models.DocumentBulkBatch)
+            .with_for_update()
             .execution_options(populate_existing=True)
         )
-    ).first()
-    return None if row is None else (row[0], bool(row[1]))
+    ).scalar_one_or_none()
+    if row is None:
+        return None
+    return row, row.expires_at <= await db_clock(db)
 
 
 async def db_clock(db: AsyncSession) -> datetime:
@@ -474,18 +477,23 @@ async def load_profiles_with_documents(db: AsyncSession, profile_ids: Sequence[i
 # Khoá theo thứ tự chung §4.5 cho MỘT hồ sơ của lô (sau dòng lô)
 # ---------------------------------------------------------------------------------------------------------------------
 async def lock_grant_share(db: AsyncSession, grant_id: int) -> Optional[Tuple[models.DocumentCrossReviewGrant, bool]]:
-    row = (
+    """Dòng quyền chéo ``FOR SHARE`` + ``still_valid`` = ``expires_at > clock_timestamp()`` đọc SAU khi có khoá.
+
+    PR-B lượt 4 (Codex lượt 3 điểm chặn 4): ``still_valid`` từng tính TRONG câu ``SELECT … FOR SHARE`` — PostgreSQL có thể
+    tính biểu thức ấy TRƯỚC lúc chờ khoá và trả lại nguyên giá trị nếu dòng không bị sửa (giao dịch giữ khoá nhả mà không
+    ghi) ⇒ quyền hết hạn TRONG lúc chờ vẫn được coi là còn hạn. Nay đồng hồ CSDL đọc bằng câu RIÊNG sau khi có khoá (dòng đã
+    khoá ⇒ ``expires_at`` đứng yên tới commit; đồng hồ là thời điểm quyết định)."""
+    grant = (
         await db.execute(
-            select(
-                models.DocumentCrossReviewGrant,
-                (models.DocumentCrossReviewGrant.expires_at > func.clock_timestamp()).label("still_valid"),
-            )
+            select(models.DocumentCrossReviewGrant)
             .where(models.DocumentCrossReviewGrant.id == grant_id)
-            .with_for_update(read=True, of=models.DocumentCrossReviewGrant)
+            .with_for_update(read=True)
             .execution_options(populate_existing=True)
         )
-    ).first()
-    return None if row is None else (row[0], bool(row[1]))
+    ).scalar_one_or_none()
+    if grant is None:
+        return None
+    return grant, grant.expires_at > await db_clock(db)
 
 
 async def lock_lead_share(db: AsyncSession, lead_id: int) -> Optional[models.Lead]:
@@ -715,13 +723,16 @@ async def own_grant_unit_id(db: AsyncSession, grant_id: int, grantee_user_id: in
 
 
 async def lock_active_grants_of_user_for_update(db: AsyncSession, user_id: int) -> List[models.DocumentCrossReviewGrant]:
-    """Mọi quyền CHƯA thu hồi, CHƯA hết hạn (``clock_timestamp()``) của một người — ``FOR UPDATE`` theo id TĂNG (Q4)."""
+    """Mọi quyền CHƯA thu hồi, CHƯA hết hạn (``clock_timestamp()``) của một người — ``FOR UPDATE`` theo id TĂNG (Q4).
+
+    PR-B lượt 4 (rà cùng khuôn Codex lượt 3 điểm chặn 4): khoá mọi quyền CHƯA thu hồi, rồi lọc hạn bằng đồng hồ CSDL đọc
+    SAU khi có khoá (câu riêng) — hạn đặt trong câu khoá có thể tính TRƯỚC lúc chờ."""
     g = models.DocumentCrossReviewGrant
-    return list(
+    grants = list(
         (
             await db.execute(
                 select(g)
-                .where(g.grantee_user_id == user_id, g.revoked_at.is_(None), g.expires_at > func.clock_timestamp())
+                .where(g.grantee_user_id == user_id, g.revoked_at.is_(None))
                 .order_by(g.id)
                 .with_for_update()
                 .execution_options(populate_existing=True)
@@ -730,6 +741,10 @@ async def lock_active_grants_of_user_for_update(db: AsyncSession, user_id: int) 
         .scalars()
         .all()
     )
+    if not grants:
+        return []
+    now = await db_clock(db)
+    return [x for x in grants if x.expires_at > now]
 
 
 async def lock_grant_for_update(db: AsyncSession, grant_id: int) -> Optional[models.DocumentCrossReviewGrant]:
