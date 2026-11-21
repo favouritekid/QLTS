@@ -760,9 +760,10 @@ async def update_user(
         from app.services.document_cross_review_service import revoke_grants_on_account_change
 
         # PR-B lượt 4 (rà nhánh "CHỈ đổi đơn vị"): khoá dòng người ``FOR NO KEY UPDATE`` cho MỌI lần cập nhật, không chỉ
-        # khi đổi vai / trạng thái. Đổi đơn vị đi qua ``_create_or_update_user_assignment`` — hàm ấy GHI cả ``user.role``
-        # (= vai hiện hành mà hàm này tính) ⇒ tính từ bản nạp đầu yêu cầu thì một lệnh đổi vai đã commit trong lúc ấy bị GHI
-        # ĐÈ bằng vai cũ (vai CSDL quay lại Cán bộ trong khi Casbin + quyền chéo đã theo vai mới).
+        # khi đổi vai / trạng thái. Đổi đơn vị đi qua ``_create_or_update_user_assignment`` — hàm ấy tạo bản ghi phân công
+        # MỚI mang ``role`` = vai hiện hành mà hàm này tính ⇒ tính từ bản nạp đầu yêu cầu thì một lệnh đổi vai đã commit trong
+        # lúc ấy để lại bản ghi phân công còn hiệu lực mang vai CŨ (``user.role`` thì không bị ghi đè — ORM bỏ UPDATE khi gán
+        # trùng giá trị đã nạp; đo bằng kiểm ngược l4_m7b 22-11).
         await bulk_repo.lock_user_no_key_update(db, db_user.id)
         await revoke_grants_on_account_change(
             db,

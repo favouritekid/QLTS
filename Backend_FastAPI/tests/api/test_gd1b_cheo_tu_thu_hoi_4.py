@@ -32,7 +32,7 @@ import pytest
 
 from app.repositories.user_repository import UserRepository
 from app.services import casbin_service, user_service
-from tests.api.gd1b_cheo_tro_giup import bi_chan_boi_pid, cap, mot, tao_nguoi  # noqa: F401
+from tests.api.gd1b_cheo_tro_giup import bi_chan_boi_pid, cap, hang, mot, tao_nguoi  # noqa: F401
 from tests.api.gd1b_lo_tro_giup import (  # noqa: F401
     Diem,
     PidTheoNhan,
@@ -295,8 +295,8 @@ async def test_put_chi_doi_don_vi_khong_ghi_de_vai_ma_lenh_doi_vai_khac_vua_comm
 ):
     """Lệnh đổi đơn vị (A) đã nạp tài khoản (vai ``officer``) rồi dừng TRƯỚC dịch vụ; lệnh đổi vai sang Kế toán (B) commit
     (thu hồi quyền chéo, ``casbin_rule`` = {accountant}). Thả A ⇒ A khoá + đọc lại vai = ``accountant`` ⇒ chỉ đổi đơn vị.
-    Tính từ bản nạp đầu yêu cầu ⇒ đường đổi đơn vị ghi lại ``officer`` (vai CSDL Cán bộ — quyền Cán bộ qua
-    ``check_permission`` — trong khi Casbin là Kế toán)."""
+    Tính từ bản nạp đầu yêu cầu ⇒ đường đổi đơn vị ghi vai cũ ``officer`` vào bản ghi phân công mới (``user_unit_assignment``)
+    trong khi vai CSDL / Casbin là Kế toán."""
     u = await tao_nguoi("prb_l4_dv_ghi_de", "officer", lo_config["unit_id"])
     diem = Diem(lan=1)
     boc(monkeypatch, user_service, "update_user", diem, truoc=True)  # chỉ dừng lần gọi ĐẦU (yêu cầu A)
@@ -316,3 +316,9 @@ async def test_put_chi_doi_don_vi_khong_ghi_de_vai_ma_lenh_doi_vai_khac_vua_comm
     assert await _vai(u["id"]) == "accountant"
     assert await mot('SELECT unit_id FROM "user" WHERE id = :u', u=u["id"]) == seed_other_unit["unit_id"]
     assert await _bang(u["id"]) == {"role:accountant"}
+    # Kiểm ngược l4_m7b (22-11): ``user.role`` KHÔNG bị ghi đè dù A tính từ bản cũ — ORM bỏ UPDATE khi gán trùng giá trị đã
+    # nạp. Chỗ vai cũ thực sự bị ghi là BẢN GHI PHÂN CÔNG mới A tạo (``user_unit_assignment.role``, nơi các bộ lọc theo đơn
+    # vị đọc vai): phải là vai HIỆN HÀNH ``accountant``, đúng một bản ghi còn hiệu lực.
+    assert await hang(
+        "SELECT role, unit_id FROM user_unit_assignment WHERE user_id = :u AND is_active", u=u["id"]
+    ) == [{"role": "accountant", "unit_id": seed_other_unit["unit_id"]}]
