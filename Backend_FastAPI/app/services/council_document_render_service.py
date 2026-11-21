@@ -85,6 +85,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from pydantic import ValidationError as PydanticValidationError
 from pydantic import field_validator, model_validator
 
+from app.repositories.council_candidate_repository import is_kinh_or_blank
 from app.utils.exceptions import DataValidationError, FileValidationError
 
 # Nhãn luật render — ghi vào metadata của mỗi bộ văn bản.
@@ -92,7 +93,9 @@ RENDER_RULE = "v1.2"  # GĐ1b §4.6: giấy đã duyệt in theo verified_format
 
 # Trần tổng điểm ưu tiên (khu vực + đối tượng) của luật v1.1 (= v1) — bộ xuất ghim 2.75 theo
 # ``max_total_bonus`` của quy tắc mặc định trên production lúc in. KHÔNG phải cấu
-# hình sống: giai đoạn 2 dùng bộ phân giải ưu tiên v2, không dùng hằng số này.
+# hình sống (không đọc ``max_total_bonus`` của đường xét). Máy xét mới GĐ2-B dùng ĐÚNG
+# hằng này: điểm đem so sàn = điểm in = :func:`compute_printed_scores` (owner QĐB:22 —
+# trần 2,75; đặc tả GĐ2-B bản 4 §6.3). Đổi trần ⇒ đổi cả bản in lẫn máy xét.
 PRIORITY_CAP_V1 = 2.75
 
 # Trạng thái giấy tờ được coi là ĐÃ NỘP (ký hiệu C/Ct/Pt; ngoài ra là K).
@@ -1340,7 +1343,7 @@ def _stats(rs: Sequence[_Profile]):
         college_count,
         0,  # Đại học
         sum(1 for h in rs if h.dto.gioi_tinh == "Nữ"),
-        sum(1 for h in rs if h.dto.dan_toc not in ("Kinh", "")),
+        sum(1 for h in rs if not is_kinh_or_blank(h.dto.dan_toc)),
     )
 
 
@@ -2137,7 +2140,7 @@ def _build_list_docx(template: bytes, major, list1, list2, list3, method_rows, g
     for i in (1, 6, 12):
         _set_paragraph(d.paragraphs[i], title)
     female = sum(1 for h in list1 if h.dto.gioi_tinh == "Nữ")
-    ethnic_minority = sum(1 for h in list1 if h.dto.dan_toc not in ("Kinh", ""))
+    ethnic_minority = sum(1 for h in list1 if not is_kinh_or_blank(h.dto.dan_toc))
     _set_paragraph(
         d.paragraphs[3],
         "Tổng số hồ sơ thí sinh theo danh sách: %d thí sinh. Trong đó, Nữ: %d thí sinh; "
