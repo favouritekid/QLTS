@@ -43,6 +43,16 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base
 
 
+def school_kv_pick_order_sql(alias: str) -> str:
+    """Thứ tự TẤT ĐỊNH khi NHIỀU dòng ``vn_school_kv_assignment`` cùng khớp một (trường, năm) — khoảng hiệu lực chồng nhau (CSDL
+    cho phép; chỉ dịch vụ kiểm chồng lấn trước khi chèn — ``vn_school_service._years_overlap``). MỘT nguồn cho đường từng hồ sơ
+    (``priority_service.lookup_kv_for_school_year``) và đường lô (``admission_review_load_repository.SQL_SCHOOL_KV``) — Codex 22-11
+    lượt 2 B-P1. Quy ước SẴN CÓ của mã: dòng có năm bắt đầu MỚI NHẤT thắng (``vn_school_service._current_kv_subq`` /
+    ``search`` — ``ORDER BY effective_from_year DESC``; ``priority_service._lookup_commune_kv`` — ``effective_from DESC``); hoà ⇒
+    ``id`` lớn nhất (dòng ghi sau). ``alias`` = tên / bí danh bảng trong câu (định danh nội bộ, không phải dữ liệu)."""
+    return "%s.effective_from_year DESC, %s.id DESC" % (alias, alias)
+
+
 class VnSchool(Base):
     """Vietnam school master directory — supports multi-level + SCD.
 

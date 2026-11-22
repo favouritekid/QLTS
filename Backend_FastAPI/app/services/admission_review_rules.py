@@ -1065,7 +1065,14 @@ def _later_open_choice(evaluation: ProfileEvaluation, run: RunFacts) -> bool:
         if (c.display_order, c.choice_id) <= (placed.display_order, placed.choice_id):
             continue
         ai = run.academic_infos.get(c.offering_academic_info_id) if c.offering_academic_info_id is not None else None
-        if ai is not None and not ai.is_deleted and ai.annual_quota is not None and ai.annual_quota > 0:
+        # Codex 22-11 lượt 2 B-P4 (owner Q5): học vụ NĂM KHÁC lần xét không phải "NV sau còn mở" — xét tới nó là DỪNG.
+        if (
+            ai is not None
+            and int(ai.academic_year) == int(run.academic_year)
+            and not ai.is_deleted
+            and ai.annual_quota is not None
+            and ai.annual_quota > 0
+        ):
             return True
     return False
 

@@ -223,3 +223,68 @@ def test_doi_tuong_da_xac_minh_mot_ham_cho_t6_va_may_xet():
         priority_object_evidence={"03": {"status": "verified"}, "01": {"status": "pending"}, "05": "verified"},
     )
     assert ps.verified_object_codes(hs) == ["03"]
+
+
+# ═══════════════════════════════ Codex 22-11 lượt 2 — B-P1, B-P2 ═══════════════════════════════
+class _GhiCau:
+    """Phiên giả ghi lại câu mà hàm đọc từng phép tra gửi (để biên dịch, không cần CSDL)."""
+
+    def __init__(self):
+        self.cau = []
+
+    async def execute(self, stmt):
+        self.cau.append(stmt)
+        return SimpleNamespace(scalar_one_or_none=lambda: None)
+
+
+def _sql(stmt) -> str:
+    from sqlalchemy.dialects import postgresql
+
+    return " ".join(str(stmt.compile(dialect=postgresql.dialect())).split())
+
+
+def test_b_p1_hai_duong_tra_kv_cung_mot_thu_tu_chon_dong():
+    """Khoảng KV chồng nhau / hoà: đường TỪNG HỒ SƠ (câu thật của ``lookup_kv_for_school_year`` / ``_lookup_commune_kv``, biên
+    dịch) và đường LÔ (``SQL_SCHOOL_KV`` / ``SQL_COMMUNE_KV``) sắp bằng CÙNG một hàm thứ tự (một nguồn — ``models``)."""
+    from app.models.vn_locality import commune_kv_pick_order_sql
+    from app.models.vn_school import school_kv_pick_order_sql
+    from app.repositories import admission_review_load_repository as load_repo
+
+    db = _GhiCau()
+    asyncio.run(ps.lookup_kv_for_school_year(db, 1, NAM))
+    asyncio.run(ps._lookup_commune_kv(db, "X1", NAM))
+    truong, xa = (_sql(s) for s in db.cau)
+    assert "ORDER BY " + school_kv_pick_order_sql("vn_school_kv_assignment") + " LIMIT" in truong, truong
+    assert "ORDER BY " + commune_kv_pick_order_sql("vn_commune_area_map") + " LIMIT" in xa, xa
+    assert " ".join(load_repo.SQL_SCHOOL_KV.text.split()).endswith(", " + school_kv_pick_order_sql("a"))
+    assert " ".join(load_repo.SQL_COMMUNE_KV.text.split()).endswith(", " + commune_kv_pick_order_sql("m"))
+    assert school_kv_pick_order_sql("a") == "a.effective_from_year DESC, a.id DESC"
+    assert commune_kv_pick_order_sql("m") == "m.effective_from DESC, m.id DESC"
+
+
+def _canh_gia(join, pairs):
+    prop = SimpleNamespace(
+        direction=SimpleNamespace(name="MANYTOONE"), primaryjoin=join, secondary=None, local_remote_pairs=pairs
+    )
+    return SimpleNamespace(property=prop, class_=SimpleNamespace(__name__="GiaA"), key="b")
+
+
+def test_b_p2_phep_noi_phai_la_hai_cot_truc_tiep():
+    """``load_relationship_paths`` chỉ nạp quan hệ mà phép nối là ``cột = cột`` đúng cặp ``local_remote_pairs``: có hàm / ép kiểu
+    (vẫn mang toán tử ``=``) ⇒ ``UnsupportedBatchRelationship`` TRƯỚC mọi câu. Đối chứng: nối hai cột trực tiếp qua được chốt (lỗi
+    sau đó là do quan hệ giả không có mapper — không phải chốt)."""
+    from sqlalchemy import Column, Integer, MetaData, String, Table, cast, func
+
+    from app.repositories import admission_review_load_repository as load_repo
+
+    md = MetaData()
+    a = Table("gia_a", md, Column("id", Integer, primary_key=True), Column("ma", String))
+    b = Table("gia_b", md, Column("id", Integer, primary_key=True), Column("ma", String))
+    cap = [(a.c.ma, b.c.ma)]
+    for join in (func.lower(a.c.ma) == b.c.ma, cast(a.c.ma, String) == b.c.ma, a.c.ma == func.upper(b.c.ma)):
+        with pytest.raises(load_repo.UnsupportedBatchRelationship):
+            asyncio.run(load_repo._load_edge(None, [], _canh_gia(join, cap)))
+    with pytest.raises(load_repo.UnsupportedBatchRelationship):  # hai cột trực tiếp nhưng KHÔNG phải cặp của quan hệ
+        asyncio.run(load_repo._load_edge(None, [], _canh_gia(a.c.id == b.c.id, cap)))
+    with pytest.raises(AttributeError):
+        asyncio.run(load_repo._load_edge(None, [], _canh_gia(a.c.ma == b.c.ma, cap)))

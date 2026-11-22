@@ -1467,6 +1467,8 @@ jobs:
               tests/integration/test_gd2b_rang_buoc_db.py
               tests/integration/test_gd2b_repository_db.py
               tests/integration/test_gd2b_bt35_toan_luot_db.py
+              tests/integration/test_gd2b_bo_dem_mot_cau_db.py
+              tests/api/test_gd2b_kv_truong_chong_khoang_api.py
 
     env:
       APP_ENV: test

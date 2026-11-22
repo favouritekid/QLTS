@@ -17,11 +17,13 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 from sqlalchemy.orm import lazyload
 from sqlalchemy.orm.attributes import set_committed_value
 from sqlalchemy.sql import operators
-from sqlalchemy.sql.elements import BinaryExpression
+from sqlalchemy.sql.elements import BinaryExpression, ColumnClause
 
 from app import models
 from app.models.admission_review import REVIEW_RUN_DONE, REVIEW_SESSION_DRAFT, REVIEW_TAB_AUTO
 from app.models.council_document import EFFECTIVE_ROW_CONDITION
+from app.models.vn_locality import commune_kv_pick_order_sql
+from app.models.vn_school import school_kv_pick_order_sql
 
 # ═══════════════════════════════ lần xét · bảng chỉ tiêu · học vụ ═══════════════════════════════
 async def read_session(conn: AsyncConnection, session_id: int) -> Optional[Any]:
@@ -119,7 +121,17 @@ async def _load_edge(orm: Any, parents: Sequence[Any], attr: Any) -> List[Any]:
     prop = attr.property
     direction = prop.direction.name
     join = prop.primaryjoin
-    simple_join = isinstance(join, BinaryExpression) and join.operator is operators.eq
+    # Codex 22-11 lượt 2 B-P2: ``=`` chưa đủ — HAI VẾ phải là hai CỘT trực tiếp (không hàm / ép kiểu / biểu thức), và đúng là cặp
+    # cột của ``local_remote_pairs``; không thì một câu ``cột = ANY(:mảng)`` không còn tương đương phép nối của quan hệ.
+    simple_join = (
+        isinstance(join, BinaryExpression)
+        and join.operator is operators.eq
+        and isinstance(join.left, ColumnClause)
+        and isinstance(join.right, ColumnClause)
+        and len(prop.local_remote_pairs) == 1
+        and {join.left.key, join.right.key} == {c.key for c in prop.local_remote_pairs[0]}
+        and {join.left.table.name, join.right.table.name} == {c.table.name for c in prop.local_remote_pairs[0]}
+    )
     if (
         prop.secondary is not None
         or not simple_join
@@ -259,7 +271,8 @@ async def read_choice_subject_totals(conn: AsyncConnection, choice_ids: Sequence
 
 # ═══════════════════════════════ F231 · ưu tiên ═══════════════════════════════
 #: Bản LÔ của ``priority_service._lookup_commune_kv``: hàng KV có hiệu lực TẠI 31-12 của năm (``effective_from <= 31-12`` và
-#: ``effective_to`` trống hoặc SAU 31-12), mới nhất theo ``effective_from`` — cho MỌI cặp (mã xã, năm).
+#: ``effective_to`` trống hoặc SAU 31-12) — cho MỌI cặp (mã xã, năm). Nhiều hàng cùng khớp ⇒ CÙNG thứ tự với câu gốc
+#: (``commune_kv_pick_order_sql`` — một nguồn).
 SQL_COMMUNE_KV = text(
     """
 SELECT DISTINCT ON (k.code, k.year) k.code, k.year, m.area_code
@@ -268,22 +281,23 @@ JOIN vn_commune_area_map m
      ON m.commune_code = k.code
     AND m.effective_from <= make_date(k.year, 12, 31)
     AND (m.effective_to IS NULL OR m.effective_to > make_date(k.year, 12, 31))
-ORDER BY k.code, k.year, m.effective_from DESC
-"""
+ORDER BY k.code, k.year, """
+    + commune_kv_pick_order_sql("m")
 )
 
 #: Bản LÔ của ``priority_service.lookup_kv_for_school_year``: ``effective_from_year <= năm`` và ``effective_to_year`` trống hoặc
-#: ``>= năm`` — cho MỌI cặp (id trường, năm). Câu gốc ``LIMIT 1`` không sắp ⇒ nhiều hàng khớp thì cả hai cùng "một hàng bất kỳ".
+#: ``>= năm`` — cho MỌI cặp (id trường, năm). Khoảng chồng nhau (nhiều hàng khớp) ⇒ CÙNG thứ tự với câu gốc
+#: (``school_kv_pick_order_sql`` — một nguồn; Codex 22-11 lượt 2 B-P1).
 SQL_SCHOOL_KV = text(
     """
 SELECT DISTINCT ON (k.sid, k.year) k.sid, k.year, a.kv_code
-FROM unnest(CAST(:sids AS integer[]), CAST(:years AS integer[])) AS k(sid, year)
+FROM unnest(CAST(:sids AS bigint[]), CAST(:years AS integer[])) AS k(sid, year)
 JOIN vn_school_kv_assignment a
      ON a.school_id = k.sid
     AND a.effective_from_year <= k.year
     AND (a.effective_to_year IS NULL OR a.effective_to_year >= k.year)
-ORDER BY k.sid, k.year
-"""
+ORDER BY k.sid, k.year, """
+    + school_kv_pick_order_sql("a")
 )
 
 

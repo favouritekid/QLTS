@@ -48,6 +48,13 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.models.base import Base
 
 
+def commune_kv_pick_order_sql(alias: str) -> str:
+    """Thứ tự TẤT ĐỊNH khi NHIỀU dòng ``vn_commune_area_map`` cùng có hiệu lực cho một (mã xã, năm): ``effective_from`` mới nhất
+    (quy ước có sẵn của ``priority_service._lookup_commune_kv``), hoà ⇒ ``id`` lớn nhất. MỘT nguồn cho đường từng hồ sơ và đường lô
+    (``admission_review_load_repository.SQL_COMMUNE_KV``) — cùng lỗi với B-P1 (Codex 22-11 lượt 2) ở nhánh anh em."""
+    return "%s.effective_from DESC, %s.id DESC" % (alias, alias)
+
+
 class VnCommuneAreaMap(Base):
     """Commune (province + district + ward) -> KV area_code mapping.
 

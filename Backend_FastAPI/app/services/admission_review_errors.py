@@ -96,6 +96,12 @@ MESSAGES: Dict[str, str] = {
     ),
 }
 
+#: 500 riêng cho SQLSTATE ``QLC04`` (trigger ``admission_review_session_guard``: huỷ lần xét ở mức cô lập khác ``read
+#: committed``) — LỖI LẬP TRÌNH phía máy chủ (dịch vụ E5 phải chạy READ COMMITTED), không phải lỗi người dùng ⇒ giữ 500 nhưng có
+#: mã riêng để phân biệt với 500 chung (Codex 22-11 lượt 2 mục B, E5). Không ghi gì (giao dịch đã lùi).
+ERROR_CODE_REVIEW_ISOLATION_UNSUPPORTED = "REVIEW_ISOLATION_UNSUPPORTED"
+MESSAGE_REVIEW_ISOLATION_UNSUPPORTED = "Lỗi hệ thống khi huỷ lần xét (mức cô lập giao dịch không đúng) — chưa ghi gì."
+
 #: Câu 409 ``ACADEMIC_INFO_IN_REVIEW_FLOOR`` — chỉ tới HAI thao tác làm được (đặc tả §4.3; hợp đồng §5).
 MESSAGE_ACADEMIC_INFO_IN_REVIEW_FLOOR = (
     "Học vụ đang có điểm sàn ở lần xét nháp số {seq_no} năm {academic_year} — bỏ học vụ này khỏi danh sách sàn (lưu lại "

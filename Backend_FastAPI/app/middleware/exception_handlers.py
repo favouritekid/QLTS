@@ -502,7 +502,7 @@ async def database_error_handler(request: Request, exc: Exception) -> JSONRespon
     # GĐ2-B: trigger "lần xét không còn nháp" (``app.models.admission_review_ddl`` — ghi điểm sàn khi lần xét không ``draft``,
     # sửa lần xét đã huỷ; bắt cả SQL tay) ⇒ 409 CÙNG ``error_code`` / ``reason_code`` / ``detail`` với lỗi kiểm trước ở dịch vụ
     # (``admission_review_errors.review_session_not_draft`` — MỘT nguồn), KHÔNG có ``status`` (hợp đồng API GĐ2-B bản 4 §1.3).
-    # SQLSTATE ``QLC04`` (huỷ lần xét ở mức cô lập khác ``read committed``) cũng KHÔNG đổi — cùng lý do với ``QLC03`` dưới.
+    # SQLSTATE ``QLC04`` (huỷ lần xét ở mức cô lập khác ``read committed``): xem nhánh riêng dưới — 500 có mã riêng.
     # SQLSTATE ``QLC03`` (dữ liệu lần xét bất biến: xoá lần xét, đổi năm, huỷ khi còn sàn, lượt / dòng đã xong) CỐ Ý KHÔNG đổi ở
     # đây: không route nào của GĐ2-B làm những việc ấy ⇒ gặp là lỗi lập trình ⇒ rơi xuống ``raise exc`` dưới (500
     # ``INTERNAL_ERROR`` — hợp đồng §5 "lỗi không lường; không ghi gì"), như mọi lỗi CSDL khác.
@@ -520,6 +520,31 @@ async def database_error_handler(request: Request, exc: Exception) -> JSONRespon
         content["detail"] = loi.detail
         content["error_code"] = loi.error_code
         return JSONResponse(status_code=loi.status_code, content=content)
+    # GĐ2-B (Codex 22-11 lượt 2, E5): ``QLC04`` = dịch vụ huỷ chạy sai mức cô lập — lỗi lập trình ⇒ GIỮ 500 (không 409 / 503: người
+    # dùng không làm gì được), nhưng thân CỐ ĐỊNH có mã riêng + log mức lỗi kèm SQLSTATE (không câu SQL, không tham số).
+    from app.models.admission_review_ddl import SQLSTATE_REVIEW_ISOLATION_UNSUPPORTED
+
+    if db_error_codes(exc)[0] == SQLSTATE_REVIEW_ISOLATION_UNSUPPORTED:
+        from app.services.admission_review_errors import (
+            ERROR_CODE_REVIEW_ISOLATION_UNSUPPORTED,
+            MESSAGE_REVIEW_ISOLATION_UNSUPPORTED,
+        )
+
+        logger.error(
+            "review_session_cancel_isolation_unsupported",
+            extra={
+                "path": _redact_path(request.url.path),
+                "method": request.method,
+                "sqlstate": SQLSTATE_REVIEW_ISOLATION_UNSUPPORTED,
+            },
+        )
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={
+                "detail": MESSAGE_REVIEW_ISOLATION_UNSUPPORTED,
+                "error_code": ERROR_CODE_REVIEW_ISOLATION_UNSUPPORTED,
+            },
+        )
     raise exc
 
 

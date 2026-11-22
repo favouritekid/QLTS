@@ -915,6 +915,29 @@ async def test_rr_huy_co_anh_chup_truoc_khi_san_moi_commit_thi_bi_tu_choi(nen):
     assert await _trang_thai_cuoi(sid) == ("draft", 2, 0)
 
 
+async def test_loi_qlc04_qua_handler_la_500_ma_rieng_khong_ghi_gi(nen):
+    """Codex 22-11 lượt 2 (E5): ``QLC04`` (huỷ ở mức cô lập khác ``read committed`` — lỗi lập trình) GIỮ 500 nhưng có thân CỐ ĐỊNH
+    ``error_code = REVIEW_ISOLATION_UNSUPPORTED``; không lộ câu SQL / tham số; lần xét vẫn nháp, sàn còn nguyên. Lỗi THẬT của trigger.
+    (Ca READ COMMITTED đo trên CHÍNH giao dịch huỷ của dịch vụ E5 — làm khi có L3a.)"""
+    from app.middleware.exception_handlers import database_error_handler
+
+    sid, u = nen["sid"], nen["nguoi"]
+    b = await _mo("REPEATABLE READ")
+    try:
+        with pytest.raises(DBAPIError) as e:
+            await _huy_kieu_e5(b, sid, u)
+    finally:
+        await b.rollback()
+        await b.close()
+    assert db_error_codes(e.value)[0] == QLC04
+    r = await database_error_handler(_yeu_cau("/api/admission-config/review-sessions/%d/cancel" % sid), e.value)
+    than = json.loads(r.body)
+    assert r.status_code == 500, (r.status_code, than)
+    assert set(than) == {"detail", "error_code"} and than["error_code"] == "REVIEW_ISOLATION_UNSUPPORTED", than
+    assert "admission_review" not in than["detail"] and "QLC04" not in than["detail"], than
+    assert await _trang_thai_cuoi(sid) == ("draft", 1, 0)
+
+
 async def test_rr_ghi_san_khi_huy_commit_sau_anh_chup_thi_loi_tuan_tu_hoa(nen):
     """RR, HUỶ TRƯỚC: phiên A (REPEATABLE READ) đã lấy ảnh chụp; phiên B huỷ theo E5 CHƯA commit. A chèn sàn ⇒ CHỜ đúng B; B commit
     (dòng lần xét có phiên bản mới SAU ảnh chụp của A) ⇒ ``FOR SHARE`` của trigger sàn ném lỗi tuần tự hoá ``40001`` ⇒ không sàn

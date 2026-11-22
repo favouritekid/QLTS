@@ -118,8 +118,9 @@ async def _nen(conn) -> dict:
                               status="draft", version=1, created_by_user_id=d["nguoi"])
     await chen(conn, "admission_review_floor", session_id=d["lan_xet"], academic_year=NAM,
                offering_academic_info_id=d["ai"]["oto_cd"], floor_score="10.00", updated_by_user_id=d["nguoi"])
-    await chen(conn, "config_document_type", code="giay_xac_nhan_cu_tru", name="Giấy cư trú giả", display_order=99,
-               is_active=True)
+    d["giay"]["giay_xac_nhan_cu_tru"] = await chen(
+        conn, "config_document_type", code="giay_xac_nhan_cu_tru", name="Giấy cư trú giả", display_order=99, is_active=True
+    )
     for ma, diem in (("01", "2.00"), ("06", "1.00")):
         await chen(conn, "priority_object_config", academic_year=NAM, group_code="UT1", sub_code=ma,
                    description="Đối tượng giả " + ma, bonus_points=diem, effective_from=date(2026, 1, 1))
@@ -337,19 +338,129 @@ async def test_dieu_kien_muc_ho_so_bang_ban_in_gd1_tren_du_nhanh_f231(nen):
     assert {g.status for g in cong_lo.values()} >= {rules.GATE_PASSED}
 
 
+async def _hoc_vu_nam_khac(conn, d) -> int:
+    """Học vụ ô tô CĐ NĂM TRƯỚC (chỉ tiêu 500) + đường xét + tổ hợp g1 — khoá ``d["psg"][("oto_cd_nam_truoc", "cq", "g1")]``."""
+    off = (await _x(conn, "SELECT offering_id FROM offering_academic_info WHERE id = :i", i=d["ai"]["oto_cd"])).scalar_one()
+    ai_cu = await chen(conn, "offering_academic_info", academic_year=NAM - 1, is_published=True, offering_id=off,
+                       annual_admission_quota=500)
+    ap_cu = await chen(conn, "admission_path", academic_info_id=ai_cu, admission_method_id=d["pt"], status="active",
+                       display_order=1, visibility="public", admission_round_id=d["vong"],
+                       created_at=datetime(2026, 10, 1, tzinfo=timezone.utc),
+                       updated_at=datetime(2026, 10, 1, tzinfo=timezone.utc))
+    psg_cu = await chen(conn, "path_subject_group_config", admission_path_id=ap_cu, subject_group_id=d["to_hop"]["g1"])
+    d["psg"][("oto_cd_nam_truoc", "cq", "g1")] = (ap_cu, psg_cu)
+    return ai_cu
+
+
+async def _ho_so_hai_nv(conn, d, so: int, nv2: str, nganh_hp: str) -> int:
+    """Hồ sơ sạch: NV1 ô tô CĐ 2026 (đạt sàn), NV2 ``nv2``, học phí HK1 gán ngành ``nganh_hp``."""
+    pid = await ho_so(
+        conn, d, cccd=ma_gia(so), full_name="Họ Giả Hai Nguyện Vọng", dob=date(2008, 1, 1), gender="Nam", ethnicity="01",
+        permanent_commune_code="GX1", cultural_education_level="graduated_thpt", vocational_qualification="none",
+        priority_resolution_snapshot=kv("KV1"), academic_history=lich_su_thpt(d, "KV1"),
+        nv=[(1, "oto_cd", "cq", "g1"), (2, nv2, "cq", "g1")], diem={0: DIEM, 1: DIEM},
+        hoc_phi=[dict(HP, resolved_major=nganh_hp)], giay=[KHAI_SINH], status="submitted",
+    )
+    await _x(conn, "UPDATE admission_profile SET applied_rules = CAST(:a AS jsonb) WHERE id = :p",
+             a=json.dumps(QUY_TAC_GIAY), p=pid)
+    return pid
+
+
+async def test_q5_doi_xung_nv1_da_xep_nv2_nam_khac_khong_doi_ket_qua_va_khong_goi_y_nv_sau(nen):
+    """Codex 22-11 lượt 2 B-P4: (a) NV1 hợp lệ đã được xếp, NV2 thuộc năm khác ⇒ NV1 GIỮ kết quả (``auto``), NV2
+    ``not_considered``; (b) ``needs_decision`` (lệch ngành học phí) mà NV sau DUY NHẤT thuộc năm khác ⇒ KHÔNG gợi ý
+    ``consider_next_choice``; (c) đối chứng: NV sau cùng năm còn chỉ tiêu ⇒ CÓ gợi ý (phép đo không rỗng)."""
+    d = nen
+    async with csdl.engine.begin() as conn:
+        ai_cu = await _hoc_vu_nam_khac(conn, d)
+        giu = await _ho_so_hai_nv(conn, d, 20_955, "oto_cd_nam_truoc", "oto_cd")
+        lech_nam_khac = await _ho_so_hai_nv(conn, d, 20_956, "oto_cd_nam_truoc", "duoc_cd")
+        lech_cung_nam = await _ho_so_hai_nv(conn, d, 20_957, "duoc_cd", "duoc_cd")
+    nap = await _nap(d)
+    dong = {r.profile_id: r for r in rules.evaluate_run(nap.profiles, nap.run).rows}
+    assert (dong[giu].tab, list(dong[giu].reason_codes)) == ("auto", []), dong[giu]
+    assert [(o.offering_academic_info_id, o.status) for o in dong[giu].per_choice] == [
+        (d["ai"]["oto_cd"], "passed_floor"),
+        (ai_cu, "not_considered"),
+    ], dong[giu].per_choice
+    assert dong[giu].considered.offering_academic_info_id == d["ai"]["oto_cd"]
+    assert (dong[lech_nam_khac].tab, list(dong[lech_nam_khac].reason_codes)) == ("needs_decision", ["tuition_major_mismatch"])
+    assert "consider_next_choice" not in dong[lech_nam_khac].decision_hints, dong[lech_nam_khac].decision_hints
+    assert (dong[lech_cung_nam].tab, list(dong[lech_cung_nam].reason_codes)) == ("needs_decision", ["tuition_major_mismatch"])
+    assert "consider_next_choice" in dong[lech_cung_nam].decision_hints, dong[lech_cung_nam].decision_hints
+
+
+async def test_b_p1_kv_truong_chong_khoang_hai_duong_chon_cung_mot_dong(nen):
+    """Codex 22-11 lượt 2 B-P1: danh mục KV trường có HAI dòng cùng khớp (trường, năm) — khoảng chồng nhau (năm bắt đầu khác) và
+    hoà năm bắt đầu. Dòng CŨ chèn TRƯỚC (thứ tự vật lý ≠ thứ tự chọn). Hai đường (từng hồ sơ / lô) chọn CÙNG dòng theo
+    ``school_kv_pick_order_sql`` (năm bắt đầu mới nhất, rồi ``id`` lớn nhất) ⇒ KV1 ⇒ F231 qua ở cả hai, ``CheckData`` bằng nhau."""
+    from app.services import priority_service
+
+    d = nen
+    truong, pids = [], []
+    async with csdl.engine.begin() as conn:
+        for i, (tu_cu, tu_moi) in enumerate(((2020, 2022), (2022, 2022))):
+            t = await chen(conn, "vn_school", moet_school_code="GIACK%02d" % i, moet_province_code="99",
+                           name="Trường giả chồng khoảng %d" % i, province="Tỉnh giả", level="THPT")
+            for ma_kv, tu in (("KV3", tu_cu), ("KV1", tu_moi)):
+                await chen(conn, "vn_school_kv_assignment", school_id=t, kv_code=ma_kv, effective_from_year=tu, source="gia")
+            pid = await _ho_so_kieu(conn, d, 970 + i, "thieu_giay_hp")
+            await _x(conn, "UPDATE admission_profile SET academic_history = CAST(:h AS jsonb) WHERE id = :p",
+                     h=json.dumps([{"level": "THPT", "school_id": t, "school_name": "Trường giả", "year_from": 2023,
+                                    "year_to": 2025}]), p=pid)
+            truong.append(t)
+            pids.append(pid)
+    async with AsyncSessionLocal() as db:
+        tung = [await priority_service.lookup_kv_for_school_year(db, t, 2023) for t in truong]
+    async with read_only_transaction(csdl.engine) as (conn, _):
+        lo = await load_repo.read_school_kv(conn, [(t, 2023) for t in truong])
+    assert tung == ["KV1", "KV1"] and [lo[(t, 2023)] for t in truong] == ["KV1", "KV1"], (tung, lo)
+    nap = await _nap(d)
+    ban_in = await doc.read_profiles_by_id(csdl.engine, [p.profile_id for p in nap.profiles], academic_year=NAM)
+    assert tuple(p.check for p in nap.profiles) == ban_in.check_data
+    cua = {p.profile_id: p.check for p in nap.profiles}
+    assert [(cua[p].kv_ly_do, cua[p].kv_muc) for p in pids] == [(None, "0.75"), (None, "0.75")]
+
+
+async def test_uu_tien_dan_toc_tra_kv_xa_theo_lo_doi_ket_qua(nen):
+    """Codex 22-11 lượt 2 (bộ gieo bổ sung b): em dân tộc NGOÀI Kinh, khai sinh + giấy cư trú đã duyệt ⇒ ``full_evidence``; mã đối
+    tượng theo KV của xã thường trú tra THEO LÔ cho năm lần xét: GX1 (KV1) ⇒ ``01`` = 2,00; GX2 (KV2) ⇒ ``06`` = 1,00 — tổng điểm
+    khác nhau đúng phần ấy (KV trường 0,75; trần 2,75)."""
+    d = nen
+    cu_tru = dict(loai="giay_xac_nhan_cu_tru", status="verified", actual_submission_format="certified_copy")
+    pid = {}
+    async with csdl.engine.begin() as conn:
+        for i, xa in enumerate(("GX1", "GX2")):
+            pid[xa] = await _ho_so_kieu(conn, d, 980 + i, "thieu_giay_hp")
+            await _x(conn, "UPDATE admission_profile SET ethnicity = '02', permanent_commune_code = :x WHERE id = :p",
+                     x=xa, p=pid[xa])
+            await _x(conn, "DELETE FROM profile_document WHERE profile_id = :p", p=pid[xa])
+            await chen(conn, "fee", admission_profile_id=pid[xa], academic_year=NAM, base_amount="1000",
+                       final_amount="1000", paid_amount="1000", calculated_at=datetime(2026, 10, 1, tzinfo=timezone.utc),
+                       created_at=datetime(2026, 10, 1, tzinfo=timezone.utc),
+                       updated_at=datetime(2026, 10, 1, tzinfo=timezone.utc), fee_type="tuition", semester_no=1,
+                       status="paid", resolved_major_id=d["mp"]["oto_cd"], resolved_degree_level="Cao đẳng")
+            for g in (KHAI_SINH, cu_tru):
+                await chen(conn, "profile_document", profile_id=pid[xa], document_type_id=d["giay"][g["loai"]],
+                           status="verified", actual_submission_format=g["actual_submission_format"],
+                           verified_format=g["actual_submission_format"], paper_submitted_by_unknown=True,
+                           created_at=datetime(2026, 10, 1, tzinfo=timezone.utc),
+                           updated_at=datetime(2026, 10, 1, tzinfo=timezone.utc))
+    nap = await _nap(d)
+    dong = {r.profile_id: r for r in rules.evaluate_run(nap.profiles, nap.run).rows}
+    thay = {xa: (dong[p].tab, dong[p].ethnic_priority_state, str(dong[p].scores.object), str(dong[p].scores.review_total))
+            for xa, p in pid.items()}
+    assert thay == {
+        "GX1": ("auto", "full_evidence", "2.00", "26.75"),
+        "GX2": ("auto", "full_evidence", "1.00", "25.75"),
+    }, thay
+
+
 async def test_q5_nguyen_vong_hoc_vu_nam_khac_thi_dung_khong_sang_nv_sau(nen):
     """Owner Q5 22-11: NV1 trỏ tới học vụ NĂM KHÁC năm lần xét ⇒ hồ sơ DỪNG ở NV1 với mã riêng; NV2 (hợp lệ, đủ sàn) KHÔNG xét."""
     d = nen
     async with csdl.engine.begin() as conn:
-        off = (await _x(conn, "SELECT offering_id FROM offering_academic_info WHERE id = :i", i=d["ai"]["oto_cd"])).scalar_one()
-        ai_cu = await chen(conn, "offering_academic_info", academic_year=NAM - 1, is_published=True, offering_id=off,
-                           annual_admission_quota=500)
-        ap_cu = await chen(conn, "admission_path", academic_info_id=ai_cu, admission_method_id=d["pt"], status="active",
-                           display_order=1, visibility="public", admission_round_id=d["vong"],
-                           created_at=datetime(2026, 10, 1, tzinfo=timezone.utc),
-                           updated_at=datetime(2026, 10, 1, tzinfo=timezone.utc))
-        psg_cu = await chen(conn, "path_subject_group_config", admission_path_id=ap_cu, subject_group_id=d["to_hop"]["g1"])
-        d["psg"][("oto_cd_nam_truoc", "cq", "g1")] = (ap_cu, psg_cu)
+        ai_cu = await _hoc_vu_nam_khac(conn, d)
         pid = await ho_so(
             conn, d, cccd=ma_gia(20_950), full_name="Họ Giả Năm Khác", dob=date(2008, 1, 1), gender="Nam", ethnicity="01",
             permanent_commune_code="GX1", cultural_education_level="graduated_thpt", vocational_qualification="none",

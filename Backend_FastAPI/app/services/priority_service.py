@@ -40,7 +40,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Generator, Iterable, Mapping, NamedTuple, Optional, Sequence
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -546,7 +546,7 @@ async def _lookup_commune_kv(
     the "now" row — which would silently mis-score historical/future cycles.
     Returns None if commune not in table (graceful — coverage may be partial).
     """
-    from app.models.vn_locality import VnCommuneAreaMap
+    from app.models.vn_locality import VnCommuneAreaMap, commune_kv_pick_order_sql
 
     as_of = date(year, 12, 31)
     stmt = (
@@ -557,7 +557,8 @@ async def _lookup_commune_kv(
             (VnCommuneAreaMap.effective_to.is_(None))
             | (VnCommuneAreaMap.effective_to > as_of),
         )
-        .order_by(VnCommuneAreaMap.effective_from.desc())
+        # MỘT thứ tự với đường lô (``commune_kv_pick_order_sql``): mới nhất theo ``effective_from``, hoà ⇒ ``id`` lớn nhất.
+        .order_by(text(commune_kv_pick_order_sql(VnCommuneAreaMap.__tablename__)))
         .limit(1)
     )
     result = await db.execute(stmt)
@@ -575,7 +576,7 @@ async def lookup_kv_for_school_year(
           AND :year BETWEEN effective_from_year
                        AND COALESCE(effective_to_year, 9999);
     """
-    from app.models.vn_school import VnSchoolKvAssignment
+    from app.models.vn_school import VnSchoolKvAssignment, school_kv_pick_order_sql
 
     stmt = (
         select(VnSchoolKvAssignment.kv_code)
@@ -585,6 +586,8 @@ async def lookup_kv_for_school_year(
             (VnSchoolKvAssignment.effective_to_year.is_(None))
             | (VnSchoolKvAssignment.effective_to_year >= year),
         )
+        # Codex 22-11 lượt 2 B-P1: nhiều dòng chồng khoảng cùng khớp ⇒ thứ tự TẤT ĐỊNH, MỘT nguồn với đường lô.
+        .order_by(text(school_kv_pick_order_sql(VnSchoolKvAssignment.__tablename__)))
         .limit(1)
     )
     result = await db.execute(stmt)
