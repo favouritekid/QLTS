@@ -1337,6 +1337,7 @@ jobs:
               tests/unit/test_priority_kv_resolution.py
               tests/unit/test_priority_kv_phase_e4_matrix.py
               tests/unit/test_priority_kv_lien_cap_g5.py
+              tests/unit/test_l3_kv_cho_xac_minh.py
               tests/unit/test_status_history_runtime_writer.py
               tests/unit/test_upload_image_verify.py
               tests/unit/test_admission_file_signature.py
@@ -1472,6 +1473,9 @@ jobs:
           # Lượt 3 (22-11): `test_vn_school_admin_service.py` vào lát này — nó canh KV hiện hành trên ô chọn trường dùng CHUNG thứ tự
           # `school_kv_pick_order_sql` với resolver / đường lô (B-P1 của đợt 2); trước đó tệp không nằm trong tier nào (chỉ chạy đêm)
           # nên cổng PR không thấy (CLAUDE.md §11). Không có tier `vn_school*` nào khác để ghép.
+          # L3 (owner 22-11): `test_l3_truong_thcs_db.py` — Admin thêm trường THCS + KV qua `VnSchoolService` ⇒ hồ sơ trung cấp sau
+          # THCS tính ra KV, hai đường (từng hồ sơ / lô của bộ nạp này) bằng nhau trên CSDL thật; cùng lát với tệp vn_school ở trên.
+          # Ca đơn vị `test_l3_kv_cho_xac_minh.py` ở Tier 5 cạnh `test_priority_kv_lien_cap_g5.py`.
           - tier: Tier 5k — GĐ2-B lần xét nháp (đợt 1 + đợt 2)
             tests: >-
               tests/unit/test_gd2b_ddl_lockin.py
@@ -1486,6 +1490,7 @@ jobs:
               tests/integration/test_gd2b_bo_dem_mot_cau_db.py
               tests/api/test_gd2b_kv_truong_chong_khoang_api.py
               tests/unit/test_vn_school_admin_service.py
+              tests/integration/test_l3_truong_thcs_db.py
 
     env:
       APP_ENV: test

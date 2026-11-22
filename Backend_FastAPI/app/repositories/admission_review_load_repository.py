@@ -323,6 +323,25 @@ async def read_school_kv(conn: AsyncConnection, keys: Iterable[Tuple[int, int]])
     return out
 
 
+SQL_SCHOOL_DTNT = text(
+    """
+SELECT s.id, s.is_dtnt
+FROM vn_school s
+WHERE s.id = ANY(CAST(:sids AS bigint[]))
+"""
+)
+
+
+async def read_school_dtnt(conn: AsyncConnection, ids: Iterable[int]) -> Dict[int, Optional[bool]]:
+    """L3: ``{id trường: is_dtnt | None}`` cho ĐỦ mọi id hỏi (không có trường ⇒ ``None``, như
+    ``priority_service.lookup_school_is_dtnt``). MỘT câu kể cả khi rỗng (BT35)."""
+    ks = sorted({int(k) for k in ids})
+    out: Dict[int, Optional[bool]] = {k: None for k in ks}
+    for sid, is_dtnt in await _rows(conn, SQL_SCHOOL_DTNT, sids=ks):
+        out[int(sid)] = bool(is_dtnt)
+    return out
+
+
 async def read_open_area_rates(conn: AsyncConnection, academic_year: int) -> List[Tuple[str, Any]]:
     """Mọi hàng mức KV ĐANG MỞ (``effective_to IS NULL``) của năm — ``(mã, điểm)``; cùng điều kiện ``select_open_priority_rates``."""
     m = models.PriorityAreaConfig

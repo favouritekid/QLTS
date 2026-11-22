@@ -52,7 +52,8 @@ KHAI_SINH = dict(loai="giay_khai_sinh", status="verified", actual_submission_for
 QUY_TAC_GIAY = {"mandatory_docs": ["giay_khai_sinh"], "doc_configs": {"giay_khai_sinh": {"is_mandatory": True}}}
 LUC_THU_CONG = "2026-10-02T03:04:05+00:00"
 
-#: Mười kiểu hồ sơ XEN KẼ (chu kỳ 10) và kết quả mong đợi (tab, mã lý do) — viết tay theo đặc tả §6.2 / §6.5 / §6.7.
+#: Mười một kiểu hồ sơ XEN KẼ (chu kỳ 11; L3 thêm ``kv_cho_xm``) và kết quả mong đợi (tab, mã lý do) — viết tay theo đặc tả §6.2 /
+#: §6.5 / §6.7.
 KIEU = (
     "xep_nam_truoc",
     "thieu_giay_hp",
@@ -64,6 +65,7 @@ KIEU = (
     "kv_hong",
     "chua_muc",
     "muc_lech",
+    "kv_cho_xm",
 )
 MONG_DOI = {
     "xep_nam_truoc": ("auto", []),
@@ -76,9 +78,12 @@ MONG_DOI = {
     "kv_hong": ("ineligible", ["khu_vuc_khong_tinh_lai_duoc"]),
     "chua_muc": ("ineligible", ["chua_co_muc_khu_vuc"]),
     "muc_lech": ("ineligible", ["muc_khu_vuc_khong_nhat_quan"]),
+    # L3 (owner 22-11): "KV chờ xác minh" ⇒ mã riêng, không phải ``thieu_khu_vuc``.
+    "kv_cho_xm": ("ineligible", ["khu_vuc_cho_xac_minh"]),
 }
 SAU_NHANH_F231 = {
     "thieu_khu_vuc",
+    "khu_vuc_cho_xac_minh",
     "khu_vuc_thu_cong_khong_hieu_luc",
     "khu_vuc_doi_sau_anh_chup",
     "khu_vuc_khong_tinh_lai_duoc",
@@ -163,6 +168,9 @@ async def _ho_so_kieu(conn, d, i: int, kieu: str) -> int:
                    hoc_phi=[dict(HP, resolved_major="duoc_cd")])
     elif kieu == "thieu_kv":
         goc.update(priority_resolution_snapshot={})
+    elif kieu == "kv_cho_xm":
+        goc.update(priority_resolution_snapshot={"kv_resolved": None, "rule_applied": "kv_pending_verification",
+                                                 "requires_manual_override": True, "reason": "thcs_school_not_in_catalog"})
     elif kieu in ("tc_hop_le", "tc_khong_hl"):
         goc.update(area_resolution_basis="manual_override", priority_resolution_snapshot=thu_cong)
     elif kieu == "kv_doi":
@@ -451,8 +459,10 @@ async def test_b_p1_kv_chong_khoang_ba_ca_hai_duong_chon_cung_mot_dong(nen):
                 await chen(conn, "vn_commune_area_map", commune_code=ma_xa, province="Tỉnh giả", district="Huyện giả",
                            ward="Xã giả " + ma_xa, area_code=ma_kv, effective_from=tu, effective_to=den)
             pid = await _ho_so_kieu(conn, d, 975 + i, "thieu_giay_hp")
-            await _x(conn, "UPDATE admission_profile SET cultural_education_level = 'graduated_thcs', "
-                           "vocational_qualification = 'so_cap', academic_history = '[]'::jsonb, permanent_commune_code = :x, "
+            # Nhánh THƯỜNG TRÚ ngoài ba nhóm L3 (hoàn thành THPT, không chuyên môn, ảnh chụp không ghi trình độ) — L3 (owner 22-11)
+            # đổi nhánh "tốt nghiệp THCS" cũ sang "chờ xác minh", nên ca xã dùng nhánh thường trú còn giữ nguyên.
+            await _x(conn, "UPDATE admission_profile SET cultural_education_level = 'completed_thpt', "
+                           "vocational_qualification = 'none', academic_history = '[]'::jsonb, permanent_commune_code = :x, "
                            "priority_resolution_snapshot = CAST(:s AS jsonb) WHERE id = :p",
                      x=ma_xa, s=json.dumps(kv(mong)), p=pid)
             pid_xa[nhan] = pid
@@ -478,6 +488,72 @@ async def test_b_p1_kv_chong_khoang_ba_ca_hai_duong_chon_cung_mot_dong(nen):
         assert (cua[pid].kv_ly_do, cua[pid].kv_muc) == (None, MUC_KV[mong_truong[nhan]]), (nhan, cua[pid])
     for nhan, pid in pid_xa.items():
         assert (cua[pid].kv_ly_do, cua[pid].kv_muc) == (None, MUC_KV[mong_xa[nhan]]), (nhan, cua[pid])
+
+
+def _dong_thcs(sid, tu, den, level="THCS"):
+    return {"level": level, "graduation_type": "THCS", "school_id": sid, "school_name": "Trường THCS giả", "year_from": tu,
+            "year_to": den}
+
+
+async def test_l3_f231_hai_ban_bang_nhau_tren_nhanh_thcs(nen, monkeypatch):
+    """L3 (owner 22-11; điều phối Phần C mục 2–4): trên CSDL thật, dữ kiện F231 của bộ nạp theo lô (kèm cờ DTNT nạp theo lô) ==
+    ``CheckData`` của bản in GĐ1 (đường từng hồ sơ) trên các nhánh THCS; kết quả viết tay:
+
+    * trung cấp sau THCS, trường THCS có KV1 phủ đủ năm, ảnh chụp KV1 ⇒ qua (mức KV1);
+    * trường DTNT, ảnh chụp cũ KV1 (``longest_duration``) ⇒ tính lại ra "chờ xác minh" ⇒ ``khu_vuc_doi_sau_anh_chup``;
+    * trường có KV nhưng không phủ đủ năm ⇒ tương tự ``khu_vuc_doi_sau_anh_chup`` (không ``khu_vuc_khong_tinh_lai_duoc``);
+    * ảnh chụp "chờ xác minh" ⇒ ``khu_vuc_cho_xac_minh``;
+    * hồ sơ CŨ (ảnh chụp theo hộ khẩu, cặp luật cũ), cờ TẮT ⇒ qua; cờ BẬT ⇒ ``khu_vuc_doi_sau_anh_chup``."""
+    from app.config import settings
+
+    d = nen
+    anh_thcs = {"kv_resolved": "KV1", "rule_applied": "longest_duration", "basis": "LICH_SU_THCS",
+                "basis_reason": "tc_chinh_quy_post_thcs_uses_thcs_school_history", "target_level": "trung_cap",
+                "admission_type": "chinh_quy"}
+    anh_cu = {"kv_resolved": "KV1", "rule_applied": "commune_lookup", "basis": "THUONG_TRU",
+              "basis_reason": "tc_chinh_quy_post_thcs_uses_commune", "target_level": "trung_cap", "admission_type": "chinh_quy"}
+    anh_cho = {"kv_resolved": None, "rule_applied": "kv_pending_verification", "requires_manual_override": True,
+               "reason": "thcs_school_not_in_catalog", "target_level": "trung_cap", "admission_type": "chinh_quy"}
+    pid = {}
+    async with csdl.engine.begin() as conn:
+        truong = {}
+        for nhan, ma, dtnt, tu in (("thuong", "GIATHCS01", False, 2000), ("dtnt", "GIATHCS02", True, 2000),
+                                  ("thieu_nam", "GIATHCS03", False, 2020)):
+            truong[nhan] = await chen(conn, "vn_school", moet_school_code=ma, moet_province_code="99",
+                                      name="Trường THCS giả " + nhan, province="Tỉnh giả", level="THCS", is_dtnt=dtnt)
+            await chen(conn, "vn_school_kv_assignment", school_id=truong[nhan], kv_code="KV1", effective_from_year=tu,
+                       effective_to_year=None, source="manual_admin")
+        ca = (
+            ("qua", [_dong_thcs(truong["thuong"], 2018, 2022)], anh_thcs),
+            ("dtnt", [_dong_thcs(truong["dtnt"], 2018, 2022)], anh_thcs),
+            ("thieu_nam", [_dong_thcs(truong["thieu_nam"], 2018, 2022)], anh_thcs),
+            ("cho_xm", [_dong_thcs(None, 2018, 2022, level=None)], anh_cho),
+            ("ho_so_cu", [_dong_thcs(None, 2018, 2022, level=None)], anh_cu),
+        )
+        for i, (nhan, lich_su, anh) in enumerate(ca):
+            pid[nhan] = await _ho_so_kieu(conn, d, 990 + i, "thieu_giay_hp")
+            await _x(conn, "UPDATE admission_profile SET cultural_education_level = 'graduated_thcs', "
+                           "vocational_qualification = 'none', academic_history = CAST(:h AS jsonb), permanent_commune_code = 'GX1', "
+                           "priority_resolution_snapshot = CAST(:s AS jsonb) WHERE id = :p",
+                     h=json.dumps(lich_su), s=json.dumps(anh), p=pid[nhan])
+
+    async def _hai_ban():
+        nap = await _nap(d)
+        ban_in = await doc.read_profiles_by_id(csdl.engine, [p.profile_id for p in nap.profiles], academic_year=NAM)
+        assert tuple(p.check for p in nap.profiles) == ban_in.check_data
+        cua = {p.profile_id: p.check for p in nap.profiles}
+        return {nhan: (cua[p].kv_ly_do, cua[p].kv_muc) for nhan, p in pid.items()}
+
+    monkeypatch.setattr(settings, "KV_L3_APPLY_TO_EXISTING_ENABLED", False)
+    assert await _hai_ban() == {
+        "qua": (None, "0.75"),
+        "dtnt": ("khu_vuc_doi_sau_anh_chup", None),
+        "thieu_nam": ("khu_vuc_doi_sau_anh_chup", None),
+        "cho_xm": ("khu_vuc_cho_xac_minh", None),
+        "ho_so_cu": (None, "0.75"),
+    }
+    monkeypatch.setattr(settings, "KV_L3_APPLY_TO_EXISTING_ENABLED", True)
+    assert (await _hai_ban())["ho_so_cu"] == ("khu_vuc_doi_sau_anh_chup", None)
 
 
 async def test_uu_tien_dan_toc_tra_kv_xa_theo_lo_doi_ket_qua(nen):

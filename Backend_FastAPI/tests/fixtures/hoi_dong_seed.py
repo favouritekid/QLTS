@@ -47,6 +47,13 @@ def kv(ma: str, rule: str = "commune_lookup") -> dict:
     return {"kv_resolved": ma, "rule_applied": rule}
 
 
+def kv_ho_so_cu_thcs(ma: str) -> dict:
+    """L3 (owner 22-11): ảnh chụp KV theo hộ khẩu do luật CŨ ra cho em văn hoá THCS mà nơi gọi không truyền trình độ — cặp
+    ``(THUONG_TRU, legacy_thcs_pathway_uses_commune)`` ⇒ "hồ sơ cũ": khi cờ ``KV_L3_APPLY_TO_EXISTING_ENABLED`` tắt (mặc định),
+    tính lại vẫn theo hộ khẩu như lúc chụp (``priority_service.kv_l3_keeps_legacy_rule``)."""
+    return {**kv(ma), "basis": "THUONG_TRU", "basis_reason": "legacy_thcs_pathway_uses_commune"}
+
+
 def lich_su_thpt(d: dict, ma_kv: str) -> list:
     """Lịch sử học THPT giả: ba năm ở trường giả có khu vực ``ma_kv`` (``d["truong"]``) — đủ để
     resolver của app (``resolve_kv_for_profile``, nhánh LICH_SU_THPT) ra ĐÚNG ``ma_kv``. Không có
@@ -654,7 +661,7 @@ async def seed_hoi_dong(conn) -> dict:
         permanent_province="Tỉnh trên hồ sơ 4",
         cultural_education_level="graduated_thcs",
         vocational_qualification="so_cap",
-        priority_resolution_snapshot=kv("KV2-NT"),
+        priority_resolution_snapshot=kv_ho_so_cu_thcs("KV2-NT"),
         nv=[(1, "oto_tc", "cq", "g1")],
         diem={0: {"toan": "6.00", "ly": "6.00", "hoa": "6.00"}},
         hoc_phi=[
@@ -676,7 +683,7 @@ async def seed_hoi_dong(conn) -> dict:
         permanent_province="Tỉnh trên hồ sơ 5",
         cultural_education_level="completed_thcs",
         vocational_qualification="none",
-        priority_resolution_snapshot=kv("KV1"),
+        priority_resolution_snapshot=kv_ho_so_cu_thcs("KV1"),
         nv=[(1, "kt_tc", "cq", "g2")],
         diem={0: {"van": "5.25", "toan": "5.75", "ly": "4.00"}},
         hoc_phi=[

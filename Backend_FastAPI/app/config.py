@@ -713,6 +713,16 @@ class Settings(BaseSettings):
         default=False, validation_alias="ADMISSION_FROZEN"
     )
 
+    # -- L3: KV trung cấp sau THCS theo nơi học THCS (owner 22-11, câu 1 "đo trước rồi quyết") --
+    # Cờ CHO PHÉP, mặc định TẮT: hồ sơ CŨ (ảnh chụp KV do luật cũ ra — tính theo hộ khẩu) GIỮ luật cũ ở
+    # mọi lần chụp / tính lại (nộp, T6, xem trước, bản in GĐ1, máy xét GĐ2-B — một hàm
+    # ``priority_service.kv_l3_keeps_legacy_rule``). Chỉ ``true`` mới áp luật mới cho hồ sơ cũ, SAU khi
+    # owner quyết. Pydantic đọc env lúc TẠO container ⇒ đổi bằng ``up -d`` (KHÔNG ``restart``) cho
+    # backend + celery-worker + celery-beat.
+    KV_L3_APPLY_TO_EXISTING_ENABLED: bool = Field(
+        default=False, validation_alias="KV_L3_APPLY_TO_EXISTING_ENABLED"
+    )
+
     # -- Admission Confirmation Settings --
     # Magic link token expiration and CCCD verification
     ADMISSION_CONFIRM_TOKEN_EXPIRE_DAYS: int = Field(

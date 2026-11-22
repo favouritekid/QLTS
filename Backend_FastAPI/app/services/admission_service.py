@@ -6590,6 +6590,7 @@ def _calculate_and_update_totals(profile: models.AdmissionProfile, scores: list 
 # Một nguồn (C8b): tập và vị từ sống ở ``priority_service`` — T6 dùng CHUNG. Tên cũ giữ làm bí danh.
 from .priority_service import KV_SUCCESS_RULE_APPLIED as _KV_SUCCESS_RULE_APPLIED  # noqa: E402
 from .priority_service import kv_snapshot_resolved as _kv_snapshot_resolved  # noqa: E402
+from .priority_service import kv_snapshot_blocks_submit as _kv_snapshot_blocks_submit  # noqa: E402
 
 
 def _kv_unresolved_error_message(
@@ -6609,6 +6610,9 @@ def _kv_unresolved_error_message(
       - longest_duration / tiebreak_graduation_school / commune_lookup
         (engine resolve qua LICH_SU_THPT hoặc THUONG_TRU/COMMUNE_SPECIAL)
       - manual_override (admin/manager đã set KV thủ công pre-submit)
+      - L3 (owner 22-11): ``kv_pending_verification`` — "KV chờ xác minh", vẫn tiếp
+        nhận bình thường (vị từ riêng ``kv_snapshot_blocks_submit``; T6 / bản in
+        vẫn coi là chưa phân giải)
 
     Block paths (fail-closed mọi case khác — KHÔNG có defensive escape):
       - address_not_normalized / catalog_gap_* / insufficient_data /
@@ -6627,8 +6631,15 @@ def _kv_unresolved_error_message(
     rule_applied = snapshot.get("rule_applied")
     kv_resolved = snapshot.get("kv_resolved")
 
-    # Pass: rule trong success whitelist VÀ kv_resolved có giá trị (vị từ chung với T6).
-    if _kv_snapshot_resolved(snapshot):
+    # Pass: rule trong success whitelist VÀ kv_resolved có giá trị (vị từ chung với T6), HOẶC
+    # L3 "KV chờ xác minh" — vị từ "chặn nộp" riêng, không nới ``kv_snapshot_resolved``.
+    if not _kv_snapshot_blocks_submit(snapshot):
+        if not _kv_snapshot_resolved(snapshot):
+            log.info(
+                "submit_kv_pending_verification_accepted",
+                profile_id=profile_id,
+                reason=snapshot.get("reason"),
+            )
         return None
 
     # Otherwise build error message — fail-closed default.

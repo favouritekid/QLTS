@@ -45,6 +45,7 @@ from app.services.council_decision_status_service import from_row
 from app.services.priority_service import (
     RATE_TABLE_OBJECT,
     kv_lookup_keys,
+    kv_school_dtnt_keys,
     latest_manual_override_audit_rows,
     pick_open_priority_rates,
     verified_object_codes,
@@ -229,6 +230,7 @@ async def load_run_facts(
         # F231 + ưu tiên dân tộc: mọi khoá tra KV của mọi hồ sơ ⇒ HAI câu.
         commune_keys: Set[Tuple[str, int]] = set()
         school_keys: Set[Tuple[int, int]] = set()
+        dtnt_keys: Set[int] = set()
         for p in profiles:
             snap = area_check_rules.parse_kv_snapshot(check_rows[int(p.id)]["kv_snapshot"])
             if isinstance(snap, dict):
@@ -237,11 +239,16 @@ async def load_run_facts(
                 )
                 commune_keys |= c_keys
                 school_keys |= s_keys
+                # L3: cờ DTNT của trường THCS (nhánh trung cấp sau THCS) — CÙNG kế hoạch khoá với ``kv_lookup_keys``.
+                dtnt_keys |= kv_school_dtnt_keys(
+                    p, target_level=snap.get("target_level"), admission_type=snap.get("admission_type")
+                )
             code = p.permanent_commune_code
             if isinstance(code, str) and code:
                 commune_keys.add((code, year))
         commune_kv = await load_repo.read_commune_kv(conn, commune_keys)
         school_kv = await load_repo.read_school_kv(conn, school_keys)
+        school_dtnt = await load_repo.read_school_dtnt(conn, dtnt_keys)
         area_rates = await load_repo.read_open_area_rates(conn, year)
         object_rows = await load_repo.read_open_object_rates(conn, year)
         match_key = {int(p.id): rules.citizen_id_match_key(p.citizen_id) for p in profiles}
@@ -272,6 +279,7 @@ async def load_run_facts(
                 commune_kv=commune_kv,
                 school_kv=school_kv,
                 open_area_rate_rows=area_rates,
+                school_dtnt=school_dtnt,
             )
             printed_path = k["nv_in_path_id"]
             rule = rule_of.get(printed_path, (None, None)) if isinstance(printed_path, int) else (None, None)

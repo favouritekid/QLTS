@@ -5,7 +5,8 @@
 (``council_candidate_service._resolve_area`` + ``_area_recompute_mismatch``), từng nhánh gọi ĐÚNG hàm thuần của
 ``priority_service`` mà đường từng hồ sơ gọi:
 
-1. ảnh chụp KV chưa phân giải (``kv_snapshot_resolved``) ⇒ ``thieu_khu_vuc``;
+1. ảnh chụp KV chưa phân giải (``kv_snapshot_resolved``) ⇒ ``thieu_khu_vuc`` — riêng "KV chờ xác minh" (L3,
+   ``kv_snapshot_pending_verification``) ⇒ ``khu_vuc_cho_xac_minh``;
 2. hồ sơ ấn định thủ công (``area_resolution_basis`` hoặc ``rule_applied`` = ``manual_override``) ⇒ xác minh sổ
    (``decide_manual_override_provenance`` trên hàng sổ mới nhất ĐÃ NẠP) — không hiệu lực ⇒ ``khu_vuc_thu_cong_khong_hieu_luc``;
 3. không thủ công ⇒ TÍNH LẠI KV bằng bộ quyết định của resolver (``decide_kv_for_profile`` trên bản đồ tra ĐÃ NẠP, cùng ngữ cảnh
@@ -27,6 +28,7 @@ from app.services.priority_service import (
     RATE_TABLE_AREA,
     decide_kv_for_profile,
     decide_manual_override_provenance,
+    kv_snapshot_pending_verification,
     kv_snapshot_resolved,
     pick_open_priority_rates,
     priority_academic_year,
@@ -34,6 +36,8 @@ from app.services.priority_service import (
 from app.utils.exceptions import PriorityRateNotConfigured
 
 AREA_MISSING = "thieu_khu_vuc"
+#: L3 (owner 22-11): "KV chờ xác minh" — mã riêng để Ban thư ký thấy đúng việc cần làm (xác minh trường THCS / ấn định tay).
+AREA_PENDING_VERIFICATION = "khu_vuc_cho_xac_minh"
 AREA_MANUAL_INVALID = "khu_vuc_thu_cong_khong_hieu_luc"
 AREA_CHANGED_AFTER_SNAPSHOT = "khu_vuc_doi_sau_anh_chup"
 AREA_NOT_RECOMPUTABLE = "khu_vuc_khong_tinh_lai_duoc"
@@ -42,6 +46,7 @@ AREA_RATE_INCONSISTENT = "muc_khu_vuc_khong_nhat_quan"
 #: Mọi mã chặn F231 (đặc tả GĐ2-B bản 4 §6.2 E6 — mức hồ sơ).
 AREA_REASON_CODES: Tuple[str, ...] = (
     AREA_MISSING,
+    AREA_PENDING_VERIFICATION,
     AREA_MANUAL_INVALID,
     AREA_CHANGED_AFTER_SNAPSHOT,
     AREA_NOT_RECOMPUTABLE,
@@ -66,6 +71,7 @@ def area_check(
     commune_kv: Mapping[Tuple[Any, Any], Optional[str]],
     school_kv: Mapping[Tuple[Any, Any], Optional[str]],
     open_area_rate_rows: Iterable[Sequence[Any]],
+    school_dtnt: Optional[Mapping[Any, Optional[bool]]] = None,
 ) -> Tuple[Optional[str], Optional[str]]:
     """``(mã chặn F231 | None, mức KV theo năm tuyển sinh dạng chuỗi | None)`` của MỘT hồ sơ — cùng hình giá trị với từng phần tử
     ``_resolve_area`` trả.
@@ -75,12 +81,14 @@ def area_check(
     * ``profile``: đối tượng hồ sơ đã nạp (chỉ đọc CỘT — như ``session.get(..., raiseload("*"))`` của bản in);
     * ``manual_audit_row``: hàng ``kv_manual_override`` mới nhất của hồ sơ (``latest_manual_override_audit_rows``) hoặc ``None``;
     * ``commune_kv`` / ``school_kv``: bản đồ tra đã nạp cho MỌI khoá ``kv_lookup_keys`` của hồ sơ;
+    * ``school_dtnt``: cờ DTNT đã nạp cho MỌI id ``kv_school_dtnt_keys`` của hồ sơ (L3; không truyền ⇒ rỗng ⇒ hồ sơ cần cờ ra
+      ``khu_vuc_khong_tinh_lai_duoc`` — fail-closed);
     * ``open_area_rate_rows``: các hàng ``(area_code, bonus_points)`` ĐANG MỞ của năm tuyển sinh hồ sơ.
 
     Lỗi của bước xác minh sổ nổi lên (như bản in); lỗi của bước tính lại ⇒ ``khu_vuc_khong_tinh_lai_duoc`` (như bản in)."""
     snap = parse_kv_snapshot(kv_snapshot)
     if not kv_snapshot_resolved(snap):
-        return AREA_MISSING, None
+        return (AREA_PENDING_VERIFICATION if kv_snapshot_pending_verification(snap) else AREA_MISSING), None
     if area_resolution_basis == MANUAL_OVERRIDE or snap.get("rule_applied") == MANUAL_OVERRIDE:
         ok, _reason, _ = decide_manual_override_provenance(profile, manual_audit_row)
         if not ok:
@@ -93,6 +101,7 @@ def area_check(
                 school_kv=school_kv,
                 target_level=snap.get("target_level"),
                 admission_type=snap.get("admission_type"),
+                school_dtnt=school_dtnt,
             )
         # Không tính lại được ⇒ không chứng minh được KV sẽ in còn đúng ⇒ chặn (như ``_area_recompute_mismatch``).
         except Exception:  # noqa: BLE001

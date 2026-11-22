@@ -164,6 +164,11 @@ BLOCK_REASONS: Dict[str, str] = {
     ),
     # F231
     "thieu_khu_vuc": "hồ sơ chưa có khu vực ưu tiên đã phân giải",
+    # L3 (owner 22-11) — câu chữ CHỜ owner duyệt
+    "khu_vuc_cho_xac_minh": (
+        "khu vực ưu tiên đang chờ xác minh (trường THCS chưa có trong danh mục hoặc cần xác minh "
+        "tay) — xác minh từ học bạ rồi chụp lại"
+    ),
     "khu_vuc_thu_cong_khong_hieu_luc": "khu vực ấn định thủ công không còn hiệu lực",
     "chua_co_muc_khu_vuc": (
         "chưa có mức điểm khu vực đang áp dụng cho năm học của hồ sơ"
