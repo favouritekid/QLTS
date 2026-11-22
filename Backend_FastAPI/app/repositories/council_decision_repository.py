@@ -1,8 +1,10 @@
 # app/repositories/council_decision_repository.py
 """Truy cập dữ liệu ghi nhận Quyết định đã ký (F230 — lượt I). Chỉ SQL / ORM; luật nghiệp vụ ở
-``app/services/council_decision_service.py``. Khoá luôn theo thứ tự: văn bản → mục chờ → bộ → hồ sơ
-(id tăng dần) — đặc tả mục 2.2 / 2.5 / 8.5 (BS §4.6) — rồi dòng chỉ tiêu (chặng 2b,
-``quota_occupancy_service.lock_quota_of_set_rows``)."""
+``app/services/council_decision_service.py``. Khoá luôn theo thứ tự: [khoá năm chia sẻ —
+``quota_occupancy_service.lock_years_of_change``, PR-1 GĐ1 P2] → GỐC CHUỖI (C1 — owner 21-11:
+:meth:`CouncilDecisionRepository.chain_root_id` rồi ``lock_decision``) → văn bản khác của chuỗi → mục chờ → bộ →
+hồ sơ (id tăng dần) — đặc tả mục 2.2 / 2.5 / 8.5 (BS §4.6) — rồi dòng chỉ tiêu (chặng 2b, MỘT lần:
+``quota_occupancy_service.lock_quota_for_change``)."""
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from sqlalchemy import select, text
@@ -62,6 +64,21 @@ class CouncilDecisionRepository:
                 .where(CouncilDecision.id == decision_id)
                 .with_for_update()
                 .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
+
+    async def chain_root_id(self, decision_id: int) -> Optional[int]:
+        """id GỐC chuỗi của văn bản (C1): văn bản huỷ ⇒ gốc của văn bản đích; bổ sung / điều chỉnh ⇒ ``goc_id``; gốc ⇒ chính
+        nó; không có văn bản ⇒ None. Đọc KHÔNG khoá — ``goc_id`` / ``huy_qd_id`` chỉ đặt lúc chèn (không đường UPDATE nào đổi)
+        nên giá trị đọc trước khoá vẫn đúng; nơi gọi khoá gốc NGAY sau đó."""
+        return (
+            await self.db.execute(
+                text(
+                    "SELECT CASE WHEN x.huy_qd_id IS NOT NULL THEN COALESCE(t.goc_id, t.id) "
+                    "ELSE COALESCE(x.goc_id, x.id) END FROM council_decision x "
+                    "LEFT JOIN council_decision t ON t.id = x.huy_qd_id WHERE x.id = :d"
+                ),
+                {"d": decision_id},
             )
         ).scalar_one_or_none()
 
@@ -144,7 +161,8 @@ class CouncilDecisionRepository:
         ).scalar_one_or_none()
 
     async def chain(self, root_id: int) -> List[CouncilDecision]:
-        """Gốc + bổ sung / điều chỉnh của gốc + văn bản huỷ trỏ tới bất kỳ văn bản nào trong đó."""
+        """Gốc + bổ sung / điều chỉnh của gốc + văn bản huỷ trỏ tới bất kỳ văn bản nào trong đó. C1: nơi gọi đọc SAU khi
+        khoá gốc ⇒ ``populate_existing`` để không trả đối tượng CŨ đã nằm trong identity map của phiên (đọc trước khoá)."""
         members = list(
             (
                 await self.db.execute(
@@ -154,6 +172,7 @@ class CouncilDecisionRepository:
                         | (CouncilDecision.goc_id == root_id)
                     )
                     .order_by(CouncilDecision.id)
+                    .execution_options(populate_existing=True)
                 )
             ).scalars()
         )
@@ -164,6 +183,7 @@ class CouncilDecisionRepository:
                     select(CouncilDecision)
                     .where(CouncilDecision.huy_qd_id.in_(ids))
                     .order_by(CouncilDecision.id)
+                    .execution_options(populate_existing=True)
                 )
             ).scalars()
         )

@@ -72,6 +72,12 @@ HAM = {
     "mau.tai_mau_len": s_mau.upload_template,
     "mau.kiem_goi_mau": s_mau.check_template_package,  # kiểm tệp .docx (MSW chép phần chữ ký ZIP + câu lỗi)
     "dung.DecisionParams": s_dung.DecisionParams,
+    # PR-1 GĐ1 (C12 / Q2 / U2): luật giữa các trường tách khỏi ``DecisionParams._check_cap`` (lớp không được ca bao phủ đi
+    # vào) + MỘT chỗ đổi lỗi pydantic dùng chung cho tái dựng / ghi nhận
+    "dung.decision_param_cross_errors": s_dung.decision_param_cross_errors,
+    "dung.check_decision_param_values": s_dung.check_decision_param_values,
+    "dung._param_date": s_dung._param_date,
+    "dung._dd_mm_yyyy": s_dung._dd_mm_yyyy,  # PR-1 GĐ1 owner Q2 bổ sung: ngày ghép vào câu dừng
     # khuôn thân yêu cầu (schema)
     "schema.CouncilSetCreate": s_vb.CouncilSetCreate,
     "schema.CouncilSetPreviewIn": s_vb.CouncilSetPreviewIn,
@@ -114,6 +120,11 @@ HANG = {
     "qd.SIGN_DATE_AFTER_TODAY_MESSAGE": (s_qd, "SIGN_DATE_AFTER_TODAY_MESSAGE"),  # review max PR #724 R7
     "qd.CONFIRMATION_JSON_MAX_CHARS": (s_qd, "CONFIRMATION_JSON_MAX_CHARS"),  # Codex 42 câu 4 — MSW TRAN_KY_TU_JSON_XAC_NHAN
     "mau.TEN_LOAI": (s_mau, "KIND_NAMES"),
+    "dung.BATCH_PAIR_MESSAGE": (s_dung, "BATCH_PAIR_MESSAGE"),  # PR-1 GĐ1: câu cặp đợt — MSW chép nguyên câu
+    "dung.MINUTES_AFTER_DECISION_MESSAGE": (s_dung, "MINUTES_AFTER_DECISION_MESSAGE"),  # PR-1 GĐ1 — MSW chép nguyên câu
+    # PR-1 GĐ1 (owner 21-11 Q2): câu DỪNG khi nhập ngày ký (ghi nhận / tái dựng) — MSW CHƯA chép (phụ lục giao diện)
+    "dung.SIGNING_BEFORE_MINUTES_MESSAGE": (s_dung, "SIGNING_BEFORE_MINUTES_MESSAGE"),
+    "dung.SIGNING_BEFORE_MINUTES_DATES": (s_dung, "SIGNING_BEFORE_MINUTES_DATES"),  # khuôn ghép hai ngày (owner 21-11)
     "model.LY_DO_XOA_TOI_DA": (m_vb, "MAX_DELETE_REASON_LENGTH"),
 }
 
@@ -143,6 +154,7 @@ MIEN = {
     "_count_status_changes": "đếm đổi trạng thái sau khi dựng — cần CSDL",
     "_check_count_confirmation": "khuôn 409 xác nhận số đếm — số đếm cần CSDL (MSW giữ các ca 409 có sẵn)",
     "_check_templates_by_signing_date": "kho mẫu theo ngày ký — cần CSDL",
+    "_lock_chain_root": "khoá gốc chuỗi rồi văn bản (PR-1 GĐ1 C1) — thứ tự khoá, cần CSDL",
     "_translate_db_error": "dịch lỗi ràng buộc CSDL",
     "_scan": "dựng bản ghi scan để lưu",
     "_decision_file_sha": "băm tệp Quyết định đã lưu — cần CSDL",
@@ -192,6 +204,22 @@ def _nguon() -> dict:
 #: đổi; HANG / GIA_TRI giữ nguyên; AST so với ``39915c60`` chỉ khác định danh (đúng bảng ``ma/f339/bang-nguon-2.txt``).
 #: 16-11-2026 — F339 vòng 4: khoá log có cấu trúc sang tiếng Anh (``so_ho_so=`` → ``profile_count=``…) + trả 4 trường dùng chung
 #: của DecisionState — 9 băm HAM đổi; HANG / GIA_TRI giữ nguyên.
+#: 21-11-2026 — PR-1 GĐ1 (owner 21-11: C1, C2, C7, C12, Q2 / U2). Đã rà MSW ``council-luat-may-chu.ts`` cùng lượt:
+#:   * ``dung.DecisionParams``: luật cặp đợt + ngày Biên bản tách sang ``decision_param_cross_errors`` (ghim mới cùng hai hằng câu)
+#:     — luật và CÂU của bước dựng bộ GIỮ NGUYÊN ⇒ ``luatThamSoQuyetDinh`` không phải sửa;
+#:   * ``qd.huy_ghi_nhan``: khoá gốc chuỗi (C1), khoá + cảnh báo ô hiện tại (C2), lưu bảng đếm đã xác nhận (C7) — luật THÂN yêu
+#:     cầu / thứ tự kiểm mà MSW chép (``luatHuyGhiNhan``) không đổi ⇒ không phải sửa;
+#:   * ``qd._so_tham_so``: THÊM luật C12 (nửa cặp đợt / tháng ⇒ 400 ``truong_sai`` nêu trường thiếu) + Q2 (ngày ký trước ngày
+#:     Biên bản ⇒ 400 ``truong_sai: ["ngay_bien_ban"]``) qua ``check_decision_param_values`` — ``luatGhiNhan`` của MSW CHƯA chép
+#:     hai luật này (frontend/src ngoài phạm vi PR-1) ⇒ ĐÃ BIẾT, giao phụ lục giao diện (bàn giao PR-1 GĐ1). Owner 21-11 (Q2):
+#:     câu dừng khi nhập ngày ký = ``SIGNING_BEFORE_MINUTES_MESSAGE`` ghép hai ngày dd/mm/yyyy (``SIGNING_BEFORE_MINUTES_DATES``)
+#:     + ``ngay_ky`` / ``ngay_bien_ban`` (ISO) trong phản hồi — MSW CHƯA sinh câu ghép (phụ lục giao diện); câu
+#:     bước dựng bộ (``MINUTES_AFTER_DECISION_MESSAGE``, ``luatThamSoQuyetDinh`` chép) GIỮ nguyên.
+#: 21-11-2026 — PR-1 GĐ1 lượt 2 (Codex C2-1 / C2-2 / P2): ``qd.ghi_nhan_quyet_dinh`` và ``qd.huy_ghi_nhan`` lấy khoá năm chia sẻ ở
+#:   đầu thao tác + khoá cả ô mất chỗ qua ``lock_quota_for_change`` (ghi nhận bỏ ``lock_quota_of_set_rows`` /
+#:   ``over_quota_warnings``) — thứ tự khoá và tập ô, KHÔNG đổi thân yêu cầu / thứ tự kiểm / câu lỗi mà MSW chép (``luatGhiNhan``,
+#:   ``luatHuyGhiNhan``) ⇒ MSW không phải sửa. Lỗi mới duy nhất: 409 câu "thử lại" sẵn có (``CONFLICT_MESSAGE``) khi năm hồ sơ
+#:   đổi giữa lúc đọc phạm vi và lúc khoá — lỗi tranh chấp, không phải luật thân yêu cầu.
 GHIM = {
     "bo.CAU_DOI_TU_LUC_KIEM": "236fff0ad0195cf0",
     "bo.MA_LOI_DOI_TU_LUC_KIEM": "111c5b69b272ed2c",
@@ -204,7 +232,15 @@ GHIM = {
     "bo.tao_bo_van_ban_theo_id": "f1895ec7745d819e",
     "cau_hinh.COUNCIL_DECISION_SCAN_MAX_BYTES": "cb01a688cfdfae4b",  # review max PR #724 R1: 9 MiB — MSW chép cùng lượt
     "cau_hinh.COUNCIL_SET_MAX_PROFILES": "b09d7b699cf5ffdf",
-    "dung.DecisionParams": "6e651ef48bffd4b4",  # review max PR #724 R7: số in sẵn không 0 đầu; Codex 42 F337 "0" nhận — MSW chép cùng lượt
+    "dung.BATCH_PAIR_MESSAGE": "66e7cf36f28b5408",  # PR-1 GĐ1 — câu cũ, MSW chép nguyên câu
+    "dung.DecisionParams": "a82898879cfbbd13",  # R7 0 đầu; F337 "0" nhận; PR-1 GĐ1: luật giữa các trường gọi decision_param_cross_errors
+    "dung.MINUTES_AFTER_DECISION_MESSAGE": "4389d52ff7e43b5d",  # PR-1 GĐ1 — câu cũ, MSW chép nguyên câu
+    "dung.SIGNING_BEFORE_MINUTES_DATES": "60f464604fb7b467",  # PR-1 GĐ1 owner Q2 bổ sung — khuôn ghép hai ngày
+    "dung.SIGNING_BEFORE_MINUTES_MESSAGE": "fe9e676c838cd467",  # PR-1 GĐ1 owner Q2 — MSW CHƯA chép (phụ lục giao diện)
+    "dung._dd_mm_yyyy": "d44f3573a8907cf9",  # PR-1 GĐ1 owner Q2 bổ sung — ngày dd/mm/yyyy trong câu dừng
+    "dung._param_date": "23ac1bc54ee46511",  # PR-1 GĐ1 — đọc ngày để nêu tên trường
+    "dung.check_decision_param_values": "236ea6bb9305602c",  # PR-1 GĐ1 U2 / Q2 / C12 — MỘT chỗ đổi lỗi pydantic
+    "dung.decision_param_cross_errors": "3f0f374736d563fa",  # PR-1 GĐ1 C12 / Q2 — luật giữa các trường
     "luot.kiem_ma_luot": "069114521e4618bd",
     "mau.TEN_LOAI": "ff27ce4a7da9b1c2",
     "mau.kiem_goi_mau": "5b682ba925fc1997",
@@ -215,9 +251,9 @@ GHIM = {
     "qd._bo_qd_hop_le": "8233ad0644b78c7d",
     "qd._gia_tri_json": "2e6e814855b117b3",
     "qd._so_chua_dung": "2b64bc35e8577a50",
-    "qd._so_tham_so": "95712773fd768856",
-    "qd.ghi_nhan_quyet_dinh": "ad8d9ea16ca62c50",
-    "qd.huy_ghi_nhan": "9feb998b06a85fd5",
+    "qd._so_tham_so": "717d87883731d6cc",  # PR-1 GĐ1 C12 + Q2 — MSW luatGhiNhan CHƯA chép (phụ lục giao diện)
+    "qd.ghi_nhan_quyet_dinh": "bb2243f74b834cdc",  # PR-1 GĐ1 lượt 2 — khoá năm + ô mất chỗ; luật thân yêu cầu không đổi
+    "qd.huy_ghi_nhan": "f098a9950890b8fc",  # PR-1 GĐ1 C1 / C2 / C7 + lượt 2 (khoá năm, ô mất chỗ) — luật thân yêu cầu không đổi
     "qd.kiem_ngay": "ff50f4a05fb99172",  # review max PR #724 R7: ngày ký không sau hôm nay (giờ VN), câu = hằng nguyên văn — MSW chép cùng lượt
     "qd.kiem_scan": "a51c3ba6959c9bf3",
     "qd.kiem_so_quyet_dinh": "2d53d20a2e55808d",  # R7 cấm 0 đầu; Codex 42 F337: "0" một chữ số nhận — MSW chép cùng lượt

@@ -26,8 +26,14 @@ năm học của bộ, CHÍNH là năm học của hồ sơ lúc dựng (bộ ch
 
 MỘT ẢNH CHỤP (F260 — Codex lần 15): mỗi hàm đếm tính Phần A + Phần B trong MỘT câu SQL (:func:`_tong`, hợp
 ``UNION ALL`` ở ma trận). READ COMMITTED chụp ảnh theo TỪNG CÂU ⇒ hai câu riêng cho A và B để một thao tác
-chuyển hồ sơ A↔B (huỷ hiệu lực / huỷ ghi nhận / điều chỉnh bỏ dòng — KHÔNG khoá dòng chỉ tiêu; ghi nhận ở
-ma trận không khoá) commit chen giữa ⇒ đếm 0 (B→A) hoặc 2 (A→B) cho cùng một em. Một câu ⇒ em đếm đúng một lần.
+chuyển hồ sơ A↔B (huỷ hiệu lực / huỷ ghi nhận / điều chỉnh bỏ dòng; ghi nhận ở ma trận không khoá) commit chen
+giữa ⇒ đếm 0 (B→A) hoặc 2 (A→B) cho cùng một em. Một câu ⇒ em đếm đúng một lần.
+
+B → A (C2 — owner 21-11): em mất dòng hiệu lực mà vẫn chiếm chỗ được đếm lại theo ô HIỆN TẠI (Phần A,
+:func:`part_a_cells_of_profiles`) — ô ấy có thể KHÁC ô chụp và có thể thành vượt ⇒ điều chỉnh / huỷ hiệu lực / huỷ ghi nhận
+khoá ô hiện tại cùng ô chụp (:func:`lock_quota_for_change`) và cảnh báo đúng ô tăng (:func:`quota_warnings_after_change`).
+Ô MẤT chỗ (ô chụp của dòng tắt / bị bỏ; ô Phần A của em được thêm dòng — A → B) cũng vào tập khoá (C2-1, Codex PR-1 lượt 2):
+không thì một văn bản khác chuỗi đang so "trước / sau" ở ô ấy đọc số trước khi ta trả chỗ và mất cảnh báo.
 
 Dòng bộ THIẾU khoá đếm / lệch chuỗi cấu hình: owner chốt 10-11 (Q-J1) — CHẶN tại ba thao tác sinh / khôi phục
 dòng B (ghi nhận, dòng thêm khi điều chỉnh, dòng bật lại khi huỷ ghi nhận) bằng MỘT hàm
@@ -36,19 +42,27 @@ CSDL) không khớp nơi cần khoá ấy và mỗi lần đếm gặp thì ghi 
 
 Khoá — THỨ TỰ CHUẨN cho cả giao dịch (F259): mọi hồ sơ (id tăng dần) TRƯỚC, rồi mọi dòng chỉ tiêu qua
 :func:`lock_quota_cells` (``offering_academic_info`` id tăng dần MỘT câu, RỒI ``admission_path`` id tăng dần
-MỘT câu). Các hàm đếm KHÔNG khoá. Ghi nhận / điều chỉnh thêm dòng / huỷ ghi nhận bật lại (làm TĂNG Phần B) khoá
-qua :func:`lock_quota_of_set_rows`; Phê duyệt hàng loạt và công bố nhiều nguyện vọng khoá TRƯỚC mọi dòng chỉ
-tiêu sẽ dùng (cùng hàm) rồi mới xét — giữ nguyên thứ tự xét nguyện vọng nghiệp vụ.
+MỘT câu). Các hàm đếm KHÔNG khoá. Bốn thao tác Quyết định (ghi nhận / bổ sung, điều chỉnh, huỷ hiệu lực, huỷ ghi
+nhận) khoá HỢP mọi ô đổi số — ô chụp của dòng thêm / bật lại, ô hiện tại của em quay về Phần A, ô mất chỗ — bằng MỘT lần
+:func:`lock_quota_cells` (:func:`lock_quota_for_change`); Phê duyệt hàng loạt và công bố nhiều nguyện vọng khoá TRƯỚC mọi
+dòng chỉ tiêu sẽ dùng (cùng hàm) rồi mới xét — giữ nguyên thứ tự xét nguyện vọng nghiệp vụ.
+
+Dò ô theo CẶP (loại hình, năm) — ô ngành của Phê duyệt cũ — đọc tập học vụ của năm; lệnh tạo / dời năm học vụ đổi tập ấy (P2 —
+Codex PR-1 lượt 2). Bốn thao tác Quyết định lấy KHOÁ NĂM CHIA SẺ của mọi năm có thể chạm Ở ĐẦU thao tác
+(:func:`lock_years_of_change`, trước mọi khoá dòng — bất biến + thứ tự ở ``app.core.review_year_lock``) ⇒ tập học vụ đúng tới
+lúc ghi; :func:`lock_quota_for_change` kiểm lại năm thật (dưới khoá hồ sơ) nằm trong tập đã khoá, không thì 409 "thử lại".
 """
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, FrozenSet, Iterable, List, Optional, Sequence, Set, Tuple
 
 import structlog
-from sqlalchemy import Integer, String, cast, distinct, func, select, text, tuple_, union_all
+from sqlalchemy import Integer, String, cast, distinct, func, or_, select, text, tuple_, union_all
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
+from app.core.review_year_lock import lock_review_years_shared
 from app.models.council_document import (
     EFFECTIVE_ROW_CONDITION,
+    CouncilDecision,
     CouncilDecisionRow,
     CouncilDocumentSetRow,
 )
@@ -215,6 +229,12 @@ def _part_a_multi_choice(*conditions, exclude_profile_id: Optional[int]):
     return q
 
 
+def _legacy_path_id(ap):
+    """``applied_rules->>'admission_path_id'`` ép số nguyên — biểu thức Phần A kiểu cũ, MỘT nguồn cho :func:`_part_a_legacy`
+    (đếm) và :func:`part_a_cells_of_profiles` (ô)."""
+    return ap.applied_rules["admission_path_id"].astext.cast(Integer)
+
+
 def _part_a_legacy(path_condition, exclude_profile_id: Optional[int]):
     """Phần A — hồ sơ một nguyện vọng kiểu cũ (``uses_choice_engine`` = FALSE) theo
     ``applied_rules->>'admission_path_id'`` (ép kiểu như hôm nay)."""
@@ -223,11 +243,72 @@ def _part_a_legacy(path_condition, exclude_profile_id: Optional[int]):
         ap.uses_choice_engine.is_(False),
         ap.status.in_(OCCUPYING_STATUSES),
         no_effective_row(ap.id),
-        path_condition(ap.applied_rules["admission_path_id"].astext.cast(Integer)),
+        path_condition(_legacy_path_id(ap)),
     )
     if exclude_profile_id is not None:
         q = q.where(ap.id != exclude_profile_id)
     return q
+
+
+async def part_a_cells_of_profiles(
+    db: AsyncSession, profile_ids: Iterable[Optional[int]], *, counted_now: bool = False
+) -> Tuple[Set[int], Set[int]]:
+    """C2 (owner 21-11): (id ``offering_academic_info``, id ``admission_path``) mà các hồ sơ ``profile_ids`` sẽ được đếm ở
+    **Phần A** nếu KHÔNG còn dòng Quyết định hiệu lực — "ô HIỆN TẠI" của em bị bỏ tên / văn bản bị huỷ / bị huỷ ghi nhận.
+
+    ĐÚNG điều kiện Phần A của các hàm đếm (một nguồn — cùng hằng, cùng biểu thức), BỎ riêng ``no_effective_row`` (câu hỏi là
+    "mất dòng thì đếm ở đâu"); chỉ hồ sơ ở trạng thái chiếm chỗ (:data:`OCCUPYING_STATUSES` — trạng thái khác không vào Phần A):
+
+    * Phê duyệt cũ (:func:`count_by_offering_year`): học vụ theo ``lead.offering_id`` + ``admission_profile.academic_year``;
+    * công bố (:func:`count_by_academic_info` / :func:`count_by_path` — :func:`_part_a_multi_choice`): đường xét của nguyện vọng
+      ``admitted`` + học vụ của đường xét ấy;
+    * kiểu cũ (:func:`_part_a_legacy`): đường xét ``applied_rules->>'admission_path_id'`` + học vụ của nó.
+
+    ``counted_now`` = True (C2-1 — ô MẤT chỗ khi em được THÊM dòng hiệu lực, A → B): chỉ em ĐANG được đếm ở Phần A (thêm đúng
+    ``no_effective_row`` của các hàm đếm) — em đã có dòng hiệu lực thì không chiếm ô Phần A nào để mất.
+
+    Gọi SAU khi đã khoá hồ sơ (trạng thái / nguyện vọng / dòng hiệu lực không đổi dưới tay) và SAU khoá năm của các hồ sơ
+    (:func:`lock_years_of_change` — câu dò học vụ theo ngành + năm dưới đây đọc tập học vụ của năm, P2). Hai chiều mới của #733
+    (nhóm ngành) CHƯA có ở đây."""
+    ids = sorted({int(p) for p in profile_ids if p is not None})
+    if not ids:
+        return set(), set()
+    ap, lead = models.AdmissionProfile, models.Lead
+    oai, path, c = models.OfferingAcademicInfo, models.AdmissionPath, models.AdmissionProfileChoice
+    occupying = (ap.id.in_(ids), ap.status.in_(OCCUPYING_STATUSES)) + ((no_effective_row(ap.id),) if counted_now else ())
+    ai_ids = set(
+        (
+            await db.execute(
+                select(oai.id)
+                .select_from(ap)
+                .join(lead, ap.lead_id == lead.id)
+                .join(oai, (oai.offering_id == lead.offering_id) & (oai.academic_year == ap.academic_year))
+                .where(*occupying)
+            )
+        ).scalars()
+    )
+    path_rows = list(
+        (
+            await db.execute(
+                select(path.id, path.academic_info_id)
+                .select_from(c)
+                .join(ap, ap.id == c.admission_profile_id)
+                .join(path, path.id == c.admission_path_id)
+                .where(*occupying, c.decision == "admitted")
+            )
+        ).all()
+    ) + list(
+        (
+            await db.execute(
+                select(path.id, path.academic_info_id)
+                .select_from(ap)
+                .join(path, path.id == _legacy_path_id(ap))
+                .where(*occupying, ap.uses_choice_engine.is_(False))
+            )
+        ).all()
+    )
+    ai_ids |= {r.academic_info_id for r in path_rows if r.academic_info_id is not None}
+    return ai_ids, {r.id for r in path_rows}
 
 
 async def count_by_academic_info(
@@ -456,8 +537,8 @@ async def quota_cells_of_set_rows(
 ) -> Tuple[Set[int], Set[int]]:
     """(id ``offering_academic_info``, id ``admission_path``) mà các dòng bộ chiếm ở Phần B — học vụ theo
     ``academic_info_id`` CHỤP và theo cặp ``offering_id`` + năm CHỤP (phủ cả hai cách Phê duyệt cũ chọn dòng),
-    đường xét theo ``admission_path_id`` CHỤP. MỘT nguồn cho khoá (:func:`lock_quota_of_set_rows`) và cảnh
-    báo vượt chỉ tiêu (:func:`canh_bao_vuot_chi_tieu`)."""
+    đường xét theo ``admission_path_id`` CHỤP. MỘT nguồn cho ô chụp của dòng sắp chiếm chỗ và ô mất chỗ của dòng sắp tắt
+    (:func:`lock_quota_for_change` — khoá + cảnh báo). Câu dò theo cặp đọc tập học vụ của năm CHỤP ⇒ gọi SAU khoá năm (P2)."""
     ids = sorted({int(x) for x in set_row_ids if x is not None})
     if not ids:
         return set(), set()
@@ -485,12 +566,130 @@ async def quota_cells_of_set_rows(
     return ai_ids, {k.admission_path_id for k in lock if k.admission_path_id is not None}
 
 
-async def lock_quota_of_set_rows(db: AsyncSession, set_row_ids: Iterable[int]) -> None:
-    """``FOR UPDATE`` các dòng chỉ tiêu mà các dòng bộ ``set_row_ids`` sẽ chiếm ở Phần B — qua THỨ TỰ CHUẨN
-    (:func:`lock_quota_cells`). Gọi SAU khi đã khoá hồ sơ ⇒ ghi nhận và lần đếm của Phê duyệt cũ / công bố
-    tuần tự hoá: lần đếm thấy dòng mới, hoặc ghi nhận chờ lần duyệt commit."""
-    ai_ids, path_ids = await quota_cells_of_set_rows(db, set_row_ids)
-    await lock_quota_cells(db, ai_ids, path_ids)
+def _ids(values: Iterable[Optional[int]]) -> List[int]:
+    return sorted({int(x) for x in values if x is not None})
+
+
+async def _years_of(db: AsyncSession, set_row_ids: Sequence[int], profile_ids: Sequence[int]) -> Set[int]:
+    """Năm mà bước dò ô theo cặp (loại hình, năm) đọc: năm CHỤP của dòng bộ (:func:`quota_cells_of_set_rows`) + năm hồ sơ
+    (:func:`part_a_cells_of_profiles` — ``lead.offering_id`` + ``admission_profile.academic_year``)."""
+    years: Set[int] = set()
+    if set_row_ids:
+        b = CouncilDocumentSetRow
+        years |= set((await db.execute(select(b.academic_year).where(b.id.in_(set_row_ids)).distinct())).scalars())
+    if profile_ids:
+        ap = models.AdmissionProfile
+        years |= set((await db.execute(select(ap.academic_year).where(ap.id.in_(profile_ids)).distinct())).scalars())
+    return {int(y) for y in years if y is not None}
+
+
+async def lock_years_of_change(
+    db: AsyncSession,
+    *,
+    set_ids: Iterable[Optional[int]] = (),
+    decision_ids: Iterable[Optional[int]] = (),
+    row_ids: Iterable[Optional[int]] = (),
+) -> FrozenSet[int]:
+    """P2 (Codex PR-1 GĐ1 lượt 2, 21-11): KHOÁ NĂM CHIA SẺ (``app.core.review_year_lock.lock_review_years_shared`` — MỘT định
+    nghĩa) của mọi năm mà một thao tác Quyết định CÓ THỂ chạm, gọi Ở ĐẦU thao tác — TRƯỚC mọi khoá dòng (lượt gửi, gốc chuỗi, …,
+    hồ sơ, ô chỉ tiêu). Lệnh tạo / dời năm / xoá / khôi phục học vụ (khoá năm ĐỘC QUYỀN) không chen được giữa bước dò ô theo cặp
+    (loại hình, năm) và lúc commit ⇒ không có học vụ "vừa xuất hiện" vắng khỏi tập khoá + cảnh báo.
+
+    Phạm vi đọc TRƯỚC khoá (tập rộng, chưa khoá gì): dòng bộ của ``set_ids`` (ghi nhận; dòng THÊM của điều chỉnh); dòng
+    Quyết định ``row_ids`` (dòng BỎ của điều chỉnh); mọi dòng của văn bản ``decision_ids`` + dòng nó đã bỏ + dòng của văn bản đích
+    nếu nó là văn bản huỷ (huỷ hiệu lực / huỷ ghi nhận) — năm chụp của dòng bộ nguồn và năm của hồ sơ. Trả tập năm đã khoá cho
+    :func:`lock_quota_for_change` kiểm lại dưới khoá hồ sơ."""
+    r, b, cd = CouncilDecisionRow, CouncilDocumentSetRow, CouncilDecision
+    sets, decisions, rows = _ids(set_ids), _ids(decision_ids), _ids(row_ids)
+    pairs: List[Any] = []
+    conditions = []
+    if decisions:
+        targets = select(cd.huy_qd_id).where(cd.id.in_(decisions), cd.huy_qd_id.is_not(None))
+        conditions += [r.decision_id.in_(decisions), r.decision_id.in_(targets), r.bi_bo_boi_id.in_(decisions)]
+    if rows:
+        conditions.append(r.id.in_(rows))
+    if conditions:
+        pairs += (await db.execute(select(r.set_row_id, r.profile_id).where(or_(*conditions)))).all()
+    if sets:
+        pairs += (await db.execute(select(b.id, b.profile_id).where(b.set_id.in_(sets)))).all()
+    years = await _years_of(db, _ids(p[0] for p in pairs), _ids(p[1] for p in pairs))
+    await lock_review_years_shared(db, years)
+    return frozenset(years)
+
+
+class QuotaChange:
+    """Các ô chỉ tiêu mà MỘT thao tác ghi văn bản (ghi nhận / bổ sung, điều chỉnh, huỷ hiệu lực, huỷ ghi nhận) làm TĂNG số đếm —
+    MỘT nguồn cho khoá (:func:`lock_quota_for_change`) và cảnh báo (:func:`quota_warnings_after_change`).
+
+    * ``snapshot_*``: ô CHỤP của dòng sắp chiếm chỗ (Phần B — dòng ghi nhận / thêm / bật lại) ⇒ cảnh báo khi VƯỢT sau ghi (N9 /
+      K-1);
+    * ``current_*``: ô HIỆN TẠI (Phần A) của em sắp mất dòng hiệu lực mà vẫn chiếm chỗ — KỂ CẢ ô cũng là ô chụp (ô HAI VAI —
+      C2-2) ⇒ cảnh báo khi số chính TĂNG so với ``before`` VÀ vượt (ô hai vai: vượt là báo, như ô chụp), bản ghi mang số trước;
+    * ``before``: {(``"nganh"`` | ``"duong_xet"``, id): số chính} TRƯỚC khi ghi, đếm DƯỚI khoá — mọi ô ``current_*`` có chỉ tiêu.
+
+    Ô MẤT chỗ (C2-1) chỉ được KHOÁ (không cảnh báo — số đếm ở đó không tăng vì chúng) nên không nằm ở đây."""
+
+    __slots__ = ("snapshot_ai_ids", "snapshot_path_ids", "current_ai_ids", "current_path_ids", "before")
+
+    def __init__(self, snapshot_ai_ids, snapshot_path_ids, current_ai_ids, current_path_ids, before):
+        self.snapshot_ai_ids = frozenset(snapshot_ai_ids)
+        self.snapshot_path_ids = frozenset(snapshot_path_ids)
+        self.current_ai_ids = frozenset(current_ai_ids)
+        self.current_path_ids = frozenset(current_path_ids)
+        self.before: Dict[Tuple[str, int], int] = dict(before)
+
+
+async def lock_quota_for_change(
+    db: AsyncSession,
+    *,
+    locked_years: Iterable[int],
+    set_row_ids: Iterable[Optional[int]],
+    returning_profile_ids: Iterable[Optional[int]],
+    released_set_row_ids: Iterable[Optional[int]] = (),
+    entering_profile_ids: Iterable[Optional[int]] = (),
+) -> QuotaChange:
+    """C2 (owner 21-11 — CHẶN F230): khoá MỌI ô chỉ tiêu mà thao tác làm đổi số đếm bằng MỘT lần :func:`lock_quota_cells`
+    (gọi nhiều lần là phá thứ tự tăng dần F259 ⇒ vòng chờ với Phê duyệt hàng loạt / công bố đang khoá [thấp, cao]); rồi đếm số
+    "trước" DƯỚI khoá. Nơi gọi: SAU khi khoá hồ sơ, TRƯỚC mọi câu ghi.
+
+    Ô TĂNG (cảnh báo — :class:`QuotaChange`):
+
+    * ô CHỤP của dòng ``set_row_ids`` sắp chiếm chỗ (ghi nhận / thêm / bật lại);
+    * ô HIỆN TẠI (:func:`part_a_cells_of_profiles`) của em ``returning_profile_ids`` sắp mất dòng hiệu lực (B → A). Vì sao khoá:
+      Phê duyệt cũ / công bố đồng thời ở ô ấy phải CHỜ thao tác này commit rồi mới đếm (thấy em đã về Phần A).
+
+    Ô MẤT chỗ (C2-1 — Codex PR-1 lượt 2; chỉ khoá): ô CHỤP của dòng ``released_set_row_ids`` sắp tắt / bị bỏ, và ô Phần A mà em
+    ``entering_profile_ids`` ĐANG được đếm (sắp được thêm dòng hiệu lực, A → B — ``counted_now``). Vì sao khoá: một văn bản KHÁC
+    chuỗi đang so "trước / sau" ở cùng ô (đã đọc 31 / 30 dưới khoá) phải thấy chỗ ta trả TRƯỚC hoặc SAU cả lần so — không thì nó
+    trả 1 chỗ giữa chừng, văn bản kia đưa em về (31) rồi so 31 với 31 và mất cảnh báo.
+
+    P2: ``locked_years`` = tập năm :func:`lock_years_of_change` đã khoá ở đầu thao tác (bắt buộc — không thể quên khoá năm). Năm
+    THẬT của dòng bộ + hồ sơ (đọc lại dưới khoá hồ sơ) ngoài tập ấy (hồ sơ vừa đổi năm ở nơi khác) ⇒ 409 "thử lại": khoá thêm năm
+    sau khi đã giữ khoá dòng là phá thứ tự."""
+    gain, lost = _ids(set_row_ids), _ids(released_set_row_ids)
+    returning, entering = _ids(returning_profile_ids), _ids(entering_profile_ids)
+    missing = await _years_of(db, gain + lost, returning + entering) - set(locked_years)
+    if missing:
+        log.warning("quota_nam_ngoai_khoa_nam", years=sorted(missing))
+        raise ConflictError(CONFLICT_MESSAGE)
+    snapshot_ai, snapshot_path = await quota_cells_of_set_rows(db, gain)
+    current_ai, current_path = await part_a_cells_of_profiles(db, returning)
+    lost_ai, lost_path = await quota_cells_of_set_rows(db, lost)
+    leaving_ai, leaving_path = await part_a_cells_of_profiles(db, entering, counted_now=True)
+    await lock_quota_cells(
+        db,
+        snapshot_ai | current_ai | lost_ai | leaving_ai,
+        snapshot_path | current_path | lost_path | leaving_path,
+    )
+    # C2-2 (Codex PR-1 lượt 2): đếm trước MỌI ô hiện tại — KỂ CẢ ô hai vai (cũng là ô chụp); bỏ ô ấy khỏi tập TRƯỚC khi đếm thì
+    # cảnh báo của nó thiếu số trước + câu owner.
+    return QuotaChange(
+        snapshot_ai,
+        snapshot_path,
+        current_ai,
+        current_path,
+        await _main_used(db, current_ai, current_path),
+    )
 
 
 # ═══════════════════════════════ Q-J1 — khoá đếm của dòng bộ (owner 10-11) ════════════════════
@@ -503,7 +702,7 @@ async def check_lock_and_count_set_rows(
     db: AsyncSession, row: Sequence[Tuple[int, Optional[int]]]
 ) -> None:
     """Q-J1 (owner chốt 10-11): MỘT hàm kiểm cho ba thao tác sinh / khôi phục dòng Phần B — ghi nhận, dòng
-    THÊM khi điều chỉnh, dòng BẬT LẠI khi huỷ ghi nhận. Gọi DƯỚI khoá (sau :func:`lock_quota_of_set_rows`),
+    THÊM khi điều chỉnh, dòng BẬT LẠI khi huỷ ghi nhận. Gọi DƯỚI khoá (sau :func:`lock_quota_for_change`),
     TRƯỚC khi ghi. ``dong`` = [(số dòng, id dòng bộ nguồn)].
 
     Chặn (409, nêu SỐ DÒNG — không tên, không CCCD) khi một dòng:
@@ -576,77 +775,181 @@ async def check_lock_and_count_set_rows(
 
 
 # ═══════════════════════════════ N9 — cảnh báo vượt chỉ tiêu (không chặn) ═══════════════════
-async def over_quota_warnings(
-    db: AsyncSession, set_row_ids: Iterable[Optional[int]]
-) -> List[Dict[str, Any]]:
-    """N9 (đặc tả 5.3): sau khi ghi (cùng giao dịch, dưới khoá dòng chỉ tiêu), các ô chỉ tiêu mà dòng bộ
-    chiếm (:func:`quota_cells_of_set_rows` — cùng nguồn với khoá) bị VƯỢT thì trả cảnh báo; KHÔNG chặn.
+async def quota_warnings_after_change(db: AsyncSession, change: QuotaChange) -> List[Dict[str, Any]]:
+    """Cảnh báo vượt chỉ tiêu SAU khi ghi (cùng giao dịch, dưới khoá của :func:`lock_quota_for_change`) — KHÔNG chặn (K-1).
+    MỘT hàm cho cả bốn thao tác Quyết định (ghi nhận / bổ sung dùng nó từ PR-1 GĐ1 lượt 2 — trước đó ``over_quota_warnings``):
 
-    "Vượt" = số đã dùng > chỉ tiêu — ĐÚNG nghĩa sẵn có của phần mềm (Phê duyệt cũ / công bố chặn khi
-    ``đã dùng + 1 > chỉ tiêu`` ⇒ bằng chỉ tiêu là ĐẦY, chưa vượt). Chỉ tiêu NULL = không giới hạn ⇒ không xét.
-    Số đã dùng đếm qua ĐÚNG các hàm đếm của module (một nguồn): ô ngành (học vụ, chỉ tiêu năm) có HAI cách
-    đếm đang dùng — công bố (:func:`count_by_academic_info`) và Phê duyệt cũ (:func:`count_by_offering_year`)
-    — trả cả hai, vượt ở cách nào cũng báo; ô đường xét theo :func:`count_by_path`. Chỉ id + số đếm."""
-    ai_ids, path_ids = await quota_cells_of_set_rows(db, set_row_ids)
-    out: List[Dict[str, Any]] = []
-    t_oai, t_path = models.OfferingAcademicInfo, models.AdmissionPath
+    * N9 (đặc tả 5.3) — ô CHỤP của dòng ghi nhận / thêm / bật lại: VƯỢT sau ghi ⇒ báo. "Vượt" = số đã dùng > chỉ tiêu — ĐÚNG nghĩa
+      sẵn có của phần mềm (Phê duyệt cũ / công bố chặn khi ``đã dùng + 1 > chỉ tiêu`` ⇒ bằng chỉ tiêu là ĐẦY, chưa vượt). Chỉ
+      tiêu NULL = không giới hạn ⇒ không xét. Số đã dùng đếm qua ĐÚNG các hàm đếm của module (một nguồn): ô ngành (học vụ, chỉ
+      tiêu năm) có HAI cách đếm đang dùng — công bố (:func:`count_by_academic_info`) và Phê duyệt cũ
+      (:func:`count_by_offering_year`) — trả cả hai, vượt ở cách nào cũng báo; ô đường xét theo :func:`count_by_path`;
+    * C2 (owner 21-11) — ô HIỆN TẠI của em quay về Phần A: chỉ báo ô mà số chính TĂNG (so ``change.before``) VÀ vượt — "chỉ
+      đúng ô tăng số chỗ đã dùng"; 29 / 30 → 30 / 30 là đầy, KHÔNG báo. Bản ghi mang thêm ``o_hien_tai``, ``da_dung_truoc``
+      và câu owner ``cau`` (ô ngành :data:`CURRENT_CELL_OVER_QUOTA_MESSAGE`, ô đường xét :data:`CURRENT_PATH_OVER_QUOTA_MESSAGE`);
+    * C2-2 (Codex PR-1 lượt 2) — ô HAI VAI (vừa ô chụp vừa ô hiện tại, vd văn bản vừa bỏ một em về Y vừa thêm một em vào Y): MỘT
+      bản ghi — vượt là báo (luật ô chụp), mang đủ ``o_hien_tai`` / ``da_dung_truoc`` / ``cau`` (vd 30 → 32)."""
+    return await _cell_warnings(
+        db,
+        change.snapshot_ai_ids,
+        change.snapshot_path_ids,
+        change.current_ai_ids,
+        change.current_path_ids,
+        change.before,
+    )
+
+
+#: C2 (owner 21-11) — câu cảnh báo ô NGÀNH hiện tại: NGUYÊN VĂN mẫu owner ("Ngành Y, đường xét hiện tại: 30 → 31 chỗ đã dùng,
+#: chỉ tiêu 30, vượt 1."), chỉ điền tên ngành (``major_program.name``; thiếu ⇒ "học vụ #id") + số chính trước / sau (ô ngành:
+#: mức lớn nhất trong hai cách đếm — K-4) + chỉ tiêu + số vượt.
+CURRENT_CELL_OVER_QUOTA_MESSAGE = "Ngành %s, đường xét hiện tại: %d → %d chỗ đã dùng, chỉ tiêu %d, vượt %d."
+#: C2 (owner 21-11, câu ô ĐƯỜNG XÉT) — NGUYÊN VĂN "Đường xét Z (ngành Y): 30 → 31 chỗ đã dùng, chỉ tiêu 30, vượt 1.": tên đường xét
+#: TRƯỚC (``display_name``; thiếu ⇒ "#id"), rồi tên ngành của học vụ của đường xét (thiếu ⇒ "học vụ #id"); số trước / sau / chỉ
+#: tiêu lấy từ CHÍNH ô đường xét (:func:`count_by_path`, ``admit_quota``).
+CURRENT_PATH_OVER_QUOTA_MESSAGE = "Đường xét %s (ngành %s): %d → %d chỗ đã dùng, chỉ tiêu %d, vượt %d."
+
+
+async def _nganh_cells(db: AsyncSession, ai_ids: Iterable[int]):
+    # Vòng giao diện (đặc tả 3.8): ``ten`` = tên ngành của học vụ (``major_program.name`` qua ``program_offering``) — chỉ
+    # để hiển thị; thiếu ⇒ None (giao diện hiện mã + id).
+    t_oai = models.OfferingAcademicInfo
+    return (
+        await db.execute(
+            select(
+                t_oai.id,
+                t_oai.offering_id,
+                t_oai.academic_year,
+                t_oai.annual_admission_quota,
+                models.MajorProgram.name.label("ten"),
+            )
+            .select_from(t_oai)
+            .outerjoin(models.ProgramOffering, models.ProgramOffering.id == t_oai.offering_id)
+            .outerjoin(models.MajorProgram, models.MajorProgram.id == models.ProgramOffering.program_id)
+            .where(t_oai.id.in_(sorted(ai_ids)))
+            .order_by(t_oai.id)
+        )
+    ).all()
+
+
+async def _path_cells(db: AsyncSession, path_ids: Iterable[int]):
+    # ``ten_nganh`` = tên ngành của học vụ của đường xét — chỉ cho câu cảnh báo ô đường xét (C2); thiếu ⇒ None.
+    t_path, t_oai = models.AdmissionPath, models.OfferingAcademicInfo
+    return (
+        await db.execute(
+            select(
+                t_path.id,
+                t_path.admit_quota,
+                t_path.display_name,
+                t_path.academic_info_id,
+                models.MajorProgram.name.label("ten_nganh"),
+            )
+            .select_from(t_path)
+            .outerjoin(t_oai, t_oai.id == t_path.academic_info_id)
+            .outerjoin(models.ProgramOffering, models.ProgramOffering.id == t_oai.offering_id)
+            .outerjoin(models.MajorProgram, models.MajorProgram.id == models.ProgramOffering.program_id)
+            .where(t_path.id.in_(sorted(path_ids)))
+            .order_by(t_path.id)
+        )
+    ).all()
+
+
+async def _nganh_used(db: AsyncSession, cell) -> Tuple[int, int]:
+    """(công bố, Phê duyệt cũ) — HAI cách đếm ô ngành đang dùng (F264); số chính = mức lớn nhất (K-4)."""
+    return (
+        await count_by_academic_info(db, academic_info_id=cell.id),
+        await count_by_offering_year(db, offering_id=cell.offering_id, academic_year=cell.academic_year),
+    )
+
+
+async def _main_used(db: AsyncSession, ai_ids: Set[int], path_ids: Set[int]) -> Dict[Tuple[str, int], int]:
+    """Số chính đã dùng của các ô CÓ chỉ tiêu (ô ngành: mức lớn nhất trong hai cách đếm; ô đường xét: :func:`count_by_path`)."""
+    out: Dict[Tuple[str, int], int] = {}
     if ai_ids:
-        # Vòng giao diện (đặc tả 3.8): ``nhan`` = tên ngành của học vụ (``major_program.name`` qua
-        # ``program_offering``) / tên hiển thị của đường xét — chỉ để hiển thị; thiếu ⇒ None (giao diện hiện mã + id).
-        for cell in (
-            await db.execute(
-                select(
-                    t_oai.id,
-                    t_oai.offering_id,
-                    t_oai.academic_year,
-                    t_oai.annual_admission_quota,
-                    models.MajorProgram.name.label("ten"),
-                )
-                .select_from(t_oai)
-                .outerjoin(models.ProgramOffering, models.ProgramOffering.id == t_oai.offering_id)
-                .outerjoin(models.MajorProgram, models.MajorProgram.id == models.ProgramOffering.program_id)
-                .where(t_oai.id.in_(sorted(ai_ids)))
-                .order_by(t_oai.id)
-            )
-        ).all():
-            if cell.annual_admission_quota is None:
-                continue
-            publish_count = await count_by_academic_info(db, academic_info_id=cell.id)
-            approved_count = await count_by_offering_year(
-                db, offering_id=cell.offering_id, academic_year=cell.academic_year
-            )
-            if max(publish_count, approved_count) > cell.annual_admission_quota:
-                out.append(
-                    {
-                        "loai": "nganh",
-                        "academic_info_id": cell.id,
-                        "chi_tieu": cell.annual_admission_quota,
-                        "da_dung_cong_bo": publish_count,
-                        "da_dung_phe_duyet_cu": approved_count,
-                        "nhan": cell.ten,
-                    }
-                )
+        for cell in await _nganh_cells(db, ai_ids):
+            if cell.annual_admission_quota is not None:
+                out[("nganh", cell.id)] = max(await _nganh_used(db, cell))
     if path_ids:
-        for p in (
-            await db.execute(
-                select(t_path.id, t_path.admit_quota, t_path.display_name)
-                .where(t_path.id.in_(sorted(path_ids)))
-                .order_by(t_path.id)
-            )
-        ).all():
+        for p in await _path_cells(db, path_ids):
+            if p.admit_quota is not None:
+                out[("duong_xet", p.id)] = await count_by_path(db, admission_path_id=p.id)
+    return out
+
+
+async def _cell_warnings(
+    db: AsyncSession,
+    snapshot_ai_ids: Iterable[int],
+    snapshot_path_ids: Iterable[int],
+    current_ai_ids: Iterable[int],
+    current_path_ids: Iterable[int],
+    before: Dict[Tuple[str, int], int],
+) -> List[Dict[str, Any]]:
+    """MỘT chỗ dựng cảnh báo vượt cho :func:`quota_warnings_after_change` (ô ngành trước, rồi ô đường xét; id tăng dần). Ô
+    CHỈ là ô hiện tại có số "trước" ⇒ chỉ báo khi số chính TĂNG; ô hai vai (cũng là ô chụp) vượt là báo; mọi ô có số "trước"
+    (``before`` — chỉ ô hiện tại) mang ``o_hien_tai`` / ``da_dung_truoc`` / ``cau``."""
+    snapshot_ai, snapshot_path = set(snapshot_ai_ids), set(snapshot_path_ids)
+    ai_ids = snapshot_ai | set(current_ai_ids)
+    path_ids = snapshot_path | set(current_path_ids)
+    out: List[Dict[str, Any]] = []
+    if ai_ids:
+        for cell in await _nganh_cells(db, ai_ids):
+            quota = cell.annual_admission_quota
+            if quota is None:
+                continue
+            publish_count, approved_count = await _nganh_used(db, cell)
+            used = max(publish_count, approved_count)
+            if used <= quota:
+                continue
+            entry: Dict[str, Any] = {
+                "loai": "nganh",
+                "academic_info_id": cell.id,
+                "chi_tieu": quota,
+                "da_dung_cong_bo": publish_count,
+                "da_dung_phe_duyet_cu": approved_count,
+                "nhan": cell.ten,
+            }
+            prior = before.get(("nganh", cell.id))
+            if prior is not None:
+                if used <= prior and cell.id not in snapshot_ai:
+                    continue  # C2: ô CHỈ là ô hiện tại, không TĂNG ⇒ không phải ô thao tác này làm vượt
+                entry.update(
+                    o_hien_tai=True,
+                    da_dung_truoc=prior,
+                    cau=CURRENT_CELL_OVER_QUOTA_MESSAGE
+                    % (cell.ten or "học vụ #%d" % cell.id, prior, used, quota, used - quota),
+                )
+            out.append(entry)
+    if path_ids:
+        for p in await _path_cells(db, path_ids):
             if p.admit_quota is None:
                 continue
             n = await count_by_path(db, admission_path_id=p.id)
-            if n > p.admit_quota:
-                out.append(
-                    {
-                        "loai": "duong_xet",
-                        "admission_path_id": p.id,
-                        "chi_tieu": p.admit_quota,
-                        "da_dung": n,
-                        "nhan": p.display_name,
-                    }
+            if n <= p.admit_quota:
+                continue
+            entry = {
+                "loai": "duong_xet",
+                "admission_path_id": p.id,
+                "chi_tieu": p.admit_quota,
+                "da_dung": n,
+                "nhan": p.display_name,
+            }
+            prior = before.get(("duong_xet", p.id))
+            if prior is not None:
+                if n <= prior and p.id not in snapshot_path:
+                    continue  # C2: ô CHỈ là ô hiện tại, không TĂNG
+                entry.update(
+                    o_hien_tai=True,
+                    da_dung_truoc=prior,
+                    cau=CURRENT_PATH_OVER_QUOTA_MESSAGE
+                    % (
+                        p.display_name or "#%d" % p.id,
+                        p.ten_nganh or "học vụ #%s" % p.academic_info_id,
+                        prior,
+                        n,
+                        p.admit_quota,
+                        n - p.admit_quota,
+                    ),
                 )
+            out.append(entry)
     if out:
         log.warning(
             "council_decision_vuot_chi_tieu",
