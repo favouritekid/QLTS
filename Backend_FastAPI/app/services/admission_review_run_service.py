@@ -24,7 +24,6 @@ from app.models.admission_review import (
     REVIEW_RUN_DONE,
     REVIEW_RUN_KIND_EVALUATE,
     REVIEW_RUN_RUNNING,
-    REVIEW_SESSION_DRAFT,
 )
 from app.repositories import admission_review_load_repository as load_repo
 from app.repositories import admission_review_repository as review_repo
@@ -33,6 +32,7 @@ from app.services import admission_review_errors as errors
 from app.services import admission_review_loader as loader
 from app.services import admission_review_rules as rules
 from app.services import fee_gate_rules
+from app.services.admission_review_service import ACTION_RUN_EVALUATE, require_session_action
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
@@ -95,8 +95,7 @@ async def run_evaluate(
     session = await review_repo.get_session(db, session_id)
     if session is None:
         raise errors.review_session_not_found()
-    if session.status != REVIEW_SESSION_DRAFT:
-        raise errors.review_session_not_draft(session.status)
+    require_session_action(session.status, ACTION_RUN_EVALUATE)  # MỘT cổng với ``available_actions`` (hợp đồng §3.1)
     if int(session.version) != int(session_version):
         raise errors.review_session_stale(int(session.version))
     try:
@@ -121,8 +120,7 @@ async def run_evaluate(
     locked = await review_repo.lock_session(db, session_id)
     if locked is None:
         raise errors.review_session_not_found()
-    if locked.status != REVIEW_SESSION_DRAFT:
-        raise errors.review_session_not_draft(locked.status)
+    require_session_action(locked.status, ACTION_RUN_EVALUATE)  # huỷ chen giữa ⇒ 409, không ghi gì
     inputs = {
         "academic_year": loaded.academic_year,
         "session_version": loaded.session_version,

@@ -413,3 +413,88 @@ async def tab_counts(db: Executor, run_id: int) -> Dict[str, int]:
     """Số dòng theo tab của CẢ lượt (``tab_counts`` của E9 / ``summary``). Tab không có dòng không có khoá."""
     rows = (await db.execute(select(W.tab, func.count()).where(W.run_id == run_id).group_by(W.tab))).all()
     return {str(t): int(n) for t, n in rows}
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# GĐ2-B đợt 2 (L3a + L4) — đọc phụ cho dịch vụ ghi và phản hồi của 9 API (hợp đồng API bản 4 §3). Không khoá, không luật.
+# ---------------------------------------------------------------------------------------------------------------------
+async def read_rounds(db: Executor, round_ids: Sequence[int]) -> Dict[int, Row]:
+    """Đợt tuyển sinh theo id — mỗi ``Row``: ``id``, ``academic_year``, ``round_code``, ``round_name``. Id không có không có khoá."""
+    ids = sorted({int(i) for i in round_ids})
+    if not ids:
+        return {}
+    o = models.OfferingAdmissionRound
+    rows = (
+        await db.execute(select(o.id, o.academic_year, o.round_code, o.round_name).where(o.id.in_(ids)))
+    ).all()
+    return {int(r.id): r for r in rows}
+
+
+async def read_quota_table_state(db: Executor, academic_year: int) -> Optional[Row]:
+    """Trạng thái + ``version`` HIỆN TẠI của bảng chỉ tiêu năm (KHÔNG khoá). ``None`` = năm chưa có bảng."""
+    t = models.AdmissionQuotaTable
+    return (
+        await db.execute(select(t.status, t.version).where(t.academic_year == academic_year))
+    ).one_or_none()
+
+
+async def read_academic_info_years(db: Executor, academic_info_ids: Sequence[int]) -> List[Row]:
+    """``id``, ``academic_year``, ``is_deleted`` của các học vụ (id không có thì không có hàng) — E4 kiểm thành viên. KHÔNG khoá
+    dòng: E4 gọi SAU khoá năm của lần xét (mọi lệnh dời năm / xoá mềm học vụ cũng giữ khoá năm ⇒ giá trị đứng yên tới commit)."""
+    ids = sorted({int(i) for i in academic_info_ids})
+    if not ids:
+        return []
+    oai = models.OfferingAcademicInfo
+    return list(
+        (await db.execute(select(oai.id, oai.academic_year, oai.is_deleted).where(oai.id.in_(ids)).order_by(oai.id))).all()
+    )
+
+
+async def list_floors_detail(db: Executor, session_id: int) -> List[Row]:
+    """Điểm sàn của một lần xét kèm nhãn HIỆN TẠI của học vụ (``FloorOut`` — hợp đồng §3.1), sắp ``offering_academic_info_id``
+    TĂNG. Mỗi ``Row``: ``offering_academic_info_id``, ``floor_score``, ``updated_by_user_id``, ``updated_at``, ``major_code``,
+    ``major_name``, ``offering_type``, ``annual_admission_quota``, ``is_deleted``, ``group_code`` (nhóm của bảng chỉ tiêu cùng năm —
+    UNIQUE một học vụ một nhóm; nối trái: không thuộc nhóm ⇒ ``None``)."""
+    oai, po, mp = models.OfferingAcademicInfo, models.ProgramOffering, models.MajorProgram
+    m, g = models.AdmissionQuotaGroupMember, models.AdmissionQuotaGroup
+    return list(
+        (
+            await db.execute(
+                select(
+                    F.offering_academic_info_id,
+                    F.floor_score,
+                    F.updated_by_user_id,
+                    F.updated_at,
+                    mp.code.label("major_code"),
+                    mp.name.label("major_name"),
+                    po.offering_type.label("offering_type"),
+                    oai.annual_admission_quota,
+                    oai.is_deleted,
+                    g.code.label("group_code"),
+                )
+                .select_from(F)
+                .join(oai, oai.id == F.offering_academic_info_id)
+                .outerjoin(po, po.id == oai.offering_id)
+                .outerjoin(mp, mp.id == po.program_id)
+                .outerjoin(m, (m.offering_academic_info_id == oai.id) & (m.academic_year == F.academic_year))
+                .outerjoin(g, g.id == m.group_id)
+                .where(F.session_id == session_id)
+                .order_by(F.offering_academic_info_id)
+            )
+        ).all()
+    )
+
+
+async def read_profile_people(db: Executor, profile_ids: Sequence[int]) -> Dict[int, Row]:
+    """Họ tên + đơn vị HIỆN TẠI của hồ sơ (E9 ``full_name`` / ``unit_id`` — đọc lúc GET, không bất biến). Đơn vị = ``lead.unit_id``
+    (cột kiểm quyền của hồ sơ). Hồ sơ không còn ⇒ không có khoá. KHÔNG đọc CCCD / điện thoại / ngày sinh."""
+    ids = sorted({int(i) for i in profile_ids})
+    if not ids:
+        return {}
+    p, lead = models.AdmissionProfile, models.Lead
+    rows = (
+        await db.execute(
+            select(p.id, p.full_name, lead.unit_id).select_from(p).outerjoin(lead, lead.id == p.lead_id).where(p.id.in_(ids))
+        )
+    ).all()
+    return {int(r.id): r for r in rows}

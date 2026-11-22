@@ -1472,6 +1472,10 @@ jobs:
           # Lượt 3 (22-11): `test_vn_school_admin_service.py` vào lát này — nó canh KV hiện hành trên ô chọn trường dùng CHUNG thứ tự
           # `school_kv_pick_order_sql` với resolver / đường lô (B-P1 của đợt 2); trước đó tệp không nằm trong tier nào (chỉ chạy đêm)
           # nên cổng PR không thấy (CLAUDE.md §11). Không có tier `vn_school*` nào khác để ghép.
+          # Đợt 2 L3a + L4 (22-11): 9 API lần xét nháp (E1–E9) — hợp đồng không CSDL (ghim route / trường / quyền / điểm sàn / một
+          # cổng), API lần xét (E1–E5, quyền, đóng băng, PATCH dời năm có sàn), hai phiên khoá năm (lưu sàn ↔ dời năm cả hai thứ tự,
+          # huỷ ↔ dời năm, tạo ↔ tạo, lưu ↔ lưu), chạy kiểm qua API thật (E6–E9, BT45). Ngoài mọi tier ⇒ check vẫn xanh mà không
+          # chạy (CLAUDE.md §11). `gd2b_lan_xet_tro_giup.py` là trợ giúp (không `test_`), import từ `test_gd2b_bt35_toan_luot_db.py`.
           - tier: Tier 5k — GĐ2-B lần xét nháp (đợt 1 + đợt 2)
             tests: >-
               tests/unit/test_gd2b_ddl_lockin.py
@@ -1486,6 +1490,10 @@ jobs:
               tests/integration/test_gd2b_bo_dem_mot_cau_db.py
               tests/api/test_gd2b_kv_truong_chong_khoang_api.py
               tests/unit/test_vn_school_admin_service.py
+              tests/unit/test_gd2b_lan_xet_hop_dong.py
+              tests/api/test_gd2b_lan_xet_api.py
+              tests/api/test_gd2b_lan_xet_hai_phien_api.py
+              tests/api/test_gd2b_chay_kiem_api.py
 
     env:
       APP_ENV: test

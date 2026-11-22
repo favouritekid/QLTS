@@ -29,7 +29,6 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 from sqlalchemy.orm import lazyload
 
 from app import models
-from app.models.admission_review import REVIEW_SESSION_DRAFT
 from app.repositories import admission_review_load_repository as load_repo
 from app.repositories import admission_review_repository as review_repo
 from app.repositories.council_candidate_repository import read_check_source, read_print_figures
@@ -40,6 +39,7 @@ from app.services import council_set_gate_service as set_gate
 from app.services import quota_occupancy_service as qos
 from app.services.admission_choice_engine_service import t6_profile_load_paths
 from app.services.admission_quota_table_service import quota_fingerprint_of
+from app.services.admission_review_service import ACTION_RUN_EVALUATE, require_session_action
 from app.services.council_candidate_service import _merge_duplicate_rows, _score_add_rules
 from app.services.council_decision_status_service import from_row
 from app.services.priority_service import (
@@ -146,8 +146,7 @@ async def load_run_facts(
     s = await load_repo.read_session(conn, session_id)
     if s is None:
         raise errors.review_session_not_found()
-    if s.status != REVIEW_SESSION_DRAFT:
-        raise errors.review_session_not_draft(s.status)
+    require_session_action(s.status, ACTION_RUN_EVALUATE)  # MỘT cổng với ``available_actions`` (hợp đồng §3.1)
     if int(s.version) != int(session_version):
         raise errors.review_session_stale(int(s.version))
     year = int(s.academic_year)
