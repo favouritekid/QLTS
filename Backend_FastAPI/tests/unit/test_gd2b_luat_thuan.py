@@ -988,6 +988,8 @@ _MA_DUNG_NV2 = (
     ("cong_chua_du_cau_hinh", (R.CHOICE_CONFIG_INCOMPLETE,)),  # bước 6 — cổng ``config_incomplete``
     ("chua_cau_hinh_trinh_do", (R.TARGET_LEVEL_NOT_CONFIGURED,)),  # bước 6
     ("e6_hai_bang_diem_khac", ("diem_hai_nguon_khac",)),  # bước 6 — E6 mức NV
+    ("e6_luat_kv_khong_xac_dinh", ("khong_xac_dinh_luat_cong_diem_kv",)),  # bước 6 — E6 mức NV (Codex lượt 3 H4)
+    ("e6_luat_ut_khong_xac_dinh", ("khong_xac_dinh_luat_cong_diem_ut",)),  # bước 6 — E6 mức NV (Codex lượt 3 H4)
 )
 
 
@@ -1016,6 +1018,10 @@ def _nv2_theo_ca(ca):
         nv2 = _nv(522, 2, HV2, gate=R.GATE_TARGET_LEVEL_NOT_CONFIGURED)
     elif ca == "e6_hai_bang_diem_khac":
         nv2 = _nv(522, 2, HV2, score_both_differ=1)
+    elif ca == "e6_luat_kv_khong_xac_dinh":
+        nv2 = _nv(522, 2, HV2, area_rule=None)
+    elif ca == "e6_luat_ut_khong_xac_dinh":
+        nv2 = _nv(522, 2, HV2, object_rule=None)
     elif ca != "doi_chung":
         raise AssertionError(ca)
     return nv2, hv2, san
