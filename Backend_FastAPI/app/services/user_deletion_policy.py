@@ -252,8 +252,12 @@ async def assert_user_deletable(db: AsyncSession, user_ids: Iterable[int], actor
     """Hàm chung cho ``delete_user`` VÀ ``perform_bulk_action`` (§4.3).
 
     1. Bỏ trùng, xếp id, bỏ chính người bấm.
-    2. Khoá (người bị xoá ∪ admin đang hoạt động, nếu có người bị xoá là admin đang hoạt động) ``FOR UPDATE ORDER BY id``
-       trong MỘT câu — hai lệnh xoá admin chéo không bế tắc.
+    2. Khoá (người bị xoá ∪ admin đang hoạt động, nếu có người bị xoá là admin đang hoạt động) ``FOR UPDATE`` — hai lệnh xoá
+       admin chéo không bế tắc. PR-B lượt 5 (owner 22-11, K4 ↔ K4): người bấm (khoá ngoại ``user_activity_log.actor_id``
+       của nhật ký router ghi SAU bước này) vào CÙNG thứ tự id tăng, ``FOR KEY SHARE`` — qua :func:`lock_users_in_id_order`
+       (MỘT nơi giữ thứ tự khoá): (a) ĐỌC không khoá tập cần ``FOR UPDATE`` bằng đúng vị từ cũ, (b) khoá tập ấy ∪ người bấm
+       theo id tăng. Người bấm đã nằm trong tập (admin, khi xoá admin) ⇒ chỉ ``FOR UPDATE``, không khoá lại yếu hơn. Tập admin
+       đổi giữa (a) và (b) ⇒ phép kiểm "admin hiện tại ⊆ đã khoá" ở bước 3 trả ``ConflictError`` như trước.
     3. Guard "admin cuối" cho CẢ lệnh.
     4. Kiểm mọi cột ``BLOCK_*`` + ``CURRENT_STATE`` — CHỈ ĐỌC. Một người không đạt ⇒ 409 cả lệnh, không câu ghi nào.
     5. Xoá tường minh các dòng ``OWNED_CASCADE`` cần xoá tay. Người gọi ``db.delete`` rồi ``flush``.
@@ -264,19 +268,21 @@ async def assert_user_deletable(db: AsyncSession, user_ids: Iterable[int], actor
     if not ids:
         return []
 
-    locked = (
+    # (2a) ĐỌC (không khoá) tập cần ``FOR UPDATE`` — đúng vị từ của câu khoá cũ.
+    can_khoa = (
         await db.execute(
             text(
-                'SELECT id, role, status FROM "user" '
+                'SELECT id FROM "user" '
                 "WHERE id = ANY(:ids) "
                 "   OR (role = 'admin' AND status = 'active' AND EXISTS ("
-                '       SELECT 1 FROM "user" t WHERE t.id = ANY(:ids) AND t.role = \'admin\' AND t.status = \'active\')) '
-                "ORDER BY id FOR UPDATE"
+                '       SELECT 1 FROM "user" t WHERE t.id = ANY(:ids) AND t.role = \'admin\' AND t.status = \'active\'))'
             ),
             {"ids": ids},
         )
-    ).all()
-    by_id = {row.id: row for row in locked}
+    ).scalars().all()
+    # (2b) khoá theo id TĂNG: tập trên ``FOR UPDATE`` + người bấm ``FOR KEY SHARE`` (nếu ngoài tập). Vai / trạng thái đọc
+    # DƯỚI khoá (hàng trả về).
+    by_id = await lock_users_in_id_order(db, target_ids=can_khoa, referenced_ids=[actor_id], delete_targets=True)
     targets = [u for u in ids if u in by_id]
     if not targets:
         return []
@@ -311,7 +317,11 @@ async def assert_user_deletable(db: AsyncSession, user_ids: Iterable[int], actor
 
 
 async def lock_users_in_id_order(
-    db: AsyncSession, *, target_ids: Iterable[int], referenced_ids: Iterable[Optional[int]] = ()
+    db: AsyncSession,
+    *,
+    target_ids: Iterable[int],
+    referenced_ids: Iterable[Optional[int]] = (),
+    delete_targets: bool = False,
 ) -> Dict[int, object]:
     """THỨ TỰ KHOÁ DÒNG ``user`` cho mọi đường GHI tài khoản (PR-B lượt 5, Codex 22-11 P2) — cùng chiều K4.
 
@@ -326,6 +336,10 @@ async def lock_users_in_id_order(
     xung đột ``FOR UPDATE`` của K4 nên không chặn ai khác). Sau đó mọi khoá ngoại tới ``user`` của giao dịch trỏ vào dòng
     ĐÃ giữ ⇒ không chờ thêm dòng ``user`` nào. Người gọi khoá lại từng người trong vòng (đọc dưới khoá) là no-op.
 
+    ``delete_targets=True`` (CHỈ K4 — :func:`assert_user_deletable`, owner 22-11 "K4 ↔ K4"): người đích sắp bị XOÁ ⇒ khoá
+    ``FOR UPDATE`` (đúng khoá của ``DELETE``) thay vì ``FOR NO KEY UPDATE``; cùng MỘT vòng id tăng với người được tham
+    chiếu (người bấm — khoá ngoại nhật ký) — thứ tự khoá dòng ``user`` chỉ nằm ở hàm này.
+
     Trả ``{id: (id, role, status)}`` các người đích còn tồn tại (người đích không còn ⇒ bỏ qua, người gọi quyết 404).
     Người được tham chiếu không còn ⇒ bỏ qua, KHÔNG báo lỗi ở đây: phép kiểm sẵn có của người gọi (vd cán bộ quản lý CTV
     không tồn tại ⇒ 404) hoặc chính khoá ngoại lúc ghi quyết như trước — hàm này chỉ đổi THỨ TỰ khoá, không đổi kết quả.
@@ -338,7 +352,14 @@ async def lock_users_in_id_order(
     with db.no_autoflush:
         for uid in sorted(targets | referenced):
             if uid in targets:
-                row = await bulk_repo.lock_user_no_key_update(db, uid)
+                if delete_targets:
+                    row = (
+                        await db.execute(
+                            text('SELECT id, role, status FROM "user" WHERE id = :id FOR UPDATE'), {"id": uid}
+                        )
+                    ).first()
+                else:
+                    row = await bulk_repo.lock_user_no_key_update(db, uid)
                 if row is not None:
                     rows[uid] = row
             else:

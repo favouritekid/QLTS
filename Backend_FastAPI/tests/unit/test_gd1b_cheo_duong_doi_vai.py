@@ -138,6 +138,9 @@ KHONG_CAN_KHOA_THEO_THU_TU = {
     # Tự sửa hồ sơ: chỉ dòng của CHÍNH mình + khoá ngoại tới chính mình ⇒ một dòng ``user`` ⇒ không thể vòng chờ với K4.
     ("services/user_service.py", "update_profile"),
 }
+#: Ngoài hai sổ (không ghi vai / trạng thái) mà vẫn phải khoá theo thứ tự: K4 — xoá tài khoản lẻ / lô; người bấm được nhật ký
+#: router tham chiếu SAU K4 (owner 22-11 "K4 ↔ K4").
+KHOA_THEO_THU_TU_NGOAI_SO = {("services/user_deletion_policy.py", "assert_user_deletable")}
 
 
 def test_duong_ghi_tai_khoan_dang_co_khoa_nguoi_theo_thu_tu_k4():
@@ -147,9 +150,9 @@ def test_duong_ghi_tai_khoan_dang_co_khoa_nguoi_theo_thu_tu_k4():
 
     Giới hạn: chỉ kiểm CÓ lời gọi trong hàm, không kiểm vị trí / thứ tự — phần ấy do ca hai phiên
     ``tests/api/test_gd1b_cheo_phan_cong_vai.py::test_hai_phien_admin_ghi_tai_khoan_trong_luc_admin_khac_xoa_lo_gom_ca_hai_khong_be_tac``."""
-    can = {
-        k for k, q in {**SO_DUONG_GHI, **NGUOI_GOI_HAM_PHAN_CONG}.items() if q != "MOI"
-    } - KHONG_CAN_KHOA_THEO_THU_TU
+    can = (
+        {k for k, q in {**SO_DUONG_GHI, **NGUOI_GOI_HAM_PHAN_CONG}.items() if q != "MOI"} - KHONG_CAN_KHOA_THEO_THU_TU
+    ) | KHOA_THEO_THU_TU_NGOAI_SO
     goi_khoa = set()
     for p in APP.rglob("*.py"):
         rel = p.relative_to(APP).as_posix()
