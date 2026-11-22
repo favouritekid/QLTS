@@ -1513,6 +1513,16 @@ jobs:
               tests/api/test_gd2c_c1_thu_ky_api.py
               tests/api/test_gd2c_c1_thu_ky_cong.py
               tests/api/test_gd2c_c1_thu_ky_k4_hai_phien.py
+          # GĐ2-C C2 (22-11): lựa chọn của Ban thư ký — bảng chỉ thêm + trigger "chỉ khi nháp" + migration gd2cs20261122 (dòng
+          # Casbin route Ban thư ký), route PUT / GET (cổng Thư ký), T9 SELECTION_STALE, cờ "đang ngừng" (hàm cho C4), K4, đóng
+          # băng, hai phiên (thứ tự khoá). Lát RIÊNG như 5k / 5l; ngoài mọi tier thì required check vẫn xanh mà không chạy
+          # (CLAUDE.md §11). Ghim WHOLE-FILE. Tệp cũ bị chạm nằm sẵn ở tier của chúng (5j, 5k, 5l, 4b, 5i).
+          - tier: Tier 5m — GĐ2-C lựa chọn của Ban thư ký (C2)
+            tests: >-
+              tests/unit/test_gd2c_c2_ddl_lockin.py
+              tests/integration/test_gd2c_c2_rang_buoc_db.py
+              tests/integration/test_gd2c_c2_migration.py
+              tests/api/test_gd2c_c2_lua_chon_api.py
 
     env:
       APP_ENV: test

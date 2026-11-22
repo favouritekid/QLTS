@@ -163,7 +163,9 @@ def test_migration_noi_sau_head_cua_nen():
 
 
 def test_mot_head_alembic():
-    """Đúng MỘT head (đọc cả ``down_revision`` dạng bộ nhiều dòng). Gộp GĐ2-B mà quên nối lại ⇒ hai head ⇒ ĐỎ."""
+    """Đúng MỘT head (đọc cả ``down_revision`` dạng bộ nhiều dòng). Gộp GĐ2-B mà quên nối lại ⇒ hai head ⇒ ĐỎ.
+    ``gd2c20261122`` là head HOẶC tổ tiên của head (không ghim head = revision cuối — khuôn GĐ2-B, review max PR #724 R15): từ
+    GĐ2-C C2 (22-11) migration ``gd2cs20261122`` nối sau."""
     revs, downs = set(), set()
     for p in (GOC / "alembic" / "versions").glob("*.py"):
         s = p.read_text(encoding="utf-8")
@@ -174,7 +176,9 @@ def test_mot_head_alembic():
         d = re.search(r"^down_revision\s*(?::[^=]+)?=\s*(\([^)]*\)|[^\n]+)", s, re.M | re.S)
         if d:
             downs.update(re.findall(r"['\"]([^'\"]+)['\"]", d.group(1)))
-    assert revs - downs == {"gd2c20261122"}
+    heads = revs - downs
+    assert len(heads) == 1, heads
+    assert "gd2c20261122" in revs and ("gd2c20261122" in heads or "gd2c20261122" in downs)
 
 
 def test_co_ha_cap_mang_nghia_cho_phep_dung_chu_1():

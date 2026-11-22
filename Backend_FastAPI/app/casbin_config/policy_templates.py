@@ -133,6 +133,20 @@ GD2_PRIORITY_PAPER_OBJECTS = (
     ("/api/v2/admissions/*/priority-evidence/*/paper-submitted", "POST"),
 )
 
+# GĐ2-C C2 (thiết kế GĐ2-C 22-11 §4: "Casbin mở ``manager``, ``officer`` + ``deps.require_review_secretary``") — route Ban thư
+# ký: XEM bảng chỉ tiêu năm, XEM / GHI lựa chọn của Ban thư ký. Cán bộ ALLOW; Quản lý kế thừa cán bộ; Admin wildcard. Kế toán
+# kế thừa cán bộ và KHÔNG có deny riêng: Casbin cho qua rồi cổng ``require_review_secretary`` trả 404 (vai không được gán) — cùng
+# thân 404 với Cán bộ / Quản lý chưa được gán (thiết kế §4 "không quyền ⇒ 404"). Lớp QUYỀN THẬT là cổng (vai + trạng thái + quyền
+# gán còn hiệu lực, đọc dưới khoá), không phải dòng Casbin. Route lần xét / lượt / dòng / tab của GĐ2-B (chưa có — L4) mở ở PR
+# của L4 / C2b. MỘT nguồn cho template; migration ``gd2cs20261122`` chép cứng cùng dòng (seed production),
+# ``tests/unit/test_gd2c_c2_ddl_lockin.py`` khoá hai bên bằng nhau.
+GD2C_REVIEW_SECRETARY_OBJECTS = (
+    ("/api/admission-config/quota-tables/{academic_year}", "GET"),
+    ("/api/admission-config/review-sessions/{session_id}/selections", "GET"),
+    ("/api/admission-config/review-sessions/{session_id}/selections/{profile_id}", "GET"),
+    ("/api/admission-config/review-sessions/{session_id}/selections/{profile_id}", "PUT"),
+)
+
 
 # =============================================================================
 # CORE ROLE TEMPLATES (Based on system defaults)
@@ -281,6 +295,10 @@ OFFICER_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/v2/admissions/*/priority-evidence/*/upload",    "action": "POST"},
         {"subject": "{role}", "object": "/api/v2/admissions/*/priority-evidence/*",           "action": "DELETE"},
         *({"subject": "{role}", "object": o, "action": a} for o, a in GD2_PRIORITY_PAPER_OBJECTS),
+        # GĐ2-C C2 — route Ban thư ký (bảng chỉ tiêu: xem; lựa chọn: xem / ghi). Lớp quyền thật: ``deps.require_review_secretary``
+        # (không phải Thư ký ⇒ 404). Kế toán kế thừa, KHÔNG deny (cổng trả 404 như người chưa gán) — xem
+        # ``GD2C_REVIEW_SECRETARY_OBJECTS``.
+        *({"subject": "{role}", "object": o, "action": a} for o, a in GD2C_REVIEW_SECRETARY_OBJECTS),
         # Wave 1 read endpoints — KV preview + UT catalog. Used by candidate
         # (BASIC_USER_TEMPLATE also has these) AND officer/manager/admin via
         # this template. Accountant DENY block below.

@@ -362,9 +362,12 @@ async def _audit(db: AsyncSession, academic_year: int, action: str, actor_id: in
 
 
 # ═══════════════════════════════ đọc ═══════════════════════════════════════════════════════
-async def get_quota_table(db: AsyncSession, academic_year: int) -> Dict[str, Any]:
+async def get_quota_table(db: AsyncSession, academic_year: int, *, can_write: bool = True) -> Dict[str, Any]:
     """Bảng chỉ tiêu của năm + nhóm + thành viên + chỉ tiêu ngành hiện tại + số chỗ đã dùng của từng nhóm (THAM KHẢO —
-    :func:`quota_occupancy_service.count_by_group`). Năm chưa có bảng ⇒ 404."""
+    :func:`quota_occupancy_service.count_by_group`). Năm chưa có bảng ⇒ 404.
+
+    ``can_write`` (GĐ2-C C2 — GET mở cho Ban thư ký): người xem KHÔNG được ghi bảng chỉ tiêu (``deps.quota_table_write_allowed``
+    sai) ⇒ ``available_actions`` rỗng — cờ là "thao tác NGƯỜI XEM làm được", không chỉ theo trạng thái bảng."""
     t = models.AdmissionQuotaTable
     table = (await db.execute(select(t).where(t.academic_year == academic_year))).scalar_one_or_none()
     academic_infos, quota_fingerprint = await read_quota_snapshot(db, academic_year)
@@ -423,7 +426,7 @@ async def get_quota_table(db: AsyncSession, academic_year: int) -> Dict[str, Any
         "version": table.version,
         "locked_by_user_id": table.locked_by_user_id,
         "locked_at": table.locked_at,
-        "available_actions": quota_table_actions(table.status),
+        "available_actions": quota_table_actions(table.status) if can_write else [],
         "quota_fingerprint": quota_fingerprint,
         "groups": out_groups,
         # Codex lượt 3: danh sách học vụ của năm CÙNG ảnh với dấu (``read_quota_snapshot``) — nguồn duy nhất cho trình soạn.

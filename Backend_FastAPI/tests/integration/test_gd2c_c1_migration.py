@@ -20,7 +20,7 @@ from sqlalchemy.engine import make_url
 from app.config import settings
 from app.models.base import Base
 from tests.fixtures.database import kiem_url_csdl_test
-from tests.integration.test_gd2a_migration import GO_GD2C_C1
+from tests.integration.test_gd2a_migration import GO_GD2C_C1, GO_SAU_GD2C_C1
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
@@ -31,8 +31,9 @@ SAU = "gd2c20261122"
 CO = "GD2C_C1_DOWNGRADE_DROP_DATA_ENABLED"
 BANG = "admission_review_secretary_grant"
 HAM = ("admission_review_secretary_grant_revoke_only",)
-#: MỘT danh sách với ``test_gd2a_migration.py`` (lượt nâng tới head của GĐ2-A cũng phải gỡ phần C1 trước).
-GO_C1 = GO_GD2C_C1
+#: MỘT danh sách với ``test_gd2a_migration.py`` (lượt nâng tới head của GĐ2-A cũng phải gỡ phần C1 trước). Từ GĐ2-C C2: gỡ cả
+#: phần nối SAU C1 trước (``GO_SAU_GD2C_C1`` — bảng lựa chọn) ⇒ CSDL "ở ``gd2b20261121``" đúng trạng thái thật.
+GO_C1 = (*GO_SAU_GD2C_C1, *GO_GD2C_C1)
 
 
 def _url(ten_db, driver):

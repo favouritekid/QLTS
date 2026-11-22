@@ -65,6 +65,8 @@ ADMISSION_ROUTER_MODULES: Final[frozenset[str]] = frozenset(
         "app.routers.admission_review",
         # Lần xét tuyển GĐ2-C C1: quyền "Thư ký Hội đồng" (Admin gán / thu hồi) — dưới tiền tố v1 /api/admission-config.
         "app.routers.admission_review_secretary",
+        # Lần xét tuyển GĐ2-C C2: lựa chọn của Ban thư ký — dưới tiền tố v1 /api/admission-config.
+        "app.routers.admission_review_selection",
         "app.routers.admin_backfill",
         "app.routers.admin_priority_config",
         "app.routers.admin_v2_admission_round",
@@ -196,6 +198,8 @@ ADMISSION_WRITE_ROUTES: Final[tuple[tuple[str, str], ...]] = (
     # Lần xét tuyển GĐ2-C C1 (22-11): gán / thu hồi quyền Thư ký Hội đồng — rà tay từ route thật.
     ("POST", "/api/admission-config/review-secretaries"),
     ("POST", "/api/admission-config/review-secretaries/{grant_id}/revoke"),
+    # Lần xét tuyển GĐ2-C C2 (22-11): Ban thư ký ghi lựa chọn — rà tay từ route thật.
+    ("PUT", "/api/admission-config/review-sessions/{session_id}/selections/{profile_id}"),
     ("POST", "/api/admission-config/criteria"),
     ("DELETE", "/api/admission-config/criteria/{criteria_id}"),
     ("PUT", "/api/admission-config/criteria/{criteria_id}"),

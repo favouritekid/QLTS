@@ -314,7 +314,7 @@ async def test_mo_khoa_bang_chua_khoa_409(client: AsyncClient, admin_token_heade
 
 # ── quyền ───────────────────────────────────────────────────────────────────────────────────────────────────────────
 @pytest.mark.parametrize("vai", ["quan_ly", "can_bo"])
-async def test_chi_admin_403_cho_vai_khac(
+async def test_chi_admin_ghi_403_vai_khac_xem_404_khi_chua_gan_thu_ky(
     client: AsyncClient, admin_token_headers, manager_user_in_db, officer_user_in_db, hoc_vu, vai
 ):
     assert (await client.put(f"{P}/{NAM}", headers=admin_token_headers, json=await _gui(0, hoc_vu))).status_code == 200
@@ -322,13 +322,16 @@ async def test_chi_admin_403_cho_vai_khac(
     h = await _login(client, u["username"], u["password"])
     client.cookies.clear()  # cookie đăng nhập đè tiêu đề — request đi đúng vai của ``h``
     for m, duong, than in (
-        ("GET", f"{P}/{NAM}", None),
         ("PUT", f"{P}/{NAM}", await _gui(1, hoc_vu)),
         ("POST", f"{P}/{NAM}/lock", await _khoa_than(1)),
         ("POST", f"{P}/{NAM}/unlock", {"version": 1, "reason": "x"}),
     ):
         r = await client.request(m, duong, headers=h, json=than)
         assert r.status_code == 403, (vai, m, duong, r.text)
+    # GĐ2-C C2: GET mở cho Ban thư ký (Casbin cán bộ allow + cổng Thư ký) — Quản lý / Cán bộ CHƯA được gán ⇒ 404 thân cổng
+    # (không lộ gì), không còn 403. Thư ký được gán / Admin xem được: ``tests/api/test_gd2c_c2_lua_chon_api.py``.
+    r = await client.get(f"{P}/{NAM}", headers=h)
+    assert r.status_code == 404 and r.json() == {"detail": "Không tìm thấy", "error_code": "RESOURCE_NOT_FOUND"}, (vai, r.text)
     assert tuple(await _bang()) == ("draft", 1)
 
 

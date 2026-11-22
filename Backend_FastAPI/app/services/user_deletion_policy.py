@@ -57,7 +57,8 @@ C = UserRefGroup.CURRENT_STATE
 O = UserRefGroup.OWNED_CASCADE
 I = UserRefGroup.IGNORE
 
-#: MỘT nguồn — xếp theo (bảng, cột). Đo 17-11: 94 cột cũ + 8 cột GĐ1b = 102; GĐ2-A thêm 1 = 103; GĐ2-B thêm 4 = 107; GĐ2-C C1 thêm 3 = 110.
+#: MỘT nguồn — xếp theo (bảng, cột). Đo 17-11: 94 cột cũ + 8 cột GĐ1b = 102; GĐ2-A thêm 1 = 103; GĐ2-B thêm 4 = 107; GĐ2-C C1 thêm 3 = 110;
+#: GĐ2-C C2 thêm 1 = 111.
 USER_REFERENCES: Tuple[UserRef, ...] = (
     UserRef("_admission_backfill_exceptions", "resolved_by_user_id", A),
     UserRef("accounting_period", "closed_by_id", A),
@@ -86,6 +87,9 @@ USER_REFERENCES: Tuple[UserRef, ...] = (
     UserRef("admission_review_secretary_grant", "granted_by_user_id", A),
     UserRef("admission_review_secretary_grant", "revoked_by_user_id", A),
     UserRef("admission_review_secretary_grant", "user_id", A),
+    # GĐ2-C C2: người ghi lựa chọn của Ban thư ký (RESTRICT, bảng chỉ thêm — trigger). Lựa chọn là vết quyết định của Hội đồng
+    # ⇒ chặn xoá, khuyên khoá tài khoản (thiết kế GĐ2-C §2 "mọi cột người dùng … một dòng BLOCK_ACTOR").
+    UserRef("admission_review_selection", "decided_by_user_id", A),
     UserRef("assignment_decision_log", "assigned_officer_id", H),
     UserRef("assignment_log", "officer_id", H),
     UserRef("collaborator", "approved_by_id", A),

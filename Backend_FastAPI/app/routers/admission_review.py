@@ -7,7 +7,10 @@ và khối đóng băng của nginx ⇒ cần gạt đóng băng tuyển sinh ch
 ``ADMISSION_ROUTER_MODULES``, ba route ghi trong ``ADMISSION_WRITE_ROUTES``.
 
 Quyền (đặc tả §10: "Bảng chỉ tiêu … Admin — lớp 'chỉ Admin'"): ``CasbinAuth`` (chỉ admin có dòng — wildcard) +
-``deps.require_quota_table_admin`` (lớp phụ fail-closed). Quyền xem của Ban thư ký đến cùng bảng quyền Ban thư ký (GĐ2-B).
+``deps.require_quota_table_admin`` (lớp phụ fail-closed) cho ba route GHI. GĐ2-C C2 (ĐT3 §11 "GET + Ban thư ký"; thiết kế GĐ2-C
+§4): route GET mở cho Ban thư ký — Casbin cán bộ allow (``policy_templates.GD2C_REVIEW_SECRETARY_OBJECTS``) +
+``deps.require_review_secretary`` (Admin đang hoạt động, hoặc Quản lý / Cán bộ có quyền gán còn hiệu lực; không đạt ⇒ 404).
+Người xem không ghi được (``deps.quota_table_write_allowed`` sai) ⇒ ``available_actions`` rỗng.
 
 Log chỉ năm + số đếm; không dữ liệu cá nhân (bảng chỉ tiêu không mang dữ liệu cá nhân).
 """
@@ -43,10 +46,12 @@ async def get_quota_table(
     request: Request,
     academic_year: int = Path(..., ge=2000, le=2100, description="Năm tuyển sinh"),
     current_user: models.User = deps.CasbinAuth,
-    _admin: models.User = Depends(deps.require_quota_table_admin),
+    _secretary: models.User = Depends(deps.require_review_secretary),
     db: AsyncSession = Depends(database.get_db),
 ):
-    return await quota_table_service.get_quota_table(db, academic_year)
+    return await quota_table_service.get_quota_table(
+        db, academic_year, can_write=deps.quota_table_write_allowed(current_user)
+    )
 
 
 @router.put(

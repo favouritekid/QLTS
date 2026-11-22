@@ -4581,12 +4581,19 @@ async def require_priority_evidence_reviewer(
 # GĐ2-A — bảng chỉ tiêu năm / nhóm ngành (đặc tả GĐ2 bản 3 §10: "Bảng chỉ tiêu … Admin — lớp 'chỉ Admin'"). CHỈ THÊM.
 # Tầng chủ sở hữu VAI = Casbin (chỉ admin có dòng — wildcard; migration KHÔNG thêm dòng cho vai khác). Dependency dưới
 # đây là LỚP PHỤ fail-closed (khuôn ``require_council_document_admin``): vai khác lọt Casbin (cấu hình sai) vẫn 403.
-# Quyền xem của Ban thư ký (đặc tả §11 "GET + Ban thư ký") đến cùng bảng quyền Ban thư ký ở GĐ2-B.
+# Quyền xem của Ban thư ký (đặc tả §11 "GET + Ban thư ký"): GĐ2-C C2 — route GET dùng ``require_review_secretary``; ba route
+# GHI giữ lớp này. ``quota_table_write_allowed`` = MỘT vị từ cho lớp này VÀ cờ ``available_actions`` của GET (người xem không
+# ghi được ⇒ cờ rỗng).
 # =====================================================================================================================
+def quota_table_write_allowed(user: Any) -> bool:
+    """Người này được sửa / khoá / mở khoá bảng chỉ tiêu năm (chỉ Admin)."""
+    return user.role == UserRole.ADMIN
+
+
 async def require_quota_table_admin(
     current_user: models.User = Depends(check_permission),
 ) -> models.User:
-    if current_user.role != UserRole.ADMIN:
+    if not quota_table_write_allowed(current_user):
         raise PermissionDeniedError(detail="Chỉ Admin được xem / sửa / khoá bảng chỉ tiêu năm.")
     return current_user
 
