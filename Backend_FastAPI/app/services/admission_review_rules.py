@@ -1058,22 +1058,25 @@ def selected_in_other_draft_session(profile_id: int, other_draft_auto_profile_id
 
 # ═══════════════════════════════════════════ dựng dòng ═══════════════════════════════════════════
 def _later_open_choice(evaluation: ProfileEvaluation, run: RunFacts) -> bool:
-    """Em còn NV SAU NV được xếp mà học vụ có thật, chưa xoá, chỉ tiêu > 0 — gợi ý ``consider_next_choice`` không bao giờ trỏ vào
-    học vụ chỉ tiêu 0 / trống [ĐX]."""
+    """Gợi ý ``consider_next_choice``: duyệt các NV SAU NV được xếp theo ĐÚNG thứ tự máy xét (:func:`_ordered_choices`).
+
+    Owner 22-11 (``logs-P5/cong-bo-ket-qua/gd2/gd2b/dot2/QUYET-DINH-OWNER-GD2B-DOT2-MA-DUNG-GOI-Y-2026-11-22.md``, "sửa luôn cả hai"; Codex
+    GĐ2-B lượt 2 P3): gặp NV mang MÃ DỪNG của máy xét (:func:`_evaluate_choice` bước 0–2: đứt chuỗi — thiếu đường xét / học vụ; học
+    vụ NĂM KHÁC lần xét; học vụ đã xoá; chỉ tiêu trống) ⇒ ``False`` — máy xét dừng ở NV ấy, không sang NV sau, nên gợi ý cũng dừng ở
+    CÙNG chỗ. CHỈ đi tiếp qua NV chỉ tiêu 0 (ngành đã đóng — bước 3, máy xét sang NV kế). Gặp NV chỉ tiêu > 0 ⇒ ``True``. Gợi ý không
+    bao giờ trỏ vào học vụ chỉ tiêu 0 / trống [ĐX]."""
     placed = evaluation.placed
-    for c in evaluation.facts.choices:
+    for c in _ordered_choices(evaluation.facts.choices):
         if (c.display_order, c.choice_id) <= (placed.display_order, placed.choice_id):
             continue
         ai = run.academic_infos.get(c.offering_academic_info_id) if c.offering_academic_info_id is not None else None
-        # Codex 22-11 lượt 2 B-P4 (owner Q5): học vụ NĂM KHÁC lần xét không phải "NV sau còn mở" — xét tới nó là DỪNG.
-        if (
-            ai is not None
-            and int(ai.academic_year) == int(run.academic_year)
-            and not ai.is_deleted
-            and ai.annual_quota is not None
-            and ai.annual_quota > 0
-        ):
-            return True
+        if c.admission_path_id is None or ai is None:
+            return False
+        if int(ai.academic_year) != int(run.academic_year) or ai.is_deleted or ai.annual_quota is None:
+            return False
+        if ai.annual_quota == 0:
+            continue
+        return ai.annual_quota > 0
     return False
 
 

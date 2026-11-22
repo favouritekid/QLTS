@@ -973,6 +973,54 @@ def test_goi_y_nv_ke_khong_tro_vao_hoc_vu_chi_tieu_0():
     assert R.HINT_CONSIDER_NEXT_CHOICE not in dong_b.decision_hints
 
 
+#: Owner 22-11 "sửa luôn cả hai" (``gd2/gd2b/dot2/QUYET-DINH-OWNER-GD2B-DOT2-MA-DUNG-GOI-Y-2026-11-22.md``; Codex GĐ2-B lượt 2 P3):
+#: NV2 mang MÃ DỪNG của máy xét ⇒ KHÔNG gợi ý ``consider_next_choice`` dù NV3 còn chỉ tiêu — gợi ý và máy xét dừng ở CÙNG chỗ.
+#: Ba mã owner nêu + đứt chuỗi (thiếu học vụ / đường xét — bước "đứt chuỗi" của máy xét, cùng nguyên tắc).
+_MA_DUNG_NV2 = ("nam_khac", "da_xoa", "chi_tieu_trong", "thieu_hoc_vu", "thieu_duong_xet")
+
+
+def _ba_nv_nv1_vuot_chi_tieu(nv2, hv2):
+    """A chiếm chỗ duy nhất của HV1; B: NV1 HV1 (vượt chỉ tiêu ⇒ cần quyết), NV2 theo ca, NV3 HV3 còn chỉ tiêu."""
+    hv = {HV1: _hv(HV1, annual_quota=1), HV2: hv2, HV3: _hv(HV3)}
+    a = _ho_so(1001, nvs=[_nv(511, 1, HV1, subject_total=D("18"))])
+    b = _ho_so(1002, nvs=[_nv(521, 1, HV1, subject_total=D("17")), nv2, _nv(523, 3, HV3)])
+    return {r.profile_id: r for r in _chay(a, b, run=_run(hv=hv)).rows}[1002]
+
+
+@pytest.mark.parametrize("ma_dung", _MA_DUNG_NV2)
+def test_goi_y_nv_sau_dung_o_nv_mang_ma_dung_du_nv3_con_chi_tieu(ma_dung):
+    nv2, hv2 = _nv(522, 2, HV2), _hv(HV2)
+    if ma_dung == "nam_khac":
+        hv2 = _hv(HV2, academic_year=NAM - 1)
+    elif ma_dung == "da_xoa":
+        hv2 = _hv(HV2, is_deleted=True)
+    elif ma_dung == "chi_tieu_trong":
+        hv2 = _hv(HV2, annual_quota=None)
+    elif ma_dung == "thieu_hoc_vu":
+        nv2 = _nv(522, 2, None)
+    else:
+        nv2 = _nv(522, 2, HV2, path_id=None)
+    dong_b = _ba_nv_nv1_vuot_chi_tieu(nv2, hv2)
+    assert (dong_b.tab, dong_b.considered.choice_id) == (R.TAB_NEEDS_DECISION, 521), dong_b
+    assert dong_b.decision_hints == (R.HINT_ADMIT_OVER_MAJOR_QUOTA,), (ma_dung, dong_b.decision_hints)
+
+
+def test_goi_y_nv_sau_chi_di_qua_nv_chi_tieu_0_toi_nv3_con_chi_tieu():
+    """Đối chứng: NV2 chỉ tiêu 0 (ngành đã đóng — máy xét sang NV kế) ⇒ đi tiếp ⇒ NV3 còn chỉ tiêu ⇒ CÓ gợi ý."""
+    dong_b = _ba_nv_nv1_vuot_chi_tieu(_nv(522, 2, HV2), _hv(HV2, annual_quota=0))
+    assert dong_b.decision_hints == (R.HINT_ADMIT_OVER_MAJOR_QUOTA, R.HINT_CONSIDER_NEXT_CHOICE), dong_b.decision_hints
+
+
+def test_goi_y_nv_sau_duyet_theo_thu_tu_may_xet_khong_theo_thu_tu_luu():
+    """NV lưu theo thứ tự NV1, NV3, NV2; NV2 (thứ tự 2) năm khác ⇒ máy xét dừng ở NV2 ⇒ KHÔNG gợi ý (duyệt theo thứ tự lưu sẽ gặp NV3
+    còn chỉ tiêu trước rồi gợi ý sai)."""
+    hv = {HV1: _hv(HV1, annual_quota=1), HV2: _hv(HV2, academic_year=NAM - 1), HV3: _hv(HV3)}
+    a = _ho_so(1001, nvs=[_nv(511, 1, HV1, subject_total=D("18"))])
+    b = _ho_so(1002, nvs=[_nv(521, 1, HV1, subject_total=D("17")), _nv(523, 3, HV3), _nv(522, 2, HV2)])
+    dong_b = {r.profile_id: r for r in _chay(a, b, run=_run(hv=hv)).rows}[1002]
+    assert dong_b.decision_hints == (R.HINT_ADMIT_OVER_MAJOR_QUOTA,), dong_b.decision_hints
+
+
 def test_goi_y_trung_vuot_chi_khi_nhom_con_cho_sau_phan_auto():
     hv = {HV1: _hv(HV1, annual_quota=1), HV2: _hv(HV2), HV3: _hv(HV3)}
     nhom_het = (R.GroupFacts(NHOM, "N1", "Nhóm 1", ceiling=1),)

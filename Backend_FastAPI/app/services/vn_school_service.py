@@ -30,10 +30,10 @@ import csv
 import io
 from typing import Any, Awaitable, Callable, Optional, Tuple
 
-from sqlalchemy import case, func, or_, select
+from sqlalchemy import case, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.vn_school import VnSchool, VnSchoolKvAssignment
+from app.models.vn_school import VnSchool, VnSchoolKvAssignment, school_kv_pick_order_sql
 from app.utils.exceptions import (
     BusinessRuleViolation,
     DuplicateResourceError,
@@ -112,7 +112,8 @@ class VnSchoolService:
                 VnSchoolKvAssignment.school_id == VnSchool.id,
                 VnSchoolKvAssignment.effective_to_year.is_(None),
             )
-            .order_by(VnSchoolKvAssignment.effective_from_year.desc())
+            # Codex GĐ2-B lượt 2 (P1, không chặn): MỘT thứ tự với resolver / đường lô — năm bắt đầu mới nhất, hoà ⇒ id lớn nhất.
+            .order_by(text(school_kv_pick_order_sql(VnSchoolKvAssignment.__tablename__)))
             .limit(1)
             .correlate(VnSchool)
             .scalar_subquery()
@@ -182,7 +183,8 @@ class VnSchoolService:
                 VnSchoolKvAssignment.school_id == VnSchool.id,
                 VnSchoolKvAssignment.effective_to_year.is_(None),
             )
-            .order_by(VnSchoolKvAssignment.effective_from_year.desc())
+            # Codex GĐ2-B lượt 2 (P1, không chặn): MỘT thứ tự với resolver / đường lô — năm bắt đầu mới nhất, hoà ⇒ id lớn nhất.
+            .order_by(text(school_kv_pick_order_sql(VnSchoolKvAssignment.__tablename__)))
             .limit(1)
             .correlate(VnSchool)
             .scalar_subquery()
@@ -268,7 +270,8 @@ class VnSchoolService:
                 VnSchoolKvAssignment.school_id == school_id,
                 VnSchoolKvAssignment.effective_to_year.is_(None),
             )
-            .order_by(VnSchoolKvAssignment.effective_from_year.desc())
+            # Codex GĐ2-B lượt 2 (P1, không chặn): MỘT thứ tự với resolver / đường lô — năm bắt đầu mới nhất, hoà ⇒ id lớn nhất.
+            .order_by(text(school_kv_pick_order_sql(VnSchoolKvAssignment.__tablename__)))
             .limit(1)
         )
         return (await self.db.execute(stmt)).scalar_one_or_none()
