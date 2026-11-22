@@ -759,14 +759,22 @@ async def _years_of_profiles(db: AsyncSession, profile_ids: Sequence[int]) -> Se
     return await _years_of(db, await _effective_set_rows_of_profiles(db, profile_ids), profile_ids)
 
 
-async def profile_quota_cells(db: AsyncSession, profile_ids: Iterable[Optional[int]]) -> Tuple[Set[int], Set[int]]:
+async def profile_quota_cells(
+    db: AsyncSession,
+    profile_ids: Iterable[Optional[int]],
+    *,
+    effective_set_rows: Optional[Sequence[int]] = None,
+) -> Tuple[Set[int], Set[int]]:
     """MỘT nguồn (F230): (id học vụ, id đường xét) mà các hồ sơ CÓ THỂ chiếm — mọi ô Phần A, BẤT KỂ trạng thái hiện tại
     (:func:`part_a_cells_of_profiles` ``assume_occupying``: ngành theo lead + năm, nguyện vọng trúng, đường xét kiểu cũ) ∪ ô chụp
     của dòng Quyết định hiệu lực (Phần B, :func:`quota_cells_of_set_rows`). Một tập cho cả đường VÀO lẫn RA khỏi trạng thái chiếm
-    chỗ (rộng hơn cần — chủ ý: không phân nhánh theo cạnh). Gọi SAU khoá năm + khoá hồ sơ."""
+    chỗ (rộng hơn cần — chủ ý: không phân nhánh theo cạnh). Gọi SAU khoá năm + khoá hồ sơ. ``effective_set_rows``: dòng bộ của
+    dòng hiệu lực ĐÃ đọc (nơi gọi đọc một lần cho cả năm lẫn ô — :func:`check_quota_locked_for_transition`); ``None`` ⇒ tự đọc."""
     ids = _ids(profile_ids)
+    if effective_set_rows is None:
+        effective_set_rows = await _effective_set_rows_of_profiles(db, ids)
     a_ai, a_path = await part_a_cells_of_profiles(db, ids, assume_occupying=True)
-    b_ai, b_path = await quota_cells_of_set_rows(db, await _effective_set_rows_of_profiles(db, ids))
+    b_ai, b_path = await quota_cells_of_set_rows(db, effective_set_rows)
     return a_ai | b_ai, a_path | b_path
 
 
@@ -832,15 +840,21 @@ async def check_quota_locked_for_transition(db: AsyncSession, profile: Any, old_
         # kiểm được. Mọi phiên của ứng dụng là ``AsyncSession`` thật nên đường chạy thật luôn qua chốt.
         return
     crosses = (old_status in OCCUPYING_STATUSES) != (new_status in OCCUPYING_STATUSES)
-    releases_b = (
-        new_status == RELEASED_STATUSES
-        and old_status != RELEASED_STATUSES
-        and await has_effective_row(db, profile.id)
-    )
-    if not (crosses or releases_b):
+    may_release_b = new_status == RELEASED_STATUSES and old_status != RELEASED_STATUSES
+    if not (crosses or may_release_b):
         return
-    years = await _years_of_profiles(db, [profile.id])
-    ai, path = await profile_quota_cells(db, [profile.id])
+    # Phiên ``autoflush=False`` (``app.database``) ⇒ đẩy thay đổi đang chờ (vd ``decision`` nguyện vọng vừa đặt) xuống TRƯỚC MỌI
+    # câu đọc của chốt (kể cả câu hỏi dòng hiệu lực ngay dưới) — đường mới quên flush không làm chốt mù (Codex F230 P5 mục 6).
+    await db.flush()
+    # Sang "đã rút" mà KHÔNG vượt ranh giới chiếm chỗ (vd ``withdrawal_pending``): chỉ đổi số khi em còn dòng hiệu lực (trả chỗ
+    # Phần B).
+    if not crosses and not await has_effective_row(db, profile.id):
+        return
+    # Dòng hiệu lực đọc MỘT lần cho cả năm lẫn ô.
+    ids = [profile.id]
+    set_rows = await _effective_set_rows_of_profiles(db, ids)
+    years = await _years_of(db, set_rows, ids)
+    ai, path = await profile_quota_cells(db, ids, effective_set_rows=set_rows)
     missing = {
         "years": sorted(years - book["years"]),
         "ai": sorted(ai - book["ai"]),

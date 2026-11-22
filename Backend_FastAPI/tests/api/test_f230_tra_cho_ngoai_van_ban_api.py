@@ -28,12 +28,12 @@ phép so "trước / sau" của A sai (mất cảnh báo khi B trả chỗ; sai 
   thư khi cấu hình cùng năm đang giữ khoá năm ⇒ 409 NGAY câu owner; hồ sơ, liên kết giữ nguyên, 0 thông báo; nhả khoá ⇒ CHÍNH
   liên kết ấy rút được ĐÚNG MỘT lần, lần thứ ba bị từ chối theo luật liên kết đã dùng.
 """
+import ast
 import asyncio
-import inspect
-import re
 import secrets
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 from sqlalchemy import select, text
@@ -48,7 +48,6 @@ from app.services import admission_choice_engine_service as engine
 from app.services import admission_service as asv
 from app.services import admission_state_service as state_service
 from app.services import magic_link_service as mls
-from app.services import payment_service as ps
 from app.services import quota_occupancy_service as qos
 from app.utils.exceptions import ServiceError
 from tests.api import test_council_decisions_api as qd
@@ -421,15 +420,51 @@ async def _do_khoa_trong_luc_dung(monkeypatch, chay, *muc):
     return do
 
 
+async def _o_moi_nguyen_vong(pid):
+    """[(id học vụ, id đường xét, id nguyện vọng)] của MỌI nguyện vọng của em (thứ tự hiển thị)."""
+    return [
+        tuple(r)
+        for r in await qd._q(
+            "SELECT ap.academic_info_id, c.admission_path_id, c.id FROM admission_profile_choice c "
+            "JOIN admission_path ap ON ap.id = c.admission_path_id WHERE c.admission_profile_id = :p "
+            "ORDER BY c.display_order, c.id",
+            p=pid,
+        )
+    ]
+
+
+async def _them_nguyen_vong_hai(hs, pid):
+    """Thêm nguyện vọng THỨ HAI (Kế toán TC chính quy — ô KHÁC X, Y) cho em ``pid`` ⇒ phép "khoá ô của MỌI nguyện vọng" có
+    hai nguyện vọng ở hai ô khác nhau (em seed ``loai_hinh_chinh_quy`` chỉ có một)."""
+    py, psg = hs["_danh_muc"]["psg"][("kt_tc", "cq", "g1")]
+    await qd._sql(
+        "INSERT INTO admission_profile_choice (admission_profile_id, admission_path_id, path_subject_group_config_id, "
+        "display_order) VALUES (:p, :y, :g, 2)",
+        p=pid,
+        y=py,
+        g=psg,
+    )
+
+
+async def _hoc_vu_ngoai(*loai_tru):
+    """Một học vụ năm 2026 NGOÀI mọi ô của phép đo — đối chứng ÂM (phải ra "trong")."""
+    ai = await qd._q1(
+        "SELECT id FROM offering_academic_info WHERE academic_year = 2026 AND id <> ALL(CAST(:k AS integer[])) "
+        "ORDER BY id LIMIT 1",
+        k=sorted(set(loai_tru)),
+    )
+    assert ai is not None, "seed thiếu học vụ năm 2026 ngoài tập đo"
+    return ai
+
+
 async def test_f7_cong_bo_khoa_ca_o_nganh_theo_lead(client, hs, ad, monkeypatch):  # noqa: F811
     g = hs[SACH[2]][1]
     y = await _dat_o_y(hs, 1, SACH[2])
-    x_ai, _ = await _x_cua(SACH[2], hs)
-    duong_g = await qd._q1(
-        "SELECT admission_path_id FROM admission_profile_choice WHERE admission_profile_id = :p ORDER BY display_order LIMIT 1",
-        p=g,
-    )
-    assert x_ai != y["ai"], "phép đo không hợp lệ: ô nguyện vọng phải KHÁC ô theo lead"
+    await _them_nguyen_vong_hai(hs, g)
+    nv = await _o_moi_nguyen_vong(g)
+    assert len({ai for ai, _, _ in nv}) == len(nv) == 2, "phép đo không hợp lệ: hai nguyện vọng ở hai ô khác nhau — %r" % nv
+    assert all(ai != y["ai"] for ai, _, _ in nv), "phép đo không hợp lệ: ô của MỌI nguyện vọng phải KHÁC ô theo lead"
+    ngoai = await _hoc_vu_ngoai(y["ai"], *[ai for ai, _, _ in nv])
     await qd._sql("UPDATE admission_profile SET status = 'reviewing' WHERE id = :p", p=g)
 
     async def cong_bo():
@@ -447,25 +482,29 @@ async def test_f7_cong_bo_khoa_ca_o_nganh_theo_lead(client, hs, ad, monkeypatch)
             finally:
                 await s.rollback()
 
-    do = await _do_khoa_trong_luc_dung(
-        monkeypatch, cong_bo, ("offering_academic_info", y["ai"], "y"), ("admission_path", duong_g, "duong_nv")
-    )
-    assert do == {"y": "bi_giu", "duong_nv": "bi_giu"}, (
-        "công bố phải khoá cả ô theo ngành của lead (cách đếm Phê duyệt cũ) — %r (duong_nv: đối chứng dương)" % do
+    muc = [("offering_academic_info", y["ai"], "y"), ("offering_academic_info", ngoai, "ngoai")]
+    for i, (ai, duong, _) in enumerate(nv):
+        muc += [("offering_academic_info", ai, "hoc_vu_nv%d" % i), ("admission_path", duong, "duong_nv%d" % i)]
+    do = await _do_khoa_trong_luc_dung(monkeypatch, cong_bo, *muc)
+    mong = {nhan: ("trong" if nhan == "ngoai" else "bi_giu") for _, _, nhan in muc}
+    assert do == mong, (
+        "công bố phải khoá ô theo ngành của lead (cách đếm Phê duyệt cũ) + ô của MỌI nguyện vọng; dòng ngoài tập KHÔNG bị giữ "
+        "(đối chứng âm) — %r" % do
     )
 
 
 async def test_f8_chuyen_tu_danh_sach_cho_khoa_ca_o_nganh_theo_lead(client, hs, ad, monkeypatch):  # noqa: F811
+    # Chuyển nguyện vọng THỨ HAI (không phải nguyện vọng đầu) ⇒ khoá phải theo nguyện vọng được chuyển, không theo thứ tự.
     g = hs[SACH[2]][1]
     y = await _dat_o_y(hs, 1, SACH[2])
-    x_ai, _ = await _x_cua(SACH[2], hs)
-    assert x_ai != y["ai"], "phép đo không hợp lệ: ô nguyện vọng phải KHÁC ô theo lead"
-    nv = await qd._q1(
-        "SELECT id FROM admission_profile_choice WHERE admission_profile_id = :p ORDER BY display_order LIMIT 1", p=g
-    )
-    duong_g = await qd._q1("SELECT admission_path_id FROM admission_profile_choice WHERE id = :c", c=nv)
+    await _them_nguyen_vong_hai(hs, g)
+    nv = await _o_moi_nguyen_vong(g)
+    assert len({ai for ai, _, _ in nv}) == len(nv) == 2, "phép đo không hợp lệ: hai nguyện vọng ở hai ô khác nhau — %r" % nv
+    assert all(ai != y["ai"] for ai, _, _ in nv), "phép đo không hợp lệ: ô của MỌI nguyện vọng phải KHÁC ô theo lead"
+    ai_cho, duong_cho, id_cho = nv[1]
+    ngoai = await _hoc_vu_ngoai(y["ai"], *[ai for ai, _, _ in nv])
     await qd._sql("UPDATE admission_profile SET status = 'waitlisted' WHERE id = :p", p=g)
-    await qd._sql("UPDATE admission_profile_choice SET decision = 'waitlisted' WHERE id = :c", c=nv)
+    await qd._sql("UPDATE admission_profile_choice SET decision = 'waitlisted' WHERE id = :c", c=id_cho)
 
     async def chuyen():
         async with AsyncSessionLocal() as s:
@@ -481,7 +520,7 @@ async def test_f8_chuyen_tu_danh_sach_cho_khoa_ca_o_nganh_theo_lead(client, hs, 
                 choice = (
                     await s.execute(
                         select(models.AdmissionProfileChoice)
-                        .where(models.AdmissionProfileChoice.id == nv)
+                        .where(models.AdmissionProfileChoice.id == id_cho)
                         .options(
                             selectinload(models.AdmissionProfileChoice.admission_path).selectinload(
                                 models.AdmissionPath.academic_info
@@ -494,10 +533,15 @@ async def test_f8_chuyen_tu_danh_sach_cho_khoa_ca_o_nganh_theo_lead(client, hs, 
                 await s.rollback()
 
     do = await _do_khoa_trong_luc_dung(
-        monkeypatch, chuyen, ("offering_academic_info", y["ai"], "y"), ("admission_path", duong_g, "duong_nv")
+        monkeypatch,
+        chuyen,
+        ("offering_academic_info", y["ai"], "y"),
+        ("offering_academic_info", ai_cho, "hoc_vu_nv"),
+        ("admission_path", duong_cho, "duong_nv"),
+        ("offering_academic_info", ngoai, "ngoai"),
     )
-    assert do == {"y": "bi_giu", "duong_nv": "bi_giu"}, (
-        "chuyển chờ phải khoá cả ô theo ngành của lead — %r (duong_nv: đối chứng dương)" % do
+    assert do == {"y": "bi_giu", "hoc_vu_nv": "bi_giu", "duong_nv": "bi_giu", "ngoai": "trong"}, (
+        "chuyển chờ phải khoá ô theo ngành của lead + ô của nguyện vọng được chuyển; dòng ngoài tập KHÔNG bị giữ — %r" % do
     )
 
 
@@ -521,71 +565,304 @@ async def test_f9_tra_ve_nhap_khi_cau_hinh_giu_khoa_nam_tra_409_khong_cho(client
 
 
 # ═══════════════════════════════ F10 — chốt ở transition() ════════════════════════════════════════
+async def _chuyen_chua_khoa(pid, toi, khoa=None):
+    """Phiên riêng: (tuỳ chọn ``khoa(db)`` — khoá một phần), rồi ``transition()`` sang ``toi``. Trả lỗi bắt được (hoặc None); luôn
+    LÙI phiên (không ghi gì)."""
+    async with AsyncSessionLocal() as db:
+        try:
+            if khoa is not None:
+                await khoa(db)
+            p = await db.get(models.AdmissionProfile, pid)
+            await state_service.transition(db, p, toi, skip_dispatch=True)
+            return None
+        except ServiceError as loi:
+            return loi
+        finally:
+            await db.rollback()
+
+
+def _kiem_loi_chot(loi):
+    assert loi is not None, "chốt phải TỪ CHỐI chuyển trạng thái (giao dịch chưa khoá đủ)"
+    assert loi.detail == qos.OCCUPANCY_TRANSITION_UNLOCKED_MESSAGE and loi.status_code == 500, loi
+
+
 async def test_f10_chot_transition_chua_khoa_o_thi_500_va_khong_doi_trang_thai(hs):  # noqa: F811
     pid = hs[E][1]
     await _nop(pid)
-    async with AsyncSessionLocal() as db:
-        p = await db.get(models.AdmissionProfile, pid)
-        with pytest.raises(ServiceError) as loi:
-            await state_service.transition(db, p, "approved", skip_dispatch=True)
-        assert loi.value.detail == qos.OCCUPANCY_TRANSITION_UNLOCKED_MESSAGE
-        assert loi.value.status_code == 500
-        await db.rollback()
+    _kiem_loi_chot(await _chuyen_chua_khoa(pid, "approved"))
     assert (await _ban(pid))[0] == "submitted"
+
     # đối chứng: khoá năm + đủ ô (đúng thứ tự đường thật) ⇒ qua
-    async with AsyncSessionLocal() as db:
+    async def khoa_du(db):
         nam = await qos.lock_years_of_profiles(db, [pid])
-        p = await db.get(models.AdmissionProfile, pid)
         await qos.lock_quota_for_profiles(db, locked_years=nam, profile_ids=[pid])
-        await state_service.transition(db, p, "approved", skip_dispatch=True)
-        assert p.status == "approved"
-        await db.rollback()
+
+    assert await _chuyen_chua_khoa(pid, "approved", khoa_du) is None
 
 
-# ═══════════════════════════════ F11 — kiểm kê mã ════════════════════════════════════════════════
-_KHOA_NAM_CO_CHO = re.compile(r"(?<!try_)lock_years_of_profiles\(")
-#: Câu khoá DÒNG HỒ SƠ (``select(models.AdmissionProfile)`` … ``.with_for_update(``) — đường hoàn tiền khoá dòng tiền trước đó, được.
-_KHOA_HO_SO = re.compile(r"select\(models\.AdmissionProfile\)[^;]{0,400}?\.with_for_update\(", re.S)
+async def test_f10a_canh_ra_trung_tuyen_sang_da_rut_chua_khoa_bi_chan(hs):  # noqa: F811
+    # Chiều RA khỏi trạng thái chiếm chỗ (trả chỗ) cũng phải bị chốt — không chỉ chiều vào.
+    pid = hs[E][1]
+    await qd._sql("UPDATE admission_profile SET status = 'admitted' WHERE id = :p", p=pid)
+    _kiem_loi_chot(await _chuyen_chua_khoa(pid, "withdrawn"))
+    assert (await _ban(pid))[0] == "admitted"
 
 
-def test_f11_kiem_ke_moi_duong_doi_so_cho_khoa_nam_truoc_khoa_o_mot_lan():
-    """Đọc nguồn: (1) đường tự khoá hồ sơ lấy khoá năm CÓ CHỜ đúng một lần TRƯỚC câu khoá hồ sơ đầu tiên; (2) đường nhận hồ sơ
-    đã khoá ở ``deps.py`` CHỈ dùng bản KHÔNG CHỜ; (3) mỗi đường khoá ô đúng MỘT lần qua ``lock_quota_for_profiles`` (không gọi
-    thẳng ``lock_quota_cells``); (4) ``_finalize_withdrawn`` đòi ``locked_years`` và mọi nơi gọi truyền nó; (5) ``transition()``
-    gọi chốt."""
-    tu_khoa = {
-        "approve_profile": asv.approve_profile,
-        "withdraw_profile": asv.withdraw_profile,
-        "_lock_before_batch_approval": asv._lock_before_batch_approval,
-        "process_approved_refund": ps.RefundService.process_approved_refund,
-    }
-    for ten, ham in tu_khoa.items():
-        nguon = inspect.getsource(ham)
-        assert len(_KHOA_NAM_CO_CHO.findall(nguon)) == 1, ten
-        assert _KHOA_HO_SO.search(nguon) is not None, ten
-        assert _KHOA_NAM_CO_CHO.search(nguon).start() < _KHOA_HO_SO.search(nguon).start(), ten
-    khoa_o = {
-        "approve_profile": asv.approve_profile,
-        "_lock_before_batch_approval": asv._lock_before_batch_approval,
-        "_finalize_withdrawn": asv._finalize_withdrawn,
-        "evaluate_cascade": engine.evaluate_cascade,
-        "promote_waitlisted_choice": engine.promote_waitlisted_choice,
-        "admin_rollback_profile": engine.admin_rollback_profile,
-    }
-    for ten, ham in khoa_o.items():
-        nguon = inspect.getsource(ham)
-        assert nguon.count("lock_quota_for_profiles(") == 1, ten
-        assert "lock_quota_cells(" not in nguon, ten
-    for ten in ("evaluate_cascade", "promote_waitlisted_choice", "admin_rollback_profile"):
-        nguon = inspect.getsource(khoa_o[ten])
-        assert "try_lock_years_of_profiles(" in nguon and not _KHOA_NAM_CO_CHO.search(nguon), ten
-        assert nguon.index("try_lock_years_of_profiles(") < nguon.index("lock_quota_for_profiles("), ten
-    tham_so = inspect.signature(asv._finalize_withdrawn).parameters["locked_years"]
-    assert tham_so.default is inspect.Parameter.empty and tham_so.kind is inspect.Parameter.KEYWORD_ONLY
-    for ham in (asv.withdraw_profile, ps.RefundService.process_approved_refund):
-        nguon = inspect.getsource(ham)
-        assert nguon.count("_finalize_withdrawn(") == nguon.count("locked_years=quota_years"), ham.__name__
-    assert "check_quota_locked_for_transition(" in inspect.getsource(state_service.transition)
+async def test_f10b_cho_hoan_sang_da_rut_con_quyet_dinh_chua_khoa_bi_chan(client, hs, ad):  # noqa: F811
+    # ``withdrawal_pending → withdrawn`` KHÔNG vượt ranh giới chiếm chỗ — chỉ nhánh "trả chỗ Phần B" (em còn dòng Quyết định
+    # hiệu lực) bắt được nó.
+    q = hs[Q][1]
+    await _chuyen_sang_duoc_cd(hs, Q)
+    await qd._qd_cua_bo(client, ad, hs, [Q], "502")
+    await qd._sql("UPDATE admission_profile SET status = 'withdrawal_pending' WHERE id = :p", p=q)
+    assert await _dong_hieu_luc(q) is not None, "phép đo không hợp lệ: em phải còn dòng Quyết định hiệu lực"
+    _kiem_loi_chot(await _chuyen_chua_khoa(q, "withdrawn"))
+    assert (await _ban(q))[0] == "withdrawal_pending"
+
+
+async def test_f10c_co_o_ma_thieu_khoa_nam_bi_chan(hs):  # noqa: F811
+    pid = hs[E][1]
+    await _nop(pid)
+    await _dat_o_y(hs, 1, E)  # lead → Y ⇒ em có ô Phần A
+
+    async def chi_khoa_o(db):
+        ai, path = await qos.profile_quota_cells(db, [pid])
+        assert ai, "phép đo không hợp lệ: em phải có ô học vụ"
+        await qos.lock_quota_cells(db, ai, path)  # đủ ô, KHÔNG khoá năm
+
+    _kiem_loi_chot(await _chuyen_chua_khoa(pid, "approved", chi_khoa_o))
+    assert (await _ban(pid))[0] == "submitted"
+
+
+async def test_f10d_co_nam_va_hoc_vu_ma_thieu_duong_xet_bi_chan(hs):  # noqa: F811
+    pid = hs[E][1]
+    await _nop(pid)
+    await _dat_o_y(hs, 1, E)
+    nv = await _o_moi_nguyen_vong(pid)
+    await qd._sql("UPDATE admission_profile_choice SET decision = 'admitted' WHERE id = :c", c=nv[0][2])  # ⇒ ô đường xét Phần A
+
+    async def thieu_duong_xet(db):
+        await qos.lock_years_of_profiles(db, [pid])
+        ai, path = await qos.profile_quota_cells(db, [pid])
+        assert ai and path, "phép đo không hợp lệ: em phải có cả ô học vụ lẫn ô đường xét"
+        await qos.lock_quota_cells(db, ai, [])  # năm + học vụ, THIẾU đường xét
+
+    _kiem_loi_chot(await _chuyen_chua_khoa(pid, "approved", thieu_duong_xet))
+    assert (await _ban(pid))[0] == "submitted"
+
+
+class _GianLog:
+    """Bọc một logger: ghi lại mọi lần gọi ``ham`` (rồi vẫn chuyển cho logger gốc)."""
+
+    def __init__(self, goc_log, ghi, ham):
+        self._goc, self._ghi, self._ham = goc_log, ghi, ham
+
+    def __getattr__(self, ten):
+        ham_goc = getattr(self._goc, ten)
+        if ten != self._ham:
+            return ham_goc
+
+        def boc(su_kien, **kw):
+            self._ghi.append((su_kien, kw))
+            return ham_goc(su_kien, **kw)
+
+        return boc
+
+
+async def test_f10e_lo_hai_ho_so_mot_em_thieu_khoa_chi_em_ay_loi_em_kia_duoc_duyet(client, hs, ad, monkeypatch):  # noqa: F811
+    # Owner 22-11 (Q5 ở Phê duyệt LÔ): chốt từ chối ⇒ lỗi của RIÊNG hồ sơ ấy ("Unexpected error (ref: …)"), ngăn của nó bị huỷ,
+    # hồ sơ giữ nguyên; có log của chốt + log của lô (cùng mã ref); lô vẫn 200, em kia được duyệt. Cố ý để em 2 thiếu khoá: bọc
+    # ``lock_quota_for_profiles`` của lô bỏ em 2 (sổ khoá vẫn trung thực — chỉ ghi những gì đã khoá).
+    # Dựng như F12: em 1 lead → X, em 2 lead → Y; ô cổng của em 2 = X (chỉ tiêu 10) ⇒ ô Y chỉ đến từ ô của RIÊNG em 2.
+    await _dam_bao_sts09()
+    e1, e2 = hs[SACH[2]][1], hs["don_vi_khac"][1]
+    x_ai, x_off = await _x_cua("don_vi_khac", hs)
+    y = await _o_y(hs)
+    assert x_ai != y["ai"], "phép đo không hợp lệ: ô X phải khác ô Y"
+    await qd._sql("UPDATE offering_academic_info SET annual_admission_quota = 10 WHERE id = :a", a=x_ai)
+    for pid_, off in ((e1, x_off), (e2, y["off"])):
+        await _nop(pid_)
+        await _gan_nganh(pid_, off)
+    await _dat_o_cong(e2, x_ai)
+    v1, v2 = (await _ban(e1))[1], (await _ban(e2))[1]
+    goc = qos.lock_quota_for_profiles
+
+    async def bo_em_2(db, *, profile_ids, **kw):
+        return await goc(db, profile_ids=[x for x in profile_ids if x != e2], **kw)
+
+    log_chot, log_lo = [], []
+    monkeypatch.setattr(qos, "lock_quota_for_profiles", bo_em_2)
+    monkeypatch.setattr(qos, "log", _GianLog(qos.log, log_chot, "error"))
+    monkeypatch.setattr(asv, "log", _GianLog(asv.log, log_lo, "exception"))
+    r = await _duyet_hang_loat(client, ad, (e1, v1), (e2, v2))
+    monkeypatch.undo()
+    assert r.status_code == 200, r.text
+    kq = r.json()
+    assert (kq["success_count"], kq["failed_ids"]) == (1, [e2]), kq
+    loi_e2 = kq["errors"][str(e2)]
+    assert loi_e2.startswith("Unexpected error (ref: "), kq
+    assert ((await _ban(e1))[0], (await _ban(e2))[0]) == ("approved", "submitted")
+    chot = [kw for su_kien, kw in log_chot if su_kien == "quota_chuyen_trang_thai_chua_khoa_o" and kw.get("profile_id") == e2]
+    assert chot and y["ai"] in chot[0]["missing"]["ai"], "phải có log của chốt nêu em 2 thiếu khoá ô Y — %r" % log_chot
+    lo = [kw for su_kien, kw in log_lo if su_kien == "bulk_action_unexpected_error" and kw.get("profile_id") == e2]
+    assert lo and lo[0]["error_type"] == "ServiceError" and lo[0]["correlation_id"] in loi_e2, (
+        "phải có log của lô kèm đúng mã ref — %r" % log_lo
+    )
+
+
+# ═══════════════════════════════ F11 — kiểm kê mã (AST) ══════════════════════════════════════════
+_THU_MUC_APP = Path(asv.__file__).resolve().parents[1]
+#: Đích làm đổi số chỗ: trạng thái chiếm chỗ, ``draft`` (trả về Nháp), ``withdrawn`` (rút / trả chỗ Phần B). Đích là BIẾN ⇒ coi như
+#: đổi số (``_BIEN``).
+_DICH_DOI_SO = frozenset(qos.OCCUPYING_STATUSES) | {"draft", qos.RELEASED_STATUSES}
+_BIEN = "<biến>"
+#: Bảng kiểm kê: MỌI hàm có lời gọi ``transition`` / ``state_transition`` tới đích đổi số → (cách khoá, {đích: số lời gọi}).
+#: * ``tu_khoa``: khoá năm CÓ CHỜ trước câu khoá hồ sơ, một lần ``lock_quota_for_profiles`` trước lời gọi;
+#: * ``qua_lo``: khoá ở ``_lock_before_batch_approval`` (gọi trước lời gọi; hàm ấy theo ``tu_khoa``);
+#: * ``qua_finalize``: ``locked_years`` bắt buộc, một lần ``lock_quota_for_profiles`` trước lời gọi (nơi gọi: ``_NOI_GOI_FINALIZE``);
+#: * ``khong_cho``: hồ sơ đã khoá ở ``deps.py`` ⇒ CHỈ bản khoá năm KHÔNG CHỜ, trước một lần ``lock_quota_for_profiles``;
+#: * ``khong_doi_so``: cạnh trong tập chiếm chỗ (từ trạng thái đã chiếm chỗ) hoặc đích bị khoá trạng thái Quyết định chặn — không
+#:   đổi số; chỉ được đúng các đích kê ở đây.
+_KIEM_KE = {
+    "services/admission_service.py:approve_profile": ("tu_khoa", {"approved": 1}),
+    "services/admission_service.py:bulk_approve": ("qua_lo", {"approved": 1}),
+    "services/admission_service.py:_finalize_withdrawn": ("qua_finalize", {"withdrawn": 1}),
+    "services/admission_choice_engine_service.py:evaluate_cascade": ("khong_cho", {_BIEN: 1}),
+    "services/admission_choice_engine_service.py:promote_waitlisted_choice": ("khong_cho", {"admitted": 1}),
+    "services/admission_choice_engine_service.py:admin_rollback_profile": ("khong_cho", {"draft": 1}),
+    "services/admission_service.py:_perform_enrollment_core": ("khong_doi_so", {"enrolled": 1}),  # confirmed / overridden → enrolled
+    "services/admission_service.py:override_profile": ("khong_doi_so", {"overridden": 1}),  # approved → overridden
+    "services/admission_service.py:verify_and_confirm": ("khong_doi_so", {"confirmed": 1}),  # approved / admitted → confirmed
+    "services/admission_service.py:cancel_withdrawal": ("khong_doi_so", {"draft": 1}),  # withdrawal_pending → draft (QĐ: chặn)
+}
+#: Nơi gọi ``_finalize_withdrawn`` (rút route / thư, chốt rút sau hoàn tiền): khoá năm CÓ CHỜ trước câu khoá hồ sơ, truyền
+#: ``locked_years``.
+_NOI_GOI_FINALIZE = {
+    "services/admission_service.py:withdraw_profile",
+    "services/payment_service.py:RefundService.process_approved_refund",
+}
+
+
+def _ten_goi(call):
+    f = call.func
+    return f.id if isinstance(f, ast.Name) else f.attr if isinstance(f, ast.Attribute) else None
+
+
+def _quet_app():
+    """{khoá hàm "tệp:Lớp.hàm": (nút hàm, [lời gọi trong hàm — KHÔNG kể hàm lồng])} cho mọi tệp ``app/**.py``."""
+    ra = {}
+    for tep in sorted(_THU_MUC_APP.rglob("*.py")):
+        cay = ast.parse(tep.read_text(encoding="utf-8"))
+        rel = tep.relative_to(_THU_MUC_APP).as_posix()
+
+        def di(nut, tien_to):
+            for con in ast.iter_child_nodes(nut):
+                if isinstance(con, ast.ClassDef):
+                    di(con, tien_to + con.name + ".")
+                elif isinstance(con, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    goi = []
+                    ngan = list(ast.iter_child_nodes(con))
+                    while ngan:
+                        x = ngan.pop()
+                        if isinstance(x, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+                            continue
+                        if isinstance(x, ast.Call):
+                            goi.append(x)
+                        ngan.extend(ast.iter_child_nodes(x))
+                    ra["%s:%s%s" % (rel, tien_to, con.name)] = (con, goi)
+                    di(con, tien_to + con.name + ".")
+
+        di(cay, "")
+    return ra
+
+
+def _dich(call):
+    for kw in call.keywords:
+        if kw.arg == "new_status":
+            return kw.value.value if isinstance(kw.value, ast.Constant) else _BIEN
+    if len(call.args) >= 3:
+        a = call.args[2]
+        return a.value if isinstance(a, ast.Constant) else _BIEN
+    return _BIEN
+
+
+def _la_goi_chuyen(call):
+    return _ten_goi(call) in ("transition", "state_transition")
+
+
+def _la_khoa_ho_so(call):
+    return _ten_goi(call) == "with_for_update" and any(
+        isinstance(x, ast.Call)
+        and _ten_goi(x) == "select"
+        and x.args
+        and isinstance(x.args[0], ast.Attribute)
+        and x.args[0].attr == "AdmissionProfile"
+        for x in ast.walk(call)
+    )
+
+
+def _dong(goi, ten):
+    return sorted(c.lineno for c in goi if _ten_goi(c) == ten)
+
+
+def _kiem_tu_khoa(khoa, goi, cho_phep_ban_thu=False):
+    co_cho, ho_so = _dong(goi, "lock_years_of_profiles"), sorted(c.lineno for c in goi if _la_khoa_ho_so(c))
+    assert len(co_cho) == 1 and ho_so and co_cho[0] < ho_so[0], (khoa, "khoá năm CÓ CHỜ phải đứng TRƯỚC câu khoá hồ sơ", co_cho, ho_so)
+    if not cho_phep_ban_thu:
+        assert not _dong(goi, "try_lock_years_of_profiles"), (khoa, "đường tự khoá hồ sơ không dùng bản không chờ")
+
+
+def test_f11_kiem_ke_ast_moi_duong_doi_so_cho_deu_khoa_dung_thu_tu():
+    """Quét AST MỌI ``app/**.py``: (1) mọi hàm có lời gọi ``transition`` / ``state_transition`` tới đích đổi số (chiếm chỗ, ``draft``,
+    ``withdrawn``, đích là biến) phải nằm trong ``_KIEM_KE`` với ĐÚNG các đích ấy và ngược lại; (2) cách khoá của từng hàm đúng
+    mục kê (thứ tự, một lần khoá ô, không gọi thẳng ``lock_quota_cells``; ``khong_cho`` không dùng bản có chờ); (3) mọi lời gọi
+    ``_finalize_withdrawn`` truyền ``locked_years`` và nơi gọi khoá năm trước khoá hồ sơ; (4) ``transition()`` gọi chốt."""
+    ham = _quet_app()
+    thay = {}
+    for khoa, (_, goi) in ham.items():
+        dich = [_dich(c) for c in goi if _la_goi_chuyen(c)]
+        dich = [d for d in dich if d == _BIEN or d in _DICH_DOI_SO]
+        if dich and not khoa.startswith("services/admission_state_service.py:"):
+            thay[khoa] = {d: dich.count(d) for d in set(dich)}
+    assert thay == {k: v[1] for k, v in _KIEM_KE.items()}, (
+        "lời gọi chuyển trạng thái đổi số chỗ NGOÀI bảng kiểm kê (hoặc bảng kê thừa / lệch đích) — %r" % thay
+    )
+    for khoa, (cach, _) in _KIEM_KE.items():
+        nut, goi = ham[khoa]
+        dong_chuyen = min(c.lineno for c in goi if _la_goi_chuyen(c) and (_dich(c) == _BIEN or _dich(c) in _DICH_DOI_SO))
+        if cach == "khong_doi_so":
+            continue
+        assert not _dong(goi, "lock_quota_cells"), (khoa, "không gọi thẳng lock_quota_cells")
+        if cach == "qua_lo":
+            truoc = _dong(goi, "_lock_before_batch_approval")
+            assert len(truoc) == 1 and truoc[0] < dong_chuyen, khoa
+            _, goi_lo = ham["services/admission_service.py:_lock_before_batch_approval"]
+            _kiem_tu_khoa("_lock_before_batch_approval", goi_lo)
+            assert len(_dong(goi_lo, "lock_quota_for_profiles")) == 1 and not _dong(goi_lo, "lock_quota_cells")
+            continue
+        khoa_o = _dong(goi, "lock_quota_for_profiles")
+        assert len(khoa_o) == 1 and khoa_o[0] < dong_chuyen, (khoa, "một lần lock_quota_for_profiles TRƯỚC lời gọi", khoa_o)
+        if cach == "tu_khoa":
+            _kiem_tu_khoa(khoa, goi)
+        elif cach == "khong_cho":
+            thu = _dong(goi, "try_lock_years_of_profiles")
+            assert not _dong(goi, "lock_years_of_profiles"), (khoa, "đường nhận hồ sơ đã khoá KHÔNG được dùng bản có chờ")
+            assert len(thu) == 1 and thu[0] < khoa_o[0], (khoa, "bản không chờ đứng trước khoá ô", thu)
+        elif cach == "qua_finalize":
+            ten_tham_so = [a.arg for a in nut.args.kwonlyargs]
+            assert "locked_years" in ten_tham_so, "_finalize_withdrawn phải có tham số chỉ-từ-khoá locked_years"
+            assert nut.args.kw_defaults[ten_tham_so.index("locked_years")] is None, "locked_years phải BẮT BUỘC (không mặc định)"
+    noi_goi = {}
+    for khoa, (_, goi) in ham.items():
+        for c in goi:
+            if _ten_goi(c) == "_finalize_withdrawn":
+                assert any(kw.arg == "locked_years" for kw in c.keywords), (khoa, c.lineno, "thiếu locked_years")
+                noi_goi[khoa] = goi
+    assert set(noi_goi) == _NOI_GOI_FINALIZE, sorted(noi_goi)
+    for khoa, goi in noi_goi.items():
+        _kiem_tu_khoa(khoa, goi, cho_phep_ban_thu=True)
+    _, goi_chot = ham["services/admission_state_service.py:transition"]
+    assert _dong(goi_chot, "check_quota_locked_for_transition"), "transition() phải gọi chốt"
 
 
 # ═══════════════════════════════ F12 — Phê duyệt: MỘT lần khoá ô ═════════════════════════════════
