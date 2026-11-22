@@ -12,11 +12,12 @@ Ba việc:
 
    * chạy thử MẶC ĐỊNH; chế độ thật khoá bằng cờ CHO PHÉP ``THCS_MAPPING_APPLY_ENABLED`` (mặc định tắt — owner chưa
      quyết dòng y→y). Tầng chủ sở hữu của cờ = :meth:`ThcsSchoolMappingService.apply_mappings` (không phải router);
-   * KHÔNG chạm dòng đã có ``school_id``; chỉ chạm hồ sơ ở :data:`APPLY_ELIGIBLE_STATUSES` (chờ xét); bỏ qua hồ sơ gắn
-     Quyết định / dấu AppSheet (``council_decision_status_service``);
+   * KHÔNG chạm dòng đã có ``school_id``; chỉ chạm hồ sơ năm :data:`APPLY_ACADEMIC_YEAR` ở
+     :data:`APPLY_ELIGIBLE_STATUSES` (nháp + chờ xét — owner 22-11 câu 1, 2); bỏ qua hồ sơ gắn Quyết định / dấu
+     AppSheet (``council_decision_status_service``);
    * chế độ thật khoá hồ sơ ``FOR UPDATE`` (thứ tự id tăng — thứ tự khoá chung), đọc lại dưới khoá, đối chiếu hai số
-     của lượt chạy thử (lệch ⇒ 409, không ghi gì), tăng ``version`` (khoá lạc quan của form hồ sơ), ghi vết từng hồ sơ
-     vào ``entity_audit_log``;
+     của lượt chạy thử (lệch ⇒ 409, không ghi gì), tăng ``version`` (khoá lạc quan của form hồ sơ: cán bộ đang mở
+     form nháp mà lưu bản cũ ⇒ ``ProfileVersionConflict`` có câu rõ ràng), ghi vết từng hồ sơ vào ``entity_audit_log``;
    * báo trước: số hồ sơ đang ở chế độ KV ấn định tay (đổi lịch sử học ⇒ vân tay đầu vào đổi ⇒ ấn định hết hiệu lực)
      và số dòng y→y.
 """
@@ -49,16 +50,21 @@ from app.utils.exceptions import (
 )
 from app.utils.exceptions import ValidationError as DomainValidationError
 
-#: Trạng thái hồ sơ lượt áp ghép ĐƯỢC chạm — hồ sơ đã nộp, đang chờ xét (chưa có kết quả). Danh sách CHO PHÉP
-#: (fail-closed): trạng thái mới thêm về sau mặc định KHÔNG bị chạm. Ngoài tập: nháp chưa nộp (``draft``), đã có
-#: kết quả (``result_published`` / ``admitted`` / ``waitlisted`` / ``rejected`` / ``approved`` / ``confirmed`` /
-#: ``overridden`` / ``enrolled``), đã / đang rút (``withdrawal_pending`` / ``withdrawn``). Câu hỏi owner ở biên bản.
+#: Trạng thái hồ sơ lượt áp ghép ĐƯỢC chạm — owner 22-11 (``QUYET-DINH-OWNER-THCS-CONG-CU-GHEP`` câu 1): nháp + chờ xét.
+#: Danh sách CHO PHÉP (fail-closed): trạng thái mới thêm về sau mặc định KHÔNG bị chạm. Ngoài tập: đã có kết quả
+#: (``result_published`` / ``admitted`` / ``waitlisted`` / ``rejected`` / ``approved`` / ``confirmed`` / ``overridden`` /
+#: ``enrolled``), đã / đang rút (``withdrawal_pending`` / ``withdrawn``).
 APPLY_ELIGIBLE_STATUSES: Final[tuple[str, ...]] = (
+    "draft",
     "submitted",
     "resubmitted",
     "revision_requested",
     "reviewing",
 )
+#: Năm tuyển sinh lượt áp ghép được chạm — owner 22-11 câu 2 ("giới hạn năm 2026").
+APPLY_ACADEMIC_YEAR: Final[int] = 2026
+#: Trạng thái nháp — lượt chạy thử báo riêng số hồ sơ nháp (owner câu 1).
+DRAFT_STATUS: Final[str] = "draft"
 #: Hồ sơ đã / đang rút: không tính vào nhóm (owner đo "bỏ hồ sơ rút").
 WITHDRAWN_STATUSES: Final[frozenset[str]] = frozenset({"withdrawal_pending", "withdrawn"})
 
@@ -81,7 +87,7 @@ def candidate_profiles_stmt(ids: Optional[Iterable[int]] = None):
     """Câu đọc hồ sơ CÓ THỂ có dòng THCS (lọc sơ bộ — tập CHA của :func:`is_thcs_manual_row`)."""
     t = AdmissionProfile.__table__
     stmt = (
-        select(t.c.id, t.c.status, t.c.area_resolution_basis, t.c.academic_history)
+        select(t.c.id, t.c.status, t.c.academic_year, t.c.area_resolution_basis, t.c.academic_history)
         .where(
             func.jsonb_typeof(t.c.academic_history) == "array",
             # Hằng ``::jsonpath`` viết thẳng: tham số ràng buộc của asyncpg bị ép ``::VARCHAR`` và PostgreSQL không
@@ -93,6 +99,14 @@ def candidate_profiles_stmt(ids: Optional[Iterable[int]] = None):
     if ids is not None:
         stmt = stmt.where(t.c.id.in_(sorted(set(ids))))
     return stmt
+
+
+def is_apply_target(profile: dict) -> bool:
+    """MỘT nguồn: hồ sơ thuộc phạm vi áp ghép (trạng thái cho phép + năm tuyển sinh). Chưa xét Quyết định."""
+    return (
+        profile.get("status") in APPLY_ELIGIBLE_STATUSES
+        and profile.get("academic_year") == APPLY_ACADEMIC_YEAR
+    )
 
 
 def is_thcs_manual_row(entry: Any) -> bool:
@@ -168,7 +182,6 @@ class ThcsSchoolMappingService:
     ) -> dict[str, Any]:
         page = max(1, page)
         page_size = min(max(1, page_size), 200)
-        eligible = set(APPLY_ELIGIBLE_STATUSES)
         groups: dict[str, dict[str, Any]] = {}
         blank_rows = 0
         all_profiles: set[int] = set()
@@ -197,7 +210,7 @@ class ThcsSchoolMappingService:
                 g["rows"] += 1
                 g["profiles"].add(p["id"])
                 all_profiles.add(p["id"])
-                if p["status"] in eligible:
+                if is_apply_target(p):
                     g["eligible"].add(p["id"])
                 if is_same_year_row(entry):
                     g["same_year"] += 1
@@ -378,13 +391,17 @@ class ThcsSchoolMappingService:
                     unmapped += 1
                     continue
                 changes.append((idx, hit[0], hit[1], entry))
-            if p["status"] in eligible:
+            if is_apply_target(p):
                 c["unmapped_rows"] += unmapped
             if not changes:
                 continue
             if p["status"] not in eligible:
                 c["skipped_status_profiles"] += 1
                 c["skipped_status_rows"] += len(changes)
+                continue
+            if not is_apply_target(p):  # đúng trạng thái nhưng khác năm tuyển sinh
+                c["skipped_year_profiles"] += 1
+                c["skipped_year_rows"] += len(changes)
                 continue
             st = states.get(p["id"])
             if st is not None and (st.code != NO_DECISION or st.dau_appsheet or st.named_in_document):
@@ -393,6 +410,9 @@ class ThcsSchoolMappingService:
             plan.append({"profile": p, "changes": changes})
             c["rows_to_change"] += len(changes)
             c["profiles_to_change"] += 1
+            if p["status"] == DRAFT_STATUS:
+                c["draft_rows_to_change"] += len(changes)
+                c["draft_profiles_to_change"] += 1
             same = sum(1 for ch in changes if is_same_year_row(ch[3]))
             c["same_year_rows"] += same
             c["same_year_profiles"] += 1 if same else 0
@@ -427,7 +447,7 @@ class ThcsSchoolMappingService:
         touched = [
             p["id"]
             for p in profiles
-            if p["status"] in APPLY_ELIGIBLE_STATUSES
+            if is_apply_target(p)
             and any(
                 is_thcs_manual_row(e) and normalize_thcs_school_name(e.get("school_name")) in usable
                 for e in p["academic_history"]
@@ -441,13 +461,18 @@ class ThcsSchoolMappingService:
             "applied": False,
             "apply_enabled": is_apply_allowed(),
             "eligible_statuses": list(APPLY_ELIGIBLE_STATUSES),
+            "academic_year": APPLY_ACADEMIC_YEAR,
             "rows_to_change": c["rows_to_change"],
             "profiles_to_change": c["profiles_to_change"],
+            "draft_rows_to_change": c["draft_rows_to_change"],
+            "draft_profiles_to_change": c["draft_profiles_to_change"],
             "same_year_rows": c["same_year_rows"],
             "same_year_profiles": c["same_year_profiles"],
             "manual_kv_override_profiles": c["manual_kv_override_profiles"],
             "skipped_status_profiles": c["skipped_status_profiles"],
             "skipped_status_rows": c["skipped_status_rows"],
+            "skipped_year_profiles": c["skipped_year_profiles"],
+            "skipped_year_rows": c["skipped_year_rows"],
             "skipped_decision_profiles": c["skipped_decision_profiles"],
             "unmapped_rows": c["unmapped_rows"],
             "unusable_mappings": unusable,

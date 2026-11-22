@@ -71,9 +71,9 @@ export function ApplyMappingPanel() {
       </CardHeader>
       <CardContent className="space-y-3 text-sm">
         <p className="text-muted-foreground">
-          Gắn trường đã ghép vào các dòng THCS gõ tay của hồ sơ đang chờ xét. Không
-          chạm dòng đã chọn trường, hồ sơ nháp, hồ sơ đã có kết quả, đã rút, hoặc gắn
-          Quyết định. Luôn chạy thử trước.
+          Gắn trường đã ghép vào các dòng THCS gõ tay của hồ sơ nháp và hồ sơ đang chờ
+          xét (năm tuyển sinh 2026). Không chạm dòng đã chọn trường, hồ sơ đã có kết
+          quả, đã rút, hoặc gắn Quyết định. Luôn chạy thử trước.
         </p>
         <div className="flex gap-2">
           <Button
@@ -112,6 +112,11 @@ export function ApplyMappingPanel() {
               Sẽ gắn trường: <b>{preview.rows_to_change}</b> dòng ở{" "}
               <b>{preview.profiles_to_change}</b> hồ sơ.
             </li>
+            <li data-testid="thcs-apply-preview-draft">
+              Trong đó hồ sơ NHÁP: {preview.draft_profiles_to_change} hồ sơ (
+              {preview.draft_rows_to_change} dòng) — cán bộ đang mở form các hồ sơ này
+              sẽ phải tải lại trang trước khi lưu.
+            </li>
             <li>
               Trong đó dòng y→y (năm bắt đầu = năm kết thúc): {preview.same_year_rows}{" "}
               dòng ở {preview.same_year_profiles} hồ sơ.
@@ -121,9 +126,11 @@ export function ApplyMappingPanel() {
               {preview.manual_kv_override_profiles}.
             </li>
             <li>
-              Bỏ qua vì trạng thái hồ sơ (nháp / có kết quả):{" "}
+              Bỏ qua vì trạng thái hồ sơ (có kết quả):{" "}
               {preview.skipped_status_profiles} hồ sơ ({preview.skipped_status_rows}{" "}
-              dòng). Bỏ qua vì gắn Quyết định: {preview.skipped_decision_profiles} hồ sơ.
+              dòng). Bỏ qua vì khác năm {preview.academic_year}:{" "}
+              {preview.skipped_year_profiles} hồ sơ ({preview.skipped_year_rows} dòng).
+              Bỏ qua vì gắn Quyết định: {preview.skipped_decision_profiles} hồ sơ.
             </li>
             <li>
               Dòng ở hồ sơ chờ xét mà nhóm chưa ghép: {preview.unmapped_rows}.
@@ -145,9 +152,10 @@ export function ApplyMappingPanel() {
             <AlertDialogTitle>Áp ghép thật?</AlertDialogTitle>
             <AlertDialogDescription>
               Gắn trường vào {preview?.rows_to_change} dòng ở{" "}
-              {preview?.profiles_to_change} hồ sơ. {preview?.manual_kv_override_profiles}{" "}
-              hồ sơ có KV ấn định tay sẽ mất hiệu lực ấn định. Thao tác ghi vết từng
-              hồ sơ; muốn gỡ phải sửa tay.
+              {preview?.profiles_to_change} hồ sơ (trong đó{" "}
+              {preview?.draft_profiles_to_change} hồ sơ nháp).{" "}
+              {preview?.manual_kv_override_profiles} hồ sơ có KV ấn định tay sẽ mất hiệu
+              lực ấn định. Thao tác ghi vết từng hồ sơ; muốn gỡ phải sửa tay.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

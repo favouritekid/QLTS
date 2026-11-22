@@ -281,6 +281,21 @@ class ProfileLockedByDecisionError(ConflictError):
     detail = "Hồ sơ đã có tên trong Quyết định đã ký — thao tác bị chặn."
 
 
+class ProfileVersionConflict(ConflictError):
+    """Lưu hồ sơ bằng bản đã CŨ (khoá lạc quan ``version`` lệch) — HTTP 409.
+
+    Owner 22-11 (công cụ ghép trường THCS, câu 1): áp ghép cho cả hồ sơ NHÁP tăng ``version``; cán bộ đang mở form nháp
+    mà lưu sau đó phải nhận câu RÕ RÀNG. Mã riêng để giao diện hiện NGUYÊN câu (``USER_FACING_CONFLICT_CODES``) thay vì câu
+    chung "trùng hoặc đã thay đổi". ``public_payload`` chỉ mang số phiên bản (không dữ liệu cá nhân)."""
+
+    status_code = status.HTTP_409_CONFLICT
+    error_code = "PROFILE_VERSION_CONFLICT"
+    detail = (
+        "Hồ sơ vừa được cập nhật ở nơi khác sau khi bạn mở (người dùng khác, hoặc Admin áp ghép trường THCS vào lịch "
+        "sử học). Bản bạn đang sửa đã cũ nên CHƯA được lưu. Tải lại trang hồ sơ rồi nhập lại phần vừa sửa."
+    )
+
+
 # ============================================================================
 # GONE / CLOSED RESOURCES (410)
 # ============================================================================

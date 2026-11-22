@@ -70,10 +70,14 @@ export interface ApiErrorResponse {
 // `COUNCIL_DECISION_LOCKS_PROFILE` (`QuyetDinhKhoaHoSo`, `app/utils/exceptions.py`) và
 // `CAU_HINH_DA_DUOC_QUYET_DINH_DUNG` (trigger khoá cấu hình, `exception_handlers.py`). Câu "thử lại" của deadlock đi
 // ra với mã chung `CONFLICT` (mang cả chuỗi nội bộ) ⇒ KHÔNG thêm — giữ câu chung "…kiểm tra lại".
+//
+// Owner 22-11 (công cụ ghép trường THCS, câu 1): `PROFILE_VERSION_CONFLICT` — lưu hồ sơ bằng bản đã cũ (khoá lạc quan
+// `version` lệch, vd sau khi Admin áp ghép trường THCS vào hồ sơ nháp). Câu của máy chủ nói rõ phải tải lại trang.
 const USER_FACING_CONFLICT_CODES = new Set<string>([
   'DUPLICATE_RESOURCE',
   'COUNCIL_DECISION_LOCKS_PROFILE',
   'CAU_HINH_DA_DUOC_QUYET_DINH_DUNG',
+  'PROFILE_VERSION_CONFLICT',
 ])
 
 // =============================================================================

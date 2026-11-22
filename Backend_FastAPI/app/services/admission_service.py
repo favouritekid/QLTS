@@ -80,6 +80,7 @@ from ..utils.exceptions import (
     PermissionDeniedError,
     ConflictError,
     DuplicateResourceError,
+    ProfileVersionConflict,
     ServiceError,
     ValidationError,
 )
@@ -6023,10 +6024,11 @@ async def update_profile(
             current_version=profile.version,
             user_id=current_user.id,
         )
-        raise ConflictError(
-            f"Profile was modified by another user. "
-            f"Expected version {data['version']}, but current version is {profile.version}. "
-            "Please refresh and try again."
+        # Owner 22-11 (công cụ ghép trường THCS, câu 1): áp ghép tăng version cả hồ sơ NHÁP ⇒ cán bộ đang mở form
+        # nhận câu RÕ RÀNG (mã riêng PROFILE_VERSION_CONFLICT, giao diện hiện nguyên câu) thay vì câu chung.
+        raise ProfileVersionConflict(
+            context={"expected_version": data["version"], "current_version": profile.version},
+            public_payload={"current_version": profile.version},
         )
 
     # Update fields (only non-None values from schema)

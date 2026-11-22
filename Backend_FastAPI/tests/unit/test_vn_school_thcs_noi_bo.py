@@ -36,7 +36,11 @@ from app.scripts.import_moet_schools_3_provinces import (
     find_existing_moet_school,
     upsert_one,
 )
-from app.scripts.rebuild_school_kv_from_xls import region_school_filter
+from app.scripts.rebuild_school_kv_from_xls import (
+    ProtectedRegionSchools,
+    guard_no_protected_region_schools,
+    region_school_filter,
+)
 from app.services.vn_locality_service import VnLocalityService
 from app.services.vn_school_service import VnSchoolService
 from app.utils.exceptions import BusinessRuleViolation
@@ -447,3 +451,93 @@ async def test_cau_kiem_lech_bo_qua_dong_kv_da_dong_va_dong_tay(db) -> None:
     kq = await svc.internal_kv_mismatch()
     assert (kq["mismatch_count"], kq["commune_inactive_count"]) == (0, 0)
     assert row.kv_code == "KV1"
+
+
+
+# =====================================================================================================================
+# 5. Bộ nạp danh mục Bộ KHÔNG hạ cấp liên cấp do Admin đặt (owner 22-11, QUYET-DINH-OWNER-THCS-CONG-CU-GHEP câu 3)
+# =====================================================================================================================
+
+
+async def _truong_bo_lien_cap(db, ma="002", prov="040", province="Đắk Lắk") -> VnSchool:
+    """Trường của Bộ nạp ở cấp THPT, Admin sửa thành liên cấp (đúng đường owner chốt)."""
+    svc = VnSchoolService(db)
+    s, _ = await svc.create_school(
+        {"moet_school_code": ma, "moet_province_code": prov, "name": "THCS-THPT Liên Cấp", "province": province,
+         "level": "THPT"}
+    )
+    await db.flush()
+    s, _ = await svc.update_school(s.id, {"level": "THCS_THPT"})
+    await db.flush()
+    return s
+
+
+def _dong_moet(s: VnSchool, **kw) -> dict:
+    d = {
+        "moet_province_code": s.moet_province_code, "moet_district_code": None, "moet_school_code": s.moet_school_code,
+        "name": "THPT Liên Cấp (tên Bộ mới)", "address": None, "province": s.province, "district": None,
+        "level": "THPT", "is_dtnt": False, "kv_code": "KV1", "is_special": False,
+    }
+    d.update(kw)
+    return d
+
+
+async def test_nap_moet_cap_nhat_truong_co_san_khong_ha_lien_cap_ve_thpt(db) -> None:
+    s = await _truong_bo_lien_cap(db)
+    thong_ke: Counter = Counter()
+    await upsert_one(db, _dong_moet(s), thong_ke)
+    await db.flush()
+    await db.refresh(s)
+    assert s.name == "THPT Liên Cấp (tên Bộ mới)"  # các cột khác vẫn cập nhật theo nguồn
+    assert s.level == "THCS_THPT"  # cấp do Admin đặt giữ nguyên
+    assert thong_ke["school_updated"] == 1
+
+
+async def test_nap_moet_cap_khong_bao_ve_van_theo_nguon(db) -> None:
+    s, _ = await VnSchoolService(db).create_school(
+        {"moet_school_code": "800", "moet_province_code": "040", "name": "Học ở nước ngoài", "province": "Đắk Lắk",
+         "level": "THPT"}
+    )
+    await db.flush()
+    await upsert_one(db, _dong_moet(s, level="OTHER"), Counter())
+    await db.flush()
+    await db.refresh(s)
+    assert s.level == "OTHER"
+
+
+async def test_nap_lai_xls_dung_khi_vung_co_truong_lien_cap_admin_dat(db) -> None:
+    await _truong_bo_lien_cap(db, province="Đắk Lắk")
+    with pytest.raises(ProtectedRegionSchools, match="liên cấp"):
+        await guard_no_protected_region_schools(db, ["Đắk Lắk"])
+    # Vùng khác không có ⇒ không chặn.
+    await guard_no_protected_region_schools(db, ["Gia Lai"])
+
+
+async def test_nap_lai_xls_truong_noi_bo_lien_cap_khong_tinh_vao_chot(db) -> None:
+    """Trường NB… liên cấp đã được loại khỏi xoá (``region_school_filter``) ⇒ không làm chốt dừng."""
+    await _xa(db)
+    await _truong_noi_bo(db, level="THCS_THPT", province="Đắk Lắk")
+    await guard_no_protected_region_schools(db, ["Đắk Lắk"])
+
+
+async def test_csv_truong_lien_cap_co_san_khong_bi_ha_cap(db) -> None:
+    s = await _truong_bo_lien_cap(db, ma="040778", prov="048")
+    csv_bytes = (
+        b"moet_school_code,moet_province_code,name,province,level\n"
+        b"040778,048,THPT Ghi De,Tinh X,THPT\n"
+    )
+    kq, _ = await VnSchoolService(db).import_schools_csv(csv_bytes)
+    await db.flush()
+    assert (kq["inserted"], kq["skipped_existing"]) == (0, 1)
+    await db.refresh(s)
+    assert s.level == "THCS_THPT"
+
+
+async def test_gom_cap_trung_ten_khong_dung_truong_lien_cap(db) -> None:
+    """``dedup_temporal_split`` chỉ gom cấp THPT và KHÔNG ghi cột ``level`` ⇒ trường liên cấp không bị đụng."""
+    await _truong_bo_lien_cap(db, ma="011", prov="040")
+    db.add(VnSchool(moet_school_code="012", moet_province_code="040", name="THCS-THPT Liên Cấp", province="Đắk Lắk",
+                    level="THPT"))
+    await db.flush()
+    cum = await detect_clusters(db)
+    assert all(all(x.level == "THPT" for x in c) for c in cum)

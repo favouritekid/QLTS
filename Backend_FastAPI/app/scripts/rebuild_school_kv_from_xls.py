@@ -171,6 +171,39 @@ def region_school_filter(old_names):
     )
 
 
+class ProtectedRegionSchools(RuntimeError):
+    """Vùng target có trường cấp được bảo vệ (liên cấp do Admin đặt) — xoá-rồi-tạo-lại sẽ hạ cấp / mất ghép ⇒ DỪNG."""
+
+
+def protected_region_filter(old_names):
+    """Trường mã Bộ trong vùng target mang cấp được bảo vệ (``MOET_LOADER_PROTECTED_LEVELS`` — owner 22-11 câu 3)."""
+    from app.models.vn_school import VnSchool
+    from app.models.vn_school_internal_code import MOET_LOADER_PROTECTED_LEVELS
+
+    return (
+        *region_school_filter(old_names),
+        VnSchool.level.in_(sorted(MOET_LOADER_PROTECTED_LEVELS)),
+    )
+
+
+async def guard_no_protected_region_schools(db, old_names) -> None:
+    """Đường này XOÁ CỨNG rồi TẠO LẠI trường từ XLS (cấp luôn "THPT"): trường liên cấp Admin đã sửa thành THCS_THPT sẽ
+    bị hạ về THPT (và mất ghép tên THCS / KV). Không có khoá đối chiếu tin cậy giữa bản ghi cũ và dòng XLS (mã tỉnh cũ
+    khác mã GSO) ⇒ cách an toàn nhất: DỪNG cả lượt, không xoá gì, để Admin xem tay."""
+    from sqlalchemy import func, select
+
+    from app.models.vn_school import VnSchool
+
+    n = await db.scalar(
+        select(func.count()).select_from(VnSchool).where(*protected_region_filter(old_names))
+    )
+    if n:
+        raise ProtectedRegionSchools(
+            f"DỪNG: vùng target có {n} trường cấp liên cấp do Admin đặt (THCS_THPT). Nạp lại kiểu xoá-rồi-tạo sẽ hạ "
+            "chúng về THPT — không xoá gì. Xử lý tay các trường ấy trước."
+        )
+
+
 async def apply(args) -> int:
     from app.database import AsyncSessionLocal
     from app.models.vn_school import VnSchool, VnSchoolKvAssignment
@@ -184,6 +217,8 @@ async def apply(args) -> int:
     old_names = [n for n, g in OLD_TO_GSO.items() if g in provinces]
     async with AsyncSessionLocal() as db:
         async with db.begin():
+            # (0) Có trường liên cấp do Admin đặt ⇒ DỪNG trước mọi ghi (owner 22-11 câu 3).
+            await guard_no_protected_region_schools(db, old_names)
             # (2) XÓA CỨNG toàn bộ cũ vùng target — TRỪ trường nội bộ NB….
             # FK: kv_assignment + name_history = CASCADE (tự xóa).
             # merged_into_id (self-ref, NO ACTION): set NULL trước.

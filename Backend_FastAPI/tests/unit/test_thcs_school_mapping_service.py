@@ -29,7 +29,14 @@ from app.services import thcs_school_mapping_service as svc_mod
 from app.services.council_decision_status_service import HAS_EFFECTIVE_DECISION, DecisionState
 from app.services.thcs_school_mapping_service import ThcsSchoolMappingService
 from app.services.vn_school_service import VnSchoolService
-from app.utils.exceptions import BusinessRuleViolation, ConflictError, ResourceNotFoundError
+from app.models.user import User
+from app.services import admission_service
+from app.utils.exceptions import (
+    BusinessRuleViolation,
+    ConflictError,
+    ProfileVersionConflict,
+    ResourceNotFoundError,
+)
 from app.utils.exceptions import ValidationError as DomainValidationError
 from tests.fixtures.hoi_dong_seed import LUC, chen, ma_gia
 
@@ -93,7 +100,7 @@ class _Nen:
         await self.db.flush()
         return self
 
-    async def ho_so(self, lich_su, status="submitted", basis=None) -> int:
+    async def ho_so(self, lich_su, status="submitted", basis=None, nam=2026) -> int:
         self.so += 1
         lead = await chen(
             self.db, "lead", full_name="Lead giả", phone="0000000000", source="gia", status="new",
@@ -101,7 +108,7 @@ class _Nen:
             academic_performance=0, created_at=LUC, updated_at=LUC, version=1, consultation_count=0,
             cached_urgency_score=0, is_hot_lead=False, is_overdue=False, unit_id=self.unit,
         )
-        cot = dict(lead_id=lead, academic_year=2026, citizen_id=ma_gia(71000 + self.so), applied_rules={},
+        cot = dict(lead_id=lead, academic_year=nam, citizen_id=ma_gia(71000 + self.so), applied_rules={},
                    created_at=LUC, updated_at=LUC, status=status, uses_choice_engine=False,
                    academic_history=lich_su)
         if basis:
@@ -148,7 +155,8 @@ async def test_gom_nhom_theo_ten_chuan_hoa_bo_ho_so_rut_va_dong_da_co_truong(db,
     nhom = {g["normalized_name"]: g for g in kq["items"]}
     assert set(nhom) == {"lê lợi", "nguyễn du"}
     ll = nhom["lê lợi"]
-    assert (ll["row_count"], ll["profile_count"], ll["eligible_profile_count"], ll["same_year_row_count"]) == (3, 2, 1, 2)
+    # Owner 22-11 câu 1: nháp CŨNG thuộc phạm vi áp ghép ⇒ cả hai hồ sơ (submitted + draft, năm 2026) đều tính.
+    assert (ll["row_count"], ll["profile_count"], ll["eligible_profile_count"], ll["same_year_row_count"]) == (3, 2, 2, 2)
     assert {v["text"]: v["row_count"] for v in ll["variants"]} == {"Trường THCS Lê Lợi": 2, "THCS Lê Lợi.": 1}
     assert ll["mapping"] is None
     assert kq["summary"]["blank_name_row_count"] == 1
@@ -243,11 +251,12 @@ async def _bo_du_lieu_ap(db, nen):
         "p1": await nen.ho_so([_thcs("THCS Lê Lợi", y) for y in (2017, 2018, 2019)]
                               + [_thcs("Trường THCS Lê Lợi", 2020, level="THCS", graduation_type=None), _thpt()]),
         "p2": await nen.ho_so([_thcs("THCS Lê Lợi", 2016, 2020)], status="reviewing", basis="manual_override"),
-        "p3": await nen.ho_so([_thcs("THCS Lê Lợi", 2018)], status="draft"),
+        "p3": await nen.ho_so([_thcs("THCS Lê Lợi", 2018)], status="draft"),  # nháp: ĐƯỢC chạm (owner câu 1)
         "p4": await nen.ho_so([_thcs("THCS Lê Lợi", 2018)], status="result_published"),
         "p5": await nen.ho_so([_thcs("THCS Chưa Ghép", 2018)]),
         "p6": await nen.ho_so([_thcs("THCS Lê Lợi", 2018, school_id=777, level="THCS")]),
         "p7": await nen.ho_so([_thcs("THCS Lê Lợi", 2018)], status="withdrawn"),
+        "p8": await nen.ho_so([_thcs("THCS Lê Lợi", 2018)], nam=2025),  # năm khác ⇒ không chạm (owner câu 2)
     }
     await ThcsSchoolMappingService(db).map_group("lê lợi", s.id, nen.admin)
     return s, ids
@@ -258,10 +267,13 @@ async def test_chay_thu_dem_dung_va_khong_ghi_gi(db, nen) -> None:
     truoc = {k: await nen.lich_su(v) for k, v in ids.items()}
     kq = await ThcsSchoolMappingService(db).apply_mappings(dry_run=True, actor_id=nen.admin)
     assert kq["applied"] is False and kq["dry_run"] is True
-    assert (kq["rows_to_change"], kq["profiles_to_change"]) == (5, 2)
-    assert (kq["same_year_rows"], kq["same_year_profiles"]) == (4, 1)
+    assert (kq["rows_to_change"], kq["profiles_to_change"]) == (6, 3)
+    assert (kq["draft_rows_to_change"], kq["draft_profiles_to_change"]) == (1, 1)  # báo riêng hồ sơ nháp
+    assert (kq["same_year_rows"], kq["same_year_profiles"]) == (5, 2)
     assert kq["manual_kv_override_profiles"] == 1
-    assert (kq["skipped_status_profiles"], kq["skipped_status_rows"]) == (2, 2)  # nháp + có kết quả
+    assert (kq["skipped_status_profiles"], kq["skipped_status_rows"]) == (1, 1)  # có kết quả
+    assert (kq["skipped_year_profiles"], kq["skipped_year_rows"]) == (1, 1)  # năm 2025
+    assert kq["academic_year"] == 2026 and "draft" in kq["eligible_statuses"]
     assert kq["unmapped_rows"] == 1
     assert kq["skipped_decision_profiles"] == 0 and kq["unusable_mappings"] == 0
     assert {k: await nen.lich_su(v) for k, v in ids.items()} == truoc
@@ -272,7 +284,7 @@ async def test_chay_that_khi_co_tat_thi_409_khong_ghi_gi(db, nen, khoa_ap) -> No
     truoc = {k: (await nen.lich_su(v), await nen.version(v)) for k, v in ids.items()}
     with pytest.raises(ConflictError) as e:
         await ThcsSchoolMappingService(db).apply_mappings(
-            dry_run=False, actor_id=nen.admin, expected_rows_to_change=5, expected_profiles_to_change=2
+            dry_run=False, actor_id=nen.admin, expected_rows_to_change=6, expected_profiles_to_change=3
         )
     assert e.value.public_payload == {"operation": "thcs_mapping_apply", "reason": "apply_disabled"}
     assert {k: (await nen.lich_su(v), await nen.version(v)) for k, v in ids.items()} == truoc
@@ -286,17 +298,18 @@ async def test_chay_that_chi_gan_dong_thcs_go_tay_khop_ten_o_ho_so_cho_xet(db, n
     s, ids = await _bo_du_lieu_ap(db, nen)
     truoc = {k: (await nen.lich_su(v), await nen.version(v)) for k, v in ids.items()}
     svc = ThcsSchoolMappingService(db)
-    kq = await svc.apply_mappings(dry_run=False, actor_id=nen.admin, expected_rows_to_change=5,
-                                  expected_profiles_to_change=2)
+    kq = await svc.apply_mappings(dry_run=False, actor_id=nen.admin, expected_rows_to_change=6,
+                                  expected_profiles_to_change=3)
     assert kq["applied"] is True and kq["apply_enabled"] is True
     p1 = await nen.lich_su(ids["p1"])
     assert [(r["school_id"], r["level"]) for r in p1[:4]] == [(s.id, "THCS")] * 4
     assert p1[4] == truoc["p1"][0][4]  # dòng THPT nguyên vẹn
     assert [r["school_name"] for r in p1[:4]] == [r["school_name"] for r in truoc["p1"][0][:4]]  # tên gốc giữ
     assert (await nen.lich_su(ids["p2"]))[0]["school_id"] == s.id
-    for k in ("p1", "p2"):
+    assert (await nen.lich_su(ids["p3"]))[0]["school_id"] == s.id  # nháp
+    for k in ("p1", "p2", "p3"):
         assert await nen.version(ids[k]) == truoc[k][1] + 1
-    for k in ("p3", "p4", "p5", "p6", "p7"):
+    for k in ("p4", "p5", "p6", "p7", "p8"):
         assert (await nen.lich_su(ids[k]), await nen.version(ids[k])) == truoc[k], k
     vet = (await db.execute(
         select(EntityAuditLog).where(EntityAuditLog.action == "thcs_school_mapping_applied")
@@ -304,6 +317,7 @@ async def test_chay_that_chi_gan_dong_thcs_go_tay_khop_ten_o_ho_so_cho_xet(db, n
     )).scalars().all()
     assert [(v.entity_type, v.entity_id, v.actor_user_id) for v in vet] == [
         ("AdmissionProfile", ids["p1"], nen.admin), ("AdmissionProfile", ids["p2"], nen.admin),
+        ("AdmissionProfile", ids["p3"], nen.admin),
     ]
     assert [r["index"] for r in vet[0].new_value] == [0, 1, 2, 3]
     # Chạy lại: không còn gì để gắn (lũy đẳng).
@@ -316,7 +330,7 @@ async def test_chay_that_so_lech_voi_chay_thu_thi_409_khong_ghi_gi(db, nen, cho_
     truoc = {k: await nen.lich_su(v) for k, v in ids.items()}
     with pytest.raises(ConflictError) as e:
         await ThcsSchoolMappingService(db).apply_mappings(
-            dry_run=False, actor_id=nen.admin, expected_rows_to_change=4, expected_profiles_to_change=2
+            dry_run=False, actor_id=nen.admin, expected_rows_to_change=5, expected_profiles_to_change=3
         )
     assert e.value.public_payload["reason"] == "preview_mismatch"
     assert {k: await nen.lich_su(v) for k, v in ids.items()} == truoc
@@ -337,7 +351,7 @@ async def test_bo_qua_ho_so_gan_quyet_dinh(db, nen, monkeypatch) -> None:
     monkeypatch.setattr(svc_mod, "decision_state", _gia)
     kq = await ThcsSchoolMappingService(db).apply_mappings(dry_run=True)
     assert kq["skipped_decision_profiles"] == 1
-    assert (kq["rows_to_change"], kq["profiles_to_change"]) == (4, 1)
+    assert (kq["rows_to_change"], kq["profiles_to_change"]) == (5, 2)
     assert kq["manual_kv_override_profiles"] == 0  # p2 bị bỏ qua ⇒ không còn tính
 
 
@@ -348,3 +362,23 @@ async def test_ghep_tro_truong_da_ngung_thi_khong_dung(db, nen) -> None:
     kq = await ThcsSchoolMappingService(db).apply_mappings(dry_run=True)
     assert kq["unusable_mappings"] == 1
     assert (kq["rows_to_change"], kq["profiles_to_change"]) == (0, 0)
+
+
+
+async def test_can_bo_luu_form_nhap_cu_sau_ap_ghep_nhan_cau_xung_dot_ro_rang(db, nen, cho_phep_ap) -> None:
+    """Owner 22-11 câu 1: áp ghép tăng ``version`` của hồ sơ NHÁP ⇒ cán bộ đang mở form (giữ ``version`` cũ) mà lưu thì
+    BỊ CHẶN bằng ``ProfileVersionConflict`` (mã riêng, câu tiếng Việt) — không ghi đè lịch sử học vừa gắn trường."""
+    s, ids = await _bo_du_lieu_ap(db, nen)
+    v_cu = await nen.version(ids["p3"])
+    await ThcsSchoolMappingService(db).apply_mappings(
+        dry_run=False, actor_id=nen.admin, expected_rows_to_change=6, expected_profiles_to_change=3
+    )
+    admin = await db.get(User, nen.admin)
+    with pytest.raises(ProfileVersionConflict) as e:
+        await admission_service.update_profile(
+            db, ids["p3"], {"version": v_cu, "academic_history": [_thcs("THCS Lê Lợi", 2018)]}, admin
+        )
+    assert e.value.error_code == "PROFILE_VERSION_CONFLICT"
+    assert "Tải lại trang hồ sơ" in e.value.detail
+    assert e.value.public_payload == {"current_version": v_cu + 1}
+    assert (await nen.lich_su(ids["p3"]))[0]["school_id"] == s.id  # không bị ghi đè

@@ -43,6 +43,7 @@ from app.database import AsyncSessionLocal
 from app.models.vn_school import VnSchool, VnSchoolKvAssignment
 from app.models.vn_school_internal_code import (
     is_internal_school_code,
+    moet_loader_level,
     not_internal_code_sql,
 )
 
@@ -181,8 +182,13 @@ async def upsert_one(
             "is_dtnt",
             "moet_district_code",
         ):
-            if getattr(school, field) != row[field]:
-                setattr(school, field, row[field])
+            new_value = row[field]
+            if field == "level":
+                # Owner 22-11 câu 3: cấp liên cấp do Admin đặt (THCS_THPT) KHÔNG bị
+                # danh mục Bộ (chỉ biết "THPT") hạ ngược — giữ nguyên, không hạ.
+                new_value = moet_loader_level(school.level, new_value)
+            if getattr(school, field) != new_value:
+                setattr(school, field, new_value)
                 changed = True
         if changed:
             stats["school_updated"] += 1

@@ -14,8 +14,10 @@ from sqlalchemy.schema import CreateIndex, CreateTable
 
 from app.models.thcs_school_name_mapping import ThcsSchoolNameMapping
 from app.services.thcs_school_mapping_service import (
+    APPLY_ACADEMIC_YEAR,
     APPLY_ELIGIBLE_STATUSES,
     candidate_profiles_stmt,
+    is_apply_target,
     is_same_year_row,
     is_thcs_manual_row,
 )
@@ -129,11 +131,27 @@ def test_cau_loc_so_bo_gui_jsonpath_dang_hang_khong_qua_tham_so_varchar():
     assert "jsonb_path_exists(admission_profile.academic_history, $" not in cau, cau
 
 
-def test_tap_trang_thai_duoc_cham_chi_gom_ho_so_cho_xet():
-    assert APPLY_ELIGIBLE_STATUSES == ("submitted", "resubmitted", "revision_requested", "reviewing")
-    for ngoai in ("draft", "withdrawn", "withdrawal_pending", "result_published", "admitted", "waitlisted",
+def test_tap_trang_thai_duoc_cham_la_nhap_va_cho_xet_nam_2026():
+    """Owner 22-11 (QUYET-DINH-OWNER-THCS-CONG-CU-GHEP) câu 1: nháp + chờ xét; câu 2: năm 2026."""
+    assert APPLY_ELIGIBLE_STATUSES == ("draft", "submitted", "resubmitted", "revision_requested", "reviewing")
+    assert APPLY_ACADEMIC_YEAR == 2026
+    for ngoai in ("withdrawn", "withdrawal_pending", "result_published", "admitted", "waitlisted",
                   "rejected", "approved", "confirmed", "overridden", "enrolled"):
         assert ngoai not in APPLY_ELIGIBLE_STATUSES
+
+
+@pytest.mark.parametrize(
+    "ho_so,trong_pham_vi",
+    [
+        ({"status": "draft", "academic_year": 2026}, True),
+        ({"status": "reviewing", "academic_year": 2026}, True),
+        ({"status": "submitted", "academic_year": 2025}, False),
+        ({"status": "admitted", "academic_year": 2026}, False),
+        ({"status": "draft", "academic_year": None}, False),
+    ],
+)
+def test_pham_vi_ap_ghep(ho_so, trong_pham_vi):
+    assert is_apply_target(ho_so) is trong_pham_vi
 
 
 # ---------- DDL: model == migration ----------

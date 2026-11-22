@@ -148,3 +148,47 @@ async def test_moi_duong_chi_admin(
     ):
         r = await getattr(client, method)(path, headers=h, **({"json": body} if body is not None else {}))
         assert r.status_code == 403, (path, r.status_code, r.text)
+
+
+async def _version(pid: int) -> int:
+    async with AsyncSessionLocal() as s:
+        return (await s.execute(
+            text("SELECT version FROM admission_profile WHERE id = :p"), {"p": pid}
+        )).scalar_one()
+
+
+async def test_ap_ghep_ho_so_nhap_roi_luu_form_cu_409_cau_ro_rang(
+    client: AsyncClient, admin_token_headers: dict, setup_test_database, monkeypatch
+) -> None:
+    """Owner 22-11 câu 1: áp ghép cả hồ sơ NHÁP; cán bộ lưu form đã mở trước đó (``version`` cũ) qua ĐÚNG đường
+    ``PUT /api/admissions/{id}`` ⇒ 409 mã ``PROFILE_VERSION_CONFLICT`` + câu tiếng Việt, lịch sử học không bị ghi đè."""
+    h = admin_token_headers
+    monkeypatch.setattr(settings, "THCS_MAPPING_APPLY_ENABLED", True)
+    r = await client.post(XA, json={"commune_code": "99302", "province": "Tỉnh Thử", "district": "",
+                                    "ward": "Xã Thử", "area_code": "KV1"}, headers=h)
+    assert r.status_code == 201, r.text
+    pid = await _ho_so_thcs("Trường THCS Lê Lợi", 2, status="draft")
+    r = await client.post(
+        f"{NHOM}/groups/create-school",
+        json={"normalized_name": "lê lợi",
+              "school": {"moet_province_code": "048", "name": "THCS Lê Lợi", "province": "Tỉnh Thử",
+                         "level": "THCS", "commune_code": "99302"}},
+        headers=h,
+    )
+    assert r.status_code == 201, r.text
+    sid = r.json()["school"]["id"]
+    v_cu = await _version(pid)
+
+    r = await client.post(AP, json={}, headers=h)
+    assert (r.json()["draft_profiles_to_change"], r.json()["profiles_to_change"]) == (1, 1), r.text
+    r = await client.post(AP, json={"dry_run": False, "expected_rows_to_change": 1,
+                                    "expected_profiles_to_change": 1}, headers=h)
+    assert r.status_code == 200 and r.json()["applied"] is True, r.text
+
+    r = await client.put(f"/api/admissions/{pid}", json={"version": v_cu}, headers=h)
+    assert r.status_code == 409, r.text
+    body = r.json()
+    assert body["error_code"] == "PROFILE_VERSION_CONFLICT"
+    assert "Tải lại trang hồ sơ" in body["detail"]
+    assert body["current_version"] == v_cu + 1
+    assert (await _lich_su(pid))[0]["school_id"] == sid

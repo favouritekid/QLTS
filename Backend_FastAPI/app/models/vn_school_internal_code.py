@@ -52,6 +52,18 @@ INTERNAL_CODE_LEVELS: Final[frozenset[str]] = frozenset({"THCS", "THCS_THPT"})
 #: Cấp KHÔNG BAO GIỜ mang mã Bộ — gõ mã cho cấp này bị từ chối.
 NO_MOET_CODE_LEVELS: Final[frozenset[str]] = frozenset({"THCS"})
 
+#: Cấp do Admin đặt mà bộ nạp danh mục Bộ KHÔNG được hạ (owner 22-11, ``QUYET-DINH-OWNER-THCS-CONG-CU-GHEP`` câu 3):
+#: danh mục Bộ chỉ biết "THPT"; Admin sửa trường liên cấp thành ``THCS_THPT`` để ghép dòng THCS — nạp lại năm sau
+#: không được đưa về ``THPT``. Cách chọn: GIỮ NGUYÊN cấp được bảo vệ khi CẬP NHẬT trường có sẵn (chỉ giữ / không hạ);
+#: đường nạp XOÁ-rồi-TẠO-LẠI (``rebuild_school_kv_from_xls``) thì DỪNG hẳn nếu vùng có trường như thế.
+MOET_LOADER_PROTECTED_LEVELS: Final[frozenset[str]] = frozenset({"THCS_THPT"})
+
+
+def moet_loader_level(existing_level: Any, incoming_level: Any) -> Any:
+    """Cấp ghi lại khi bộ nạp danh mục Bộ cập nhật một trường CÓ SẴN: cấp được bảo vệ giữ nguyên, còn lại theo nguồn."""
+    return existing_level if existing_level in MOET_LOADER_PROTECTED_LEVELS else incoming_level
+
+
 #: Nguồn của dòng KV chép từ KV hiện hành của xã (owner câu 2: "chép từ xã + câu kiểm lệch"). DÀNH RIÊNG cho đường
 #: xác nhận KV gợi ý — đường thêm / sửa KV chung không được ghi nguồn này.
 KV_SOURCE_COMMUNE_CURRENT: Final[str] = "xa_hien_hanh"

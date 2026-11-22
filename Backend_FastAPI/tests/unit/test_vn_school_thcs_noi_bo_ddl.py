@@ -9,6 +9,7 @@ Phần cần CSDL (sinh mã từ sequence, bộ nạp không khớp trường ``
 Biến thể kiểm ngược (CLAUDE.md chung §3) ghi ở biên bản ``logs-P5/cong-bo-ket-qua/gd2/l3/thcs/``.
 """
 import importlib.util
+import inspect
 from pathlib import Path
 
 import pandas as pd
@@ -18,15 +19,18 @@ from sqlalchemy.schema import CreateIndex, CreateSequence
 
 from app.models import vn_school as m
 from app.models.vn_school_internal_code import (
+    MOET_LOADER_PROTECTED_LEVELS,
     INTERNAL_CODE_LEVELS,
     INTERNAL_CODE_SQL_PREDICATE,
     NO_MOET_CODE_LEVELS,
     format_internal_school_code,
     internal_code_sql,
     is_internal_school_code,
+    moet_loader_level,
     not_internal_code_sql,
 )
 from app.scripts.import_moet_schools_3_provinces import build_rows
+from app.scripts import rebuild_school_kv_from_xls as rebuild
 from app.scripts.rebuild_school_kv_from_xls import source_rows_for_apply
 
 pytestmark = pytest.mark.unit
@@ -178,3 +182,32 @@ def test_nap_lai_xls_bo_qua_dong_nguon_mang_ma_NB():
     ]
     ra = source_rows_for_apply(nguon, {"66", "52"})
     assert [r["name"] for r in ra] == ["A", "D"]
+
+
+# ---------- bộ nạp danh mục Bộ KHÔNG hạ cấp liên cấp do Admin đặt (owner 22-11 câu 3) ----------
+
+
+@pytest.mark.parametrize(
+    "dang_co,tu_nguon,ket_qua",
+    [
+        ("THCS_THPT", "THPT", "THCS_THPT"),  # Admin đã sửa liên cấp ⇒ giữ, không hạ
+        ("THCS_THPT", "OTHER", "THCS_THPT"),
+        ("THPT", "THPT", "THPT"),
+        ("THPT", "OTHER", "OTHER"),  # cấp không được bảo vệ ⇒ theo nguồn như cũ
+        ("OTHER", "THPT", "THPT"),
+    ],
+)
+def test_bo_nap_bo_khong_ha_cap_lien_cap(dang_co, tu_nguon, ket_qua):
+    assert moet_loader_level(dang_co, tu_nguon) == ket_qua
+
+
+def test_cap_duoc_bao_ve_chi_gom_lien_cap():
+    assert MOET_LOADER_PROTECTED_LEVELS == frozenset({"THCS_THPT"})
+
+
+def test_nap_lai_xls_kiem_truong_lien_cap_truoc_khi_xoa():
+    """Nối dây: ``apply`` gọi chốt DỪNG trước câu UPDATE / DELETE đầu tiên (đường xoá-rồi-tạo không có khoá đối chiếu
+    tin cậy ⇒ dừng cả lượt thay vì hạ cấp)."""
+    nguon = inspect.getsource(rebuild.apply)
+    goi = nguon.index("await guard_no_protected_region_schools(db, old_names)")
+    assert goi < nguon.index("update(VnSchool)") < nguon.index("sa_delete(VnSchool)")

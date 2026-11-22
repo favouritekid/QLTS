@@ -105,13 +105,20 @@ export const thcsMappingApplyResultSchema = z.object({
   /** Cờ cho phép chạy thật (BE). False ⇒ nút "Áp thật" bị khoá. */
   apply_enabled: z.boolean(),
   eligible_statuses: z.array(z.string()),
+  /** Năm tuyển sinh lượt áp ghép được chạm (owner câu 2). */
+  academic_year: z.number().int(),
   rows_to_change: z.number().int().min(0),
   profiles_to_change: z.number().int().min(0),
+  /** Phần của hồ sơ NHÁP trong số sẽ đổi (owner câu 1: báo riêng). */
+  draft_rows_to_change: z.number().int().min(0),
+  draft_profiles_to_change: z.number().int().min(0),
   same_year_rows: z.number().int().min(0),
   same_year_profiles: z.number().int().min(0),
   manual_kv_override_profiles: z.number().int().min(0),
   skipped_status_profiles: z.number().int().min(0),
   skipped_status_rows: z.number().int().min(0),
+  skipped_year_profiles: z.number().int().min(0),
+  skipped_year_rows: z.number().int().min(0),
   skipped_decision_profiles: z.number().int().min(0),
   unmapped_rows: z.number().int().min(0),
   unusable_mappings: z.number().int().min(0),

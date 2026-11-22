@@ -153,7 +153,7 @@ export function ThcsMappingClient() {
                       <TableCell className="text-right tabular-nums">
                         {g.profile_count}
                         <div className="text-muted-foreground text-xs">
-                          chờ xét: {g.eligible_profile_count}
+                          trong phạm vi áp: {g.eligible_profile_count}
                         </div>
                       </TableCell>
                       <TableCell className="text-right tabular-nums">

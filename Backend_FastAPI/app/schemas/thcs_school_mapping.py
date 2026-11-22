@@ -34,7 +34,9 @@ class ThcsNameGroup(BaseModel):
     variants: list[ThcsNameVariant]
     row_count: int = Field(description="Số dòng THCS gõ tay (hồ sơ chưa rút)")
     profile_count: int = Field(description="Số hồ sơ chưa rút có dòng thuộc nhóm")
-    eligible_profile_count: int = Field(description="Số hồ sơ thuộc trạng thái lượt áp ghép được chạm")
+    eligible_profile_count: int = Field(
+        description="Số hồ sơ thuộc phạm vi lượt áp ghép (nháp + chờ xét, năm 2026; chưa xét Quyết định)"
+    )
     same_year_row_count: int = Field(description="Số dòng năm bắt đầu = năm kết thúc (y→y)")
     mapping: Optional[ThcsGroupMapping] = None
 
@@ -101,8 +103,13 @@ class ThcsMappingApplyResult(BaseModel):
     applied: bool
     apply_enabled: bool = Field(description="Cờ cho phép chạy thật (giao diện ẩn / khoá nút áp thật khi False)")
     eligible_statuses: list[str]
+    academic_year: int = Field(description="Năm tuyển sinh lượt áp ghép được chạm (owner câu 2)")
     rows_to_change: int
     profiles_to_change: int
+    draft_rows_to_change: int = Field(description="Trong số dòng sẽ đổi: dòng ở hồ sơ NHÁP")
+    draft_profiles_to_change: int = Field(
+        description="Trong số hồ sơ sẽ đổi: hồ sơ NHÁP — cán bộ đang mở form sẽ gặp xung đột phiên bản khi lưu"
+    )
     same_year_rows: int = Field(description="Trong số dòng sẽ đổi: dòng y→y (năm bắt đầu = năm kết thúc)")
     same_year_profiles: int
     manual_kv_override_profiles: int = Field(
@@ -110,6 +117,8 @@ class ThcsMappingApplyResult(BaseModel):
     )
     skipped_status_profiles: int
     skipped_status_rows: int
+    skipped_year_profiles: int = Field(description="Hồ sơ đúng trạng thái nhưng khác năm tuyển sinh — không chạm")
+    skipped_year_rows: int
     skipped_decision_profiles: int = Field(description="Hồ sơ gắn Quyết định / dấu AppSheet — không chạm")
     unmapped_rows: int = Field(description="Dòng THCS gõ tay ở hồ sơ đủ điều kiện mà nhóm chưa ghép (dùng được)")
     unusable_mappings: int = Field(description="Dòng ghép trỏ tới trường đã ngừng / sai cấp — bỏ qua")
