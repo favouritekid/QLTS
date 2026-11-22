@@ -347,5 +347,7 @@ async def _handle_withdraw(
             "reason": "Ứng viên tự rút hồ sơ qua magic-link",
             "version": profile.version,
         },
+        # F230: ``get_token_for_confirm`` đã khoá hồ sơ ⇒ khoá năm bản không chờ (409 "thử lại" khi cấu hình cùng năm đang chạy).
+        profile_locked_by_caller=True,
     )
     return result_profile, callback

@@ -35,8 +35,8 @@ ngành) không giữ khoá nào khác khi chờ.
 
 Dây chuyền xoá loại hình / xoá ngành khoá DÒNG học vụ bằng MỘT câu ``FOR NO KEY UPDATE ORDER BY id`` TRƯỚC câu UPDATE (Codex
 lượt 3): chỉ ``UPDATE … WHERE offering_id`` thì khoá theo thứ tự QUÉT (vật lý / chỉ mục), có thể ngược chiều id ⇒ vòng chờ ``40P01``
-với ghi nhận / Phê duyệt hàng loạt (``quota_occupancy_service.lock_quota_cells``: ``FOR UPDATE`` id tăng dần; Phê duyệt KHÔNG lấy
-khoá năm, ghi nhận lấy khoá năm CHIA SẺ ở đầu thao tác — đoạn dưới).
+với ghi nhận / Phê duyệt hàng loạt (``quota_occupancy_service.lock_quota_cells``: ``FOR UPDATE`` id tăng dần; ghi nhận và — từ F230 —
+Phê duyệt cũng lấy khoá năm CHIA SẺ trước khoá dòng — đoạn dưới).
 
 NGƯỜI ĐỌC CHIA SẺ (PR-1 GĐ1 — P2 Codex, 21-11): bốn thao tác Quyết định Hội đồng (ghi nhận / bổ sung, điều chỉnh, huỷ hiệu lực, huỷ
 ghi nhận — ``quota_occupancy_service.lock_years_of_change``) dò ô chỉ tiêu theo CẶP (loại hình, năm) nên cần tập học vụ của năm KHÔNG
@@ -46,6 +46,13 @@ khi CHƯA giữ khoá dòng nào (đúng thứ tự "[khoá năm] → lượt g�
 năm thì không giữ gì; đường giữ khoá năm độc quyền không bao giờ chờ dòng hồ sơ / văn bản Hội đồng ⇒ không vòng chờ. Đường nào cần khoá
 năm ĐỘC QUYỀN trong cùng thao tác (vd GĐ2-C ký Quyết định của lần xét) lấy NGAY bản độc quyền thay cho bản chia sẻ — không lấy chia sẻ
 rồi nâng (hai giao dịch cùng nâng ⇒ vòng chờ).
+
+F230 (Codex 22-11 A-P4, owner Q1–Q5): các đường đổi số chỗ NGOÀI văn bản Hội đồng cũng là người đọc chia sẻ
+(``quota_occupancy_service.lock_years_of_profiles`` / ``try_lock_years_of_profiles``). Phê duyệt đơn / lô, Rút, Chốt rút sau hoàn
+tiền lấy bản CÓ CHỜ trước khi khoá dòng hồ sơ (dòng tiền / mã đường dẫn thư giữ trước đó thì được — đường giữ khoá năm độc quyền không
+khoá các bảng ấy). Công bố, Chuyển chờ, Trả về Nháp nhận hồ sơ ĐÃ khoá ở ``deps.py`` ⇒ chỉ được dùng bản KHÔNG CHỜ
+(:func:`try_lock_review_years_shared`): chờ khoá năm khi đang giữ dòng hồ sơ sẽ khép vòng với người lấy khoá năm độc quyền rồi mới khoá
+hồ sơ (GĐ2-C §7.2) — bản không chờ không bao giờ chờ nên không khép vòng; không lấy được ⇒ nơi gọi trả 409 "thử lại" (owner Q3).
 
 Khoá DÒNG học vụ lấy SAU khoá năm dùng chế độ YẾU NHẤT đủ việc, lấy MỘT lần, không nâng trong cùng giao dịch (GĐ2-F1 lượt 3b):
 PUT bảng chỉ tiêu chỉ ghi ``annual_admission_quota`` (không cột nào thuộc khoá duy nhất / khoá ngoại) ⇒ ``FOR NO KEY UPDATE`` —
@@ -85,3 +92,18 @@ async def lock_review_years_shared(db: AsyncSession, academic_years: Iterable[Op
         await db.execute(
             text("SELECT pg_advisory_xact_lock_shared(:ns, :k)"), {"ns": REVIEW_YEAR_NS, "k": nam}
         )
+
+
+async def try_lock_review_years_shared(db: AsyncSession, academic_years: Iterable[Optional[int]]) -> bool:
+    """Bản KHÔNG CHỜ của :func:`lock_review_years_shared` (``pg_try_advisory_xact_lock_shared``), năm TĂNG DẦN. Trả ``False`` ngay
+    ở năm đầu tiên không lấy được (một giao dịch đang giữ — hoặc đang xếp hàng chờ — khoá năm ĐỘC QUYỀN); các năm đã lấy trước đó vẫn
+    giữ tới hết giao dịch (nơi gọi trả lỗi ⇒ giao dịch lùi ⇒ nhả). Cho giao dịch ĐÃ giữ dòng hồ sơ (đoạn F230 ở đầu mô-đun)."""
+    for nam in sorted({int(y) for y in academic_years if y is not None}):
+        ok = (
+            await db.execute(
+                text("SELECT pg_try_advisory_xact_lock_shared(:ns, :k)"), {"ns": REVIEW_YEAR_NS, "k": nam}
+            )
+        ).scalar()
+        if not ok:
+            return False
+    return True

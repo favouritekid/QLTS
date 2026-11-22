@@ -1694,6 +1694,12 @@ class RefundService:
             # >0 → NEITHER finalizes → the profile is stranded in
             # withdrawal_pending with money fully refunded. Re-read status under
             # the lock (an admin cancel-withdrawal may have moved it to draft).
+            # F230 (Codex 22-11 A-P4): chốt rút có thể TRẢ chỗ Phần B (em còn dòng Quyết định hiệu lực) ⇒ khoá năm CHIA SẺ
+            # TRƯỚC khoá hồ sơ (sau dòng phiếu hoàn / học phí — người giữ khoá năm độc quyền không khoá bảng tiền); ô khoá ở
+            # ``_finalize_withdrawn``.
+            from app.services import quota_occupancy_service as _qos
+
+            quota_years = await _qos.lock_years_of_profiles(self.db, [profile.id])
             locked_profile = (
                 await self.db.execute(
                     select(models.AdmissionProfile)
@@ -1723,6 +1729,7 @@ class RefundService:
                                 "Hoàn tất hoàn tiền — chốt rút hồ sơ "
                                 f"#{locked_profile.id}"
                             ),
+                            locked_years=quota_years,
                         )
                     )
                     # (Phantom-invoice cleanup lives INSIDE _finalize_withdrawn,

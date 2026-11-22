@@ -53,6 +53,7 @@ from ..schemas.admission import DEFAULT_UPLOAD_CONFIG
 from ..core.constants import UserRole, SYSTEM_CONSULTATION_METHOD
 from .admission_state_service import transition as state_transition
 from . import quota_occupancy_service as _qos
+from typing import Iterable  # F230: ``_finalize_withdrawn(locked_years=…)`` — dòng riêng, không chạm dòng ``typing`` N4 sửa
 from ..repositories.council_decision_repository import db_error_codes
 from .commission_service import safe_check_commission_on_status_change
 from .notification_bundle import (
@@ -340,6 +341,9 @@ async def _lock_before_batch_approval(db: AsyncSession, profile_ids: List[int]) 
     ids = sorted({int(x) for x in profile_ids})
     if not ids:
         return {}
+    # F230 (Codex 22-11 A-P4): khoá năm CHIA SẺ TRƯỚC khoá hồ sơ — lệnh tạo / dời năm học vụ (khoá năm độc quyền) không chen giữa
+    # bước dò và lúc commit ⇒ "hai lần dò đều rỗng" không còn để lọt học vụ vừa xuất hiện.
+    quota_years = await _qos.lock_years_of_profiles(db, ids)
     locked_profiles = (
         (
             await db.execute(
@@ -360,7 +364,14 @@ async def _lock_before_batch_approval(db: AsyncSession, profile_ids: List[int]) 
     for p in locked_profiles:
         ai, _ = await _resolve_quota_context(db, p, lock=False)
         probed[p.id] = ai.id if ai is not None else None
-    await _qos.lock_quota_cells(db, [a for a in probed.values() if a is not None], [])
+    # F230: MỘT lần khoá ô (F259) — học vụ cổng chỉ tiêu đã dò ∪ MỌI ô mà các em sẽ chiếm (ngành theo lead + năm, đường xét kiểu
+    # cũ, nguyện vọng trúng còn lại) — để ô thực sự tăng KHÁC ô đã dò cũng được khoá. Luật chặn không đổi (owner Q1).
+    await _qos.lock_quota_for_profiles(
+        db,
+        locked_years=quota_years,
+        profile_ids=[p.id for p in locked_profiles],
+        extra_ai_ids=[a for a in probed.values() if a is not None],
+    )
     return probed
 
 
@@ -10104,7 +10115,10 @@ async def approve_profile(
     # ✅ CRITICAL FIX #1.2: Pessimistic Locking (Row Lock)
     from sqlalchemy import select
     from sqlalchemy.orm import selectinload
-    
+
+    # F230 (Codex 22-11 A-P4): khoá năm CHIA SẺ TRƯỚC khoá hồ sơ (thứ tự PR-1) — học vụ không "xuất hiện" sau lần dò rỗng.
+    quota_years = await _qos.lock_years_of_profiles(db, [profile_id])
+
     stmt = (
         select(models.AdmissionProfile)
         .where(models.AdmissionProfile.id == profile_id)
@@ -10206,6 +10220,17 @@ async def approve_profile(
             "Hồ sơ còn nợ giấy tờ chưa bổ sung/xác minh đủ, không thể "
             "duyệt. Cần verify đủ giấy tờ trước khi duyệt."
         )
+
+    # F230 (Codex 22-11 A-P4; owner Q1): MỘT lần khoá ô (F259) — học vụ mà cổng chỉ tiêu dưới đây khoá (dò dưới khoá năm) ∪ MỌI
+    # ô em sẽ chiếm (ngành theo lead + năm, đường xét kiểu cũ, nguyện vọng trúng còn lại). Cổng chỉ tiêu chỉ còn khoá LẠI dòng đã
+    # giữ; luật chặn của nó KHÔNG đổi.
+    _gate_ai, _ = await _resolve_quota_context(db, profile, lock=False)
+    await _qos.lock_quota_for_profiles(
+        db,
+        locked_years=quota_years,
+        profile_ids=[profile.id],
+        extra_ai_ids=[_gate_ai.id] if _gate_ai is not None else [],
+    )
 
     # ADM-026: quota gate. Locks the OfferingAcademicInfo row before
     # counting committed seats so concurrent approve calls cannot blow the
@@ -12701,6 +12726,7 @@ async def _finalize_withdrawn(
     *,
     from_status: str,
     reason: str,
+    locked_years: Iterable[int],
 ) -> tuple[models.AdmissionProfile, Any]:
     """Transition a (row-locked) profile to terminal ``withdrawn`` + build the
     paired notification bundle. Shared by:
@@ -12716,7 +12742,12 @@ async def _finalize_withdrawn(
     the audit ``from_status`` and the notification ``old_status``. The profile
     is mutated in place AND returned (``state_transition`` may hand back a
     different instance). Caller must hold the profile row lock.
+
+    F230 (Codex 22-11 A-P4; owner Q4): rút / chốt rút TRẢ chỗ (Phần A của em đang chiếm chỗ; Phần B khi em còn dòng
+    Quyết định hiệu lực) ⇒ khoá MỘT lần mọi ô của em (``_qos.lock_quota_for_profiles``) TRƯỚC khi chuyển — chỉ khoá, không
+    cảnh báo. ``locked_years`` (bắt buộc) = khoá năm chia sẻ nơi gọi đã lấy TRƯỚC khi khoá hồ sơ.
     """
+    await _qos.lock_quota_for_profiles(db, locked_years=locked_years, profile_ids=[profile.id])
     _actor_id: Optional[int] = actor.id if actor else None
     _actor_name: str = (
         (actor.full_name or actor.username) if actor else "Ứng viên (magic-link)"
@@ -12954,6 +12985,8 @@ async def withdraw_profile(
     profile_id: int,
     actor: Optional[models.User],
     data: Dict[str, Any],
+    *,
+    profile_locked_by_caller: bool = False,
 ) -> tuple[models.AdmissionProfile, Any]:
     """
     Withdraw admission profile.
@@ -12980,6 +13013,15 @@ async def withdraw_profile(
     """
     from sqlalchemy import select
     from sqlalchemy.orm import selectinload
+
+    # F230 (Codex 22-11 A-P4): rút em đang chiếm chỗ TRẢ chỗ ⇒ khoá năm CHIA SẺ TRƯỚC khoá hồ sơ (thứ tự PR-1); ô khoá ở
+    # ``_finalize_withdrawn``. ``profile_locked_by_caller`` = True (đường dẫn thư: ``get_token_for_confirm`` khoá HỒ SƠ rồi mã,
+    # TRƯỚC khi gọi đây) ⇒ chỉ được dùng bản KHÔNG CHỜ (chờ khoá năm khi đang giữ dòng hồ sơ khép vòng với người lấy khoá năm
+    # độc quyền rồi mới khoá hồ sơ) — cấu hình cùng năm đang chạy ⇒ 409 "thử lại".
+    if profile_locked_by_caller:
+        quota_years = await _qos.try_lock_years_of_profiles(db, [profile_id])
+    else:
+        quota_years = await _qos.lock_years_of_profiles(db, [profile_id])
 
     stmt = (
         select(models.AdmissionProfile)
@@ -13065,6 +13107,7 @@ async def withdraw_profile(
         return await _finalize_withdrawn(
             db, profile, actor,
             from_status=_old_status_for_audit, reason=data["reason"],
+            locked_years=quota_years,
         )
 
     from app.services.fee_calculation_service import FeeCalculationService
@@ -13142,6 +13185,7 @@ async def withdraw_profile(
         return await _finalize_withdrawn(
             db, profile, actor,
             from_status=_old_status_for_audit, reason=data["reason"],
+            locked_years=quota_years,
         )
 
     # → withdrawal_pending. Lead is HELD at its current status (no-op sync); the
