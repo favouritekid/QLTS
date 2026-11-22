@@ -147,7 +147,7 @@ async def create_grant(
         reason=reason,
         source="api",
         ip_address=meta.ip_address,
-        user_agent=(meta.user_agent or None) and meta.user_agent[:500],
+        user_agent=meta.user_agent or None,  # cột tự cắt theo độ dài (TruncatedString, PR-D F12)
     )
     log.info("cross_review_granted", grant_id=grant.id, grantee_user_id=grant.grantee_user_id, unit_id=grant.unit_id)
     return _grant_view(grant, True)
@@ -183,7 +183,7 @@ async def _write_revocations(
             reason=reason,
             source="api",
             ip_address=meta.ip_address,
-            user_agent=(meta.user_agent or None) and meta.user_agent[:500],
+            user_agent=meta.user_agent or None,  # cột tự cắt theo độ dài (TruncatedString, PR-D F12)
         )
 
 

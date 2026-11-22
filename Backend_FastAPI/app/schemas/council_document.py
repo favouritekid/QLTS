@@ -451,6 +451,13 @@ class CouncilQuotaWarningOut(BaseModel):
     # Vòng giao diện (đặc tả 3.8): tên ngành của học vụ / tên hiển thị của đường xét — chỉ để hiển thị; thiếu ⇒ None.
     # Bản cảnh báo đã lưu TRƯỚC thay đổi này không có khoá ⇒ None.
     nhan: Optional[str] = None
+    # PR-1 GĐ1 (C2 — owner 21-11): ô HIỆN TẠI (Phần A) TĂNG vì em mất dòng Quyết định hiệu lực mà vẫn chiếm chỗ (điều chỉnh bỏ
+    # tên / huỷ hiệu lực / huỷ ghi nhận). ``da_dung_truoc`` = số chính TRƯỚC thao tác (ô ngành: mức lớn nhất trong hai cách
+    # đếm); ``cau`` = câu owner (ô ngành / ô đường xét). Cảnh báo ô CHỤP (ghi nhận / dòng thêm / dòng bật lại) không có ba khoá
+    # ⇒ None.
+    o_hien_tai: Optional[bool] = None
+    da_dung_truoc: Optional[int] = None
+    cau: Optional[str] = None
 
 
 class CouncilDecisionWriteOut(CouncilDecisionOut):
@@ -462,7 +469,7 @@ class CouncilDecisionWriteOut(CouncilDecisionOut):
     ma_luot_gui: Optional[str] = None
     lap_lai: bool = False
     so_lieu: Optional[Dict[str, Any]] = None
-    #: N9 — chỉ thao tác ghi nhận (``POST /decisions``) điền; rỗng = không ô nào vượt.
+    #: N9 / K-1 / C2 — ghi nhận, điều chỉnh, huỷ hiệu lực, huỷ ghi nhận điền; rỗng = không ô nào vượt.
     canh_bao_vuot_chi_tieu: List[CouncilQuotaWarningOut] = Field(default_factory=list)
 
 
