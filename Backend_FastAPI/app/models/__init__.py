@@ -76,6 +76,10 @@ from .admission_quota_table import (  # noqa: E402
     AdmissionQuotaTable,
 )
 from . import admission_quota_ddl  # noqa: E402,F401
+# GĐ2-C C1: quyền "Thư ký Hội đồng" gán theo từng người + trigger "chỉ thu hồi, không xoá" (bản cho create_all(); bản thật:
+# migration gd2c20261122).
+from .admission_review_secretary import AdmissionReviewSecretaryGrant  # noqa: E402
+from . import admission_review_secretary_ddl  # noqa: E402,F401
 
 # Admission Config Domain (Phase 1: Relational admission system)
 from .admission_config import (
@@ -263,6 +267,7 @@ __all__ = [
     "AdmissionQuotaTable",
     "AdmissionQuotaGroup",
     "AdmissionQuotaGroupMember",
+    "AdmissionReviewSecretaryGrant",  # GĐ2-C C1
     "ProfileSubjectScore",
     "ProfileDocument",
     "DocumentAuditLog",  # Audit trail for document operations

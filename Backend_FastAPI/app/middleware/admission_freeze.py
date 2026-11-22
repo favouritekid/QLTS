@@ -63,6 +63,8 @@ ADMISSION_ROUTER_MODULES: Final[frozenset[str]] = frozenset(
         "app.routers.council_documents",
         # Lần xét tuyển GĐ2 (GĐ2-A: bảng chỉ tiêu năm / nhóm ngành) — dưới tiền tố v1 /api/admission-config.
         "app.routers.admission_review",
+        # Lần xét tuyển GĐ2-C C1: quyền "Thư ký Hội đồng" (Admin gán / thu hồi) — dưới tiền tố v1 /api/admission-config.
+        "app.routers.admission_review_secretary",
         "app.routers.admin_backfill",
         "app.routers.admin_priority_config",
         "app.routers.admin_v2_admission_round",
@@ -191,6 +193,9 @@ ADMISSION_WRITE_ROUTES: Final[tuple[tuple[str, str], ...]] = (
     ("PUT", "/api/admission-config/quota-tables/{academic_year}"),
     ("POST", "/api/admission-config/quota-tables/{academic_year}/lock"),
     ("POST", "/api/admission-config/quota-tables/{academic_year}/unlock"),
+    # Lần xét tuyển GĐ2-C C1 (22-11): gán / thu hồi quyền Thư ký Hội đồng — rà tay từ route thật.
+    ("POST", "/api/admission-config/review-secretaries"),
+    ("POST", "/api/admission-config/review-secretaries/{grant_id}/revoke"),
     ("POST", "/api/admission-config/criteria"),
     ("DELETE", "/api/admission-config/criteria/{criteria_id}"),
     ("PUT", "/api/admission-config/criteria/{criteria_id}"),

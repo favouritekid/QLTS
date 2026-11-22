@@ -41,6 +41,7 @@ from .routers import (
     admission_paths,  # ✅ PHASE 1: Admission Configuration Console
     council_documents,  # Lần xét tuyển GĐ1: kho mẫu + bộ văn bản Hội đồng
     admission_review,  # Lần xét tuyển GĐ2: bảng chỉ tiêu năm / nhóm ngành (GĐ2-A)
+    admission_review_secretary,  # Lần xét tuyển GĐ2-C C1: quyền "Thư ký Hội đồng" (Admin gán / thu hồi)
     admin_v2_casbin,  # ✅ T0-5 cold cutover: admin-only Casbin reload endpoint
     admin_v2_admission_round,  # ✅ #184 Phase 2 v8.2 PR-2A v2: year-level rounds CRUD + bulk-create + extend
     admin_v2_path_subject_group,  # ✅ #184 Phase 2 v8.2 PR-2D: path-level subject group config + clone endpoint
@@ -845,6 +846,7 @@ fastapi_app.include_router(admission_config.router, prefix="/api")  # ✅ PHASE 
 fastapi_app.include_router(admission_paths.router, prefix="/api")  # ✅ PHASE 1: Admission Configuration Console
 fastapi_app.include_router(council_documents.router, prefix="/api")  # Văn bản Hội đồng (dưới /api/admission-config — bị đóng băng)
 fastapi_app.include_router(admission_review.router, prefix="/api")  # GĐ2: bảng chỉ tiêu năm (dưới /api/admission-config — bị đóng băng)
+fastapi_app.include_router(admission_review_secretary.router, prefix="/api")  # GĐ2-C C1: quyền Thư ký Hội đồng (dưới /api/admission-config — bị đóng băng)
 fastapi_app.include_router(admin_v2_casbin.router)  # ✅ T0-5: POST /api/v2/admin/casbin/reload (router declares full prefix)
 fastapi_app.include_router(admin_v2_system_config.router)  # ✅ #184 PR-1D: GET/PATCH /api/v2/admin/system-config (router declares full prefix)
 fastapi_app.include_router(admin_v2_admission_round.router)  # ✅ #184 Phase 2 v8.2 PR-2A v2: year-level rounds (router declares full prefix)

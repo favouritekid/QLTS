@@ -57,7 +57,7 @@ C = UserRefGroup.CURRENT_STATE
 O = UserRefGroup.OWNED_CASCADE
 I = UserRefGroup.IGNORE
 
-#: MỘT nguồn — xếp theo (bảng, cột). Đo 17-11: 94 cột cũ + 8 cột GĐ1b = 102; GĐ2-A thêm 1 = 103.
+#: MỘT nguồn — xếp theo (bảng, cột). Đo 17-11: 94 cột cũ + 8 cột GĐ1b = 102; GĐ2-A thêm 1 = 103; GĐ2-C C1 thêm 3 = 106.
 USER_REFERENCES: Tuple[UserRef, ...] = (
     UserRef("_admission_backfill_exceptions", "resolved_by_user_id", A),
     UserRef("accounting_period", "closed_by_id", A),
@@ -74,6 +74,12 @@ USER_REFERENCES: Tuple[UserRef, ...] = (
     UserRef("admission_profile_status_history", "transitioned_by_user_id", A),
     # GĐ2-A: người khoá bảng chỉ tiêu năm (RESTRICT). Mở khoá xoá cột này — vết còn ở ``entity_audit_log``.
     UserRef("admission_quota_table", "locked_by_user_id", A),
+    # GĐ2-C C1: quyền "Thư ký Hội đồng" (RESTRICT, chỉ thu hồi không xoá). Người được gán / người gán / người thu hồi đều là
+    # vết thao tác của Hội đồng (người đề xuất ≠ người khoá đọc lại ở đây) ⇒ chặn xoá, khuyên khoá tài khoản — khuôn
+    # ``document_cross_review_grant`` + thiết kế GĐ2-C §2 "mọi cột người dùng … một dòng BLOCK_ACTOR".
+    UserRef("admission_review_secretary_grant", "granted_by_user_id", A),
+    UserRef("admission_review_secretary_grant", "revoked_by_user_id", A),
+    UserRef("admission_review_secretary_grant", "user_id", A),
     UserRef("assignment_decision_log", "assigned_officer_id", H),
     UserRef("assignment_log", "officer_id", H),
     UserRef("collaborator", "approved_by_id", A),

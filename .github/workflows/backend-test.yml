@@ -1479,6 +1479,18 @@ jobs:
               tests/services/test_organization.py
               tests/unit/test_gd2f_trigger_luat_b_lockin.py
               tests/integration/test_gd2f_trigger_luat_b_migration.py
+          # GĐ2-C C1 (22-11): quyền "Thư ký Hội đồng" — bảng quyền + migration, route Admin gán / thu hồi, cổng
+          # `deps.require_review_secretary` (hai phiên, T17), tự thu hồi khi khoá / đổi vai, K4 (sổ + hai phiên). Lát RIÊNG, tên
+          # KHÁC `Tier 5k` của GĐ2-B (nhánh song song) để hai nhánh gộp không đè nhau. Ngoài mọi tier thì required check vẫn xanh
+          # mà không chạy (CLAUDE.md §11). Ghim WHOLE-FILE. `tests/api/gd2c_thu_ky_tro_giup.py` là trợ giúp, KHÔNG phải tệp test.
+          - tier: Tier 5l — GĐ2-C Thư ký Hội đồng (C1)
+            tests: >-
+              tests/unit/test_gd2c_c1_ddl_lockin.py
+              tests/integration/test_gd2c_c1_rang_buoc_db.py
+              tests/integration/test_gd2c_c1_migration.py
+              tests/api/test_gd2c_c1_thu_ky_api.py
+              tests/api/test_gd2c_c1_thu_ky_cong.py
+              tests/api/test_gd2c_c1_thu_ky_k4_hai_phien.py
 
     env:
       APP_ENV: test

@@ -255,7 +255,15 @@ async def revoke_grants_on_account_change(
     + nhật ký (:func:`_write_revocations`). Vai / trạng thái CŨ đọc DƯỚI khoá dòng ``user`` (PR-B lượt 2 — cùng khuôn điểm
     chặn 4 của Codex: không quyết bằng bản đọc từ đầu yêu cầu, vì giữa đó tài khoản có thể vừa được trả vai / mở khoá và
     cấp quyền mới). Không commit; mọi lỗi ném ra ⇒ người gọi KHÔNG commit ⇒ rollback CẢ việc đổi vai / khoá LẪN việc thu
-    hồi. Quyền đã thu hồi không bao giờ được khôi phục (mở khoá / trả vai ⇒ Admin cấp mới). Trả id các quyền vừa thu hồi."""
+    hồi. Quyền đã thu hồi không bao giờ được khôi phục (mở khoá / trả vai ⇒ Admin cấp mới). Trả id các quyền DUYỆT CHÉO vừa
+    thu hồi.
+
+    GĐ2-C C1 (owner C1 22-11 "quyền hết khi tài khoản bị khoá / xoá theo luật thu hồi đã có ở GĐ1b"): CÙNG hàm này thu hồi
+    luôn quyền "Thư ký Hội đồng" (``review_secretary_service``) — vị từ riêng (vai được giữ quyền là Quản lý / Cán bộ), cùng
+    câu lý do, cùng giao dịch, cùng người thao tác. Thứ tự khoá: người → quyền duyệt chéo → quyền Thư ký (mọi người gọi đi
+    qua đây nên thứ tự giữa hai bảng quyền chỉ nằm ở MỘT chỗ)."""
+    from app.services import review_secretary_service as secretary
+
     if new_role is None and new_status is None:
         return []
     with db.no_autoflush:  # đọc dòng TRONG CSDL (giá trị cũ), không xả trước thay đổi đang chờ của chính người ấy
@@ -263,15 +271,24 @@ async def revoke_grants_on_account_change(
     if locked is None:
         return []
     reason = auto_revoke_reason(old_role=locked.role, old_status=locked.status, new_role=new_role, new_status=new_status)
-    if reason is None:
+    secretary_reason = secretary.auto_revoke_reason(
+        old_role=locked.role, old_status=locked.status, new_role=new_role, new_status=new_status
+    )
+    if reason is None and secretary_reason is None:
         return []
     if actor_id is None:
         # Không có người thao tác thì không ghi được ``revoked_by_user_id`` đúng khuôn — fail-closed.
         raise RuntimeError("revoke_grants_on_account_change: thiếu người thao tác")
-    grants = await repo.lock_active_grants_of_user_for_update(db, user_id)
-    if grants:
-        await _write_revocations(db, grants, admin_id=actor_id, reason=reason, meta=request_meta or RequestMeta())
-        log.info("cross_review_auto_revoked", user_id=user_id, grant_ids=[g.id for g in grants])
+    grants: List[models.DocumentCrossReviewGrant] = []
+    if reason is not None:
+        grants = await repo.lock_active_grants_of_user_for_update(db, user_id)
+        if grants:
+            await _write_revocations(db, grants, admin_id=actor_id, reason=reason, meta=request_meta or RequestMeta())
+            log.info("cross_review_auto_revoked", user_id=user_id, grant_ids=[g.id for g in grants])
+    if secretary_reason is not None:
+        await secretary.revoke_on_account_change(
+            db, user_id=user_id, actor_id=actor_id, reason=secretary_reason, request_meta=request_meta
+        )
     return [g.id for g in grants]
 
 
