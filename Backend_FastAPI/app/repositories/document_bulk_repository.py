@@ -599,6 +599,20 @@ async def lock_user_no_key_update(db: AsyncSession, user_id: int) -> Optional[An
     ).first()
 
 
+async def lock_user_for_update(db: AsyncSession, user_id: int) -> Optional[Any]:
+    """Dòng người dùng ``FOR UPDATE`` — đúng khoá của ``DELETE`` (K4) và của ``UPDATE`` ĐỔI cột khoá (cột có chỉ mục duy
+    nhất dùng được cho khoá ngoại: ``username``, ``email`` — ``user_deletion_policy.USER_KEY_COLUMNS``). Xung đột MỌI khoá
+    dòng khác, kể cả ``FOR KEY SHARE`` của khoá ngoại. Trả hàng ``(id, role, status)`` đọc DƯỚI khoá; ``None`` = dòng không
+    còn. Chỉ ``user_deletion_policy.lock_users_in_id_order`` gọi (thứ tự khoá dòng ``user`` ở MỘT nơi)."""
+    return (
+        await db.execute(
+            select(models.User.id, models.User.role, models.User.status)
+            .where(models.User.id == user_id)
+            .with_for_update()
+        )
+    ).first()
+
+
 async def lock_leads_share(db: AsyncSession, lead_ids: Sequence[int]) -> Dict[int, models.Lead]:
     """Lead ``FOR SHARE`` theo id TĂNG, đọc lại dưới khoá (``populate_existing``). Trả ``{id: Lead}`` các dòng còn."""
     if not lead_ids:

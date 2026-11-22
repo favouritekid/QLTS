@@ -21,6 +21,10 @@ Codex 22-11 (PR-B lượt 5 @``d6601383``):
   lô {A, U} (K4 khoá ``FOR UPDATE ORDER BY id``, id A < U ⇒ giữ A chờ U) ⇒ bế tắc ``40P01``. Nay mọi đường ghi tài khoản
   khoá người đích ∪ người được tham chiếu theo id TĂNG TRƯỚC mọi câu ghi (``user_deletion_policy.lock_users_in_id_order``):
   K4 chờ lệnh của A (đo bằng ``pg_blocking_pids`` từ kết nối thứ ba), lệnh của A xong, không lỗi CSDL nào.
+
+Codex 22-11 (PR-B lượt 6 @``160d7e97``) H1: ``UPDATE`` ĐỔI cột có chỉ mục duy nhất (email) cần ``FOR UPDATE`` — khoá người
+đích ``FOR NO KEY UPDATE`` rồi để PostgreSQL nâng lúc flush ⇒ chờ ``FOR KEY SHARE`` của bên kia GIỮA chừng ⇒ ``40P01``. Nay
+đổi THẬT cột khoá ⇒ khoá người đích ``FOR UPDATE`` ngay từ đầu (vẫn theo id tăng).
 """
 from __future__ import annotations
 
@@ -28,6 +32,7 @@ import asyncio
 
 import pytest
 
+from app import models, schemas
 from app.database import AsyncSessionLocal
 from app.repositories import document_bulk_repository as bulk_repo
 from app.repositories.collaborator_repository import CollaboratorRepository
@@ -323,3 +328,105 @@ async def test_hai_phien_admin_ghi_tai_khoan_trong_luc_admin_khac_xoa_lo_gom_ca_
         await cb.aclose()
     assert tt == "chan", f"lệnh xoá lô (B) phải CHỜ lệnh của A đang giữ khoá ({tt})"
     assert (ra.status_code, rb.status_code < 500, loi.loi) == (ma_a, True, {}), (ra.text, rb.status_code, rb.text)
+
+
+# ---------------------------------------------------------------------------------------------------- đổi email (Codex lượt 6 H1)
+async def test_cot_khoa_cua_bang_user_dung_bang_so_cot_khoa(client):
+    """Cột có chỉ mục DUY NHẤT thường (không một phần, không biểu thức) của ``user`` trong lược đồ THẬT = ``id`` ∪
+    ``USER_KEY_COLUMNS`` — thêm cột duy nhất mới (vd số điện thoại) mà quên ghi ⇒ ĐỎ: đổi cột ấy cũng cần ``FOR UPDATE``."""
+    from app.services.user_deletion_policy import USER_KEY_COLUMNS
+
+    cot = await hang(
+        "SELECT DISTINCT a.attname FROM pg_index i "
+        "JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey) "
+        "WHERE i.indrelid = '\"user\"'::regclass AND i.indisunique AND i.indpred IS NULL AND i.indexprs IS NULL"
+    )
+    assert {r["attname"] for r in cot} == {"id", *USER_KEY_COLUMNS}
+
+
+async def test_hai_admin_sua_email_cua_nhau_cung_luc_khong_be_tac(
+    client, monkeypatch, admin_user_in_db, lo_config, lo_routers  # noqa: F811
+):
+    """Admin A (id nhỏ) đổi email của Admin U, dừng NGAY SAU bước khoá người; U đổi email của A. U phải CHỜ đúng lệnh của
+    A (``pg_blocking_pids``); thả A ⇒ cả hai 200, 0 lỗi CSDL. Bản lượt 5: A giữ U ``NO KEY UPDATE`` + A ``KEY SHARE``, U lấy
+    được A ``NO KEY UPDATE`` + U ``KEY SHARE`` rồi cả hai cùng nâng lên ``FOR UPDATE`` lúc flush ⇒ ``40P01``."""
+    from app.services import user_deletion_policy
+
+    a = await _admin_dang_nhap_duoc("prb_l6_email_a")
+    u = await _admin_dang_nhap_duoc("prb_l6_email_u")
+    assert a["id"] < u["id"], "tiền đề: A có id nhỏ hơn U"
+    ca, ha = await dang_nhap(a)
+    cu, hu = await dang_nhap(u)
+    diem = Diem()
+    boc(monkeypatch, user_deletion_policy, "lock_users_in_id_order", diem)  # lần gọi ĐẦU (A sửa U) dừng SAU bước khoá
+    try:
+        with PidTheoNhan() as ghi, _LoiCsdl() as loi:
+            ta = asyncio.create_task(
+                goi("A", lambda: ca.put(f"/api/admin/users/{u['id']}", headers=ha, data={"email": "prb_l6_u_moi@example.com"}))
+            )
+            tb = None
+            try:
+                await asyncio.wait_for(diem.toi.wait(), 30)
+                tb = asyncio.create_task(
+                    goi("B", lambda: cu.put(f"/api/admin/users/{a['id']}", headers=hu, data={"email": "prb_l6_a_moi@example.com"}))
+                )
+                tt = await bi_chan_boi(tb, ghi, bi="B", boi="A")
+            finally:
+                diem.di.set()
+                if tb is None:  # A không tới điểm dừng: vẫn chờ A xong để không bỏ lại tác vụ treo
+                    await asyncio.gather(ta, return_exceptions=True)
+            ra, rb = await asyncio.gather(ta, tb)
+    finally:
+        await ca.aclose()
+        await cu.aclose()
+    assert tt == "chan", f"lệnh của U phải CHỜ lệnh của A đang giữ khoá ({tt})"
+    assert (ra.status_code, rb.status_code, loi.loi) == (200, 200, {}), (ra.text, rb.text)
+
+
+async def _dich_vu_sua_email(uid, actor_id, email):
+    from app.services import user_service
+
+    async with AsyncSessionLocal() as s:
+        nguoi = await s.get(models.User, uid)
+        await user_service.update_user(s, nguoi, schemas.UserUpdate(email=email), assigned_by_user_id=actor_id)
+        await s.commit()
+    return "xong"
+
+
+async def _dich_vu_xoa(uid, actor_id):
+    from app.services import user_service
+
+    async with AsyncSessionLocal() as s:
+        await user_service.delete_user(s, uid, actor_id=actor_id)
+        await s.commit()
+    return "xong"
+
+
+async def test_xoa_tai_khoan_trong_luc_nguoi_bi_xoa_sua_email_nguoi_xoa_khong_be_tac(
+    client, monkeypatch, admin_user_in_db, lo_config, lo_routers  # noqa: F811
+):
+    """U (id nhỏ) xoá A (không phải admin ⇒ K4 chỉ khoá A ``FOR UPDATE`` + U ``KEY SHARE``) trong lúc A đổi email của U.
+    Gọi THẲNG tầng dịch vụ (hai phiên riêng): đường HTTP cần A là Quản lý được sửa U — cấu hình quyền ngoài phạm vi phép đo
+    khoá. A dừng NGAY SAU bước khoá; K4 của U phải CHỜ đúng phiên của A; thả A ⇒ cả hai xong, 0 lỗi CSDL. Bản lượt 5: A giữ
+    U ``NO KEY UPDATE``, K4 lấy được U ``KEY SHARE`` rồi chờ A; A nâng U lên ``FOR UPDATE`` lúc flush ⇒ ``40P01``."""
+    from app.services import user_deletion_policy
+
+    u = await _admin_dang_nhap_duoc("prb_l6_xoa_u")
+    a = await tao_nguoi("prb_l6_xoa_a", "officer", lo_config["unit_id"])
+    assert u["id"] < a["id"], "tiền đề: U có id nhỏ hơn A"
+    diem = Diem()
+    boc(monkeypatch, user_deletion_policy, "lock_users_in_id_order", diem)  # lần gọi ĐẦU (A sửa U) dừng SAU bước khoá
+    with PidTheoNhan() as ghi, _LoiCsdl() as loi:
+        ta = asyncio.create_task(goi("A", lambda: _dich_vu_sua_email(u["id"], a["id"], "prb_l6_xoa_u_moi@example.com")))
+        tb = None
+        try:
+            await asyncio.wait_for(diem.toi.wait(), 30)
+            tb = asyncio.create_task(goi("B", lambda: _dich_vu_xoa(a["id"], u["id"])))
+            tt = await bi_chan_boi(tb, ghi, bi="B", boi="A")
+        finally:
+            diem.di.set()
+            if tb is None:
+                await asyncio.gather(ta, return_exceptions=True)
+        ra, rb = await asyncio.gather(ta, tb, return_exceptions=True)
+    assert tt == "chan", f"K4 (U xoá A) phải CHỜ phiên của A đang giữ khoá ({tt})"
+    assert (ra, rb, loi.loi) == ("xong", "xong", {}), (repr(ra), repr(rb))

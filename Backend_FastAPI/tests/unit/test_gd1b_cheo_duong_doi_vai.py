@@ -11,7 +11,9 @@ thế ghi vai / trạng thái) — phần ấy do grep trong báo cáo PR-B.
 from __future__ import annotations
 
 import ast
+import contextlib
 import pathlib
+from types import SimpleNamespace
 
 import pytest
 
@@ -111,11 +113,21 @@ def test_nguoi_goi_ham_gan_vai():
             assert _goi(nguoi_goi[key], HELPER), f"{key} đổi vai mà KHÔNG gọi {HELPER} cùng giao dịch"
 
 
+#: Bản sao của bản ghi phân công trên dòng ``user``: gán trên MỌI tên biến (chỉ ``user`` có hai cột này mang nghĩa ấy) …
+COT_BAN_SAO_PHAN_CONG = ("role", "current_assignment_id")
+#: … và ``unit_id`` — CHỈ trên tên biến chứa ``user`` (lead, dữ liệu tạo CTV, bộ lọc cũng có ``unit_id``).
+COT_BAN_SAO_PHAN_CONG_TEN_USER = ("unit_id",)
+
+
 def test_chi_ham_phan_cong_gan_vai():
     """PR-B lượt 5 (Codex 22-11 B-P1, CLAUDE.md §7): vai CSDL có HAI nơi lưu — ``user.role`` (bản sao) và bản ghi phân công
     đang hiệu lực (``user_unit_assignment.role`` — nguồn chuẩn, bộ chọn người nhận thông báo đọc ở đây). Chỉ MỘT hàm được gán
-    ``.role``: ``_create_or_update_user_assignment`` — hàm ấy ghi CẢ HAI. Đường mới gán ``<tên>.role = …`` thẳng ⇒ ĐỎ."""
-    gan = set()
+    ``.role``: ``_create_or_update_user_assignment`` — hàm ấy ghi CẢ HAI. Đường mới gán ``<tên>.role = …`` thẳng ⇒ ĐỎ.
+
+    PR-B lượt 6 (Codex 22-11 H5): cùng luật cho hai bản sao còn lại — ``user.unit_id`` và ``user.current_assignment_id``
+    (gỡ đơn vị mà không đóng phân công chính là lỗi P1). Giới hạn: không bắt ``setattr`` động / ``update(User)`` /
+    ``BaseRepository.update`` (setattr không lọc — hiện chưa ai gọi trên ``UserRepository``)."""
+    gan = {c: set() for c in COT_BAN_SAO_PHAN_CONG + COT_BAN_SAO_PHAN_CONG_TEN_USER}
     for p in APP.rglob("*.py"):
         rel = p.relative_to(APP).as_posix()
         for f in ast.walk(ast.parse(p.read_text(encoding="utf-8"))):
@@ -123,9 +135,15 @@ def test_chi_ham_phan_cong_gan_vai():
                 continue
             for n in ast.walk(f):
                 targets = n.targets if isinstance(n, ast.Assign) else [n.target] if isinstance(n, (ast.AugAssign, ast.AnnAssign)) else []
-                if any(isinstance(t, ast.Attribute) and isinstance(t.value, ast.Name) and t.attr == "role" for t in targets):
-                    gan.add((rel, f.name))
-    assert gan == {("services/user_service.py", "_create_or_update_user_assignment")}, sorted(gan)
+                for t in targets:
+                    if not (isinstance(t, ast.Attribute) and isinstance(t.value, ast.Name)):
+                        continue
+                    if t.attr in COT_BAN_SAO_PHAN_CONG or (
+                        t.attr in COT_BAN_SAO_PHAN_CONG_TEN_USER and "user" in t.value.id.lower()
+                    ):
+                        gan[t.attr].add((rel, f.name))
+    chi_helper = {("services/user_service.py", "_create_or_update_user_assignment")}
+    assert gan == {c: chi_helper for c in gan}, {c: sorted(v) for c, v in gan.items()}
 
 
 #: PR-B lượt 5 (Codex 22-11 P2): hàm khoá dòng ``user`` theo id TĂNG trên (người đích ∪ người được tham chiếu) TRƯỚC mọi câu
@@ -160,3 +178,78 @@ def test_duong_ghi_tai_khoan_dang_co_khoa_nguoi_theo_thu_tu_k4():
             if isinstance(f, (ast.FunctionDef, ast.AsyncFunctionDef)) and _goi(f, KHOA_THEO_THU_TU):
                 goi_khoa.add((rel, f.name))
     assert goi_khoa == can, f"  thiếu khoá: {sorted(can - goi_khoa)}\n  ngoài sổ: {sorted(goi_khoa - can)}"
+
+
+# ---------------------------------------------------------------------------------------------------- thứ tự khoá (H4)
+# PR-B lượt 6 (Codex 22-11 H4): thứ tự khoá dòng ``user`` chỉ nằm ở MỘT vòng lặp (``lock_users_in_id_order``). Kiểm CHÍNH
+# hàm ấy bằng kho giả ghi chuỗi (id, mức khoá) — không CSDL. Ca hai phiên (API) chỉ thấy hậu quả; ca này thấy thứ tự.
+def _ghi_khoa(monkeypatch):
+    from app.repositories import document_bulk_repository as bulk_repo
+
+    chuoi = []
+
+    def _gia(muc):
+        async def khoa(db, uid):
+            chuoi.append((uid, muc))
+            return SimpleNamespace(id=uid, role="officer", status="active")
+
+        return khoa
+
+    monkeypatch.setattr(bulk_repo, "lock_user_no_key_update", _gia("NO KEY UPDATE"))
+    monkeypatch.setattr(bulk_repo, "lock_user_key_share", _gia("KEY SHARE"))
+    monkeypatch.setattr(bulk_repo, "lock_user_for_update", _gia("UPDATE"))
+    return chuoi
+
+
+async def _khoa(**kw):
+    from app.services.user_deletion_policy import lock_users_in_id_order
+
+    return await lock_users_in_id_order(SimpleNamespace(no_autoflush=contextlib.nullcontext()), **kw)
+
+
+@pytest.mark.asyncio
+async def test_khoa_nguoi_theo_id_tang_tren_hop_dich_va_tham_chieu(monkeypatch):
+    chuoi = _ghi_khoa(monkeypatch)
+    await _khoa(target_ids=[9, 2, 5], referenced_ids=[7, 1, None])
+    assert [u for u, _ in chuoi] == [1, 2, 5, 7, 9]
+
+
+@pytest.mark.asyncio
+async def test_muc_khoa_mac_dinh_dich_no_key_update_tham_chieu_key_share(monkeypatch):
+    chuoi = _ghi_khoa(monkeypatch)
+    await _khoa(target_ids=[2, 5], referenced_ids=[3])
+    assert dict(chuoi) == {2: "NO KEY UPDATE", 3: "KEY SHARE", 5: "NO KEY UPDATE"}
+
+
+@pytest.mark.asyncio
+async def test_xoa_tai_khoan_khoa_moi_nguoi_dich_for_update(monkeypatch):
+    chuoi = _ghi_khoa(monkeypatch)
+    await _khoa(target_ids=[2, 5], referenced_ids=[3], delete_targets=True)
+    assert dict(chuoi) == {2: "UPDATE", 3: "KEY SHARE", 5: "UPDATE"}
+
+
+@pytest.mark.asyncio
+async def test_doi_cot_khoa_chi_nguoi_dich_ay_khoa_for_update(monkeypatch):
+    chuoi = _ghi_khoa(monkeypatch)
+    await _khoa(target_ids=[2, 5], referenced_ids=[3], key_update_ids=[5])
+    assert dict(chuoi) == {2: "NO KEY UPDATE", 3: "KEY SHARE", 5: "UPDATE"}
+
+
+@pytest.mark.asyncio
+async def test_nguoi_vua_la_dich_vua_duoc_tham_chieu_chi_khoa_muc_dich(monkeypatch):
+    chuoi = _ghi_khoa(monkeypatch)
+    await _khoa(target_ids=[4], referenced_ids=[4])
+    assert chuoi == [(4, "NO KEY UPDATE")]
+
+
+def test_chi_doi_that_cot_khoa_moi_tinh_la_doi_cot_khoa():
+    """Codex 22-11 H1: khoá ``FOR UPDATE`` chỉ khi email ĐỔI THẬT (giá trị sắp ghi ≠ giá trị hiện có); ghi lại đúng email cũ,
+    không gửi email, hay chỉ đổi trường khác ⇒ ``FOR NO KEY UPDATE`` như cũ."""
+    from app.services.user_deletion_policy import changes_user_key_columns
+
+    u = SimpleNamespace(username="a", email="a@example.com")
+    ket_qua = [
+        changes_user_key_columns(u, d)
+        for d in ({"email": "b@example.com"}, {"email": "a@example.com"}, {"email": None}, {"full_name": "B"})
+    ]
+    assert ket_qua == [True, False, False, False]

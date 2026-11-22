@@ -770,9 +770,17 @@ async def update_user(
         # trùng giá trị đã nạp; đo bằng kiểm ngược l4_m7b 22-11).
         # PR-B lượt 5 (Codex 22-11 P2): khoá CÙNG người thao tác (khoá ngoại phân công / thu hồi / nhật ký của router) theo
         # id TĂNG, TRƯỚC mọi câu ghi — cùng chiều K4 (``user_deletion_policy.lock_users_in_id_order``).
-        from app.services.user_deletion_policy import lock_users_in_id_order
+        from app.services.user_deletion_policy import changes_user_key_columns, lock_users_in_id_order
 
-        await lock_users_in_id_order(db, target_ids=[db_user.id], referenced_ids=[assigned_by_user_id])
+        # PR-B lượt 6 (Codex 22-11 H1): đổi THẬT cột khoá (email) ⇒ ``UPDATE`` sẽ cần ``FOR UPDATE`` lúc flush ⇒ khoá
+        # người đích ``FOR UPDATE`` ngay từ đầu (vẫn theo id tăng), không để PostgreSQL nâng khoá giữa chừng.
+        doi_cot_khoa = changes_user_key_columns(db_user, update_data)
+        await lock_users_in_id_order(
+            db,
+            target_ids=[db_user.id],
+            referenced_ids=[assigned_by_user_id],
+            key_update_ids=[db_user.id] if doi_cot_khoa else [],
+        )
         await revoke_grants_on_account_change(
             db,
             user_id=db_user.id,

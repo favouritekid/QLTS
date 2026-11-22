@@ -316,12 +316,28 @@ async def assert_user_deletable(db: AsyncSession, user_ids: Iterable[int], actor
     return targets
 
 
+#: Cột của ``user`` có chỉ mục DUY NHẤT thường (không một phần, không biểu thức) — PostgreSQL coi ``UPDATE`` đổi giá trị cột
+#: như thế là "key update" ⇒ dòng phải khoá ``FOR UPDATE`` (không phải ``FOR NO KEY UPDATE``), xung đột cả ``FOR KEY SHARE``
+#: của khoá ngoại. ``id`` không bao giờ bị sửa nên không ghi. ``tests/api/test_gd1b_cheo_phan_cong_vai.py`` đọc
+#: ``pg_index`` của lược đồ THẬT và khoá tập này (+ ``id``) — thêm cột duy nhất mới mà quên ghi ở đây ⇒ ĐỎ.
+USER_KEY_COLUMNS = ("username", "email")
+
+
+def changes_user_key_columns(user: object, update_data: Dict[str, object]) -> bool:
+    """``True`` khi ``update_data`` sẽ ĐỔI THẬT giá trị một cột khoá (``USER_KEY_COLUMNS``) của ``user`` — so giá trị sắp
+    ghi (đã chuẩn hoá ở tầng kiểm dữ liệu) với giá trị hiện có của đối tượng; ``None`` = không ghi cột ấy."""
+    return any(
+        update_data.get(c) is not None and update_data.get(c) != getattr(user, c, None) for c in USER_KEY_COLUMNS
+    )
+
+
 async def lock_users_in_id_order(
     db: AsyncSession,
     *,
     target_ids: Iterable[int],
     referenced_ids: Iterable[Optional[int]] = (),
     delete_targets: bool = False,
+    key_update_ids: Iterable[int] = (),
 ) -> Dict[int, object]:
     """THỨ TỰ KHOÁ DÒNG ``user`` cho mọi đường GHI tài khoản (PR-B lượt 5, Codex 22-11 P2) — cùng chiều K4.
 
@@ -332,9 +348,16 @@ async def lock_users_in_id_order(
     id``; người được tham chiếu A có id NHỎ hơn một người đích U ⇒ đường ghi giữ U chờ A, K4 giữ A chờ U ⇒ vòng chờ.
 
     Luật: khoá TRƯỚC mọi câu ghi, theo id TĂNG trên hợp (người đích ∪ người được tham chiếu) — người đích ``FOR NO KEY
-    UPDATE`` (đúng khoá ``UPDATE "user"`` sắp lấy), người được tham chiếu ``FOR KEY SHARE`` (đúng khoá của khoá ngoại; chỉ
-    xung đột ``FOR UPDATE`` của K4 nên không chặn ai khác). Sau đó mọi khoá ngoại tới ``user`` của giao dịch trỏ vào dòng
-    ĐÃ giữ ⇒ không chờ thêm dòng ``user`` nào. Người gọi khoá lại từng người trong vòng (đọc dưới khoá) là no-op.
+    UPDATE`` (đúng khoá của ``UPDATE "user"`` KHÔNG đổi cột khoá), người được tham chiếu ``FOR KEY SHARE`` (đúng khoá của
+    khoá ngoại; chỉ xung đột ``FOR UPDATE``). Sau đó mọi khoá ngoại tới ``user`` của giao dịch trỏ vào dòng ĐÃ giữ, và
+    không câu ``UPDATE`` nào phải NÂNG mức khoá ⇒ không chờ thêm dòng ``user`` nào. Người gọi khoá lại từng người trong vòng
+    (đọc dưới khoá) là no-op.
+
+    Người đích khoá ``FOR UPDATE`` ngay từ đầu khi (a) ``delete_targets`` hoặc (b) id nằm trong ``key_update_ids`` —
+    ``UPDATE`` sắp ĐỔI cột khoá (``USER_KEY_COLUMNS``, vd PUT đổi email; xem :func:`changes_user_key_columns`). PR-B lượt 6
+    (Codex 22-11 H1): khoá ``FOR NO KEY UPDATE`` rồi tới lúc ``flush`` PostgreSQL mới NÂNG lên ``FOR UPDATE`` ⇒ phải chờ
+    mọi ``FOR KEY SHARE`` đang giữ dòng ấy GIỮA chừng, sau khi đã giữ dòng khác ⇒ vòng chờ (A sửa email U ‖ U sửa email A;
+    U xoá A ‖ A sửa email U).
 
     ``delete_targets=True`` (CHỈ K4 — :func:`assert_user_deletable`, owner 22-11 "K4 ↔ K4"): người đích sắp bị XOÁ ⇒ khoá
     ``FOR UPDATE`` (đúng khoá của ``DELETE``) thay vì ``FOR NO KEY UPDATE``; cùng MỘT vòng id tăng với người được tham
@@ -348,16 +371,13 @@ async def lock_users_in_id_order(
 
     targets = {int(u) for u in target_ids}
     referenced = {int(u) for u in referenced_ids if u is not None} - targets
+    key_update = {int(u) for u in key_update_ids}
     rows: Dict[int, object] = {}
     with db.no_autoflush:
         for uid in sorted(targets | referenced):
             if uid in targets:
-                if delete_targets:
-                    row = (
-                        await db.execute(
-                            text('SELECT id, role, status FROM "user" WHERE id = :id FOR UPDATE'), {"id": uid}
-                        )
-                    ).first()
+                if delete_targets or uid in key_update:
+                    row = await bulk_repo.lock_user_for_update(db, uid)
                 else:
                     row = await bulk_repo.lock_user_no_key_update(db, uid)
                 if row is not None:
