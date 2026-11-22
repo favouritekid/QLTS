@@ -14,7 +14,8 @@ MỘT bất biến; ca đối chứng chỉ khác đúng điều kiện được
 * N4-3 — hồ sơ ĐÃ được tính chỗ nhờ Quyết định hiệu lực vẫn bị chặn khi bấm Phê duyệt.
 * Codex — hồ sơ có ``applied_rules.academic_info_id`` trỏ ngành 0 nhưng ``lead.offering_id`` đã mất vẫn bị chặn.
 * N4-6 — Quản lý xin vượt ở ngành 0 ⇒ 400 (không còn 403); ngành chỉ tiêu dương vẫn 403; lô giữ HTTP 200 + lý do từng hồ sơ.
-* N4-7 — Admin xin vượt bị chặn ⇒ ĐÚNG MỘT vết ``quota_bypass_denied_closed``; Phê duyệt thường ⇒ 0 vết xin vượt.
+* N4-7 — Admin xin vượt bị chặn ⇒ ĐÚNG MỘT vết ``quota_bypass_denied_closed``; Phê duyệt thường ⇒ 0 vết xin vượt; ghi /
+  commit vết hỏng ⇒ lỗi kỹ thuật (đơn 503, lô: mục báo lỗi kỹ thuật), hồ sơ giữ nguyên, không vết dở (Codex 22-11 lượt 2).
 * N4-1 — ``/finalize`` giữ luật cũ: em đã chiếm chỗ hoàn tất nhập học, số chỗ đã dùng giữ nguyên; cơ chế Admin xin vượt cũ
   còn; cùng ngành ấy, hồ sơ MỚI xin Phê duyệt vẫn bị chặn.
 * Đối chứng "trống ≠ 0" và "N4 không lan sang chỉ tiêu dương".
@@ -278,9 +279,58 @@ async def test_n4_7_admin_xin_vuot_bi_chan_ghi_dung_mot_vet(client, hs, ad):  # 
     await _dam_bao_sts09()
     pid, _ = await _ho_so_nganh(hs, 0)
     r = await _duyet(client, ad, pid, (await _ban(pid))[1], xin_vuot=True)
-    assert r.status_code == 400, r.text
+    # Codex 22-11 lượt 2 (A-P3 c): lỗi NGHIỆP VỤ đúng mã — không phải lỗi kỹ thuật cùng mã HTTP.
+    assert r.status_code == 400 and r.json()["error_code"] == "BUSINESS_RULE_VIOLATION", r.text
     assert await _vet_xin_vuot(pid) == [("quota_bypass_denied_closed", await _id_nguoi("admin"))]
     assert (await _ban(pid))[0] == "submitted"
+
+
+def _hong_vet(monkeypatch, kieu):
+    """Làm HỎNG phiên ghi vết ``quota_bypass_denied_closed`` (chỉ vết ấy): ``kieu`` = "ghi" ⇒ lệnh ghi ném lỗi; "commit" ⇒
+    ghi xong nhưng commit của PHIÊN VẾT ném lỗi (dòng đã thêm vào phiên mà không commit được). Chỉ trong test."""
+    from app.services import audit_service
+
+    goc = audit_service.log_audit
+
+    async def boc(db, *a, **kw):
+        if kw.get("action") != "quota_bypass_denied_closed":
+            return await goc(db, *a, **kw)
+        if kieu == "ghi":
+            raise RuntimeError("GIA lỗi ghi vết (test)")
+        kq = await goc(db, *a, **kw)
+
+        async def commit_hong():
+            raise RuntimeError("GIA lỗi commit vết (test)")
+
+        db.commit = commit_hong
+        return kq
+
+    monkeypatch.setattr(audit_service, "log_audit", boc)
+
+
+@pytest.mark.parametrize("loi", ["ghi", "commit"])
+@pytest.mark.parametrize("duong", ["don", "lo"])
+async def test_n4_7_loi_ghi_vet_bat_buoc_thi_bao_loi_ky_thuat_ho_so_giu_nguyen(  # noqa: F811
+    client, hs, ad, monkeypatch, duong, loi
+):
+    # Codex 22-11 lượt 2 (A-P2 / A-P3 a): vết N4-7 BẮT BUỘC ⇒ ghi / commit vết hỏng thì KHÔNG trả lỗi nghiệp vụ "ngành đóng"
+    # như thể vết đã có. Đơn: lỗi kỹ thuật (503 ``SERVICE_UNAVAILABLE``); lô: HTTP 200 theo hợp đồng lô, mục ấy báo lỗi kỹ thuật
+    # (câu chung có sẵn của lô). Cả hai: hồ sơ giữ nguyên, không có vết dở (đọc từ phiên mới).
+    await _dam_bao_sts09()
+    pid, _ = await _ho_so_nganh(hs, 0)
+    ver = (await _ban(pid))[1]
+    _hong_vet(monkeypatch, loi)
+    if duong == "don":
+        r = await _duyet(client, ad, pid, ver, xin_vuot=True)
+        assert r.status_code == 503 and r.json()["error_code"] == "SERVICE_UNAVAILABLE", r.text
+    else:
+        r = await _duyet_lo(client, ad, (pid, ver, True))
+        assert r.status_code == 200, r.text
+        kq = r.json()
+        assert kq["failed_ids"] == [pid] and kq["errors"][str(pid)].startswith("Unexpected error (ref:"), kq
+    monkeypatch.undo()
+    assert (await _ban(pid))[0] == "submitted"
+    assert await _vet_xin_vuot(pid) == []
 
 
 async def test_n4_7_phe_duyet_thuong_khong_ghi_vet_xin_vuot(client, hs, ad):  # noqa: F811
