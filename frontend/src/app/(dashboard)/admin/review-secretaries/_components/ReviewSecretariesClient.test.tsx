@@ -12,6 +12,7 @@ import { http, HttpResponse } from "msw"
 import { API, renderWithClient } from "@/components/document-review/test-helpers"
 import { server } from "@/test/mocks/server"
 
+import ReviewSecretariesPage from "../page"
 import { candidateLabel, grantPersonLabel, ReviewSecretariesClient } from "./ReviewSecretariesClient"
 
 const P = `${API}/api/admission-config/review-secretaries`
@@ -175,6 +176,15 @@ describe("ReviewSecretariesClient", () => {
     expect(ds).toHaveTextContent("Đã thu hồi")
     expect(ds).toHaveTextContent("lý do thu hồi: Tự thu hồi: tài khoản bị khoá")
     expect(screen.queryByRole("button", { name: "Thu hồi quyền #41" })).toBeNull()
+  })
+
+  it("trang hiện câu owner duyệt: 'Admin luôn có quyền Thư ký Hội đồng, không cần gán.'", async () => {
+    server.use(http.get(P, () => HttpResponse.json([])), http.get(`${P}/candidates`, () => HttpResponse.json([])))
+    renderWithClient(<ReviewSecretariesPage />)
+    expect(screen.getByTestId("admin-luon-la-thu-ky")).toHaveTextContent(
+      /^Admin luôn có quyền Thư ký Hội đồng, không cần gán\.$/,
+    )
+    expect(await screen.findByTestId("gan-thu-ky")).toBeInTheDocument()
   })
 
   it("nhãn người / ứng viên: họ tên (tên đăng nhập) · …; thiếu họ tên / tóm tắt ⇒ phần còn lại", () => {
