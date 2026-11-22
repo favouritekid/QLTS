@@ -1119,6 +1119,12 @@ async def _audit_quota_bypass_denied(
     ``AuditTrailUnavailable`` (503, mã + câu riêng — owner 22-11 Q1) — người gọi
     KHÔNG được trả lỗi nghiệp vụ như thể vết đã ghi. Phiên vết chưa commit ⇒ đóng
     phiên = lùi ⇒ không có vết dở.
+
+    Ca "commit mơ hồ" (Codex N4 lượt 3 H2, ghi nhận — không vá): máy chủ ĐÃ commit
+    vết nhưng kết nối đứt trước khi kịp báo về ⇒ vết đã có mà người dùng vẫn nhận 503
+    (câu "Không ghi được…" khi ấy nói sai). Rất hiếm; không vá được nếu không có khoá
+    chống ghi trùng. Lần thử lại là một lượt xin vượt MỚI ⇒ sinh một vết mới là đúng
+    ("một lượt, một vết" vẫn giữ).
     """
     from ..database import AsyncSessionLocal
     from ..services import audit_service
@@ -1151,7 +1157,9 @@ async def _audit_quota_bypass_denied(
                 source=source,
             )
             await audit_db.commit()
-    except Exception as audit_err:  # noqa: BLE001 — best-effort (trừ fail_closed), never block denial
+    except Exception as audit_err:  # noqa: BLE001 — best-effort trừ fail_closed ⇒ 503 (AuditTrailUnavailable)
+        # Codex N4 lượt 3 H4: GIỮ nguyên câu log (bộ lọc / cảnh báo dò theo câu); vết bắt buộc thì thêm mã lỗi trả người dùng.
+        ma_loi = {"error_code": AuditTrailUnavailable.error_code} if fail_closed else {}
         log.error(
             "ADM-026 audit write FAILED for denied bypass attempt",
             entity_id=entity_id,
@@ -1159,6 +1167,7 @@ async def _audit_quota_bypass_denied(
             actor_id=actor.id,
             error=str(audit_err),
             fail_closed=fail_closed,
+            **ma_loi,
         )
         if fail_closed:
             raise AuditTrailUnavailable() from audit_err

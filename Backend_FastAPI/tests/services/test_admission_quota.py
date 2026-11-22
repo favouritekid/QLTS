@@ -1233,7 +1233,12 @@ class TestVetTuChoiKhaiTuongMinh:
         assert tham_so.default is inspect.Parameter.empty
 
     def test_moi_noi_goi_ham_ghi_vet_tu_choi_khai_fail_closed_dung_kieu(self):
-        """Quét AST ``app/``: mỗi lời gọi khai ``fail_closed`` bằng hằng bool; vết ngành đóng = True, hai vết ADM-026 = False."""
+        """Quét AST ``app/``: mỗi lời gọi khai ``fail_closed`` bằng hằng bool; vết ngành đóng = True, hai vết ADM-026 = False.
+
+        Codex N4 lượt 3 H3: GOM mọi giá trị theo hành động (lời gọi sau không đè lời gọi trước — một lời gọi thứ hai
+        ``quota_bypass_denied_closed`` với ``False`` phải làm lệch); ``denial_action`` phải là hằng và không có lời gọi dạng
+        ``**kw`` (không quét được) — lỗi nêu rõ tệp + dòng thay vì ``KeyError`` / ``AttributeError``. Không đếm số lời gọi:
+        thêm một nơi gọi ĐÚNG kiểu là hợp lệ."""
         import ast
         import pathlib
 
@@ -1244,14 +1249,16 @@ class TestVetTuChoiKhaiTuongMinh:
                 if isinstance(n, ast.Call) and getattr(n.func, "id", getattr(n.func, "attr", None)) == (
                     "_audit_quota_bypass_denied"
                 ):
+                    noi = (p.name, n.lineno)
+                    assert not any(k.arg is None for k in n.keywords), (*noi, "lời gọi dạng **kw — không quét được")
                     kw = {k.arg: k.value for k in n.keywords}
-                    hanh_dong = kw["denial_action"].value
-                    assert isinstance(kw.get("fail_closed"), ast.Constant), (p.name, n.lineno, "thiếu fail_closed")
-                    thay[hanh_dong] = kw["fail_closed"].value
+                    assert isinstance(kw.get("denial_action"), ast.Constant), (*noi, "denial_action không phải hằng")
+                    assert isinstance(kw.get("fail_closed"), ast.Constant), (*noi, "thiếu fail_closed")
+                    thay.setdefault(kw["denial_action"].value, set()).add(kw["fail_closed"].value)
         assert thay == {
-            "quota_bypass_denied_closed": True,
-            "quota_bypass_denied_role": False,
-            "quota_bypass_denied_reason": False,
+            "quota_bypass_denied_closed": {True},
+            "quota_bypass_denied_role": {False},
+            "quota_bypass_denied_reason": {False},
         }, thay
 
 
