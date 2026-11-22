@@ -268,23 +268,30 @@ async def test_c2_dieu_chinh_them_o_cao_bo_o_thap_va_duyet_hang_loat_khong_vong_
     # (A1 ở X, A2 ở Dược) khoá TRƯỚC [X, Dược] theo id tăng dần. D khoá hợp hai ô bằng MỘT câu ⇒ cũng [X, Dược] ⇒ lô chờ D,
     # không vòng. Biến thể khoá hai lần (ô chụp CAO rồi ô hiện tại THẤP) ⇒ D giữ CAO chờ THẤP, lô giữ THẤP chờ CAO ⇒ 40P01.
     # Điểm đồng bộ: lần gọi ĐẦU ``lock_quota_cells`` (của D) xong thì D DỪNG, giữ khoá đã lấy.
+    # Codex PR-1 lượt 2 (owner 22-11): nguyện vọng in của P cũng ở ô CAO ⇒ ô MẤT chỗ của P (ô chụp dòng bị bỏ — C2-1) = CAO ≠
+    # ô hiện tại X. Nếu ô mất chỗ trùng X (dữ liệu cũ), lần khoá đầu của biến thể hai lần đã lấy X ⇒ ca xanh cả khi khoá hai lần.
     await _dam_bao_sts09()
     x = await qd._q(
         "SELECT ap.academic_info_id, oai.offering_id FROM admission_profile_choice c "
         "JOIN admission_path ap ON ap.id = c.admission_path_id "
         "JOIN offering_academic_info oai ON oai.id = ap.academic_info_id "
         "WHERE c.admission_profile_id = :p ORDER BY c.display_order, c.id LIMIT 1",
-        p=hs[SACH[0]][1],
+        p=hs["don_vi_khac"][1],
     )
     x_ai, x_off = x[0]
     _, cao_ai = await _chuyen_sang_duoc_cd(hs, "loai_hinh_lien_thong")
+    _, cao_p = await _chuyen_sang_duoc_cd(hs, SACH[0])
+    assert cao_p == cao_ai, "phép đo không hợp lệ: nguyện vọng in của P và Q phải cùng ô cao"
     assert x_ai < cao_ai, "phép đo không hợp lệ: ô hiện tại của P phải có id học vụ THẤP hơn ô chụp của Q"
     cao_off = await qd._q1("SELECT offering_id FROM offering_academic_info WHERE id = :a", a=cao_ai)
     await qd._sql(
         "UPDATE offering_academic_info SET annual_admission_quota = 10 WHERE id = ANY(CAST(:a AS integer[]))",
         a=[x_ai, cao_ai],
     )
-    _, r = await qd._qd_cua_bo(client, ad, hs, [SACH[0]], "501")
+    bo_p, r = await qd._qd_cua_bo(client, ad, hs, [SACH[0]], "501")
+    assert await qd._q1(
+        "SELECT academic_info_id FROM council_document_set_row WHERE set_id = :s", s=bo_p["id"]
+    ) == cao_ai, "phép đo không hợp lệ: ô mất chỗ của P (ô chụp dòng bị bỏ) phải là ô CAO, KHÁC ô hiện tại X"
     await _gan_nganh(hs[SACH[0]][1], x_off)  # ô hiện tại của P = X (thấp)
     bd = await qd._bo_ok(client, ad, hs, ["loai_hinh_lien_thong"], duong="/decisions/%d/bo-dieu-chinh" % r["id"])
     assert await qd._q1(
