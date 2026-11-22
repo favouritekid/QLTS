@@ -50,8 +50,11 @@ from app.models.base import Base
 
 def commune_kv_pick_order_sql(alias: str) -> str:
     """Thứ tự TẤT ĐỊNH khi NHIỀU dòng ``vn_commune_area_map`` cùng có hiệu lực cho một (mã xã, năm): ``effective_from`` mới nhất
-    (quy ước có sẵn của ``priority_service._lookup_commune_kv``), hoà ⇒ ``id`` lớn nhất. MỘT nguồn cho đường từng hồ sơ và đường lô
-    (``admission_review_load_repository.SQL_COMMUNE_KV``) — cùng lỗi với B-P1 (Codex 22-11 lượt 2) ở nhánh anh em."""
+    (so đủ ngày / tháng / năm — cột ``date``; quy ước có sẵn của ``priority_service._lookup_commune_kv``), hoà ⇒ ``id`` lớn nhất. MỘT
+    nguồn cho đường từng hồ sơ và đường lô (``admission_review_load_repository.SQL_COMMUNE_KV``) — nhánh anh em của B-P1 (Codex 22-11
+    lượt 2). Owner CHỐT 22-11 (``logs-P5/cong-bo-ket-qua/gd2/QUYET-DINH-OWNER-GD2-B-DOT2-KV-CHONG-KHOANG-2026-11-22.md``): GIỮ mốc 31/12 của năm xét; CHỈ
+    sắp trong các dòng CÒN HIỆU LỰC tại mốc (``effective_from <= 31/12`` và ``effective_to`` trống hoặc SAU 31/12) — hai câu đều lọc
+    trước khi sắp."""
     return "%s.effective_from DESC, %s.id DESC" % (alias, alias)
 
 

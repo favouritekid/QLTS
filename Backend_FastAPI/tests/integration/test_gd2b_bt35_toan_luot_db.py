@@ -390,36 +390,84 @@ async def test_q5_doi_xung_nv1_da_xep_nv2_nam_khac_khong_doi_ket_qua_va_khong_go
     assert "consider_next_choice" in dong[lech_cung_nam].decision_hints, dong[lech_cung_nam].decision_hints
 
 
-async def test_b_p1_kv_truong_chong_khoang_hai_duong_chon_cung_mot_dong(nen):
-    """Codex 22-11 lượt 2 B-P1: danh mục KV trường có HAI dòng cùng khớp (trường, năm) — khoảng chồng nhau (năm bắt đầu khác) và
-    hoà năm bắt đầu. Dòng CŨ chèn TRƯỚC (thứ tự vật lý ≠ thứ tự chọn). Hai đường (từng hồ sơ / lô) chọn CÙNG dòng theo
-    ``school_kv_pick_order_sql`` (năm bắt đầu mới nhất, rồi ``id`` lớn nhất) ⇒ KV1 ⇒ F231 qua ở cả hai, ``CheckData`` bằng nhau."""
+#: Owner f7fe49b3 (22-11) — nghiệm thu B-P1, ba ca × (trường, xã). Dòng CŨ luôn chèn TRƯỚC (thứ tự vật lý ≠ thứ tự chọn). KV mong đợi
+#: VIẾT TAY. Trường: tra năm 2023 (năm của dòng THPT 2023–2025; cả ba năm cùng kết quả). Xã: mốc 31/12/2026.
+CA_TRUONG = (
+    # (nhãn, [(kv, năm bắt đầu, năm kết thúc)] theo thứ tự chèn, KV mong đợi)
+    ("chong_khoang", [("KV2", 2020, None), ("KV1", 2022, None)], "KV1"),
+    ("cung_nam_bat_dau_id_lon_thang", [("KV2", 2022, None), ("KV1", 2022, None)], "KV1"),
+    ("moi_hon_da_het_hieu_luc_chon_cu", [("KV2", 2020, None), ("KV1", 2021, 2022)], "KV2"),
+)
+CA_XA = (
+    # (nhãn, mã xã, [(kv, từ ngày, tới ngày)] theo thứ tự chèn, KV mong đợi). Production có UNIQUE từng phần "một dòng ĐANG MỞ / xã"
+    # ⇒ mọi ca chỉ có tối đa một dòng không ngày kết thúc.
+    ("chong_khoang", "GXCK1", [("KV2", date(2020, 1, 1), date(2027, 6, 30)), ("KV1", date(2024, 1, 1), None)], "KV1"),
+    ("cung_ngay_bat_dau_id_lon_thang", "GXCK2",
+     [("KV2", date(2024, 1, 1), date(2027, 6, 30)), ("KV1", date(2024, 1, 1), None)], "KV1"),
+    ("moi_hon_da_het_hieu_luc_chon_cu", "GXCK3",
+     [("KV2", date(2020, 1, 1), None), ("KV1", date(2024, 1, 1), date(2026, 6, 30))], "KV2"),
+)
+MUC_KV = {"KV1": "0.75", "KV2": "0.25"}
+
+
+async def test_b_p1_kv_chong_khoang_ba_ca_hai_duong_chon_cung_mot_dong(nen):
+    """Owner f7fe49b3 (Codex 22-11 lượt 2 B-P1): lọc khoảng CÒN HIỆU LỰC tại mốc rồi chọn mới nhất (trường: năm bắt đầu lớn nhất; xã:
+    ngày bắt đầu mới nhất), hoà ⇒ ``id`` lớn nhất. Ba ca cho cả KV trường lẫn KV xã: (a) chồng khoảng, (b) cùng mốc bắt đầu, (c) khoảng
+    mới hơn đã HẾT hiệu lực ⇒ khoảng cũ còn hiệu lực.
+
+    Kiểm CẢ HAI đường bằng giá trị viết tay: hàm tra từng phép (T1 / T6 / bản in) và câu lô (máy xét); rồi ca đối chiếu F231 —
+    ``CheckData`` của bộ nạp == của bản in GĐ1 trên các hồ sơ dùng đúng dữ liệu ấy (trường: nhánh lịch sử THPT; xã: nhánh thường trú)."""
     from app.services import priority_service
 
     d = nen
-    truong, pids = [], []
+    truong, pid_truong, pid_xa = {}, {}, {}
     async with csdl.engine.begin() as conn:
-        for i, (tu_cu, tu_moi) in enumerate(((2020, 2022), (2022, 2022))):
+        for i, (nhan, dong, _) in enumerate(CA_TRUONG):
             t = await chen(conn, "vn_school", moet_school_code="GIACK%02d" % i, moet_province_code="99",
                            name="Trường giả chồng khoảng %d" % i, province="Tỉnh giả", level="THPT")
-            for ma_kv, tu in (("KV3", tu_cu), ("KV1", tu_moi)):
-                await chen(conn, "vn_school_kv_assignment", school_id=t, kv_code=ma_kv, effective_from_year=tu, source="gia")
+            for ma_kv, tu, den in dong:
+                await chen(conn, "vn_school_kv_assignment", school_id=t, kv_code=ma_kv, effective_from_year=tu,
+                           effective_to_year=den, source="gia")
+            truong[nhan] = t
             pid = await _ho_so_kieu(conn, d, 970 + i, "thieu_giay_hp")
-            await _x(conn, "UPDATE admission_profile SET academic_history = CAST(:h AS jsonb) WHERE id = :p",
+            await _x(conn, "UPDATE admission_profile SET academic_history = CAST(:h AS jsonb), "
+                           "priority_resolution_snapshot = CAST(:s AS jsonb) WHERE id = :p",
                      h=json.dumps([{"level": "THPT", "school_id": t, "school_name": "Trường giả", "year_from": 2023,
-                                    "year_to": 2025}]), p=pid)
-            truong.append(t)
-            pids.append(pid)
+                                    "year_to": 2025}]),
+                     s=json.dumps(kv(dict((c[0], c[2]) for c in CA_TRUONG)[nhan], "longest_duration")), p=pid)
+            pid_truong[nhan] = pid
+        for i, (nhan, ma_xa, dong, mong) in enumerate(CA_XA):
+            for ma_kv, tu, den in dong:
+                await chen(conn, "vn_commune_area_map", commune_code=ma_xa, province="Tỉnh giả", district="Huyện giả",
+                           ward="Xã giả " + ma_xa, area_code=ma_kv, effective_from=tu, effective_to=den)
+            pid = await _ho_so_kieu(conn, d, 975 + i, "thieu_giay_hp")
+            await _x(conn, "UPDATE admission_profile SET cultural_education_level = 'graduated_thcs', "
+                           "vocational_qualification = 'so_cap', academic_history = '[]'::jsonb, permanent_commune_code = :x, "
+                           "priority_resolution_snapshot = CAST(:s AS jsonb) WHERE id = :p",
+                     x=ma_xa, s=json.dumps(kv(mong)), p=pid)
+            pid_xa[nhan] = pid
+    # Hai đường tra, giá trị viết tay.
     async with AsyncSessionLocal() as db:
-        tung = [await priority_service.lookup_kv_for_school_year(db, t, 2023) for t in truong]
+        tung_truong = {n: await priority_service.lookup_kv_for_school_year(db, truong[n], 2023) for n in truong}
+        tung_xa = {c[0]: await priority_service._lookup_commune_kv(db, c[1], NAM) for c in CA_XA}
     async with read_only_transaction(csdl.engine) as (conn, _):
-        lo = await load_repo.read_school_kv(conn, [(t, 2023) for t in truong])
-    assert tung == ["KV1", "KV1"] and [lo[(t, 2023)] for t in truong] == ["KV1", "KV1"], (tung, lo)
+        lo_truong = await load_repo.read_school_kv(conn, [(t, 2023) for t in truong.values()])
+        lo_xa = await load_repo.read_commune_kv(conn, [(c[1], NAM) for c in CA_XA])
+    mong_truong = {c[0]: c[2] for c in CA_TRUONG}
+    mong_xa = {c[0]: c[3] for c in CA_XA}
+    assert tung_truong == mong_truong, tung_truong
+    assert {n: lo_truong[(truong[n], 2023)] for n in truong} == mong_truong, lo_truong
+    assert tung_xa == mong_xa, tung_xa
+    assert {c[0]: lo_xa[(c[1], NAM)] for c in CA_XA} == mong_xa, lo_xa
+    # Ca đối chiếu F231: hai đường cùng kết quả TRÊN CẢ hồ sơ, và kết quả là "qua" với mức của KV mong đợi.
     nap = await _nap(d)
     ban_in = await doc.read_profiles_by_id(csdl.engine, [p.profile_id for p in nap.profiles], academic_year=NAM)
     assert tuple(p.check for p in nap.profiles) == ban_in.check_data
     cua = {p.profile_id: p.check for p in nap.profiles}
-    assert [(cua[p].kv_ly_do, cua[p].kv_muc) for p in pids] == [(None, "0.75"), (None, "0.75")]
+    for nhan, pid in pid_truong.items():
+        assert (cua[pid].kv_ly_do, cua[pid].kv_muc) == (None, MUC_KV[mong_truong[nhan]]), (nhan, cua[pid])
+    for nhan, pid in pid_xa.items():
+        assert (cua[pid].kv_ly_do, cua[pid].kv_muc) == (None, MUC_KV[mong_xa[nhan]]), (nhan, cua[pid])
 
 
 async def test_uu_tien_dan_toc_tra_kv_xa_theo_lo_doi_ket_qua(nen):
