@@ -167,7 +167,9 @@ async def test_bt35_ghi_lo_xen_ke_mot_cau_sql_khong_tang_theo_so_ho_so(c, n):
     ảnh chụp + tính lại KV F231 + ghi run / dòng — đặc tả bản 4 :617, owner K1) cần ``run_evaluate`` của L3b ⇒ ĐỢT 2."""
     cau, so_dong = await _dem_cau_khi_ghi(c, _lo_xen_ke(c, n))
     assert so_dong == n
-    assert [dau for dau, _ in cau] == ["INSERT INTO admission_review_row"], cau
+    # Đợt 2 (Codex 22-11 mục D P1): một lần gọi driver bằng ``executemany`` vẫn có thể là N lần thực thi phía máy chủ ⇒ đòi MỘT câu
+    # nhiều dòng THẬT: đúng một câu, ``executemany`` = False.
+    assert cau == [("INSERT INTO admission_review_row", False)], cau
 
 
 async def test_dong_thieu_hoac_thua_cot_bi_tu_choi_truoc_khi_ghi(c):

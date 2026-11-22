@@ -395,6 +395,61 @@ async def count_by_group(db: AsyncSession, *, group_id: int) -> Dict[str, int]:
     return {"publish_count": publish, "approved_count": approved, "used": max(publish, approved)}
 
 
+# ═══════════════════════════════ GĐ2-B — mọi học vụ trong MỘT câu ══════════════════════════════
+async def count_by_academic_infos(
+    db: AsyncSession, *, academic_info_ids: Sequence[int]
+) -> Dict[int, Dict[str, int]]:
+    """GĐ2-B (đặc tả GĐ2-B bản 4 §7.1, F260): số chỗ đã dùng của TỪNG học vụ trong ``academic_info_ids`` bằng MỘT câu SQL (một
+    ảnh chụp) — ``{id học vụ: {"publish_count", "approved_count", "used"}}``, ``used`` = số lớn hơn (CB3 B21).
+
+    Mỗi học vụ là ĐÚNG phép đếm của :func:`count_by_academic_info` (công bố) và :func:`count_by_offering_year` (Phê duyệt cũ, theo
+    ngành + năm CỦA học vụ) — cùng các phần ``_part_a_multi_choice`` / ``_part_a_legacy`` / ``_part_b``, ghép như
+    :func:`count_by_group` (câu con vô hướng TƯƠNG QUAN theo dòng ``offering_academic_info``). Test khoá bằng nhau với hai hàm ấy
+    và với ``count_by_group`` (nhóm một thành viên). Học vụ không có trong CSDL ⇒ vắng khoá. Không khoá; không lọc học vụ đã xoá
+    (nơi gọi quyết). Câu báo dòng bộ thiếu khoá đếm chạy như hai hàm gốc (lớp phụ, chỉ ghi log)."""
+    ids = sorted({int(i) for i in academic_info_ids})
+    if not ids:
+        return {}
+    oai = models.OfferingAcademicInfo
+    path = models.AdmissionPath
+    ap = models.AdmissionProfile
+    b = CouncilDocumentSetRow
+    pub_a1 = _part_a_multi_choice(path.academic_info_id == oai.id, exclude_profile_id=None).join(
+        path, path.id == models.AdmissionProfileChoice.admission_path_id
+    )
+    pub_a2 = _part_a_legacy(lambda column: column.in_(select(path.id).where(path.academic_info_id == oai.id)), None)
+    pub_b = _part_b(None, b.academic_info_id == oai.id)
+    old_a = (
+        select(func.count(ap.id))
+        .join(models.Lead, ap.lead_id == models.Lead.id)
+        .where(
+            models.Lead.offering_id == oai.offering_id,
+            ap.academic_year == oai.academic_year,
+            ap.status.in_(OCCUPYING_STATUSES),
+            no_effective_row(ap.id),
+        )
+    )
+    old_b = _part_b(None, b.offering_id == oai.offering_id, b.academic_year == oai.academic_year)
+
+    def _sc(q):
+        return func.coalesce(q.scalar_subquery().correlate(oai), 0)
+
+    rows = (
+        await db.execute(
+            select(oai.id, _sc(pub_a1) + _sc(pub_a2) + _sc(pub_b), _sc(old_a) + _sc(old_b))
+            .where(oai.id.in_(ids))
+            .order_by(oai.id)
+        )
+    ).all()
+    out: Dict[int, Dict[str, int]] = {}
+    for ai_id, publish, approved in rows:
+        publish, approved = int(publish or 0), int(approved or 0)
+        out[int(ai_id)] = {"publish_count": publish, "approved_count": approved, "used": max(publish, approved)}
+    await _report_missing_lock(db, CouncilDocumentSetRow.academic_info_id, "thong_tin_hoc_vu")
+    await _report_missing_lock(db, CouncilDocumentSetRow.offering_id, "nganh_nam")
+    return out
+
+
 # ═══════════════════════════════ "đã chiếm chỗ chưa" ═══════════════════════════════════════
 async def has_effective_row(db: AsyncSession, profile_id: int) -> bool:
     return bool(

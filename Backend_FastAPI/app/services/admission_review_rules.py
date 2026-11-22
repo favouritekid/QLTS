@@ -108,6 +108,9 @@ APPLICATION_FEE_NOT_CLEARED = "application_fee_not_cleared"
 MANDATORY_DOCUMENT_MISSING = "mandatory_document_missing"
 MANDATORY_DOCUMENT_NOT_VERIFIED = "mandatory_document_not_verified"
 ACADEMIC_INFO_DELETED = "academic_info_deleted"
+#: Owner Q5 22-11: NV trỏ tới học vụ thuộc NĂM KHÁC năm của lần xét ⇒ DỪNG (mã dừng như ``academic_info_deleted``): không xếp, không
+#: sang NV sau — để cán bộ sửa dữ liệu.
+CHOICE_ACADEMIC_YEAR_MISMATCH = "choice_academic_year_mismatch"
 QUOTA_NOT_CONFIGURED = "quota_not_configured"
 GROUP_MISSING = "group_missing"
 FLOOR_MISSING = "floor_missing"
@@ -159,6 +162,7 @@ REASON_MESSAGES: Dict[str, str] = {
     DOCUMENT_CONFIG_MISSING: "Hồ sơ thiếu cấu hình giấy tờ bắt buộc",
     DOCUMENT_CONFIG_INVALID: "Cấu hình giấy tờ bắt buộc của hồ sơ không hợp lệ",
     MANDATORY_DOCUMENT_MISSING: "Chưa có giấy bắt buộc",
+    CHOICE_ACADEMIC_YEAR_MISMATCH: "Nguyện vọng thuộc năm tuyển sinh khác năm của lần xét",
 }
 #: Câu hiển thị cờ A13 (owner K4 21-11), kèm năm + căn cứ ở ``prior_year_findings`` (:class:`PriorYearFinding`; phụ lục kỹ thuật
 #: đợt 1 §1).
@@ -917,6 +921,8 @@ def _evaluate_choice(
     ai = run.academic_infos.get(ai_id)
     if ai is None:
         raise ReviewInputError("Thiếu dữ kiện học vụ %s của NV %s." % (ai_id, cid))
+    if int(ai.academic_year) != int(run.academic_year):  # bước 0 — owner Q5 22-11: học vụ năm khác ⇒ DỪNG
+        return stop((CHOICE_ACADEMIC_YEAR_MISMATCH,))
     if ai.is_deleted:  # bước 1
         return stop((ACADEMIC_INFO_DELETED,))
     if ai.annual_quota is None:  # bước 2 — chưa cấu hình ⇒ DỪNG (QĐB:17)
@@ -1025,6 +1031,23 @@ def same_citizen_previous_year(
         if p.has_effective_decision:
             found.add(PriorYearFinding(int(p.academic_year), A13_BASIS_ADMISSION_DECISION, None))
     return tuple(sorted(found, key=lambda f: (-f.year, f.basis, f.status or "")))
+
+
+#: Cờ A13 (owner Q7 22-11): so CCCD sau khi xoá MỌI ký tự khoảng trắng (định nghĩa ``str.isspace`` của Python — mọi ký tự ấy
+#: đều ≤ U+3000, test kiểm trên toàn bảng mã) ở CẢ HAI phía; rỗng sau khi xoá ⇒ không so. MỘT định nghĩa cho phía Python
+#: (:func:`citizen_id_match_key`) và câu SQL của bộ nạp (:data:`CITIZEN_ID_WHITESPACE_PATTERN`, truyền làm tham số
+#: ``regexp_replace``). Mã chưa có hàm chuẩn hoá CCCD nào khác (rà 22-11).
+CITIZEN_ID_WHITESPACE: str = "".join(c for c in map(chr, range(0x3001)) if c.isspace())
+CITIZEN_ID_WHITESPACE_PATTERN: str = "[" + "".join("\\u%04x" % ord(c) for c in CITIZEN_ID_WHITESPACE) + "]"
+_CITIZEN_ID_DROP = {ord(c): None for c in CITIZEN_ID_WHITESPACE}
+
+
+def citizen_id_match_key(value: Any) -> Optional[str]:
+    """Khoá so CCCD của cờ A13: bỏ mọi khoảng trắng; ``None`` khi trống / rỗng sau khi bỏ (không ghép với ai)."""
+    if value is None:
+        return None
+    key = str(value).translate(_CITIZEN_ID_DROP)
+    return key or None
 
 
 def selected_in_other_draft_session(profile_id: int, other_draft_auto_profile_ids: FrozenSet[int]) -> bool:

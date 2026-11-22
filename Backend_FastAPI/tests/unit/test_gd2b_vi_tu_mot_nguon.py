@@ -34,7 +34,11 @@ GOC = Path(__file__).resolve().parents[2]
 APP = GOC / "app"
 LUAT = "services/admission_review_rules.py"
 KHUNG_CHAY = "services/admission_review_run_service.py"
-MODULE_GD2B = (LUAT, KHUNG_CHAY)
+# Đợt 2 (L3b): bộ nạp theo lô + câu đọc theo lô + kiểm KV F231 thuần — cùng chịu các lệnh cấm của máy xét.
+BO_NAP = "services/admission_review_loader.py"
+CAU_NAP = "repositories/admission_review_load_repository.py"
+KIEM_KV = "services/area_check_rules.py"
+MODULE_GD2B = (LUAT, KHUNG_CHAY, BO_NAP, CAU_NAP, KIEM_KV)
 
 
 def _cay(rel: str) -> ast.Module:

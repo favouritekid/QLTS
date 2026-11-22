@@ -15,10 +15,11 @@ Hai loại kết nối: ``AsyncSession`` (giao dịch chính của request) cho 
 """
 from __future__ import annotations
 
+import json
 from decimal import Decimal
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
-from sqlalchemy import case, delete, func, insert, select, update
+from sqlalchemy import case, delete, func, insert, select, text, update
 from sqlalchemy.engine import Row
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 
@@ -299,14 +300,40 @@ class RowColumnsMismatch(ValueError):
     """Một dòng thiếu / thừa cột so với :data:`ROW_INSERT_COLUMNS` — từ chối cả lô, KHÔNG ghi gì (fail-closed)."""
 
 
-async def insert_rows(db: Executor, run_id: int, rows: Sequence[Mapping[str, Any]]) -> None:
-    """Chèn các dòng của MỘT lượt bằng MỘT lệnh ``INSERT`` Core (executemany) — số câu SQL KHÔNG tăng theo số hồ sơ (BT35, K1).
+def _quoted(name: str) -> str:
+    return '"%s"' % name.replace('"', '""')
 
-    Đợt 1 sau Codex B1: KHÔNG dùng ``insert(<lớp ORM>)`` — đường "bulk insert" của ORM BỎ khoá có giá trị ``None`` (trừ khi bật
-    ``render_nulls``) rồi gom các dòng LIỀN NHAU cùng tập khoá thành một câu ⇒ hồ sơ được xếp (có ``considered_*``) xen kẽ hồ sơ thiếu
-    điều kiện (``None``) sinh MỘT câu mỗi dòng. Ở đây mọi dòng phải có ĐỦ :data:`ROW_INSERT_COLUMNS` (``None`` ghi thành NULL, JSON
-    ``None`` thành SQL NULL nhờ ``none_as_null``) ⇒ một hình câu duy nhất. Dòng thiếu / thừa cột ⇒ :class:`RowColumnsMismatch`
-    trước khi gửi câu nào. Giá trị JSON phải đã là JSON thuần. Trigger chỉ cho chèn khi lượt ``running``; CHECK giữ dạng dòng."""
+
+#: GĐ2-B đợt 2 (Codex 22-11 mục D P1): MỘT câu ``INSERT … SELECT`` nhiều dòng THẬT ở phía PostgreSQL — cả lô đi trong MỘT tham số
+#: ``jsonb`` (mảng object), mỗi phần tử đổi thành một hàng ``admission_review_row`` bằng ``jsonb_populate_record`` (KIỂU CỘT lấy từ
+#: CHÍNH bảng — không chép danh sách kiểu), ghi theo thứ tự lô (``WITH ORDINALITY``). Số tham số = 2, không theo số dòng (không chạm
+#: trần 32 767 tham số của giao thức); driver gọi ``execute`` MỘT lần (không ``executemany``). JSON ``null`` ⇒ SQL NULL (như
+#: ``none_as_null``); mảng JSON ⇒ ``TEXT[]``; chuỗi số ⇒ ``NUMERIC`` đúng giá trị.
+SQL_INSERT_ROWS = text(
+    "INSERT INTO admission_review_row (run_id, "
+    + ", ".join(_quoted(c) for c in ROW_INSERT_COLUMNS)
+    + ")\nSELECT CAST(:run_id AS integer), "
+    + ", ".join("r." + _quoted(c) for c in ROW_INSERT_COLUMNS)
+    + "\nFROM jsonb_array_elements(CAST(:rows AS jsonb)) WITH ORDINALITY AS e(item, ord)"
+    + "\nCROSS JOIN LATERAL jsonb_populate_record(NULL::admission_review_row, e.item) AS r"
+    + "\nORDER BY e.ord"
+)
+
+
+def _json_value(value: Any) -> Any:
+    """``Decimal`` ⇒ chuỗi (giữ ĐÚNG giá trị — không qua ``float``); kiểu khác ngoài JSON ⇒ ``TypeError`` (không đoán)."""
+    if isinstance(value, Decimal):
+        return str(value)
+    raise TypeError("Giá trị không ghi được vào JSON lô dòng: %s" % type(value).__name__)
+
+
+async def insert_rows(db: Executor, run_id: int, rows: Sequence[Mapping[str, Any]]) -> None:
+    """Chèn các dòng của MỘT lượt bằng MỘT câu SQL nhiều dòng (:data:`SQL_INSERT_ROWS`) — số câu KHÔNG tăng theo số hồ sơ, và
+    PostgreSQL thực thi ĐÚNG MỘT câu (không phải ``executemany`` = N lần thực thi phía máy chủ — Codex 22-11 mục D P1; BT35, K1).
+
+    Mọi dòng phải có ĐỦ :data:`ROW_INSERT_COLUMNS` (``None`` ghi thành NULL) — thiếu / thừa cột ⇒ :class:`RowColumnsMismatch` TRƯỚC
+    khi gửi câu nào (khoá vắng trong JSON sẽ thành NULL âm thầm ⇒ phải chặn ở đây). Giá trị JSON phải đã là JSON thuần. Trigger chỉ
+    cho chèn khi lượt ``running``; CHECK giữ dạng dòng."""
     if not rows:
         return
     cot = set(ROW_INSERT_COLUMNS)
@@ -317,8 +344,9 @@ async def insert_rows(db: Executor, run_id: int, rows: Sequence[Mapping[str, Any
             raise RowColumnsMismatch(
                 "Dòng %d thiếu cột %s, thừa cột %s" % (i, sorted(cot - khoa), sorted(khoa - cot))
             )
-        values.append({**{k: r[k] for k in ROW_INSERT_COLUMNS}, "run_id": int(run_id)})
-    await db.execute(insert(W.__table__), values)
+        values.append({k: r[k] for k in ROW_INSERT_COLUMNS})
+    payload = json.dumps(values, ensure_ascii=False, separators=(",", ":"), default=_json_value)
+    await db.execute(SQL_INSERT_ROWS, {"run_id": int(run_id), "rows": payload})
 
 
 def _row_filters(

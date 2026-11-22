@@ -37,7 +37,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Generator, Iterable, Mapping, NamedTuple, Optional, Sequence
 
 import structlog
 from sqlalchemy import select
@@ -217,7 +217,6 @@ async def select_open_priority_rates(
       bừa một hàng.
     """
     from app.models.priority_config import PriorityAreaConfig, PriorityObjectConfig
-    from app.utils.exceptions import PriorityRateNotConfigured
 
     if table == RATE_TABLE_AREA:
         model, cot_ma = PriorityAreaConfig, PriorityAreaConfig.area_code
@@ -235,8 +234,27 @@ async def select_open_priority_rates(
         model.effective_to.is_(None),
     )
     rows = (await db.execute(stmt)).all()
+    return pick_open_priority_rates(rows, table=table, academic_year=academic_year, codes=can)
+
+
+def pick_open_priority_rates(
+    rows: Iterable[Sequence[Any]],
+    *,
+    table: str,
+    academic_year: int,
+    codes: list[str],
+) -> dict[str, Decimal]:
+    """Phần QUYẾT ĐỊNH của :func:`select_open_priority_rates` — hàm THUẦN trên các hàng ``(mã, điểm)`` ĐANG MỞ của
+    ``academic_year`` đã đọc (GĐ2-B đợt 2: máy xét đọc MỌI hàng mở của năm bằng MỘT câu rồi gọi chính hàm này cho từng mã —
+    một nguồn luật với T6 / bản in). Hàng của mã KHÔNG thuộc ``codes`` bị bỏ qua (câu đọc theo năm có thể trả thêm mã khác).
+    Hai hàng mở cùng mã ⇒ ``RuntimeError``; mã thiếu ⇒ ``PriorityRateNotConfigured`` liệt kê MỌI mã thiếu."""
+    from app.utils.exceptions import PriorityRateNotConfigured
+
+    can = list(dict.fromkeys(codes))
     muc: dict[str, Decimal] = {}
     for ma, diem in rows:
+        if ma not in can:
+            continue
         if ma in muc:
             raise RuntimeError(
                 f"{table}: hơn một hàng ĐANG MỞ cho mã {ma!r} năm {academic_year} — dữ liệu mức không nhất quán."
@@ -304,14 +322,7 @@ async def _resolve_object_bonus(
 
     Returns ``(bonus_points, meta_dict)``.
     """
-    codes = getattr(profile, "priority_object_codes", None) or []
-    evidence = getattr(profile, "priority_object_evidence", None) or {}
-
-    verified_codes = [
-        c
-        for c in codes
-        if isinstance(evidence.get(c), dict) and evidence[c].get("status") == "verified"
-    ]
+    verified_codes = verified_object_codes(profile)
     meta: dict[str, Any] = {
         "verified_codes": verified_codes,
         "object_max_code": None,
@@ -330,6 +341,19 @@ async def _resolve_object_bonus(
     meta["object_max_code"] = best_code
     meta["object_rate"] = str(best_rate)
     return best_rate, meta
+
+
+def verified_object_codes(profile: Any) -> list[str]:
+    """Mã đối tượng ưu tiên có minh chứng ``verified`` (``priority_object_evidence[mã]["status"]``), theo thứ tự khai trong
+    ``priority_object_codes`` — vị từ của :func:`_resolve_object_bonus` (T6), tách thành hàm thuần để máy xét GĐ2-B (đặc tả
+    bản 4 §6.4 "các diện khác") dùng CHUNG, không chép. Chỉ đọc cột của hồ sơ."""
+    codes = getattr(profile, "priority_object_codes", None) or []
+    evidence = getattr(profile, "priority_object_evidence", None) or {}
+    return [
+        c
+        for c in codes
+        if isinstance(evidence.get(c), dict) and evidence[c].get("status") == "verified"
+    ]
 
 
 # =============================================================================
@@ -567,6 +591,28 @@ async def lookup_kv_for_school_year(
     return result.scalar_one_or_none()
 
 
+#: Bậc học của ``academic_history`` mà luật nhiều trường (TT 05/2021 Phụ lục 01 Mục 5.a) tính — MỘT nguồn cho bộ quyết định và
+#: cho :func:`kv_lookup_keys`.
+_KV_HISTORY_LEVELS = frozenset({"THPT", "THCS_THPT", "GDTX"})
+#: Loại phép tra mà bộ quyết định KV yêu cầu.
+KV_LOOKUP_COMMUNE = "commune"
+KV_LOOKUP_SCHOOL = "school"
+
+
+class KvLookup(NamedTuple):
+    """Một phép tra danh mục KV mà bộ quyết định cần: ``(loại, khoá, năm)`` — ``commune``: khoá = mã xã (``_lookup_commune_kv``);
+    ``school``: khoá = id trường (``lookup_kv_for_school_year``)."""
+
+    kind: str
+    key: Any
+    year: Any
+
+
+class KvLookupNotLoaded(RuntimeError):
+    """Đường lô: bộ quyết định cần một phép tra mà lượt nạp KHÔNG có trong bản đồ — fail-closed (nơi gọi coi như "không tính lại
+    được"), KHÔNG đoán ``None``. Chỉ id / năm trong thông điệp."""
+
+
 async def resolve_kv_for_profile(
     profile: "AdmissionProfile",
     db: "AsyncSession",
@@ -574,7 +620,114 @@ async def resolve_kv_for_profile(
     target_level: Optional[str] = None,
     admission_type: Optional[str] = None,
 ) -> tuple[Optional[str], dict[str, Any]]:
-    """Resolve KV cho profile per TT 05/2021 Phụ lục 01.
+    """Resolve KV cho profile per TT 05/2021 Phụ lục 01 — BỘ ĐỌC TỪNG HỒ SƠ quanh bộ quyết định :func:`_kv_resolution_steps`.
+
+    GĐ2-B đợt 2 (K1 — đề cương đợt 2 §3): luật nằm TRỌN trong bộ quyết định (generator thuần, không đọc CSDL); hàm này chỉ trả
+    lời từng phép tra nó yêu cầu bằng ĐÚNG hai hàm đọc cũ (``_lookup_commune_kv`` / ``lookup_kv_for_school_year``, gọi qua tên
+    module — test bọc được), đúng thứ tự và đúng số lần như trước. Đường lô (:func:`decide_kv_for_profile`) trả lời cùng bộ
+    quyết định từ bản đồ đã nạp bằng MỘT câu ⇒ một nguồn luật cho T1 / T6 / bản in GĐ1 / máy xét GĐ2-B. Tham số, giá trị trả,
+    nhánh lỗi: xem :func:`_kv_resolution_steps`."""
+    steps = _kv_resolution_steps(profile, target_level=target_level, admission_type=admission_type)
+    try:
+        request = next(steps)
+        while True:
+            if request.kind == KV_LOOKUP_COMMUNE:
+                answer = await _lookup_commune_kv(db, request.key, request.year)
+            else:
+                answer = await lookup_kv_for_school_year(db, request.key, request.year)
+            request = steps.send(answer)
+    except StopIteration as done:
+        return done.value
+
+
+def decide_kv_for_profile(
+    profile: "AdmissionProfile",
+    *,
+    commune_kv: Mapping[tuple[Any, Any], Optional[str]],
+    school_kv: Mapping[tuple[Any, Any], Optional[str]],
+    target_level: Optional[str] = None,
+    admission_type: Optional[str] = None,
+) -> tuple[Optional[str], dict[str, Any]]:
+    """Đường LÔ của :func:`resolve_kv_for_profile`: CÙNG bộ quyết định, mỗi phép tra trả lời từ bản đồ đã nạp —
+    ``commune_kv[(mã xã, năm)]`` / ``school_kv[(id trường, năm)]`` (giá trị ``None`` = danh mục không có hàng, như hai hàm đọc).
+    Khoá vắng trong bản đồ ⇒ :class:`KvLookupNotLoaded` (không đoán). Không đọc CSDL."""
+    steps = _kv_resolution_steps(profile, target_level=target_level, admission_type=admission_type)
+    try:
+        request = next(steps)
+        while True:
+            table = commune_kv if request.kind == KV_LOOKUP_COMMUNE else school_kv
+            key = (request.key, request.year)
+            if key not in table:
+                steps.close()
+                raise KvLookupNotLoaded(
+                    "Thiếu phép tra KV %s cho hồ sơ %s (năm %r)."
+                    % (request.kind, getattr(profile, "id", None), request.year)
+                )
+            request = steps.send(table[key])
+    except StopIteration as done:
+        return done.value
+
+
+def _plain_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def kv_lookup_keys(
+    profile: "AdmissionProfile",
+    *,
+    target_level: Optional[str] = None,
+    admission_type: Optional[str] = None,
+) -> tuple[frozenset, frozenset]:
+    """Tập KHOÁ TRA (bao trùm) mà bộ quyết định có thể cần cho ``profile`` — ``(xã: {(mã xã, năm)}, trường: {(id trường, năm)})``
+    — để đường lô nạp TRƯỚC bằng hai câu cho mọi hồ sơ. Chỉ khoá đúng kiểu (mã xã chuỗi; id trường / năm số nguyên); dữ liệu
+    lạ không sinh khoá ⇒ bộ quyết định gặp khoá vắng ⇒ :class:`KvLookupNotLoaded` (fail-closed). Bao trùm: mọi năm của mọi mục
+    ``academic_history`` hợp lệ + năm ``year_to`` của mọi mục (ứng viên trường tốt nghiệp)."""
+    try:
+        kv_year = priority_academic_year(profile)
+    except ValueError:
+        return frozenset(), frozenset()
+    history = getattr(profile, "academic_history", None) or []
+    basis, _ = _derive_kv_basis_level(
+        cultural=getattr(profile, "cultural_education_level", None),
+        vocational=getattr(profile, "vocational_qualification", "none") or "none",
+        target_level=target_level,
+        admission_type=admission_type,
+        academic_history=history,
+        area_resolution_basis=getattr(profile, "area_resolution_basis", None),
+    )
+    communes: set = set()
+    schools: set = set()
+    if basis in ("COMMUNE_SPECIAL", "THUONG_TRU"):
+        commune_code = getattr(profile, "permanent_commune_code", None)
+        if isinstance(commune_code, str) and commune_code:
+            communes.add((commune_code, kv_year))
+    elif basis == "LICH_SU_THPT":
+        for entry in history:
+            if not (isinstance(entry, dict) and entry.get("level") in _KV_HISTORY_LEVELS and entry.get("school_id")):
+                continue
+            sid = entry["school_id"]
+            if not _plain_int(sid):
+                continue
+            y_from, y_to = entry.get("year_from"), entry.get("year_to")
+            if _plain_int(y_to):
+                schools.add((sid, y_to))
+            if _plain_int(y_from) and _plain_int(y_to) and y_to >= y_from:
+                for year in range(y_from, y_to + 1):
+                    schools.add((sid, year))
+    return frozenset(communes), frozenset(schools)
+
+
+def _kv_resolution_steps(
+    profile: "AdmissionProfile",
+    *,
+    target_level: Optional[str] = None,
+    admission_type: Optional[str] = None,
+) -> Generator[KvLookup, Optional[str], tuple[Optional[str], dict[str, Any]]]:
+    """BỘ QUYẾT ĐỊNH KV (thuần, không đọc CSDL): mỗi phép tra danh mục là một ``yield KvLookup(...)``; nơi gọi gửi lại kết quả
+    (``None`` = không có hàng). Trả ``(kv_code, meta)`` qua ``StopIteration.value``. Hai nơi gọi: :func:`resolve_kv_for_profile`
+    (từng hồ sơ, đọc CSDL) và :func:`decide_kv_for_profile` (lô). Phần dưới là docstring luật gốc (``db`` = nơi gọi tra).
+
+    Resolve KV cho profile per TT 05/2021 Phụ lục 01.
 
     Phase E.4 (commit 5) refactor — pipeline:
        Eligibility (upstream gate) → Exception → Auto basis → Resolve KV
@@ -648,7 +801,7 @@ async def resolve_kv_for_profile(
                 requires_manual_override=True,
                 reason="special_case_no_commune_code",
             )
-        kv = await _lookup_commune_kv(db, commune_code, kv_year)
+        kv = yield KvLookup(KV_LOOKUP_COMMUNE, commune_code, kv_year)
         if kv is None:
             return None, _meta_base(
                 rule_applied="catalog_gap_commune",
@@ -702,7 +855,7 @@ async def resolve_kv_for_profile(
                 requires_manual_override=True,
                 reason="profile_missing_permanent_commune_code",
             )
-        kv = await _lookup_commune_kv(db, commune_code, kv_year)
+        kv = yield KvLookup(KV_LOOKUP_COMMUNE, commune_code, kv_year)
         if kv is None:
             return None, _meta_base(
                 rule_applied="catalog_gap_commune",
@@ -720,7 +873,7 @@ async def resolve_kv_for_profile(
     # --- LICH_SU_THPT: multi-school rule TT 05/2021 Phụ lục 01 Mục 5.a. ---
     # Aggregate duration per KV qua academic_history, longest duration wins,
     # tie → graduation school (year_to + grade_to).
-    accepted_levels = {"THPT", "THCS_THPT", "GDTX"}
+    accepted_levels = _KV_HISTORY_LEVELS
 
     basis_entries = [
         e
@@ -756,7 +909,7 @@ async def resolve_kv_for_profile(
 
         entry_years_by_kv: list[dict[str, Any]] = []
         for year in range(y_from, y_to + 1):
-            kv = await lookup_kv_for_school_year(db, sid, year)
+            kv = yield KvLookup(KV_LOOKUP_SCHOOL, sid, year)
             if kv:
                 kv_years[kv] = kv_years.get(kv, 0) + 1
                 entry_years_by_kv.append({"year": year, "kv": kv})
@@ -854,9 +1007,7 @@ async def resolve_kv_for_profile(
             )
 
     grad_entry = sorted_entries[0][1]
-    grad_kv = await lookup_kv_for_school_year(
-        db, grad_entry["school_id"], grad_entry["year_to"]
-    )
+    grad_kv = yield KvLookup(KV_LOOKUP_SCHOOL, grad_entry["school_id"], grad_entry["year_to"])
     if grad_kv is None:
         # Graduation school year miss catalog → fail-closed.
         return None, _meta_base(
@@ -1048,12 +1199,70 @@ async def verify_manual_override_provenance(
         ``snapshot["reason"]`` + log.
 
     Fail-closed ở MỌI nhánh. Xem khối chú thích phía trên cho 5 điều kiện.
+
+    GĐ2-B đợt 2 (đề cương §3): luật nằm ở hai hàm thuần :func:`manual_override_claim_refusal` (ảnh chụp) và
+    :func:`decide_manual_override_provenance` (đối chiếu sổ); hàm này chỉ ĐỌC hàng sổ mới nhất của MỘT hồ sơ (đúng câu cũ, chỉ
+    đọc khi ảnh chụp qua kiểm). Đường lô đọc hàng sổ của MỌI hồ sơ bằng :func:`latest_manual_override_audit_rows` rồi gọi cùng
+    hàm thuần.
     """
     from app.models.priority_audit import PriorityAuditLog
 
+    refusal = manual_override_claim_refusal(profile)
+    if refusal is not None:
+        return False, refusal, {}
+
+    stmt = (
+        select(PriorityAuditLog)
+        .where(
+            PriorityAuditLog.profile_id == profile.id,
+            PriorityAuditLog.action_type == _MANUAL_OVERRIDE_AUDIT_ACTION,
+        )
+        .order_by(PriorityAuditLog.created_at.desc(), PriorityAuditLog.id.desc())
+        .limit(1)
+    )
+    audit_row = (await db.execute(stmt)).scalars().first()
+    return decide_manual_override_provenance(profile, audit_row)
+
+
+#: ``priority_audit_log.action_type`` của đường override KV DUY NHẤT (``priority_override_service.override_kv``).
+_MANUAL_OVERRIDE_AUDIT_ACTION = "kv_manual_override"
+
+
+async def latest_manual_override_audit_rows(db: Any, profile_ids: Sequence[int]) -> dict[int, Any]:
+    """Đường LÔ của phần đọc sổ trong :func:`verify_manual_override_provenance`: hàng ``kv_manual_override`` MỚI NHẤT của từng hồ
+    sơ (cùng thứ tự ``created_at`` giảm rồi ``id`` giảm — ``DISTINCT ON``) bằng MỘT câu (kể cả danh sách rỗng). Hồ sơ không có
+    hàng ⇒ vắng khoá.
+    ``db``: phiên ORM (kể cả phiên trên kết nối ảnh chụp chỉ đọc)."""
+    from sqlalchemy import Integer, any_, bindparam
+    from sqlalchemy.dialects.postgresql import ARRAY
+
+    from app.models.priority_audit import PriorityAuditLog
+
+    ids = sorted({int(p) for p in profile_ids})
+    stmt = (
+        select(PriorityAuditLog)
+        .where(
+            # Tham số MẢNG (một tham số, không chia khúc) và chạy cả khi rỗng — số câu không theo số hồ sơ (owner Q3 22-11).
+            PriorityAuditLog.profile_id == any_(bindparam("ids", ids, type_=ARRAY(Integer))),
+            PriorityAuditLog.action_type == _MANUAL_OVERRIDE_AUDIT_ACTION,
+        )
+        .distinct(PriorityAuditLog.profile_id)
+        .order_by(
+            PriorityAuditLog.profile_id,
+            PriorityAuditLog.created_at.desc(),
+            PriorityAuditLog.id.desc(),
+        )
+    )
+    return {int(r.profile_id): r for r in (await db.execute(stmt)).scalars()}
+
+
+def manual_override_claim_refusal(profile: Any) -> Optional[str]:
+    """Bước 1 (thuần) của :func:`verify_manual_override_provenance`: ảnh chụp có khai override ĐỦ dạng không — ``None`` = đủ;
+    không thì mã từ chối (``no_prior_snapshot`` / ``snapshot_kv_invalid`` / ``snapshot_missing_actor`` /
+    ``snapshot_missing_timestamp`` / ``snapshot_reason_too_short``)."""
     snapshot = getattr(profile, "priority_resolution_snapshot", None)
     if not isinstance(snapshot, dict) or not snapshot:
-        return False, "no_prior_snapshot", {}
+        return "no_prior_snapshot"
 
     claimed_kv = snapshot.get("kv_resolved")
     claimed_by = snapshot.get("manual_override_by")
@@ -1061,24 +1270,31 @@ async def verify_manual_override_provenance(
     claimed_reason = (snapshot.get("manual_override_reason") or "").strip()
 
     if claimed_kv not in _MANUAL_OVERRIDE_KV_CODES:
-        return False, "snapshot_kv_invalid", {}
+        return "snapshot_kv_invalid"
     if not isinstance(claimed_by, int) or isinstance(claimed_by, bool):
-        return False, "snapshot_missing_actor", {}
+        return "snapshot_missing_actor"
     if claimed_at is None:
-        return False, "snapshot_missing_timestamp", {}
+        return "snapshot_missing_timestamp"
     if len(claimed_reason) < _MANUAL_OVERRIDE_MIN_REASON_LEN:
-        return False, "snapshot_reason_too_short", {}
+        return "snapshot_reason_too_short"
+    return None
 
-    stmt = (
-        select(PriorityAuditLog)
-        .where(
-            PriorityAuditLog.profile_id == profile.id,
-            PriorityAuditLog.action_type == "kv_manual_override",
-        )
-        .order_by(PriorityAuditLog.created_at.desc(), PriorityAuditLog.id.desc())
-        .limit(1)
-    )
-    audit_row = (await db.execute(stmt)).scalars().first()
+
+def decide_manual_override_provenance(
+    profile: Any, audit_row: Any
+) -> tuple[bool, Optional[str], dict[str, Any]]:
+    """Phần QUYẾT ĐỊNH (thuần) của :func:`verify_manual_override_provenance` trên hàng sổ mới nhất ĐÃ ĐỌC (``None`` = không có) —
+    cùng 5 điều kiện, cùng mã, cùng ``evidence``. Gọi lại :func:`manual_override_claim_refusal` trước (đường lô không đọc sổ
+    riêng cho từng hồ sơ nên không có bước chặn sớm)."""
+    refusal = manual_override_claim_refusal(profile)
+    if refusal is not None:
+        return False, refusal, {}
+    snapshot = profile.priority_resolution_snapshot
+    claimed_kv = snapshot.get("kv_resolved")
+    claimed_by = snapshot.get("manual_override_by")
+    claimed_at = _parse_iso_utc(snapshot.get("manual_override_at"))
+    claimed_reason = (snapshot.get("manual_override_reason") or "").strip()
+
     if audit_row is None:
         return False, "no_audit_row", {}
 

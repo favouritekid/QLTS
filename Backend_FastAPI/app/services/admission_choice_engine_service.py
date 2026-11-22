@@ -115,59 +115,73 @@ T6_PER_PROFILE_STOP_ERRORS = (
 )
 
 
-def t6_profile_load_options() -> list:
-    """Chuỗi eager-load mà T6 cần — MỘT nguồn cho router ``publish-result`` và test.
+def t6_profile_load_paths() -> tuple:
+    """Chuỗi quan hệ mà T6 cần, dạng DỮ LIỆU (mỗi phần tử là một đường thuộc tính từ ``AdmissionProfile``) — MỘT nguồn cho
+    :func:`t6_profile_load_options` (``selectinload`` của T6) và cho bộ nạp theo lô của máy xét GĐ2-B
+    (``admission_review_load_repository.load_relationship_paths`` — đọc bằng tham số mảng, không chia khúc 500 của
+    ``selectinload``; owner Q3 22-11). Thêm / bớt một tầng ở đây là đổi cho CẢ HAI nơi.
 
     Thiếu chuỗi trình độ/loại hình thì ``derive_target_level_and_type`` ném và T6 DỪNG
     (``ChoiceTargetLevelNotConfigured``, owner Q20(a)); thiếu ``admission_round`` thì không so được năm đợt.
     """
-    from sqlalchemy.orm import selectinload
-
-    return [
+    profile, choice, path = models.AdmissionProfile, models.AdmissionProfileChoice, models.AdmissionPath
+    return (
         # P2 fix 2026-05-22 — eager-load `.lead` cho cascade gọi
         # sync_lead_from_admission() sau khi profile.status flip
         # (reviewing → result_published → admitted/rejected). Trước
         # đây không eager-load → sync silent fail "Lead not loaded".
-        selectinload(models.AdmissionProfile.lead),
-        selectinload(models.AdmissionProfile.choices)
-        .selectinload(models.AdmissionProfileChoice.admission_path)
-        .selectinload(models.AdmissionPath.admission_method),
+        (profile.lead,),
+        (profile.choices, choice.admission_path, path.admission_method),
         # admission_round: T6 so năm của đợt với năm tuyển sinh của hồ sơ (lệch ⇒ PriorityYearMismatch). Mức điểm
         # tra theo năm của HỒ SƠ (owner Q10(a)), không theo đợt.
-        selectinload(models.AdmissionProfile.choices)
-        .selectinload(models.AdmissionProfileChoice.admission_path)
-        .selectinload(models.AdmissionPath.admission_round),
-        selectinload(models.AdmissionProfile.choices)
-        .selectinload(models.AdmissionProfileChoice.admission_path)
-        .selectinload(models.AdmissionPath.criteria),
+        (profile.choices, choice.admission_path, path.admission_round),
+        (profile.choices, choice.admission_path, path.criteria),
         # Q9 #07 Phase E.4 — choice-engine gate 0 (eligibility) needs
         # derive_target_level_and_type(path), which reads:
         #   path.academic_info.offering.program.degree_level_ref.code
         #   path.academic_info.offering.offering_type_config.code
         # Without this chain, gate 0 raises CONFIG_GAP_TARGET_LEVEL and
         # every choice rejects silently. Mirrors the bonus_rule chain.
-        selectinload(models.AdmissionProfile.choices)
-        .selectinload(models.AdmissionProfileChoice.admission_path)
-        .selectinload(models.AdmissionPath.academic_info)
-        .selectinload(models.OfferingAcademicInfo.offering)
-        .selectinload(models.ProgramOffering.program)
-        .selectinload(models.MajorProgram.degree_level_ref),
-        selectinload(models.AdmissionProfile.choices)
-        .selectinload(models.AdmissionProfileChoice.admission_path)
-        .selectinload(models.AdmissionPath.academic_info)
-        .selectinload(models.OfferingAcademicInfo.offering)
-        .selectinload(models.ProgramOffering.offering_type_config),
+        (
+            profile.choices,
+            choice.admission_path,
+            path.academic_info,
+            models.OfferingAcademicInfo.offering,
+            models.ProgramOffering.program,
+            models.MajorProgram.degree_level_ref,
+        ),
+        (
+            profile.choices,
+            choice.admission_path,
+            path.academic_info,
+            models.OfferingAcademicInfo.offering,
+            models.ProgramOffering.offering_type_config,
+        ),
         # SubjectGroup uses subject_mappings (M2M) → SubjectGroupSubject.subject
         # NOT direct `subjects` relation (em earlier drift, fixed).
-        selectinload(models.AdmissionProfile.choices)
-        .selectinload(models.AdmissionProfileChoice.path_subject_group_config)
-        .selectinload(models.PathSubjectGroupConfig.subject_group)
-        .selectinload(models.SubjectGroup.subject_mappings)
-        .selectinload(models.SubjectGroupSubject.subject),
-        selectinload(models.AdmissionProfile.choices)
-        .selectinload(models.AdmissionProfileChoice.scores)
-        .selectinload(models.ProfileChoiceScore.subject),
-    ]
+        (
+            profile.choices,
+            choice.path_subject_group_config,
+            models.PathSubjectGroupConfig.subject_group,
+            models.SubjectGroup.subject_mappings,
+            models.SubjectGroupSubject.subject,
+        ),
+        (profile.choices, choice.scores, models.ProfileChoiceScore.subject),
+    )
+
+
+def t6_profile_load_options() -> list:
+    """Chuỗi eager-load mà T6 cần — MỘT nguồn cho router ``publish-result`` và test: mỗi đường của
+    :func:`t6_profile_load_paths` thành một chuỗi ``selectinload`` (cùng thứ tự, cùng tầng như bản viết tay trước đây)."""
+    from sqlalchemy.orm import selectinload
+
+    options = []
+    for attrs in t6_profile_load_paths():
+        option = selectinload(attrs[0])
+        for attr in attrs[1:]:
+            option = option.selectinload(attr)
+        options.append(option)
+    return options
 
 
 # ============================================================================
