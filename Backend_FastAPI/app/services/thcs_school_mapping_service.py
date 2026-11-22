@@ -26,7 +26,7 @@ import copy
 from collections import Counter
 from typing import Any, Final, Iterable, Optional, Tuple
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, literal_column, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -74,6 +74,25 @@ _APPLY_LOCKED_DETAIL: Final[str] = (
 # Bộ lọc SƠ BỘ ở CSDL — CHỈ để thu hẹp số hồ sơ phải đọc. Nó là TẬP CHA của vị từ thật
 # (:func:`is_thcs_manual_row`, Python): quyết định dòng nào thuộc nhóm / bị sửa luôn do vị từ thật.
 _PREFILTER_JSONPATH: Final[str] = '$[*] ? (@.graduation_type == "THCS" || @.level == "THCS")'
+_PREFILTER_JSONPATH_SQL = literal_column(f"'{_PREFILTER_JSONPATH}'::jsonpath")
+
+
+def candidate_profiles_stmt(ids: Optional[Iterable[int]] = None):
+    """Câu đọc hồ sơ CÓ THỂ có dòng THCS (lọc sơ bộ — tập CHA của :func:`is_thcs_manual_row`)."""
+    t = AdmissionProfile.__table__
+    stmt = (
+        select(t.c.id, t.c.status, t.c.area_resolution_basis, t.c.academic_history)
+        .where(
+            func.jsonb_typeof(t.c.academic_history) == "array",
+            # Hằng ``::jsonpath`` viết thẳng: tham số ràng buộc của asyncpg bị ép ``::VARCHAR`` và PostgreSQL không
+            # có ``jsonb_path_exists(jsonb, varchar)``.
+            func.jsonb_path_exists(t.c.academic_history, _PREFILTER_JSONPATH_SQL),
+        )
+        .order_by(t.c.id)
+    )
+    if ids is not None:
+        stmt = stmt.where(t.c.id.in_(sorted(set(ids))))
+    return stmt
 
 
 def is_thcs_manual_row(entry: Any) -> bool:
@@ -129,17 +148,7 @@ class ThcsSchoolMappingService:
         self, ids: Optional[Iterable[int]] = None
     ) -> list[dict[str, Any]]:
         """(id, status, area_resolution_basis, academic_history) của hồ sơ CÓ THỂ có dòng THCS (lọc sơ bộ)."""
-        t = AdmissionProfile.__table__
-        stmt = (
-            select(t.c.id, t.c.status, t.c.area_resolution_basis, t.c.academic_history)
-            .where(
-                func.jsonb_typeof(t.c.academic_history) == "array",
-                func.jsonb_path_exists(t.c.academic_history, _PREFILTER_JSONPATH),
-            )
-            .order_by(t.c.id)
-        )
-        if ids is not None:
-            stmt = stmt.where(t.c.id.in_(sorted(set(ids))))
+        stmt = candidate_profiles_stmt(ids)
         return [dict(r._mapping) for r in (await self.db.execute(stmt)).all()]
 
     async def _mappings(self) -> dict[str, Tuple[ThcsSchoolNameMapping, VnSchool]]:

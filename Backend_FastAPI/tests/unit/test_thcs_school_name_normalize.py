@@ -15,6 +15,7 @@ from sqlalchemy.schema import CreateIndex, CreateTable
 from app.models.thcs_school_name_mapping import ThcsSchoolNameMapping
 from app.services.thcs_school_mapping_service import (
     APPLY_ELIGIBLE_STATUSES,
+    candidate_profiles_stmt,
     is_same_year_row,
     is_thcs_manual_row,
 )
@@ -117,6 +118,15 @@ def test_vi_tu_dong_y_y():
     assert is_same_year_row({"year_from": 2020, "year_to": 2020}) is True
     assert is_same_year_row({"year_from": 2019, "year_to": 2020}) is False
     assert is_same_year_row({"year_from": None, "year_to": None}) is False
+
+
+def test_cau_loc_so_bo_gui_jsonpath_dang_hang_khong_qua_tham_so_varchar():
+    """asyncpg ép tham số chuỗi ``::VARCHAR`` mà PostgreSQL không có ``jsonb_path_exists(jsonb, varchar)`` ⇒ câu lọc sơ
+    bộ phải mang hằng ``::jsonpath`` (lỗi này chỉ lộ khi chạy trên CSDL thật)."""
+    cau = str(candidate_profiles_stmt().compile(dialect=asyncpg.dialect()))
+    assert "jsonb_path_exists(admission_profile.academic_history, '$[*] ? (" in cau, cau
+    assert "::jsonpath)" in cau, cau
+    assert "jsonb_path_exists(admission_profile.academic_history, $" not in cau, cau
 
 
 def test_tap_trang_thai_duoc_cham_chi_gom_ho_so_cho_xet():
