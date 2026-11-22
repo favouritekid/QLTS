@@ -8,6 +8,7 @@
  * Mã lý do DÙNG CHUNG với giấy tờ GĐ1b (`own_submission` / `unknown_submitter`) nhưng câu RIÊNG cho minh chứng: không có
  * "Đặt lại", không có lô / duyệt chéo.
  */
+import { PROFILE_VERSION_CONFLICT_ERROR_CODE } from "@/lib/api/error-codes"
 import { readApiError } from "@/lib/error-handler"
 
 export type PriorityEvidenceAction = "verify" | "reject" | "paper"
@@ -47,6 +48,8 @@ export function describePriorityEvidenceError(error: unknown, action: PriorityEv
   if (e.status === 409) {
     const reasonCode = typeof e.data?.reason_code === "string" ? e.data.reason_code : e.errorCode?.toLowerCase()
     if (reasonCode && PRIORITY_EVIDENCE_REASON_MESSAGES[reasonCode]) return PRIORITY_EVIDENCE_REASON_MESSAGES[reasonCode]
+    // Owner 22-11 (câu 409): xung đột phiên bản hồ sơ ⇒ hiện NGUYÊN câu của máy chủ.
+    if (e.errorCode === PROFILE_VERSION_CONFLICT_ERROR_CODE && e.detail) return e.detail
     if (e.errorCode === "CONFLICT") return "Hồ sơ vừa được người khác cập nhật — tải lại trang rồi làm lại."
     return "Không thực hiện được với minh chứng này — tải lại trang để xem trạng thái mới."
   }

@@ -80,6 +80,8 @@ from ..utils.exceptions import (
     PermissionDeniedError,
     ConflictError,
     DuplicateResourceError,
+    PROFILE_VERSION_CONFLICT_ACTION_DETAIL,
+    PROFILE_VERSION_CONFLICT_SAVE_DETAIL,
     ProfileVersionConflict,
     ServiceError,
     ValidationError,
@@ -6027,8 +6029,9 @@ async def update_profile(
         # Owner 22-11 (công cụ ghép trường THCS, câu 1): áp ghép tăng version cả hồ sơ NHÁP ⇒ cán bộ đang mở form
         # nhận câu RÕ RÀNG (mã riêng PROFILE_VERSION_CONFLICT, giao diện hiện nguyên câu) thay vì câu chung.
         raise ProfileVersionConflict(
-            context={"expected_version": data["version"], "current_version": profile.version},
-            public_payload={"current_version": profile.version},
+            current_version=profile.version,
+            expected_version=data["version"],
+            detail=PROFILE_VERSION_CONFLICT_SAVE_DETAIL,
         )
 
     # Update fields (only non-None values from schema)
@@ -10151,11 +10154,7 @@ async def approve_profile(
             actual_version=profile.version,
             user_id=approver.id,
         )
-        raise ConflictError(
-            f"Profile was modified by another user. "
-            f"Expected version {data['version']}, but current version is {profile.version}. "
-            "Please refresh and try again."
-        )
+        raise ProfileVersionConflict(current_version=profile.version, expected_version=data["version"])
 
     # STATE VALIDATION (Business Rule) — only after version match confirmed
     try:
@@ -10409,11 +10408,7 @@ async def reject_profile(
             actual_version=profile.version,
             user_id=rejector.id,
         )
-        raise ConflictError(
-            f"Profile was modified by another user. "
-            f"Expected version {data['version']}, but current version is {profile.version}. "
-            "Please refresh and try again."
-        )
+        raise ProfileVersionConflict(current_version=profile.version, expected_version=data["version"])
 
     # STATE VALIDATION — only after version match confirmed
     try:
@@ -10623,11 +10618,7 @@ async def request_revision(
             actual_version=profile.version,
             user_id=reviewer.id,
         )
-        raise ConflictError(
-            f"Profile was modified by another user. "
-            f"Expected version {data['version']}, but current version is {profile.version}. "
-            "Please refresh and try again."
-        )
+        raise ProfileVersionConflict(current_version=profile.version, expected_version=data["version"])
 
     try:
         validate_transition(profile.status, "revision_requested")
@@ -11578,11 +11569,7 @@ async def resubmit_profile(
 
     # VERSION CHECK
     if data.get("version") is not None and data["version"] != profile.version:
-        raise ConflictError(
-            f"Profile was modified by another user. "
-            f"Expected version {data['version']}, but current version is {profile.version}. "
-            "Please refresh and try again."
-        )
+        raise ProfileVersionConflict(current_version=profile.version, expected_version=data["version"])
 
     # Đổi ngành: revalidate eligibility + đồng bộ applied_rules/quota/doc theo
     # ngành MỚI TRƯỚC transition (status GỐC còn revision_requested/rejected —
@@ -11900,11 +11887,7 @@ async def override_profile(
     # the schema/router ever drift again the KeyError below fails loud
     # instead of giving a false sense of optimistic locking.
     if data["version"] != profile.version:
-        raise ConflictError(
-            f"Profile was modified by another user. "
-            f"Expected version {data['version']}, but current version is {profile.version}. "
-            "Please refresh and try again."
-        )
+        raise ProfileVersionConflict(current_version=profile.version, expected_version=data["version"])
 
     # ADM-014: capture pre-mutation state for the audit row written
     # below via ``log_changes`` (richer than the standard
@@ -12049,11 +12032,7 @@ async def claim_review(
 
     # 3. Version Check (CRITICAL FIX: Prevent Race Condition)
     if expected_version is not None and profile.version != expected_version:
-        raise ConflictError(
-            f"Profile was modified by another user. "
-            f"Expected version {expected_version}, but current version is {profile.version}. "
-            "Please refresh and try again."
-        )
+        raise ProfileVersionConflict(current_version=profile.version, expected_version=expected_version)
 
     if profile.assigned_reviewer_id:
         if profile.assigned_reviewer_id == reviewer.id:
@@ -12116,11 +12095,7 @@ async def unclaim_review(
     from app.utils.exceptions import BusinessRuleViolation
 
     if expected_version is not None and profile.version != expected_version:
-        raise ConflictError(
-            f"Profile was modified by another user. "
-            f"Expected version {expected_version}, but current version is {profile.version}. "
-            "Please refresh and try again."
-        )
+        raise ProfileVersionConflict(current_version=profile.version, expected_version=expected_version)
 
     if profile.assigned_reviewer_id is None:
         raise BusinessRuleViolation("No reviewer to unclaim")
@@ -12216,11 +12191,7 @@ async def finalize_profile(
     # ADM-015: FinalizeRequest now requires ``version`` (ge=1). Direct
     # compare; KeyError fails loud if the schema ever drops the field.
     if data["version"] != profile.version:
-        raise ConflictError(
-            f"Profile was modified by another user. "
-            f"Expected version {data['version']}, but current version is {profile.version}. "
-            "Please refresh and try again."
-        )
+        raise ProfileVersionConflict(current_version=profile.version, expected_version=data["version"])
 
     # ADM-026: quota gate at finalize. Profile is already in a
     # quota-occupying status (confirmed/overridden) at this point, so the
@@ -13045,11 +13016,7 @@ async def withdraw_profile(
         raise BadRequest("Withdrawal reason is required")
 
     if data["version"] != profile.version:
-        raise ConflictError(
-            f"Profile was modified by another user. "
-            f"Expected version {data['version']}, but current version is {profile.version}. "
-            "Please refresh and try again."
-        )
+        raise ProfileVersionConflict(current_version=profile.version, expected_version=data["version"])
 
     # Caller still captures old_status for the legacy bundle below.
     _old_status_for_audit = profile.status
@@ -13350,10 +13317,7 @@ async def apply_minor_correction(
     # 2. Optimistic lock — pattern khớp admission_service.py:2424 / 4091 /
     # 4309 / 4501 / 4877 (approve / reject / etc).
     if payload.version != profile.version:
-        raise ConflictError(
-            f"Expected version {payload.version}, but current version is "
-            f"{profile.version}. Refresh and try again."
-        )
+        raise ProfileVersionConflict(current_version=profile.version, expected_version=payload.version)
 
     # 3. Resolve effective allowlist live from AdmissionPath.
     # admission_path_id sits in applied_rules snapshot (admission_service.py:1956).
@@ -13548,11 +13512,7 @@ async def mark_student_dropped(
     # already marked as dropped" — that wording suggests data error,
     # actually it's a race.
     if data["version"] != profile.version:
-        raise ConflictError(
-            f"Profile was modified by another user. "
-            f"Expected version {data['version']}, but current version is {profile.version}. "
-            "Please refresh and try again."
-        )
+        raise ProfileVersionConflict(current_version=profile.version, expected_version=data["version"])
 
     # Guard: Must be enrolled
     if profile.status != "enrolled":
@@ -14461,10 +14421,8 @@ async def bulk_approve(
                 # Optimistic locking
                 if expected_version != profile.version:
                     failed_ids.append(profile_id)
-                    errors[profile_id] = (
-                        f"Version mismatch: expected {expected_version}, "
-                        f"actual {profile.version}. Refresh and retry."
-                    )
+                    # Owner 22-11: cùng câu trung tính với ProfileVersionConflict (một nguồn).
+                    errors[profile_id] = PROFILE_VERSION_CONFLICT_ACTION_DETAIL
                     continue
 
                 # Application fee gate
@@ -14779,10 +14737,8 @@ async def bulk_reject(
                 # Optimistic locking
                 if expected_version != profile.version:
                     failed_ids.append(profile_id)
-                    errors[profile_id] = (
-                        f"Version mismatch: expected {expected_version}, "
-                        f"actual {profile.version}. Refresh and retry."
-                    )
+                    # Owner 22-11: cùng câu trung tính với ProfileVersionConflict (một nguồn).
+                    errors[profile_id] = PROFILE_VERSION_CONFLICT_ACTION_DETAIL
                     continue
 
                 # STATE CHANGE — caller still captures old_status for the

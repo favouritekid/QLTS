@@ -66,3 +66,23 @@ export function isAuthStateUnavailable(
     AUTH_STATE_UNAVAILABLE_ERROR_CODE
   );
 }
+
+/**
+ * Lưu / thao tác trên hồ sơ bằng bản đã CŨ (khoá lạc quan `version` lệch) — 409.
+ * Backend: `ProfileVersionConflict` (`app/utils/exceptions.py`), dùng chung cho MỌI
+ * chỗ kiểm `version` của hồ sơ (owner 22-11, câu 409). `detail` là câu tiếng Việt
+ * viết cho người dùng (lưu form / thao tác) — giao diện hiện NGUYÊN câu.
+ */
+export const PROFILE_VERSION_CONFLICT_ERROR_CODE = "PROFILE_VERSION_CONFLICT";
+
+/** `detail` của 409 `PROFILE_VERSION_CONFLICT`, hoặc null với mọi phản hồi khác. */
+export function profileVersionConflictDetail(
+  response: { status?: number; data?: unknown } | undefined,
+): string | null {
+  if (response?.status !== 409) return null;
+  const data = response.data;
+  if (typeof data !== "object" || data === null) return null;
+  const { error_code: code, detail } = data as { error_code?: unknown; detail?: unknown };
+  if (code !== PROFILE_VERSION_CONFLICT_ERROR_CODE) return null;
+  return typeof detail === "string" && detail ? detail : null;
+}

@@ -65,6 +65,7 @@ from app import models
 from app.core.events import SystemEvents
 from app.services.admission_service import _strip_display_fields_from_evidence
 from app.utils.exceptions import (
+    ProfileVersionConflict,
     BusinessRuleViolation,
     ConflictError,
 )
@@ -242,12 +243,7 @@ async def override_kv(
             current_version=profile.version,
             actor_id=actor.id,
         )
-        raise ConflictError(
-            f"Profile was modified by another user. "
-            f"Expected version {expected_version}, "
-            f"but current version is {profile.version}. "
-            "Please refresh and try again."
-        )
+        raise ProfileVersionConflict(current_version=profile.version, expected_version=expected_version)
 
     # ---- Step 2: Validate inputs
     if kv_resolved not in ("KV1", "KV2-NT", "KV2", "KV3"):
@@ -630,12 +626,7 @@ async def _evidence_mutation_common_checks(
     "snapshot-bumping post-decision" risk as a manual KV override.
     """
     if expected_version != profile.version:
-        raise ConflictError(
-            f"Profile was modified by another user. "
-            f"Expected version {expected_version}, "
-            f"but current version is {profile.version}. "
-            "Please refresh and try again."
-        )
+        raise ProfileVersionConflict(current_version=profile.version, expected_version=expected_version)
 
     # Hard-denied: nobody can verify/reject here. Fail-closed.
     if profile.status in _EVIDENCE_HARD_DENIED_STATUS:

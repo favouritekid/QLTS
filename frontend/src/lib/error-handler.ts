@@ -15,6 +15,8 @@ import axios, { AxiosError } from 'axios'
 import { toast } from 'sonner'
 import type { QueryClient } from '@tanstack/react-query'
 
+import { PROFILE_VERSION_CONFLICT_ERROR_CODE } from '@/lib/api/error-codes'
+
 // =============================================================================
 // ERROR CODE TAXONOMY
 // =============================================================================
@@ -71,13 +73,13 @@ export interface ApiErrorResponse {
 // `CAU_HINH_DA_DUOC_QUYET_DINH_DUNG` (trigger khoá cấu hình, `exception_handlers.py`). Câu "thử lại" của deadlock đi
 // ra với mã chung `CONFLICT` (mang cả chuỗi nội bộ) ⇒ KHÔNG thêm — giữ câu chung "…kiểm tra lại".
 //
-// Owner 22-11 (công cụ ghép trường THCS, câu 1): `PROFILE_VERSION_CONFLICT` — lưu hồ sơ bằng bản đã cũ (khoá lạc quan
-// `version` lệch, vd sau khi Admin áp ghép trường THCS vào hồ sơ nháp). Câu của máy chủ nói rõ phải tải lại trang.
+// Owner 22-11 (công cụ ghép trường THCS câu 1 + câu 409): `PROFILE_VERSION_CONFLICT` — lưu / thao tác trên hồ sơ bằng bản
+// đã cũ (khoá lạc quan `version` lệch) ở MỌI đường của hồ sơ. Câu của máy chủ nói rõ phải tải lại trang.
 const USER_FACING_CONFLICT_CODES = new Set<string>([
   'DUPLICATE_RESOURCE',
   'COUNCIL_DECISION_LOCKS_PROFILE',
   'CAU_HINH_DA_DUOC_QUYET_DINH_DUNG',
-  'PROFILE_VERSION_CONFLICT',
+  PROFILE_VERSION_CONFLICT_ERROR_CODE,
 ])
 
 // =============================================================================

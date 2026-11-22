@@ -43,6 +43,7 @@ from app.utils.exceptions import (
     ConflictError,
     PermissionDeniedError,
     ProfileLockedByDecisionError,
+    ProfileVersionConflict,
     ResourceNotFoundError,
 )
 
@@ -1401,7 +1402,8 @@ async def untick_priority_object_evidence(
         )
         return await _evidence_response(db, profile_id, current_user)
 
-    except ProfileLockedByDecisionError:
+    except (ProfileLockedByDecisionError, ProfileVersionConflict):
+        # Owner 22-11 (câu 409): PROFILE_VERSION_CONFLICT cũng giữ error_code + câu tiếng Việt (handler toàn cục).
         # Review max PR #724 (R8): GIỮ error_code + public_payload (handler toàn cục) — gói thành
         # HTTPException làm giao diện mất mã COUNCIL_DECISION_LOCKS_PROFILE và câu hướng dẫn.
         raise

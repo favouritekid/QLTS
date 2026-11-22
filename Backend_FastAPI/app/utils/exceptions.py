@@ -281,19 +281,46 @@ class ProfileLockedByDecisionError(ConflictError):
     detail = "Hồ sơ đã có tên trong Quyết định đã ký — thao tác bị chặn."
 
 
-class ProfileVersionConflict(ConflictError):
-    """Lưu hồ sơ bằng bản đã CŨ (khoá lạc quan ``version`` lệch) — HTTP 409.
+#: Owner 22-11 (``QUYET-DINH-OWNER-THCS-CAU-409``) DUYỆT NGUYÊN CÂU — lưu form hồ sơ bằng bản đã cũ (``update_profile``).
+#: Không đổi chữ nào (test khoá nguyên văn).
+PROFILE_VERSION_CONFLICT_SAVE_DETAIL = (
+    "Hồ sơ vừa được cập nhật ở nơi khác sau khi bạn mở (người dùng khác, hoặc Admin áp ghép trường THCS vào lịch "
+    "sử học). Bản bạn đang sửa đã cũ nên CHƯA được lưu. Tải lại trang hồ sơ rồi nhập lại phần vừa sửa."
+)
+#: Câu TRUNG TÍNH cho mọi THAO TÁC trên hồ sơ (duyệt, từ chối, yêu cầu bổ sung, nộp lại, ghi đè, nhận / bỏ nhận duyệt,
+#: hoàn tất, rút, đánh dấu bỏ học, hiệu chỉnh nhỏ, ấn định KV, duyệt / từ chối / bỏ tick minh chứng ưu tiên, đổi thông
+#: tư, mục lô duyệt / từ chối). ĐỀ XUẤT — chờ owner duyệt.
+PROFILE_VERSION_CONFLICT_ACTION_DETAIL = (
+    "Hồ sơ vừa được cập nhật ở nơi khác sau khi bạn mở. Thao tác CHƯA được thực hiện. Tải lại trang rồi thử lại."
+)
 
-    Owner 22-11 (công cụ ghép trường THCS, câu 1): áp ghép cho cả hồ sơ NHÁP tăng ``version``; cán bộ đang mở form nháp
-    mà lưu sau đó phải nhận câu RÕ RÀNG. Mã riêng để giao diện hiện NGUYÊN câu (``USER_FACING_CONFLICT_CODES``) thay vì câu
-    chung "trùng hoặc đã thay đổi". ``public_payload`` chỉ mang số phiên bản (không dữ liệu cá nhân)."""
+
+class ProfileVersionConflict(ConflictError):
+    """Thao tác / lưu hồ sơ bằng bản đã CŨ (khoá lạc quan ``version`` lệch) — HTTP 409, mã ``PROFILE_VERSION_CONFLICT``.
+
+    MỘT lớp cho MỌI chỗ kiểm ``version`` của hồ sơ tuyển sinh (owner 22-11: câu 1 công cụ ghép THCS + câu 409). Mã riêng
+    để giao diện hiện NGUYÊN câu (``USER_FACING_CONFLICT_CODES``) thay vì câu chung "trùng hoặc đã thay đổi". Câu mặc định
+    là câu THAO TÁC trung tính; đường lưu form truyền :data:`PROFILE_VERSION_CONFLICT_SAVE_DETAIL`. ``public_payload``
+    chỉ mang số phiên bản hiện tại (không dữ liệu cá nhân). Router gói ``ConflictError`` thành ``HTTPException`` PHẢI để
+    lớp này đi qua (``except (ProfileLockedByDecisionError, ProfileVersionConflict): raise``)."""
 
     status_code = status.HTTP_409_CONFLICT
     error_code = "PROFILE_VERSION_CONFLICT"
-    detail = (
-        "Hồ sơ vừa được cập nhật ở nơi khác sau khi bạn mở (người dùng khác, hoặc Admin áp ghép trường THCS vào lịch "
-        "sử học). Bản bạn đang sửa đã cũ nên CHƯA được lưu. Tải lại trang hồ sơ rồi nhập lại phần vừa sửa."
-    )
+    detail = PROFILE_VERSION_CONFLICT_ACTION_DETAIL
+
+    def __init__(
+        self,
+        *,
+        current_version: Any,
+        expected_version: Any = None,
+        detail: Optional[str] = None,
+    ):
+        super().__init__(
+            detail=detail,
+            context={"expected_version": expected_version, "current_version": current_version},
+            public_payload={"current_version": current_version},
+        )
+        self.current_version = current_version
 
 
 # ============================================================================

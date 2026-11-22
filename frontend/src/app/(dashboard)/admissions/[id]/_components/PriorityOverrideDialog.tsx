@@ -53,6 +53,7 @@ import {
 import { Textarea } from "@/components/ui/textarea"
 
 import { KV_BADGE } from "@/components/admissions/kv-labels"
+import { profileVersionConflictDetail } from "@/lib/api/error-codes"
 import { useOverridePriorityKv } from "@/lib/hooks/use-priority-override"
 import {
   KV_CODES,
@@ -152,8 +153,11 @@ export function PriorityOverrideDialog({
     } catch (err: unknown) {
       const status = (err as { response?: { status?: number } })?.response?.status
       if (status === 409) {
+        // Owner 22-11 (câu 409): có câu của máy chủ (PROFILE_VERSION_CONFLICT) thì hiện nguyên câu.
         toast.error(
-          "Hồ sơ vừa cập nhật bởi người khác. Vui lòng refresh và thử lại."
+          profileVersionConflictDetail(
+            (err as { response?: { status?: number; data?: unknown } })?.response,
+          ) ?? "Hồ sơ vừa cập nhật bởi người khác. Vui lòng refresh và thử lại."
         )
         setError(
           "Phiên bản hồ sơ đã thay đổi — cache đã refresh, vui lòng đóng dialog và mở lại."

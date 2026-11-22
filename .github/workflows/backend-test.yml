@@ -1470,6 +1470,8 @@ jobs:
           # required check vẫn xanh mà không chạy (CLAUDE.md §11). Ghim WHOLE-FILE.
           # `tests/unit/test_vn_school_admin_service.py` (tệp cũ, trước đây ngoài mọi tier): ca THCS phải đổi sang mã nội bộ
           # ⇒ cổng độ nhìn thấy đòi phân loại.
+          # Owner 22-11 (câu 409): lỗi xung đột phiên bản hồ sơ dùng chung `PROFILE_VERSION_CONFLICT` — ca hợp đồng (AST) +
+          # `tests/api/test_qa_wave7_notif_and_race.py` (tệp cũ, ngoài mọi tier: sửa phép khoá câu tiếng Anh ⇒ phải phân loại).
           - tier: Tier 5k — GĐ2 L3 danh mục THCS + công cụ ghép
             tests: >-
               tests/unit/test_vn_school_thcs_noi_bo_ddl.py
@@ -1481,6 +1483,8 @@ jobs:
               tests/unit/test_thcs_school_mapping_service.py
               tests/api/test_thcs_school_mapping_api.py
               tests/integration/test_thcs_mapping_migration.py
+              tests/unit/test_profile_version_conflict_contract.py
+              tests/api/test_qa_wave7_notif_and_race.py
 
     env:
       APP_ENV: test

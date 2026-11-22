@@ -39,6 +39,13 @@ describe("describePriorityEvidenceError", () => {
     )
   })
 
+  it("409 PROFILE_VERSION_CONFLICT (owner 22-11, câu 409) ⇒ hiện nguyên câu của máy chủ", () => {
+    const cau = "Hồ sơ vừa được cập nhật ở nơi khác sau khi bạn mở. Thao tác CHƯA được thực hiện. Tải lại trang rồi thử lại."
+    expect(
+      describePriorityEvidenceError(loi(409, { error_code: "PROFILE_VERSION_CONFLICT", detail: cau }), "verify"),
+    ).toBe(cau)
+  })
+
   it("409 mã lạ ⇒ câu chung, không lộ mã", () => {
     const cau = describePriorityEvidenceError(loi(409, { reason_code: "ma_noi_bo_la" }), "verify")
     expect(cau).not.toMatch(/ma_noi_bo_la/)
