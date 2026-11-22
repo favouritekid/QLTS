@@ -29,6 +29,7 @@ import {
   bandPreviewLabel,
   bandYears,
   buildBandRecords,
+  mergedLienCapNotices,
   parseBandStartYear,
   suggestThcsStartYear,
   yearNotices,
@@ -82,6 +83,7 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
   // grade_to (10-12 = THPT, 6-9 = THCS) để hoạt động ngay cả khi chưa chọn
   // trường (level chỉ set sau khi pick từ danh mục).
   const records = (form.watch("academic_history") ?? []) as Array<{
+    level?: string | null
     grade_to?: number | null
     year_from?: number | null
     year_to?: number | null
@@ -113,11 +115,11 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
   const softNotices: string[] = []
   if (dupGrades.length > 0)
     softNotices.push(
-      `Lớp ${dupGrades.join(", ")} xuất hiện nhiều lần — kiểm tra lại nếu không phải chuyển trường giữa năm.`,
+      `Lớp ${dupGrades.join(", ")} xuất hiện nhiều lần — kiểm tra lại nếu không phải ở lại lớp hoặc chuyển trường giữa năm.`,
     )
   if (thptRecords.length > bandYears(GRADE_BANDS.THPT))
     softNotices.push(
-      `Đang có ${thptRecords.length} năm THPT (thường ${bandYears(GRADE_BANDS.THPT)} năm: lớp ${bandGradesLabel(GRADE_BANDS.THPT)}). Nhiều hơn là bình thường nếu chuyển trường.`,
+      `Đang có ${thptRecords.length} năm THPT (thường ${bandYears(GRADE_BANDS.THPT)} năm: lớp ${bandGradesLabel(GRADE_BANDS.THPT)}). Nhiều hơn là bình thường nếu ở lại lớp hoặc chuyển trường.`,
     )
   if (thcsRecords.length > bandYears(GRADE_BANDS.THCS))
     softNotices.push(
@@ -130,6 +132,9 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
   // Owner 22-11: nhắc khi một dòng có hai năm bằng nhau, hai dòng trùng năm học,
   // hoặc hở năm học giữa các dòng (cùng quy ước năm với phía tính KV).
   softNotices.push(...yearNotices(records))
+  // Owner 22-11 "ở lại lớp": dòng liên cấp ghi gộp nhiều năm hơn phần lớp 10+ được
+  // tính (phản chiếu Q8 của phía tính KV) — nhắc tách mỗi năm học một dòng.
+  softNotices.push(...mergedLienCapNotices(records))
 
   // Gợi ý năm bắt đầu lớp 6 = năm bắt đầu lớp 10 − 4 khi đã có dòng THPT.
   const thcsSuggestion = suggestThcsStartYear(records)

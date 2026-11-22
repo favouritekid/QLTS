@@ -10,6 +10,8 @@ import {
   bandGraduationYear,
   bandPreviewLabel,
   buildBandRecords,
+  isMergedLienCapRow,
+  mergedLienCapNotices,
   parseBandStartYear,
   suggestThcsStartYear,
   yearNotices,
@@ -113,5 +115,34 @@ describe("yearNotices", () => {
         { year_from: 2023, year_to: 2024 },
       ]),
     ).toEqual(["Trường #1 và #2 cùng có năm học 2019–2020 — xem lại nếu không phải chuyển trường giữa năm."])
+  })
+})
+
+describe("isMergedLienCapRow / mergedLienCapNotices — phản chiếu Q8 ('3 năm cuối') của phía tính KV", () => {
+  const lc = (year_from: number | null, year_to: number | null, grade_to: number | null, level = "THCS_THPT") => ({
+    level,
+    year_from,
+    year_to,
+    grade_to,
+  })
+
+  it("bật khi số năm của dòng liên cấp vượt phần lớp 10..lớp cuối; không bật ở biên và các ca khác", () => {
+    expect(isMergedLienCapRow(lc(2015, 2023, 12))).toBe(true) // 8 > 3
+    expect(isMergedLienCapRow(lc(2015, 2022, 10))).toBe(true) // 7 > 1
+    expect(isMergedLienCapRow(lc(2016, 2022, 11))).toBe(true) // 6 > 2
+    expect(isMergedLienCapRow(lc(2020, 2023, 12))).toBe(false) // 3 = 3: đúng biên
+    expect(isMergedLienCapRow(lc(2021, 2022, 10))).toBe(false) // 1 = 1: đúng biên
+    expect(isMergedLienCapRow(lc(2022, 2023, 12))).toBe(false) // vào ở lớp 12
+    expect(isMergedLienCapRow(lc(2021, 2025, 12, "THPT"))).toBe(false) // THPT tính đủ mọi năm
+    expect(isMergedLienCapRow(lc(2015, 2020, 9))).toBe(false) // lớp cuối ≤ 9: không có phần THPT
+    expect(isMergedLienCapRow(lc(2015, 2023, null))).toBe(false) // thiếu lớp cuối: phía tính tự dừng có nhãn
+    expect(isMergedLienCapRow(lc(null, 2023, 12))).toBe(false)
+    expect(isMergedLienCapRow(null)).toBe(false)
+  })
+
+  it("câu nhắc đánh số theo thứ tự dòng trên màn hình", () => {
+    expect(mergedLienCapNotices([lc(2019, 2022, 12, "THPT"), lc(2015, 2023, 12)])).toEqual([
+      "Trường #2 là trường liên cấp ghi gộp nhiều năm: khu vực chỉ tính các năm cuối từ lớp 10 trở lên. Nếu em ở lại lớp ở cấp 3, tách mỗi năm học một dòng.",
+    ])
   })
 })

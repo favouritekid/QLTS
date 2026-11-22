@@ -273,6 +273,46 @@ def test_khoa_nam_hoc_cua_muc(muc, nam):
     assert ps.kv_last_school_year(muc) == muc["year_to"] - 1
 
 
+# ═══════════════════════════════ ở lại lớp (owner 22-11 ``gd2/g5/QUYET-DINH-OWNER-G5-O-LAI-LOP-2026-11-22.md``) ═══════════════════════════════
+# Luật (không đổi mã phía tính): mỗi năm học thực học tính 1 năm, kể cả năm ở lại lớp. Ví dụ owner — THPT ở lại lớp 10:
+# 2021→2022, 2022→2023 (lớp 10), 2023→2024, 2024→2025 ⇒ 4 năm học.
+_O_LAI_LOP_10 = [(2021, 2022, 10), (2022, 2023, 10), (2023, 2024, 11), (2024, 2025, 12)]
+_BON_NAM = [(A, 2021), (A, 2022), (A, 2023), (A, 2024)]
+
+
+def test_o_lai_lop_a_thpt_moi_nam_mot_dong_tinh_4_nam(monkeypatch):
+    """(a) THPT mỗi năm một dòng, ở lại lớp 10 ⇒ tra 2021–2024, 4 năm."""
+    kv, meta, hoi = _chay(monkeypatch, [_thpt(A, tu, den, lop) for tu, den, lop in _O_LAI_LOP_10])
+    assert hoi == _BON_NAM, hoi
+    assert (kv, meta["breakdown"]["kv_totals"]) == ("KV1", {"KV1": 4}), meta
+
+
+def test_o_lai_lop_b_thpt_mot_dong_2021_2025_tinh_4_nam(monkeypatch):
+    """(b) THPT một dòng 2021→2025 lớp 12 ⇒ 4 năm (THPT tính đủ mọi năm học — không cắt theo số lớp)."""
+    kv, meta, hoi = _chay(monkeypatch, [_thpt(A, 2021, 2025, 12)])
+    assert hoi == _BON_NAM, hoi
+    assert (kv, meta["breakdown"]["kv_totals"]) == ("KV1", {"KV1": 4}), meta
+
+
+def test_o_lai_lop_c_lien_cap_moi_nam_mot_dong_tinh_4_nam(monkeypatch):
+    """(c) Liên cấp mỗi năm một dòng (lớp 6–9 rồi lớp 10 hai năm, 11, 12) ⇒ dòng lớp ≤ 9 bỏ qua; mỗi dòng lớp 10–12 một năm ⇒ 4 năm."""
+    thcs = [_lc(A, 2017 + i, 2018 + i, 6 + i) for i in range(4)]
+    thpt = [_lc(A, tu, den, lop) for tu, den, lop in _O_LAI_LOP_10]
+    kv, meta, hoi = _chay(monkeypatch, thcs + thpt)
+    assert hoi == _BON_NAM, hoi
+    assert (kv, meta["breakdown"]["kv_totals"]) == ("KV1", {"KV1": 4}), meta
+
+
+def test_o_lai_lop_d_lien_cap_mot_dong_2015_2023_chi_tinh_3_nam(monkeypatch):
+    """(d) Liên cấp một dòng 2015→2023 lớp 12 ⇒ 3 năm (2020, 2021, 2022). KHOÁ hành vi Q8 "Suy 3 năm cuối".
+
+    Giới hạn đã biết, dữ liệu không có lớp đầu: dòng gộp 8 năm học cho 7 lớp (6–12) nghĩa là em ở lại một lớp, nhưng không biết lớp
+    nào — nếu ở lại lớp 10 thì phần THPT thật là 4 năm, máy vẫn chỉ tính 3. Giao diện nhắc tách mỗi năm học một dòng (ca c)."""
+    kv, meta, hoi = _chay(monkeypatch, [_lc(A, 2015, 2023, 12)])
+    assert hoi == [(A, 2020), (A, 2021), (A, 2022)], hoi
+    assert (kv, meta["breakdown"]["kv_totals"]) == ("KV1", {"KV1": 3}), meta
+
+
 # ═══════════════════════════════ ``_has_thpt_history`` — cùng luật lớp 10–12 ═══════════════════════════════
 def _can_cu_cd_lien_thong(lich_su):
     """Nhánh lai CĐ liên thông "khối lượng VH THPT + TC": có lịch sử THPT ⇒ LICH_SU_THPT; không ⇒ THUONG_TRU."""

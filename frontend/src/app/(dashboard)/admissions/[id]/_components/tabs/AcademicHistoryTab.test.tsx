@@ -279,7 +279,11 @@ describe("AcademicHistoryTab — soft data-quality notices (Tầng 2/3)", () => 
         ],
       } as Partial<AdmissionProfileUpdateInput>,
     })
-    expect(screen.getByText(/Lớp 12 xuất hiện nhiều lần/i)).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        "Lớp 12 xuất hiện nhiều lần — kiểm tra lại nếu không phải ở lại lớp hoặc chuyển trường giữa năm.",
+      ),
+    ).toBeInTheDocument()
   })
 
   it("cảnh báo khi > 3 năm THPT (cho phép, không chặn)", () => {
@@ -293,7 +297,29 @@ describe("AcademicHistoryTab — soft data-quality notices (Tầng 2/3)", () => 
         ],
       } as Partial<AdmissionProfileUpdateInput>,
     })
-    expect(screen.getByText(/Đang có 4 năm THPT/i)).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        "Đang có 4 năm THPT (thường 3 năm: lớp 10/11/12). Nhiều hơn là bình thường nếu ở lại lớp hoặc chuyển trường.",
+      ),
+    ).toBeInTheDocument()
+  })
+
+  it("em ở lại lớp 10, mỗi năm học một dòng (ví dụ owner 2021→2025) ⇒ hai câu nói 'ở lại lớp', không nhắc trùng / hở / liên cấp", () => {
+    renderTab({
+      defaults: {
+        academic_history: [
+          rec({ school_id: 1, grade_to: 10, year_from: 2021, year_to: 2022 }),
+          rec({ school_id: 1, grade_to: 10, year_from: 2022, year_to: 2023 }),
+          rec({ school_id: 1, grade_to: 11, year_from: 2023, year_to: 2024 }),
+          rec({ school_id: 1, grade_to: 12, year_from: 2024, year_to: 2025 }),
+        ],
+      } as Partial<AdmissionProfileUpdateInput>,
+    })
+    const notices = screen.getAllByRole("status").map((n) => n.textContent?.replace("⚠", "").trim())
+    expect(notices).toEqual([
+      "Lớp 10 xuất hiện nhiều lần — kiểm tra lại nếu không phải ở lại lớp hoặc chuyển trường giữa năm.",
+      "Đang có 4 năm THPT (thường 3 năm: lớp 10/11/12). Nhiều hơn là bình thường nếu ở lại lớp hoặc chuyển trường.",
+    ])
   })
 
   it("cảnh báo năm kết thúc ở tương lai", () => {
@@ -391,6 +417,37 @@ describe("AcademicHistoryTab — soft data-quality notices (Tầng 2/3)", () => 
     })
     expect(screen.getByText(/Hở năm học 2021–2022 \(giữa Trường #1 và #2\)/)).toBeInTheDocument()
     expect(screen.getByText(/Hở năm học 2025–2026 đến 2026–2027 \(giữa Trường #2 và #3\)/)).toBeInTheDocument()
+  })
+})
+
+describe("AcademicHistoryTab — nhắc dòng liên cấp ghi gộp nhiều năm (owner 22-11 'ở lại lớp', phản chiếu Q8)", () => {
+  const CAU_LIEN_CAP =
+    "Trường #1 là trường liên cấp ghi gộp nhiều năm: khu vực chỉ tính các năm cuối từ lớp 10 trở lên. Nếu em ở lại lớp ở cấp 3, tách mỗi năm học một dòng."
+  const mot = (level: AcademicRecord["level"], year_from: number, year_to: number) =>
+    ({
+      academic_history: [
+        { school_id: 7, school_name: "Trường liên cấp thử", level, year_from, year_to, grade_to: 12, gpa: null },
+      ],
+    }) as Partial<AdmissionProfileUpdateInput>
+
+  it("BẬT với liên cấp 2015→2023 lớp 12 (8 năm học > 3 năm lớp 10–12)", () => {
+    renderTab({ defaults: mot("THCS_THPT", 2015, 2023) })
+    expect(screen.getByText(CAU_LIEN_CAP)).toBeInTheDocument()
+  })
+
+  it("KHÔNG bật với liên cấp 2022→2023 lớp 12 (vào trường ở lớp 12)", () => {
+    renderTab({ defaults: mot("THCS_THPT", 2022, 2023) })
+    expect(screen.queryByText(/ghi gộp nhiều năm/)).not.toBeInTheDocument()
+  })
+
+  it("KHÔNG bật ở đúng biên: liên cấp 2020→2023 lớp 12 (3 năm = lớp 10–12)", () => {
+    renderTab({ defaults: mot("THCS_THPT", 2020, 2023) })
+    expect(screen.queryByText(/ghi gộp nhiều năm/)).not.toBeInTheDocument()
+  })
+
+  it("KHÔNG bật với THPT 2021→2025 lớp 12 (THPT tính đủ mọi năm học)", () => {
+    renderTab({ defaults: mot("THPT", 2021, 2025) })
+    expect(screen.queryByText(/ghi gộp nhiều năm/)).not.toBeInTheDocument()
   })
 })
 

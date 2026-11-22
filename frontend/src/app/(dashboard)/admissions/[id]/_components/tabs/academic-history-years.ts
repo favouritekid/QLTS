@@ -159,3 +159,43 @@ export function yearNotices(
 
   return notices
 }
+
+/** Bậc "liên cấp" (THCS + THPT một trường) — khớp `VN_SCHOOL_LEVELS` / backend `KV_LIEN_CAP_LEVEL`. */
+const LIEN_CAP_LEVEL = "THCS_THPT"
+
+/**
+ * Dòng LIÊN CẤP ghi gộp nhiều năm (owner 22-11 "ở lại lớp",
+ * `gd2/g5/QUYET-DINH-OWNER-G5-O-LAI-LOP-2026-11-22.md` mục 2): cấp liên cấp,
+ * lớp cuối g ∈ 10..12, và (Đến năm − Từ năm) > (g − 9).
+ *
+ * PHẢN CHIẾU Q8 ("Suy 3 năm cuối") của phía tính KV
+ * (`priority_service.kv_entry_school_years`): dòng liên cấp chỉ được tính g − 9
+ * năm học cuối (phần lớp 10 trở lên). Dữ liệu không có lớp đầu, nên năm ở lại
+ * lớp ở cấp 3 nằm trong một dòng gộp sẽ không được tính. Chỉ NHẮC, không chặn;
+ * phía tính KV là nguồn chuẩn — đổi luật ở đó thì đổi điều kiện này theo.
+ */
+export function isMergedLienCapRow(
+  r: { level?: string | null; grade_to?: number | null; year_from?: number | null; year_to?: number | null } | null | undefined,
+): boolean {
+  if (!r || r.level !== LIEN_CAP_LEVEL) return false
+  const grade = r.grade_to
+  const from = r.year_from
+  const to = r.year_to
+  if (!isYear(grade) || grade < GRADE_BANDS.THPT.start || grade > GRADE_BANDS.THPT.end) return false
+  if (!isYear(from) || !isYear(to)) return false
+  return to - from > grade - (GRADE_BANDS.THPT.start - 1)
+}
+
+/** Câu nhắc cho từng dòng liên cấp gộp nhiều năm; "Trường #n" = thứ tự hiển thị. */
+export function mergedLienCapNotices(
+  rows: ReadonlyArray<Parameters<typeof isMergedLienCapRow>[0]>,
+): string[] {
+  const notices: string[] = []
+  rows.forEach((r, i) => {
+    if (isMergedLienCapRow(r))
+      notices.push(
+        `Trường #${i + 1} là trường liên cấp ghi gộp nhiều năm: khu vực chỉ tính các năm cuối từ lớp 10 trở lên. Nếu em ở lại lớp ở cấp 3, tách mỗi năm học một dòng.`,
+      )
+  })
+  return notices
+}
