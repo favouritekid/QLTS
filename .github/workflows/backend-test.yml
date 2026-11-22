@@ -1469,6 +1469,9 @@ jobs:
           # thuần (E1–E7, ưu tiên v2, xét NV, xếp Q1, row_hash), sửa sau Codex B1–B3. Lát RIÊNG như 5j; ngoài mọi tier thì required
           # check vẫn xanh mà không chạy (CLAUDE.md §11). `test_gd2b_repository_db.py` import hàm dựng dữ liệu của
           # `test_gd2b_rang_buoc_db.py` ⇒ CÙNG lát. Đo máy dev 21-11 (L1): ràng buộc + repository ~171 s, migration ~46 s, đơn vị < 3 s.
+          # Lượt 3 (22-11): `test_vn_school_admin_service.py` vào lát này — nó canh KV hiện hành trên ô chọn trường dùng CHUNG thứ tự
+          # `school_kv_pick_order_sql` với resolver / đường lô (B-P1 của đợt 2); trước đó tệp không nằm trong tier nào (chỉ chạy đêm)
+          # nên cổng PR không thấy (CLAUDE.md §11). Không có tier `vn_school*` nào khác để ghép.
           - tier: Tier 5k — GĐ2-B lần xét nháp (đợt 1 + đợt 2)
             tests: >-
               tests/unit/test_gd2b_ddl_lockin.py
@@ -1482,6 +1485,7 @@ jobs:
               tests/integration/test_gd2b_bt35_toan_luot_db.py
               tests/integration/test_gd2b_bo_dem_mot_cau_db.py
               tests/api/test_gd2b_kv_truong_chong_khoang_api.py
+              tests/unit/test_vn_school_admin_service.py
 
     env:
       APP_ENV: test

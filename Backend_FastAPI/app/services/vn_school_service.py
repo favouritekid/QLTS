@@ -10,7 +10,8 @@ Query pattern:
     LEFT JOIN LATERAL (
         SELECT kv_code FROM vn_school_kv_assignment
         WHERE school_id = s.id AND effective_to_year IS NULL
-        ORDER BY effective_from_year DESC LIMIT 1
+        -- MỘT thứ tự với resolver / đường lô: models.vn_school.school_kv_pick_order_sql
+        ORDER BY effective_from_year DESC, id DESC LIMIT 1
     ) kv ON true
     WHERE s.is_active = true
       AND (:level IS NULL OR s.level = :level)
