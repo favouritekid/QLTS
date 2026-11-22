@@ -2,8 +2,8 @@
 """GĐ2-A — migration ``gd2a20261118`` trên PostgreSQL THẬT (CSDL dùng một lần), nâng / hạ qua ĐÚNG ``alembic`` (tiến trình
 con ⇒ đúng ``env.py`` AUTOCOMMIT). Khuôn ``test_gd1b_migration.py``.
 
-CSDL trước nâng cấp = ``create_all()`` của model HIỆN TẠI rồi gỡ ĐÚNG phần GĐ2-A (3 bảng, 4 hàm + 4 trigger, ràng buộc
-``uq_offering_academic_info_id_year``) ⇒ mọi thứ khác y như thật. Sau nâng cấp, so lược đồ phần GĐ2-A với một CSDL dựng
+CSDL trước nâng cấp = ``create_all()`` của model HIỆN TẠI rồi gỡ mọi phần nối sau (GĐ2-C C1 — :data:`GO_GD2C_C1`) và ĐÚNG
+phần GĐ2-A (3 bảng, 4 hàm + 4 trigger, ràng buộc ``uq_offering_academic_info_id_year``) ⇒ mọi thứ khác y như thật. Sau nâng cấp, so lược đồ phần GĐ2-A với một CSDL dựng
 thẳng từ model: đó là phép khoá "migration = model". Hạ cấp FAIL-CLOSED khi còn dữ liệu; cờ CHO PHÉP mới xoá.
 """
 import asyncio
@@ -34,7 +34,17 @@ HAM = (
     "chan_sua_nhom_chi_tieu_khi_bang_khoa",
     "chan_xoa_bang_chi_tieu_da_khoa",
 )
+#: GĐ2-C C1 (``gd2c20261122``, nối SAU chuỗi GĐ2-A / F1): bảng quyền Thư ký + hàm trigger "chỉ thu hồi". Lượt nâng tới ``head``
+#: ở :func:`test_nang_cap_luoc_do_khop_model_va_trigger_song` chạy lại MỌI migration sau GĐ2-A ⇒ CSDL "ở ``gd1b20261117``" KHÔNG
+#: được còn phần C1 (``create_all()`` của model hiện tại đã tạo nó ⇒ ``CREATE TABLE`` trùng ⇒ đỏ). Gỡ ngược chuỗi: mới trước.
+#: ``tests/integration/test_gd2c_c1_migration.py`` dùng ĐÚNG danh sách này (một nguồn). Migration mới nối sau ⇒ thêm phần gỡ
+#: của nó vào ĐẦU ``GO_GD2A`` (khuôn ``GO_GD2B`` của nhánh GĐ2-B).
+GO_GD2C_C1 = (
+    "DROP TABLE admission_review_secretary_grant",
+    "DROP FUNCTION admission_review_secretary_grant_revoke_only()",
+)
 GO_GD2A = (
+    *GO_GD2C_C1,
     "DROP TRIGGER trg_chan_sua_chi_tieu_nganh_khi_bang_khoa ON offering_academic_info",
     "DROP TABLE admission_quota_group_member, admission_quota_group, admission_quota_table",
     "DROP FUNCTION chan_sua_chi_tieu_nganh_khi_bang_khoa(), chan_sua_nhom_chi_tieu_khi_bang_khoa(), "
