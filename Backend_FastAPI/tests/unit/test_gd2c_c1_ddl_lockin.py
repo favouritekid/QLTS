@@ -159,7 +159,7 @@ def test_moi_khoa_ngoai_toi_user_la_restrict_o_ca_hai_ban():
 # ── chuỗi Alembic + hạ cấp ─────────────────────────────────────────────────────────────────────────────────────────────
 def test_migration_noi_sau_head_cua_nen():
     mod = _mig()
-    assert (mod.revision, mod.down_revision) == ("gd2c20261122", "gd2f20261119")
+    assert (mod.revision, mod.down_revision) == ("gd2c20261122", "gd2b20261121")
 
 
 def test_mot_head_alembic():

@@ -1,16 +1,16 @@
 """GĐ2-C C1 — bảng quyền "Thư ký Hội đồng" gán theo từng người + trigger "chỉ thu hồi, không xoá".
 
 Revision ID: gd2c20261122
-Revises: gd2f20261119
+Revises: gd2b20261121
 Create Date: 2026-11-22
 
 Nguồn: QĐB:26; thiết kế GĐ2-C 22-11 §2.2 (``logs-P5/cong-bo-ket-qua/gd2/gd2c/THIET-KE-GD2-C-2026-11-22.md``); owner C1
 22-11 "Không hết hạn, giữ tới khi Admin thu hồi" ⇒ KHÔNG có cột hết hạn. Không đổi dữ liệu có sẵn; không thêm dòng
 Casbin (route gán / thu hồi / liệt kê chỉ Admin — Admin đi qua wildcard).
 
-⚠️ Chuỗi Alembic: nền của nhánh này (PR-B ``42a497c8``) có head ``gd2f20261119``. GĐ2-B (``gd2b20261121``, cũng nối sau
-``gd2f20261119``) gộp vào main TRƯỚC ⇒ khi dựng lại C1 trên main mới phải đổi ``down_revision`` sang head của GĐ2-B (ca
-``test_mot_head_alembic`` đỏ nếu quên — hai head).
+⚠️ Chuỗi Alembic: nền gốc của C1 (PR-B ``42a497c8``) có head ``gd2f20261119``. Nền tích hợp GĐ2-C C2 (22-11) gộp C1 lên
+GĐ2-B (``gd2b20261121``, cũng nối sau ``gd2f20261119``) ⇒ ``down_revision`` đổi sang ``gd2b20261121`` — một head (ca
+``test_mot_head_alembic`` đỏ nếu hai head). Thân migration không đổi: C1 không phụ thuộc bảng nào của GĐ2-B.
 
 MỘT câu ``DO`` làm TẤT CẢ (``env.py`` chạy ``AUTOCOMMIT`` ⇒ chỉ một câu mới là một giao dịch): hỏng ở bất kỳ bước nào ⇒
 không còn gì dở dang, phiên bản Alembic chưa đổi, chạy lại được. Trong câu ấy:
@@ -36,7 +36,7 @@ from sqlalchemy.exc import DBAPIError
 from alembic import op
 
 revision: str = "gd2c20261122"
-down_revision: Union[str, None] = "gd2f20261119"
+down_revision: Union[str, None] = "gd2b20261121"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

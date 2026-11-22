@@ -2,9 +2,9 @@
 """GĐ2-A — migration ``gd2a20261118`` trên PostgreSQL THẬT (CSDL dùng một lần), nâng / hạ qua ĐÚNG ``alembic`` (tiến trình
 con ⇒ đúng ``env.py`` AUTOCOMMIT). Khuôn ``test_gd1b_migration.py``.
 
-CSDL trước nâng cấp = ``create_all()`` của model HIỆN TẠI rồi gỡ phần GĐ2-B (nối sau, phụ thuộc GĐ2-A —
-:data:`GO_GD2B`) và ĐÚNG phần GĐ2-A (3 bảng, 4 hàm + 4 trigger, ràng buộc ``uq_offering_academic_info_id_year``) ⇒ mọi
-thứ khác y như thật. Sau nâng cấp, so lược đồ phần GĐ2-A với một CSDL dựng
+CSDL trước nâng cấp = ``create_all()`` của model HIỆN TẠI rồi gỡ mọi phần nối sau GĐ2-B (:data:`GO_SAU_GD2B`), phần
+GĐ2-B (nối sau, phụ thuộc GĐ2-A — :data:`GO_GD2B`) và ĐÚNG phần GĐ2-A (3 bảng, 4 hàm + 4 trigger, ràng buộc
+``uq_offering_academic_info_id_year``) ⇒ mọi thứ khác y như thật. Sau nâng cấp, so lược đồ phần GĐ2-A với một CSDL dựng
 thẳng từ model: đó là phép khoá "migration = model". Hạ cấp FAIL-CLOSED khi còn dữ liệu; cờ CHO PHÉP mới xoá.
 """
 import asyncio
@@ -45,7 +45,19 @@ GO_GD2B = (
     "admission_review_floor_guard(), admission_review_run_guard(), admission_review_row_guard()",
     "ALTER TABLE offering_admission_round DROP CONSTRAINT uq_offering_admission_round_id_year",
 )
+#: GĐ2-C C1 (``gd2c20261122``, nối SAU ``gd2b20261121``): bảng quyền Thư ký + hàm trigger "chỉ thu hồi".
+#: ``tests/integration/test_gd2c_c1_migration.py`` dùng ĐÚNG danh sách này.
+GO_GD2C_C1 = (
+    "DROP TABLE admission_review_secretary_grant",
+    "DROP FUNCTION admission_review_secretary_grant_revoke_only()",
+)
+#: MỌI phần nối SAU GĐ2-B, xếp từ MỚI tới cũ (gỡ ngược chuỗi Alembic). Lượt nâng tới ``head`` ở
+#: :func:`test_nang_cap_luoc_do_khop_model_va_trigger_song` chạy lại mọi migration sau GĐ2-A ⇒ CSDL trước nâng cấp KHÔNG được còn
+#: phần nào của chúng (``CREATE TABLE`` trùng ⇒ đỏ). Migration mới nối sau head ⇒ thêm phần gỡ của nó vào ĐẦU bộ này.
+#: ``tests/integration/test_gd2b_migration.py`` dựng CSDL "ở ``gd2f20261119``" bằng ``(*GO_SAU_GD2B, *GO_GD2B)``.
+GO_SAU_GD2B = (*GO_GD2C_C1,)
 GO_GD2A = (
+    *GO_SAU_GD2B,
     *GO_GD2B,
     "DROP TRIGGER trg_chan_sua_chi_tieu_nganh_khi_bang_khoa ON offering_academic_info",
     "DROP TABLE admission_quota_group_member, admission_quota_group, admission_quota_table",

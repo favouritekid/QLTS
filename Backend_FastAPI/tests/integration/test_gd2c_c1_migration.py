@@ -20,19 +20,19 @@ from sqlalchemy.engine import make_url
 from app.config import settings
 from app.models.base import Base
 from tests.fixtures.database import kiem_url_csdl_test
+from tests.integration.test_gd2a_migration import GO_GD2C_C1
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
 GOC = Path(__file__).resolve().parents[2]
-TRUOC = "gd2f20261119"
+#: Nền tích hợp GĐ2-C C2 (22-11): C1 nối sau GĐ2-B ``gd2b20261121`` (trước đó: ``gd2f20261119``).
+TRUOC = "gd2b20261121"
 SAU = "gd2c20261122"
 CO = "GD2C_C1_DOWNGRADE_DROP_DATA_ENABLED"
 BANG = "admission_review_secretary_grant"
 HAM = ("admission_review_secretary_grant_revoke_only",)
-GO_C1 = (
-    "DROP TABLE admission_review_secretary_grant",
-    "DROP FUNCTION admission_review_secretary_grant_revoke_only()",
-)
+#: MỘT danh sách với ``test_gd2a_migration.py`` (lượt nâng tới head của GĐ2-A cũng phải gỡ phần C1 trước).
+GO_C1 = GO_GD2C_C1
 
 
 def _url(ten_db, driver):
@@ -118,7 +118,7 @@ async def _luoc_do(k):
 
 @pytest_asyncio.fixture
 async def csdl_truoc():
-    """CSDL ở phiên bản ``gd2f20261119``: lược đồ model hiện tại trừ phần C1."""
+    """CSDL ở phiên bản ``gd2b20261121``: lược đồ model hiện tại trừ phần C1."""
     ten = await _tao_db()
     try:
         await _create_all(ten)
