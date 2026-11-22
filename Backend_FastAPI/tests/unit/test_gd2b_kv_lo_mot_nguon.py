@@ -50,13 +50,14 @@ def _hs(**kw):
 
 
 # (nhãn, thuộc tính hồ sơ, target_level, admission_type)
-#: L3 (owner 22-11): ba ca thường trú dùng nhánh "hoàn thành THPT, không chuyên môn" (GIỮ theo hộ khẩu) — nhánh "tốt nghiệp THCS" cũ
-#: nay là "chờ xác minh"; ca L3 (trường THCS, cờ DTNT, hồ sơ cũ) ở ``test_l3_kv_cho_xac_minh.py`` (cũng chạy cả hai đường).
-_HT_THPT = dict(cultural_education_level="completed_thpt")
+#: L3 (owner 22-11): ba ca thường trú dùng nhánh CĐ liên thông "khối lượng VH THPT + TC" KHÔNG có lịch sử THPT (còn theo hộ khẩu)
+#: — nhánh "tốt nghiệp THCS" cũ nay là "chờ xác minh", nhánh cũ "hoàn thành THPT, không chuyên môn" nay theo trường THPT (L3A câu 5);
+#: ca L3 (trường THCS, cờ DTNT, hồ sơ cũ) ở ``test_l3_kv_cho_xac_minh.py`` (cũng chạy cả hai đường).
+_CD_LT = dict(cultural_education_level="completed_thpt", vocational_qualification="trung_cap", academic_history=[])
 CA = [
-    ("thuong_tru_co_xa", dict(_HT_THPT, academic_history=[]), None, None),
-    ("thuong_tru_xa_khong_co_trong_danh_muc", dict(_HT_THPT, permanent_commune_code="X9"), None, None),
-    ("thuong_tru_thieu_ma_xa", dict(_HT_THPT, permanent_commune_code=None), None, None),
+    ("thuong_tru_co_xa", _CD_LT, "cao_dang", "lien_thong"),
+    ("thuong_tru_xa_khong_co_trong_danh_muc", dict(_CD_LT, permanent_commune_code="X9"), "cao_dang", "lien_thong"),
+    ("thuong_tru_thieu_ma_xa", dict(_CD_LT, permanent_commune_code=None), "cao_dang", "lien_thong"),
     ("dien_dac_biet", dict(area_resolution_basis="permanent_address_special", permanent_commune_code="X2"), None, None),
     ("an_dinh_thu_cong", dict(area_resolution_basis="manual_override"), None, None),
     ("chua_khai_van_hoa", dict(cultural_education_level=None), None, None),

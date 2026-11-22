@@ -191,6 +191,44 @@ def test_lien_cap_chi_co_nam_lop_10_khong_phai_dong_thcs(monkeypatch):
     assert (kv, meta["breakdown"]["kv_totals"]) == ("KV1", {"KV1": 4})
 
 
+#: Owner 22-11 ``QUYET-DINH-OWNER-L3A-5-CAU`` câu 3: liên cấp cùng một trường tới lớp ≥ 10 ⇒ đếm phần lớp 6–9, cắt như G5 cắt phần
+#: THPT (``kv_lien_cap_split_year`` — một nguồn).
+_LIEN_CAP_TOI_THPT = [
+    (_thcs(T1, 2017, 2022, lop=10, level="THCS_THPT", trinh_do=None), [2017, 2018, 2019, 2020]),
+    (_thcs(T1, 2016, 2023, lop=12, level="THCS_THPT", trinh_do="THPT"), [2016, 2017, 2018, 2019]),
+    (_thcs(T1, 2019, 2022, lop=11, level="THCS_THPT", trinh_do=None), [2019]),
+]
+_ID_LIEN_CAP = ["lop_6_10", "lop_6_12", "vao_lop_9_het_lop_11"]
+
+
+@pytest.mark.parametrize("dong, nam_dem", _LIEN_CAP_TOI_THPT, ids=_ID_LIEN_CAP)
+def test_lien_cap_cung_truong_toi_lop_10_tro_len_dem_phan_lop_6_9(monkeypatch, dong, nam_dem):
+    kv, meta, hoi = _chay(monkeypatch, _hs(academic_history=[dong]))
+    assert (kv, meta["rule_applied"], meta["basis"]) == ("KV1", "longest_duration", "LICH_SU_THCS")
+    assert meta["breakdown"]["entries"][0]["counted_school_years"] == nam_dem
+    assert [h for h in hoi if h[0] == "truong"] == [("truong", T1, y) for y in nam_dem]
+
+
+@pytest.mark.parametrize("dong, nam_dem", _LIEN_CAP_TOI_THPT, ids=_ID_LIEN_CAP)
+def test_cho_cat_lien_cap_mot_nguon_phan_thcs_va_phan_thpt_bu_nhau(dong, nam_dem):
+    thcs, thpt = list(ps.kv_entry_thcs_school_years(dong)), list(ps.kv_entry_school_years(dong))
+    assert thcs == nam_dem
+    assert thcs + thpt == list(range(dong["year_from"], dong["year_to"]))
+    assert ps.kv_entry_thcs_last_school_year(dong) == nam_dem[-1]
+
+
+def test_hoa_voi_dong_lien_cap_tot_nghiep_lop_9_tra_nam_hoc_lop_9(monkeypatch):
+    """Hoà 2–2: THCS T1 2016→2018 (KV1) và liên cấp T2 2018→2021 tới lớp 10 (phần THCS 2018, 2019 — KV2). Trường tốt nghiệp lớp 9 = T2
+    (phần THCS kết thúc 2020) ⇒ tra T2 ở năm học 2019 (lớp 9), KHÔNG ở 2020 (lớp 10)."""
+    lich_su = [_thcs(T1, 2016, 2018), _thcs(T2, 2018, 2021, lop=10, level="THCS_THPT", trinh_do=None)]
+    kv, meta, hoi = _chay(monkeypatch, _hs(academic_history=lich_su))
+    assert (kv, meta["rule_applied"], meta["breakdown"]["kv_totals"]) == (
+        "KV2", "tiebreak_graduation_school", {"KV1": 2, "KV2": 2},
+    )
+    assert (meta["breakdown"]["graduation_year"], meta["breakdown"]["graduation_lookup_year"]) == (2020, 2019)
+    assert hoi[-1] == ("truong", T2, 2019)
+
+
 def test_khong_tra_dong_thpt_cua_em_bo_hoc_thpt(monkeypatch):
     lich_su = [_thcs(T1, 2018, 2022), {"level": "THPT", "graduation_type": "THPT", "school_id": P, "year_from": 2022,
                                        "year_to": 2023}]
@@ -270,12 +308,11 @@ def test_khong_co_dong_thcs_thi_cho_xac_minh(monkeypatch):
         (_thcs(T1, 2018, 2022, trinh_do="THPT"), "school_level_mismatch"),
         (_go_tay(2018, 2022, trinh_do=None), "entry_level_unknown"),
         (_thcs(T1, 2018, 2022, level="THCS_THPT", trinh_do=None), "lien_cap_missing_grade_to"),
-        (_thcs(T1, 2017, 2022, lop=10, level="THCS_THPT", trinh_do=None), "lien_cap_thcs_part_undecided"),
         (_thcs(T1, None, 2022), "entry_years_invalid"),
         (_thcs("11", 2018, 2022), "thcs_entry_school_id_invalid"),
     ],
     ids=["y_y", "y_y_go_tay", "chon_truong_cap_thpt", "cap_thcs_trinh_do_thpt", "trong_ca_hai", "lien_cap_thieu_lop",
-         "lien_cap_co_phan_thcs_va_lop_10", "thieu_nam", "school_id_chuoi"],
+         "thieu_nam", "school_id_chuoi"],
 )
 def test_dong_thcs_khong_hop_le_thi_cho_xac_minh_co_nhan(monkeypatch, dong, ca):
     kv, meta, hoi = _chay(monkeypatch, _hs(academic_history=[_thcs(T1, 2018, 2021), dong]))
@@ -317,8 +354,10 @@ def test_an_dinh_tay_thang_luat_l3(monkeypatch):
 @pytest.mark.parametrize(
     "kw, tl, at, basis, rule",
     [
-        # Điều phối 22-11: nhánh cũ "hoàn thành THPT, không chuyên môn" GIỮ NGUYÊN (theo hộ khẩu).
-        (dict(cultural_education_level="completed_thpt"), None, None, "THUONG_TRU", "commune_lookup"),
+        # Rà §6 (owner 22-11 L3A câu 5): nhánh CÒN LẠI cho em đã xong THPT mà lấy hộ khẩu — CĐ liên thông "khối lượng VH THPT + TC"
+        # KHÔNG có lịch sử THPT — GIỮ (chưa có quyết định).
+        (dict(cultural_education_level="completed_thpt", vocational_qualification="trung_cap", academic_history=[]),
+         "cao_dang", "lien_thong", "THUONG_TRU", "commune_lookup"),
         # Nhãn hộ khẩu đặc biệt ngoài ba nhóm L3 vẫn như cũ.
         (dict(cultural_education_level="graduated_thpt", area_resolution_basis="permanent_address_special",
               permanent_commune_code="X2"), "cao_dang", "chinh_quy", "COMMUNE_SPECIAL", "commune_lookup"),
@@ -327,11 +366,51 @@ def test_an_dinh_tay_thang_luat_l3(monkeypatch):
               academic_history=[{"level": "THPT", "school_id": T2, "year_from": 2022, "year_to": 2025}]),
          "trung_cap", "chinh_quy", "LICH_SU_THPT", "longest_duration"),
     ],
-    ids=["nhanh_cu_hoan_thanh_thpt", "cao_dang_nhan_dac_biet", "trung_cap_sau_thpt"],
+    ids=["cd_lien_thong_khong_lich_su_thpt", "cao_dang_nhan_dac_biet", "trung_cap_sau_thpt"],
 )
 def test_doi_chung_ngoai_ba_nhom_khong_doi(monkeypatch, kw, tl, at, basis, rule):
     _, meta, _ = _chay(monkeypatch, _hs(**kw), tl=tl, at=at)
     assert (meta["basis"], meta["rule_applied"]) == (basis, rule)
+
+
+# ═══════════════════════════════ 3b. Nhánh cũ "hoàn thành THPT" ⇒ cách tính nhóm THPT (owner 22-11 L3A câu 5) ═══════════════════════════════
+_THPT_T2 = [{"level": "THPT", "graduation_type": "THPT", "school_id": T2, "year_from": 2022, "year_to": 2025}]
+
+
+@pytest.mark.parametrize("chuyen_mon", ["none", "so_cap"])
+def test_nhanh_cu_hoan_thanh_thpt_tinh_theo_truong_thpt(monkeypatch, chuyen_mon):
+    hs = _hs(cultural_education_level="completed_thpt", vocational_qualification=chuyen_mon, academic_history=_THPT_T2)
+    kv, meta, hoi = _chay(monkeypatch, hs, tl=None, at=None)
+    assert (kv, meta["basis"], meta["basis_reason"], meta["rule_applied"]) == (
+        "KV2", "LICH_SU_THPT", "legacy_thpt_pathway", "longest_duration",
+    )
+    assert hoi == [("truong", T2, 2022), ("truong", T2, 2023), ("truong", T2, 2024)]  # không tra xã thường trú
+
+
+def test_nhanh_cu_hoan_thanh_thpt_khong_lich_su_thpt_thi_dung_nhu_nhom_thpt(monkeypatch):
+    kv, meta, hoi = _chay(monkeypatch, _hs(cultural_education_level="completed_thpt", academic_history=[]), tl=None, at=None)
+    assert (kv, meta["rule_applied"], hoi) == (None, "insufficient_data", [])
+    assert ps.kv_snapshot_blocks_submit({"kv_resolved": None, **meta})  # nhóm THPT: cổng nộp chặn như cũ
+
+
+def test_nhanh_cu_hoan_thanh_thpt_nhan_dac_biet_van_thang(monkeypatch):
+    """Là nhóm THPT ⇒ nhãn hộ khẩu đặc biệt vẫn là căn cứ (L3 câu 2 chỉ cho ba nhóm)."""
+    hs = _hs(cultural_education_level="completed_thpt", area_resolution_basis="permanent_address_special",
+             permanent_commune_code="X2", academic_history=_THPT_T2)
+    kv, meta, _ = _chay(monkeypatch, hs, tl=None, at=None)
+    assert (kv, meta["basis"]) == ("KV2-NT", "COMMUNE_SPECIAL")
+
+
+def test_nhanh_cu_hoan_thanh_thpt_ho_so_cu_theo_co(monkeypatch):
+    anh = {"kv_resolved": "KV1", "rule_applied": "commune_lookup", "basis": "THUONG_TRU",
+           "basis_reason": "legacy_completed_thpt_no_vocational"}
+    hs = _hs(cultural_education_level="completed_thpt", priority_resolution_snapshot=anh, academic_history=_THPT_T2)
+    monkeypatch.setattr(settings, "KV_L3_APPLY_TO_EXISTING_ENABLED", False)
+    kv, meta, _ = _chay(monkeypatch, hs, tl=None, at=None)
+    assert (kv, meta["basis"], meta["basis_reason"]) == ("KV1", "THUONG_TRU", "legacy_completed_thpt_no_vocational")
+    monkeypatch.setattr(settings, "KV_L3_APPLY_TO_EXISTING_ENABLED", True)
+    kv, meta, _ = _chay(monkeypatch, hs, tl=None, at=None)
+    assert (kv, meta["basis"]) == ("KV2", "LICH_SU_THPT")
 
 
 # ═══════════════════════════════ 4. Hồ sơ cũ — cờ KV_L3_APPLY_TO_EXISTING_ENABLED (câu 1) ═══════════════════════════════

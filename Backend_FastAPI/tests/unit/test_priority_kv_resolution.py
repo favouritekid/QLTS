@@ -44,9 +44,9 @@ from app.services.priority_service import (
         ("graduated_gdtx", "cao_dang", None, "LICH_SU_THPT"),
         ("completed_thpt", "trung_cap", None, "LICH_SU_THPT"),
         ("completed_thpt", "cao_dang", None, "LICH_SU_THPT"),
-        # completed_thpt + so_cap/none — legacy branch fall back commune
-        ("completed_thpt", "so_cap", None, "THUONG_TRU"),
-        ("completed_thpt", "none", None, "THUONG_TRU"),
+        # completed_thpt + so_cap/none — trước đây legacy fall back commune; owner 22-11 L3A câu 5 ⇒ cách tính nhóm THPT.
+        ("completed_thpt", "so_cap", None, "LICH_SU_THPT"),
+        ("completed_thpt", "none", None, "LICH_SU_THPT"),
         # graduated_thcs / completed_thcs, nơi gọi không truyền trình độ: trước đây THUONG_TRU (nghiệp vụ 2026-05-18); L3
         # (owner 22-11 câu 5) ⇒ chờ xác minh. Hồ sơ CŨ giữ THUONG_TRU khi cờ tắt — ``test_l3_kv_cho_xac_minh.py``.
         ("graduated_thcs", "trung_cap", None, "PENDING_VERIFICATION"),

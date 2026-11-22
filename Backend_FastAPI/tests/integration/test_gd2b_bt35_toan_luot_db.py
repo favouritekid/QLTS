@@ -459,12 +459,12 @@ async def test_b_p1_kv_chong_khoang_ba_ca_hai_duong_chon_cung_mot_dong(nen):
                 await chen(conn, "vn_commune_area_map", commune_code=ma_xa, province="Tỉnh giả", district="Huyện giả",
                            ward="Xã giả " + ma_xa, area_code=ma_kv, effective_from=tu, effective_to=den)
             pid = await _ho_so_kieu(conn, d, 975 + i, "thieu_giay_hp")
-            # Nhánh THƯỜNG TRÚ ngoài ba nhóm L3 (hoàn thành THPT, không chuyên môn, ảnh chụp không ghi trình độ) — L3 (owner 22-11)
-            # đổi nhánh "tốt nghiệp THCS" cũ sang "chờ xác minh", nên ca xã dùng nhánh thường trú còn giữ nguyên.
+            # Nhánh THƯỜNG TRÚ còn giữ sau L3 (owner 22-11): CĐ liên thông "khối lượng VH THPT + TC" KHÔNG có lịch sử THPT, ngữ cảnh
+            # ghi trong ảnh chụp — nhánh "tốt nghiệp THCS" cũ nay "chờ xác minh", nhánh cũ "hoàn thành THPT" nay theo trường THPT.
             await _x(conn, "UPDATE admission_profile SET cultural_education_level = 'completed_thpt', "
-                           "vocational_qualification = 'none', academic_history = '[]'::jsonb, permanent_commune_code = :x, "
+                           "vocational_qualification = 'trung_cap', academic_history = '[]'::jsonb, permanent_commune_code = :x, "
                            "priority_resolution_snapshot = CAST(:s AS jsonb) WHERE id = :p",
-                     x=ma_xa, s=json.dumps(kv(mong)), p=pid)
+                     x=ma_xa, s=json.dumps(dict(kv(mong), target_level="cao_dang", admission_type="lien_thong")), p=pid)
             pid_xa[nhan] = pid
     # Hai đường tra, giá trị viết tay.
     async with AsyncSessionLocal() as db:

@@ -833,14 +833,15 @@ async def test_kv_tinh_lai_khac_anh_chup_thi_chan(hs):
 
 
 async def test_kv_tinh_lai_theo_thuong_tru_khac_anh_chup_thi_chan(hs):
-    # Nhánh THƯỜNG TRÚ (hoàn thành THPT, không chuyên môn, ảnh chụp không ghi trình độ — L3 owner 22-11 giữ nhánh này; nhánh
-    # "văn hoá THCS" cũ nay là "chờ xác minh"): đổi xã thường trú GX3 (KV2-NT) ⇒ GX1 (KV1).
+    # Nhánh THƯỜNG TRÚ còn giữ sau L3 (owner 22-11): CĐ liên thông "khối lượng VH THPT + TC" KHÔNG có lịch sử THPT (ngữ cảnh ghi
+    # trong ảnh chụp) — nhánh "văn hoá THCS" cũ nay "chờ xác minh", nhánh cũ "hoàn thành THPT" nay theo trường THPT. Đổi xã thường
+    # trú GX3 (KV2-NT) ⇒ GX1 (KV1).
     cccd, pid = await _mot(
         hs,
         permanent_commune_code="GX3",
         cultural_education_level="completed_thpt",
-        vocational_qualification="none",
-        priority_resolution_snapshot=kv("KV2-NT"),
+        vocational_qualification="trung_cap",
+        priority_resolution_snapshot=dict(kv("KV2-NT"), target_level="cao_dang", admission_type="lien_thong"),
         academic_history=[],
     )
     assert (await _cong([cccd]))[0].blocks == ()  # phép đo hợp lệ: trước khi đổi thì qua
@@ -923,18 +924,23 @@ async def test_l3_anh_chup_cho_xac_minh_thi_chan_ma_rieng(hs):
 
 
 async def test_kv_tinh_lai_dung_ngu_canh_trinh_do_cua_anh_chup(hs):
-    # "Hoàn thành THPT, không chuyên môn": không ngữ cảnh trình độ ⇒ resolver đi THƯỜNG TRÚ (GX2 =
-    # KV2); ngữ cảnh "cao đẳng chính quy" ghi trong ảnh chụp ⇒ LỊCH SỬ THPT (trường KV1). Tính lại
-    # phải dùng ĐÚNG ngữ cảnh của lần chụp ⇒ KV1 = ảnh chụp ⇒ qua.
+    # Văn hoá THCS + dòng THCS ở trường KV1 (L3 owner 22-11): không ngữ cảnh trình độ ⇒ nhánh cũ ⇒ "KV chờ xác minh" (None);
+    # ngữ cảnh "trung cấp chính quy" ghi trong ảnh chụp ⇒ LỊCH SỬ THCS (trường KV1). Tính lại phải dùng ĐÚNG ngữ cảnh của lần
+    # chụp ⇒ KV1 = ảnh chụp ⇒ qua. (Bản trước dùng "hoàn thành THPT, không chuyên môn" — L3A câu 5 đưa nhánh cũ ấy về trường THPT
+    # nên hai ngữ cảnh ra CÙNG KV, phép đo hết sức bắt.)
     cccd, _ = await _mot(
         hs,
         permanent_commune_code="GX2",
-        cultural_education_level="completed_thpt",
+        cultural_education_level="graduated_thcs",
         vocational_qualification="none",
+        academic_history=[
+            {"level": "THCS", "graduation_type": "THCS", "school_id": hs["_danh_muc"]["truong"]["KV1"],
+             "school_name": "Trường giả KV1", "year_from": 2020, "year_to": 2024}
+        ],
         priority_resolution_snapshot={
             "kv_resolved": "KV1",
             "rule_applied": "longest_duration",
-            "target_level": "cao_dang",
+            "target_level": "trung_cap",
             "admission_type": "chinh_quy",
         },
     )
