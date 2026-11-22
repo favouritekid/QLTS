@@ -10,6 +10,7 @@
  * có school_id link.
  */
 
+import { useState } from "react"
 import { useFieldArray, UseFormReturn } from "react-hook-form"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -20,87 +21,64 @@ import { Plus, Trash2, GraduationCap } from "lucide-react"
 import { VnSchoolPicker } from "@/components/admissions/VnSchoolPicker"
 import { VN_SCHOOL_LEVELS } from "@/lib/zod/admissions"
 import type { AdmissionProfileUpdateInput } from "@/lib/zod/admissions"
+import {
+  GRADE_BANDS,
+  YEAR_INPUT_HINT,
+  type AcademicRow,
+  type GradeBand,
+  bandGradesLabel,
+  bandGraduationYear,
+  bandPreviewLabel,
+  bandYears,
+  buildBandRecords,
+  lienCapMissingGradeNotices,
+  mergedLienCapNotices,
+  parseBandStartYear,
+  rowSchoolYearsLabel,
+  suggestThcsStartYear,
+  yearNotices,
+} from "./academic-history-years"
 
 interface AcademicHistoryTabProps {
   form: UseFormReturn<AdmissionProfileUpdateInput>
   isEditable: boolean
 }
 
-// Dải lớp theo cấp học — nguồn DUY NHẤT cho quick-add + phân loại notices,
-// tránh magic number rải rác (vd đổi range quick-add nhưng quên đổi filter
-// notices → lệch âm thầm). graduationType gán ở lớp cuối cấp. Engine KV chỉ
-// dùng entry THPT; THCS display-only.
-const GRADE_BANDS = {
-  THCS: { start: 6, end: 9, graduationType: "THCS" },
-  THPT: { start: 10, end: 12, graduationType: "THPT" },
-} as const
-
-type GradeBand = (typeof GRADE_BANDS)[keyof typeof GRADE_BANDS]
-const bandYears = (b: { start: number; end: number }) => b.end - b.start + 1
-const bandGradesLabel = (b: { start: number; end: number }) =>
-  Array.from({ length: bandYears(b) }, (_, i) => b.start + i).join("/")
-
 export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps) {
   const { fields, append, remove } = useFieldArray({
     control: form.control,
     name: "academic_history",
   })
+  // Ô "năm bắt đầu lớp đầu cấp" của hai nút thêm nhanh (chuỗi đang gõ).
+  const [thptStartText, setThptStartText] = useState("")
+  const [thcsStartText, setThcsStartText] = useState("")
 
+  // Owner "điểm 1 và 2" việc 1: KHÔNG mặc định năm (trước đây năm nay − 3 → năm
+  // nay). Hai ô năm để trống, cán bộ phải gõ — thiếu thì form báo khi lưu.
   const addRecord = () => {
     append({
       school_id: null,
       school_name: "",
       level: null,
-      year_from: new Date().getFullYear() - 3,
-      year_to: new Date().getFullYear(),
       grade_to: null,
       gpa: null,
-    })
+    } as AcademicRow)
   }
 
-  // Quick-add toàn bộ các lớp của một cấp (THPT 10→12, THCS 6→9). Mỗi lớp 1
-  // năm, lớp cuối cấp = endYear; officer chỉ cần điền trường + GPA. Trình độ
-  // (graduation_type) gán cho MỌI lớp = cấp học quick-add (cả thẻ tương xứng
-  // THPT/THCS). Engine yêu cầu lịch sử THPT có school_id để xác định KV.
-  const addBand = (band: GradeBand, endYear: number) => {
-    const count = bandYears(band)
-    for (let i = 0; i < count; i++) {
-      const grade = band.start + i
-      const year = endYear - (count - 1) + i // lớp đầu = endYear−(count−1) … lớp cuối = endYear
-      append({
-        school_id: null,
-        school_name: "",
-        level: null,
-        year_from: year,
-        year_to: year,
-        grade_to: grade,
-        gpa: null,
-        graduation_type: band.graduationType,
-      } as Parameters<typeof append>[0])
-    }
-  }
+  // Thêm nhanh toàn bộ các lớp của một cấp (THPT 10→12, THCS 6→9) — owner
+  // 22-11: cán bộ gõ NĂM BẮT ĐẦU của lớp đầu cấp (số đầu của "Năm học
+  // 2022–2023" trên học bạ), mỗi lớp một dòng Y → Y+1 (2022→2023, 2023→2024,
+  // 2024→2025 ⇒ tốt nghiệp 2025). KHÔNG tự lấy năm nay. Các dòng sinh ra vẫn sửa
+  // được (lưu ban, chuyển trường); officer điền trường + GPA. Trình độ
+  // (graduation_type) gán cho MỌI lớp = cấp học. Engine KV cần dòng THPT có
+  // school_id; dòng THCS chỉ lưu hồ sơ.
+  const thptStartYear = parseBandStartYear(GRADE_BANDS.THPT, thptStartText)
+  const thcsStartYear = parseBandStartYear(GRADE_BANDS.THCS, thcsStartText)
 
-  // 3 năm THPT (lớp 10/11/12), tốt nghiệp = năm hiện tại.
-  const addThreeYearsThpt = () => addBand(GRADE_BANDS.THPT, new Date().getFullYear())
-
-  // 4 năm THCS (lớp 6/7/8/9). Năm tự lùi: lớp 9 = năm ngay trước khi vào lớp 10
-  // nếu hồ sơ đã có THPT (chuỗi liền mạch), else năm hiện tại − 3. Engine KV
-  // KHÔNG dùng entry THCS (chỉ lưu hồ sơ).
-  const addFourYearsThcs = () => {
-    const existing = form.getValues("academic_history") ?? []
-    const thptStartYears = existing
-      .filter(
-        (r) =>
-          r?.grade_to != null &&
-          r.grade_to >= GRADE_BANDS.THPT.start &&
-          r.grade_to <= GRADE_BANDS.THPT.end &&
-          r?.year_from != null,
-      )
-      .map((r) => r.year_from as number)
-    const grade9Year = thptStartYears.length
-      ? Math.min(...thptStartYears) - 1
-      : new Date().getFullYear() - 3
-    addBand(GRADE_BANDS.THCS, grade9Year)
+  const addBand = (band: GradeBand, startYear: number | null, reset: () => void) => {
+    if (startYear === null) return
+    append(buildBandRecords(band, startYear))
+    reset()
   }
 
   // ── Vệ sinh nhập liệu (Tầng 2) + gợi ý KV (Tầng 3) ─────────────────────────
@@ -109,7 +87,9 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
   // grade_to (10-12 = THPT, 6-9 = THCS) để hoạt động ngay cả khi chưa chọn
   // trường (level chỉ set sau khi pick từ danh mục).
   const records = (form.watch("academic_history") ?? []) as Array<{
+    level?: string | null
     grade_to?: number | null
+    year_from?: number | null
     year_to?: number | null
     school_id?: number | null
   }>
@@ -139,11 +119,11 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
   const softNotices: string[] = []
   if (dupGrades.length > 0)
     softNotices.push(
-      `Lớp ${dupGrades.join(", ")} xuất hiện nhiều lần — kiểm tra lại nếu không phải chuyển trường giữa năm.`,
+      `Lớp ${dupGrades.join(", ")} xuất hiện nhiều lần — kiểm tra lại nếu không phải ở lại lớp hoặc chuyển trường giữa năm.`,
     )
   if (thptRecords.length > bandYears(GRADE_BANDS.THPT))
     softNotices.push(
-      `Đang có ${thptRecords.length} năm THPT (thường ${bandYears(GRADE_BANDS.THPT)} năm: lớp ${bandGradesLabel(GRADE_BANDS.THPT)}). Nhiều hơn là bình thường nếu chuyển trường.`,
+      `Đang có ${thptRecords.length} năm THPT (thường ${bandYears(GRADE_BANDS.THPT)} năm: lớp ${bandGradesLabel(GRADE_BANDS.THPT)}). Nhiều hơn là bình thường nếu ở lại lớp hoặc chuyển trường.`,
     )
   if (thcsRecords.length > bandYears(GRADE_BANDS.THCS))
     softNotices.push(
@@ -153,6 +133,23 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
     softNotices.push(
       `Có năm kết thúc lớn hơn ${currentYear + 1} — kiểm tra lại năm học.`,
     )
+  // Owner 22-11: nhắc khi một dòng có hai năm bằng nhau, hai dòng trùng năm học,
+  // hoặc hở năm học giữa các dòng (cùng quy ước năm với phía tính KV).
+  softNotices.push(...yearNotices(records))
+  // Owner 22-11 "ở lại lớp": dòng liên cấp ghi gộp nhiều năm hơn phần lớp 10+ được
+  // tính (phản chiếu Q8 của phía tính KV) — nhắc tách mỗi năm học một dòng.
+  softNotices.push(...mergedLienCapNotices(records))
+  // Codex G5 lượt 2 P2: dòng liên cấp thiếu "Lớp cuối" ⇒ phía tính dừng; nhắc trước.
+  softNotices.push(...lienCapMissingGradeNotices(records))
+
+  // Owner "điểm 1 và 2" việc 4: hồ sơ đang được ấn định KV thủ công (cột
+  // `area_resolution_basis` có sẵn trong phản hồi hồ sơ, đã nạp vào form) — sửa
+  // trường / năm / lớp cuối / trình độ làm bản ấn định hết hiệu lực ở backend
+  // (`stale_inputs`). Chỉ nhắc; backend quyết.
+  const kvManualOverride = form.watch("area_resolution_basis") === "manual_override"
+
+  // Gợi ý năm bắt đầu lớp 6 = năm bắt đầu lớp 10 − 4 khi đã có dòng THPT.
+  const thcsSuggestion = suggestThcsStartYear(records)
 
   // Tầng 3 — engine chỉ resolve KV từ entry THPT CÓ school_id (chọn từ danh
   // mục). Có dòng THPT nhưng chưa chọn trường nào từ danh mục → KV chưa tính
@@ -174,6 +171,20 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
             </CardHeader>
 
             <CardContent className="space-y-6 pt-6">
+                {isEditable && kvManualOverride && (
+                    <div
+                        role="alert"
+                        data-testid="academic-kv-override-warning"
+                        className="rounded-md border border-warning-300 bg-warning-50 px-3 py-2 text-xs text-warning-900 flex items-start gap-2"
+                    >
+                        <span aria-hidden="true">⚠</span>
+                        <span>
+                            Hồ sơ này đang được ấn định khu vực thủ công. Nếu sửa trường, năm, lớp cuối hoặc
+                            trình độ ở đây, bản ấn định sẽ hết hiệu lực và quản lý phải ấn định lại (sửa điểm TB
+                            không ảnh hưởng).
+                        </span>
+                    </div>
+                )}
                 {/* NOTICES — soft data-quality hints (Tầng 2) + KV-readiness (Tầng 3).
                     KHÔNG chặn lưu/nộp; engine BE là nguồn KV/eligibility chính thức. */}
                 {(softNotices.length > 0 || needsThptCatalogPick) && (
@@ -337,6 +348,7 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
                                         min={1900}
                                         max={2100}
                                         disabled={!isEditable}
+                                        value={field.value ?? ""}
                                         className="bg-background"
                                         onChange={(e) => field.onChange(parseInt(e.target.value) || undefined)}
                                     />
@@ -359,6 +371,7 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
                                         min={1900}
                                         max={2100}
                                         disabled={!isEditable}
+                                        value={field.value ?? ""}
                                         className="bg-background"
                                         onChange={(e) => field.onChange(parseInt(e.target.value) || undefined)}
                                     />
@@ -447,6 +460,17 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
                                 )}
                             />
                         </div>
+                        {/* Owner "điểm 1 và 2" việc 2: cách ghi năm + xem trước năm học của dòng. */}
+                        <div className="col-span-2 md:col-span-5 space-y-0.5 text-xs">
+                            <p className="text-muted-foreground" data-testid={`academic-row-year-hint-${index}`}>
+                                {YEAR_INPUT_HINT}
+                            </p>
+                            {rowSchoolYearsLabel(records[index]) && (
+                                <p className="text-foreground" data-testid={`academic-row-years-${index}`}>
+                                    {rowSchoolYearsLabel(records[index])}
+                                </p>
+                            )}
+                        </div>
                         </div>
                     </div>
                     ))}
@@ -461,7 +485,7 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
 
                 {/* ADD BUTTONS */}
                 {isEditable && (
-                    <div className="flex flex-wrap gap-2 mt-4">
+                    <div className="space-y-4 mt-4">
                         <Button
                             type="button"
                             variant="outline"
@@ -470,30 +494,120 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
                             <Plus className="w-4 h-4 mr-2" aria-hidden="true" />
                             Thêm trường
                         </Button>
-                        {/* Commit 5 — quick-add 3 năm THPT */}
-                        <Button
-                            type="button"
-                            variant="outline"
-                            onClick={addThreeYearsThpt}
-                            data-testid="academic-quick-add-thpt"
-                        >
-                            <Plus className="w-4 h-4 mr-2" aria-hidden="true" />
-                            Thêm 3 năm THPT (lớp 10/11/12)
-                        </Button>
-                        {/* Quick-add 4 năm THCS (lớp 6/7/8/9) */}
-                        <Button
-                            type="button"
-                            variant="outline"
-                            onClick={addFourYearsThcs}
-                            data-testid="academic-quick-add-thcs"
-                        >
-                            <Plus className="w-4 h-4 mr-2" aria-hidden="true" />
-                            Thêm 4 năm THCS (lớp 6/7/8/9)
-                        </Button>
+                        {/* Thêm nhanh 3 năm THPT: gõ năm bắt đầu lớp 10 */}
+                        <QuickAddBand
+                            idPrefix="academic-quick-add-thpt"
+                            startLabel="Năm bắt đầu lớp 10"
+                            buttonLabel={`Thêm ${bandYears(GRADE_BANDS.THPT)} năm THPT (lớp ${bandGradesLabel(GRADE_BANDS.THPT)})`}
+                            graduationLabel="Tốt nghiệp năm"
+                            band={GRADE_BANDS.THPT}
+                            text={thptStartText}
+                            onTextChange={setThptStartText}
+                            startYear={thptStartYear}
+                            onAdd={() => addBand(GRADE_BANDS.THPT, thptStartYear, () => setThptStartText(""))}
+                        />
+                        {/* Thêm nhanh 4 năm THCS: gõ năm bắt đầu lớp 6 (gợi ý = lớp 10 − 4) */}
+                        <QuickAddBand
+                            idPrefix="academic-quick-add-thcs"
+                            startLabel="Năm bắt đầu lớp 6"
+                            buttonLabel={`Thêm ${bandYears(GRADE_BANDS.THCS)} năm THCS (lớp ${bandGradesLabel(GRADE_BANDS.THCS)})`}
+                            graduationLabel="Tốt nghiệp THCS năm"
+                            band={GRADE_BANDS.THCS}
+                            text={thcsStartText}
+                            onTextChange={setThcsStartText}
+                            startYear={thcsStartYear}
+                            onAdd={() => addBand(GRADE_BANDS.THCS, thcsStartYear, () => setThcsStartText(""))}
+                            suggestion={thcsStartText.trim() === "" ? thcsSuggestion : null}
+                            suggestionLabel="lớp 10 − 4"
+                        />
                     </div>
                 )}
             </CardContent>
         </Card>
+    </div>
+  )
+}
+
+interface QuickAddBandProps {
+  idPrefix: string
+  startLabel: string
+  buttonLabel: string
+  graduationLabel: string
+  band: GradeBand
+  text: string
+  onTextChange: (value: string) => void
+  startYear: number | null
+  onAdd: () => void
+  suggestion?: number | null
+  suggestionLabel?: string
+}
+
+// Một nút thêm nhanh: ô năm bắt đầu lớp đầu cấp + xem trước các năm học + năm tốt
+// nghiệp để cán bộ đối chiếu với học bạ trước khi bấm.
+function QuickAddBand({
+  idPrefix,
+  startLabel,
+  buttonLabel,
+  graduationLabel,
+  band,
+  text,
+  onTextChange,
+  startYear,
+  onAdd,
+  suggestion = null,
+  suggestionLabel,
+}: QuickAddBandProps) {
+  const inputId = `${idPrefix}-start`
+  const invalid = text.trim() !== "" && startYear === null
+  return (
+    <div className="space-y-1">
+      <div className="flex flex-wrap items-end gap-2">
+        <div className="space-y-1">
+          <label htmlFor={inputId} className="flex items-center text-xs font-medium text-muted-foreground">
+            {startLabel}
+          </label>
+          <Input
+            id={inputId}
+            data-testid={inputId}
+            type="number"
+            inputMode="numeric"
+            min={1900}
+            max={2100}
+            placeholder="VD: 2022"
+            value={text}
+            onChange={(e) => onTextChange(e.target.value)}
+            aria-invalid={invalid}
+            className="w-32 bg-background"
+          />
+        </div>
+        <Button type="button" variant="outline" onClick={onAdd} disabled={startYear === null} data-testid={idPrefix}>
+          <Plus className="w-4 h-4 mr-2" aria-hidden="true" />
+          {buttonLabel}
+        </Button>
+        {suggestion != null && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => onTextChange(String(suggestion))}
+            data-testid={`${idPrefix}-suggest`}
+          >
+            Gợi ý: {suggestion}
+            {suggestionLabel ? ` (${suggestionLabel})` : ""}
+          </Button>
+        )}
+      </div>
+      <p className="text-xs text-muted-foreground">Số đầu của &quot;Năm học …–…&quot; trên học bạ.</p>
+      {invalid && (
+        <p className="text-xs text-destructive" data-testid={`${idPrefix}-invalid`}>
+          Năm không hợp lệ — gõ 4 chữ số, vd 2022.
+        </p>
+      )}
+      {startYear !== null && (
+        <p className="text-xs text-foreground" data-testid={`${idPrefix}-preview`}>
+          {bandPreviewLabel(band, startYear)} {graduationLabel} {bandGraduationYear(band, startYear)}.
+        </p>
+      )}
     </div>
   )
 }
