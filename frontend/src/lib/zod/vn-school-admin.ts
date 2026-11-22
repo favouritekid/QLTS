@@ -38,10 +38,14 @@ const yearField = z.number().int().min(2000).max(2100)
 
 // --- school ---
 
+// Mã trường: BỎ TRỐNG với trường THCS / liên cấp ⇒ máy chủ sinh mã nội bộ NB + 6 số
+// (owner 22-11). Luật cấp nào được bỏ trống, mã xã bắt buộc ở đâu: BE quyết
+// (`VnSchoolService.create_school`) — FE chỉ gửi đúng thứ Admin nhập.
 export const schoolCreateSchema = z.object({
-  moet_school_code: z.string().min(1, "Mã trường MOET bắt buộc").max(10),
+  moet_school_code: z.string().max(10).optional(),
   moet_province_code: z.string().min(1, "Mã tỉnh MOET bắt buộc").max(3),
   moet_district_code: z.string().max(5).optional(),
+  commune_code: z.string().max(10).optional(),
   name: z.string().min(1, "Tên trường bắt buộc").max(255),
   address: z.string().optional(),
   province: z.string().min(1, "Tỉnh bắt buộc").max(100),
@@ -54,6 +58,7 @@ export type SchoolCreate = z.infer<typeof schoolCreateSchema>
 
 export const schoolUpdateSchema = z.object({
   moet_district_code: z.string().max(5).optional(),
+  commune_code: z.string().max(10).nullable().optional(),
   name: z.string().min(1).max(255).optional(),
   address: z.string().optional(),
   province: z.string().min(1).max(100).optional(),
@@ -69,6 +74,7 @@ export const schoolResponseSchema = z.object({
   moet_school_code: z.string(),
   moet_province_code: z.string(),
   moet_district_code: z.string().nullable(),
+  commune_code: z.string().nullable(),
   name: z.string(),
   address: z.string().nullable(),
   province: z.string(),
@@ -78,6 +84,8 @@ export const schoolResponseSchema = z.object({
   is_dtnt: z.boolean(),
   is_active: z.boolean(),
   current_kv: z.string().nullable(),
+  /** Mã nội bộ NB… do máy sinh (BE tính) — FE đọc cờ, không tự dò tiền tố. */
+  is_internal_code: z.boolean(),
 })
 export type SchoolResponse = z.infer<typeof schoolResponseSchema>
 
@@ -141,3 +149,47 @@ export const kvAssignmentResponseSchema = z.object({
   notes: z.string().nullable(),
 })
 export type KvAssignmentResponse = z.infer<typeof kvAssignmentResponseSchema>
+
+// --- KV gợi ý từ xã (trường nội bộ NB — owner 22-11: KV trường = KV hiện hành của xã) ---
+
+/** Nguồn dòng KV do máy chủ chép từ xã (mirror BE `KV_SOURCE_COMMUNE_CURRENT`). */
+export const KV_SOURCE_COMMUNE_CURRENT = "xa_hien_hanh"
+
+export const kvSuggestionResponseSchema = z.object({
+  school_id: z.number().int().positive(),
+  is_internal_code: z.boolean(),
+  commune_code: z.string().nullable(),
+  commune_ward: z.string().nullable(),
+  commune_province: z.string().nullable(),
+  suggested_kv: z.string().nullable(),
+  /** not_internal_school · no_commune_code · commune_not_active (null khi có gợi ý). */
+  reason: z.string().nullable(),
+})
+export type KvSuggestionResponse = z.infer<typeof kvSuggestionResponseSchema>
+
+/**
+ * KHÔNG có kv_code, KHÔNG có năm: máy chủ chép KV của xã lúc xác nhận, hiệu lực
+ * từ năm 2000, không năm kết thúc (owner 22-11, L3-a câu 2).
+ */
+export const kvFromCommuneCreateSchema = z.object({
+  notes: z.string().nullable().optional(),
+})
+export type KvFromCommuneCreate = z.infer<typeof kvFromCommuneCreateSchema>
+
+export const kvMismatchItemSchema = z.object({
+  school_id: z.number().int().positive(),
+  moet_school_code: z.string(),
+  name: z.string(),
+  is_active: z.boolean(),
+  commune_code: z.string().nullable(),
+  school_kv: z.string(),
+  commune_kv: z.string().nullable(),
+})
+export type KvMismatchItem = z.infer<typeof kvMismatchItemSchema>
+
+export const kvMismatchResponseSchema = z.object({
+  mismatch_count: z.number().int().min(0),
+  commune_inactive_count: z.number().int().min(0),
+  items: z.array(kvMismatchItemSchema),
+})
+export type KvMismatchResponse = z.infer<typeof kvMismatchResponseSchema>

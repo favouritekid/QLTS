@@ -41,6 +41,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import AsyncSessionLocal
 from app.models.vn_school import VnSchool, VnSchoolKvAssignment
+from app.models.vn_school_internal_code import (
+    is_internal_school_code,
+    not_internal_code_sql,
+)
 
 
 TARGET_PROVINCES = ["Lâm Đồng", "Đắk Lắk", "Gia Lai"]
@@ -86,6 +90,10 @@ def build_rows(df: pd.DataFrame, target_provinces: List[str]) -> List[Dict]:
         ma_t = str(r["ma_tinh"]).strip()
         ma_q = str(r["ma_huyen"]).strip() if pd.notna(r["ma_huyen"]) else None
         ma_tr = str(r["ma_truong"]).strip()
+        # Mã NB… là mã nội bộ trường THCS (máy sinh) — danh mục Bộ không bao giờ
+        # mang mã ấy; dòng nguồn như thế bị BỎ QUA, không ghi gì.
+        if is_internal_school_code(ma_tr):
+            continue
         kv = normalize_kv(r["khu_vuc"])
 
         rows.append(
@@ -110,22 +118,39 @@ def build_rows(df: pd.DataFrame, target_provinces: List[str]) -> List[Dict]:
     return rows
 
 
-async def upsert_one(db: AsyncSession, row: Dict, stats: Counter) -> Tuple[int, bool]:
-    """Upsert vn_school + ensure vn_school_kv_assignment exists.
-
-    Returns: (school_id, inserted_new_school)
-    """
-    # Lookup existing by composite key (active)
+async def find_existing_moet_school(
+    db: AsyncSession, province_code: str, school_code: str
+) -> Optional[VnSchool]:
+    """Trường active cùng cặp mã Bộ (tỉnh, trường). KHÔNG BAO GIỜ trả về trường nội
+    bộ NB… — kể cả khi mã nguồn trùng y mã nội bộ (lớp lọc ở câu truy vấn)."""
     existing_q = await db.execute(
         select(VnSchool)
         .where(
-            VnSchool.moet_province_code == row["moet_province_code"],
-            VnSchool.moet_school_code == row["moet_school_code"],
+            VnSchool.moet_province_code == province_code,
+            VnSchool.moet_school_code == school_code,
             VnSchool.is_active.is_(True),
+            not_internal_code_sql(VnSchool.moet_school_code),
         )
         .limit(1)
     )
-    school = existing_q.scalar_one_or_none()
+    return existing_q.scalar_one_or_none()
+
+
+async def upsert_one(
+    db: AsyncSession, row: Dict, stats: Counter
+) -> Tuple[Optional[int], bool]:
+    """Upsert vn_school + ensure vn_school_kv_assignment exists.
+
+    Returns: (school_id, inserted_new_school) — ``(None, False)`` khi dòng mang mã
+    nội bộ NB… (bỏ qua, không ghi gì).
+    """
+    # Lớp hai (lớp một ở ``build_rows``): dòng mang mã NB… không bao giờ được ghi.
+    if is_internal_school_code(row["moet_school_code"]):
+        stats["skipped_internal_code"] += 1
+        return None, False
+    school = await find_existing_moet_school(
+        db, row["moet_province_code"], row["moet_school_code"]
+    )
 
     if school is None:
         school = VnSchool(

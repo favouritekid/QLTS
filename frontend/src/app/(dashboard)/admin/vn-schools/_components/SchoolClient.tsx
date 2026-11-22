@@ -24,7 +24,11 @@ import {
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 
-import { useSchoolProvinces, useSchools } from "@/lib/hooks/useVnSchoolAdmin"
+import {
+  useInternalKvMismatch,
+  useSchoolProvinces,
+  useSchools,
+} from "@/lib/hooks/useVnSchoolAdmin"
 import {
   VN_SCHOOL_LEVELS,
   VN_SCHOOL_LEVEL_LABELS,
@@ -63,6 +67,10 @@ export function SchoolClient() {
   }
   const { data, isLoading, isFetching } = useSchools(params)
   const { data: provinces } = useSchoolProvinces()
+  // Câu kiểm lệch (owner 22-11): trường nội bộ có KV chép từ xã khác KV hiện hành của xã.
+  const { data: mismatch } = useInternalKvMismatch()
+  const mismatchTotal =
+    (mismatch?.mismatch_count ?? 0) + (mismatch?.commune_inactive_count ?? 0)
 
   // De-dupe theo mã tỉnh MOET — phòng data bẩn (1 mã map 2 tên province) gây
   // SelectItem trùng value + React key collision.
@@ -82,10 +90,10 @@ export function SchoolClient() {
     <div className="container mx-auto space-y-4 p-6">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold">Trường THPT</h1>
+          <h1 className="text-2xl font-semibold">Danh mục trường</h1>
           <p className="text-muted-foreground text-sm">
-            Danh mục trường (vn_school) + phân loại KV theo năm. Ngừng trường =
-            ẩn (không xoá), giữ lịch sử KV.
+            Trường THPT (danh mục Bộ) và trường THCS (mã nội bộ NB…) + phân loại
+            KV theo năm. Ngừng trường = ẩn (không xoá), giữ lịch sử KV.
           </p>
         </div>
         <Button variant="outline" onClick={() => setImportOpen(true)}>
@@ -93,6 +101,31 @@ export function SchoolClient() {
           Import CSV
         </Button>
       </div>
+
+      {mismatch && mismatchTotal > 0 && (
+        <div
+          role="alert"
+          data-testid="kv-lech-xa-banner"
+          className="space-y-1 rounded-md border border-warning-300 bg-warning-50 px-3 py-2 text-sm text-warning-900"
+        >
+          <p className="font-medium">
+            {mismatch.mismatch_count} trường nội bộ có KV khác KV hiện hành của xã
+            {mismatch.commune_inactive_count > 0 &&
+              ` · ${mismatch.commune_inactive_count} trường có xã không còn hiệu lực`}
+            . Mở &quot;Quản lý KV&quot; của từng trường để cập nhật.
+          </p>
+          <ul className="list-disc pl-5 text-xs">
+            {mismatch.items.slice(0, 10).map((it) => (
+              <li key={it.school_id}>
+                {it.name} ({it.moet_school_code}): KV trường {it.school_kv} —{" "}
+                {it.commune_kv
+                  ? `KV xã hiện hành ${it.commune_kv}`
+                  : `xã ${it.commune_code ?? "?"} không còn hiệu lực`}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <Card>
         <CardHeader className="pb-3">

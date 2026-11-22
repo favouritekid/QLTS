@@ -33,7 +33,9 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
+    Sequence,
     String,
     Text,
     UniqueConstraint,
@@ -41,6 +43,31 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
+from app.models.vn_school_internal_code import (
+    INTERNAL_CODE_SEQUENCE_NAME,
+    INTERNAL_CODE_SQL_PREDICATE,
+    INTERNAL_SCHOOL_CODE_MAX,
+)
+
+#: Sequence sinh số thứ tự mã nội bộ ``NB`` + 6 số (migration ``thcsnb20261122``). ``NO CYCLE`` + ``MAXVALUE`` 999999:
+#: hết số ⇒ ``nextval`` báo lỗi (fail-closed), không quay vòng sinh mã trùng.
+VN_SCHOOL_INTERNAL_CODE_SEQ = Sequence(
+    INTERNAL_CODE_SEQUENCE_NAME,
+    start=1,
+    increment=1,
+    minvalue=1,
+    maxvalue=INTERNAL_SCHOOL_CODE_MAX,
+    cycle=False,
+    metadata=Base.metadata,
+)
+
+_INTERNAL_CODE_PREDICATE = INTERNAL_CODE_SQL_PREDICATE.format(col="moet_school_code")
+#: CHECK + chỉ mục chép NGUYÊN sang migration ``thcsnb20261122`` (test khoá hai bên khớp).
+CK_VN_SCHOOL_INTERNAL_CODE_FORMAT_SQL = (
+    f"NOT ({_INTERNAL_CODE_PREDICATE}) "
+    "OR (moet_school_code ~ '^NB[0-9]{6}$' AND commune_code IS NOT NULL)"
+)
+UQ_VN_SCHOOL_INTERNAL_CODE_WHERE_SQL = _INTERNAL_CODE_PREDICATE
 
 
 class VnSchool(Base):
@@ -64,6 +91,19 @@ class VnSchool(Base):
         CheckConstraint(
             "level IN ('THCS', 'THPT', 'THCS_THPT', 'TRUNG_HOC_NGHE', 'OTHER')",
             name="ck_vn_school_level",
+        ),
+        # Mã nội bộ ``NB…`` (owner 22-11): đúng khuôn ``NB`` + 6 số VÀ có mã xã. Tầng chủ sở hữu là
+        # ``VnSchoolService``; CHECK là lớp phòng thủ thêm (migration ``thcsnb20261122``).
+        CheckConstraint(
+            CK_VN_SCHOOL_INTERNAL_CODE_FORMAT_SQL,
+            name="ck_vn_school_internal_code_format",
+        ),
+        # Mã nội bộ duy nhất TOÀN BẢNG (kể cả trường đã ngừng) — không bao giờ cấp lại.
+        Index(
+            "uq_vn_school_internal_code",
+            "moet_school_code",
+            unique=True,
+            postgresql_where=sa.text(UQ_VN_SCHOOL_INTERNAL_CODE_WHERE_SQL),
         ),
     )
 

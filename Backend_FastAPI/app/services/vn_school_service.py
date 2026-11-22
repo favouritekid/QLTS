@@ -30,10 +30,25 @@ import csv
 import io
 from typing import Any, Awaitable, Callable, Optional, Tuple
 
-from sqlalchemy import case, func, or_, select
+from sqlalchemy import case, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.vn_school import VnSchool, VnSchoolKvAssignment
+from app.models.vn_locality import VnCommuneAreaMap
+from app.models.vn_school import (
+    VN_SCHOOL_INTERNAL_CODE_SEQ,
+    VnSchool,
+    VnSchoolKvAssignment,
+)
+from app.models.vn_school_internal_code import (
+    INTERNAL_CODE_LEVELS,
+    INTERNAL_CODE_SQL_PREDICATE,
+    KV_COMMUNE_EFFECTIVE_FROM_YEAR,
+    KV_SOURCE_COMMUNE_CURRENT,
+    NO_MOET_CODE_LEVELS,
+    format_internal_school_code,
+    is_internal_school_code,
+)
+from app.services.vn_locality_service import VnLocalityService
 from app.utils.exceptions import (
     BusinessRuleViolation,
     DuplicateResourceError,
@@ -49,6 +64,47 @@ async def _noop_callback() -> None:
 
 
 _VN_SCHOOL_LEVELS = {"THCS", "THPT", "THCS_THPT", "TRUNG_HOC_NGHE", "OTHER"}
+
+# --- Câu chữ lỗi (mã nội bộ NB / mã xã / KV chép từ xã) — đi ra giao diện Admin ---
+MSG_INTERNAL_CODE_RESERVED = (
+    "Mã bắt đầu bằng 'NB' là mã nội bộ do máy tự sinh — không nhập tay."
+)
+MSG_THCS_HAS_NO_MOET_CODE = (
+    "Trường cấp THCS không có mã của Bộ — để trống ô mã trường, máy sẽ tự sinh "
+    "mã nội bộ NB."
+)
+MSG_INTERNAL_COMMUNE_REQUIRED = (
+    "Trường mã nội bộ (NB…) bắt buộc chọn xã/phường nơi trường đặt, từ bảng xã → KV."
+)
+MSG_KV_SOURCE_RESERVED = (
+    "Nguồn 'xa_hien_hanh' chỉ dùng cho nút 'Xác nhận KV gợi ý từ xã' — không "
+    "nhập tay."
+)
+MSG_KV_COMMUNE_ROW_LOCKED = (
+    "Dòng KV chép từ xã không sửa KV / nguồn bằng tay. Xoá dòng này rồi xác nhận "
+    "lại KV gợi ý từ xã."
+)
+
+
+def _is_commune_source(source: Any) -> bool:
+    return isinstance(source, str) and source.strip().lower() == KV_SOURCE_COMMUNE_CURRENT
+
+
+# Câu kiểm lệch (owner câu 2: "chép từ xã + câu kiểm lệch"). MỘT chuỗi: service chạy nó, phiếu đọc production
+# (``logs-P5/.../gd2/l3/thcs/dem-lech-kv-truong-noi-bo.sql``) chép nguyên phần thân. Dòng KV "đang áp dụng" =
+# ``effective_to_year IS NULL`` (cùng định nghĩa ``current_kv``); xã "còn hiệu lực" = ``effective_to IS NULL`` (cùng
+# ``VnLocalityService.get_active_commune``). Hàng có ``commune_kv IS NULL`` = xã không còn dòng hiệu lực.
+SQL_INTERNAL_KV_MISMATCH_ROWS = (
+    "SELECT s.id AS school_id, s.moet_school_code, s.name, s.is_active, s.commune_code, "
+    "a.kv_code AS school_kv, c.area_code AS commune_kv "
+    "FROM vn_school s "
+    "JOIN vn_school_kv_assignment a ON a.school_id = s.id "
+    f"AND a.source = '{KV_SOURCE_COMMUNE_CURRENT}' AND a.effective_to_year IS NULL "
+    "LEFT JOIN vn_commune_area_map c ON c.commune_code = s.commune_code AND c.effective_to IS NULL "
+    f"WHERE {INTERNAL_CODE_SQL_PREDICATE.format(col='s.moet_school_code')} "
+    "AND (c.id IS NULL OR c.area_code <> a.kv_code) "
+    "ORDER BY s.id"
+)
 
 
 def _years_overlap(
@@ -231,6 +287,7 @@ class VnSchoolService:
                 VnSchool.moet_school_code,
                 VnSchool.moet_province_code,
                 VnSchool.moet_district_code,
+                VnSchool.commune_code,
                 VnSchool.name,
                 VnSchool.address,
                 VnSchool.province,
@@ -283,19 +340,64 @@ class VnSchoolService:
         )
         return (await self.db.execute(stmt.limit(1))).scalar_one_or_none()
 
+    async def _require_active_commune(self, commune_code: str) -> VnCommuneAreaMap:
+        """Mã xã phải có dòng còn hiệu lực trong bảng xã → KV (``vn_commune_area_map``)."""
+        row = await VnLocalityService(self.db).get_active_commune(commune_code)
+        if row is None:
+            raise DomainValidationError(
+                f"Mã xã {commune_code!r} không có trong bảng xã → KV (hoặc không "
+                "còn hiệu lực). Chọn xã/phường từ danh mục."
+            )
+        return row
+
+    async def _next_internal_code(self) -> str:
+        """Mã nội bộ kế tiếp từ sequence ``vn_school_internal_code_seq`` (``NB`` + 6 số)."""
+        number = (
+            await self.db.execute(select(VN_SCHOOL_INTERNAL_CODE_SEQ.next_value()))
+        ).scalar_one()
+        return format_internal_school_code(int(number))
+
     async def create_school(
         self, data: dict[str, Any]
     ) -> Tuple[VnSchool, PostCommitCallback]:
-        if (
-            await self._active_school(
-                data["moet_school_code"], data["moet_province_code"]
-            )
-            is not None
-        ):
-            raise DuplicateResourceError(
-                f"Đã có trường active với mã MOET "
-                f"{data['moet_school_code']!r}/{data['moet_province_code']!r}."
-            )
+        """Tạo trường. Tầng CHỦ SỞ HỮU bất biến mã nội bộ (owner 22-11):
+
+        * mã ``NB…`` là vùng dành riêng — không nhập tay;
+        * bỏ trống mã ⇒ chỉ cấp THCS / liên cấp, máy sinh ``NB`` + 6 số, BẮT BUỘC mã xã còn hiệu lực;
+        * gõ mã ⇒ là mã Bộ; cấp THCS không có mã Bộ ⇒ từ chối.
+        """
+        data = dict(data)
+        level = data.get("level")
+        code = (data.get("moet_school_code") or "").strip()
+        commune_code = (data.get("commune_code") or "").strip() or None
+        data["commune_code"] = commune_code
+        if code:
+            if is_internal_school_code(code):
+                raise DomainValidationError(MSG_INTERNAL_CODE_RESERVED)
+            if level in NO_MOET_CODE_LEVELS:
+                raise DomainValidationError(MSG_THCS_HAS_NO_MOET_CODE)
+            data["moet_school_code"] = code
+            if commune_code is not None:
+                await self._require_active_commune(commune_code)
+            if (
+                await self._active_school(code, data["moet_province_code"])
+                is not None
+            ):
+                raise DuplicateResourceError(
+                    f"Đã có trường active với mã MOET "
+                    f"{code!r}/{data['moet_province_code']!r}."
+                )
+        else:
+            if level not in INTERNAL_CODE_LEVELS:
+                raise DomainValidationError(
+                    f"Trường cấp {level} phải có mã trường của Bộ. Chỉ trường "
+                    "THCS / liên cấp THCS-THPT mới được để trống mã (máy sinh mã "
+                    "nội bộ NB)."
+                )
+            if commune_code is None:
+                raise DomainValidationError(MSG_INTERNAL_COMMUNE_REQUIRED)
+            await self._require_active_commune(commune_code)
+            data["moet_school_code"] = await self._next_internal_code()
         clean = {k: v for k, v in data.items() if v is not None}
         school = VnSchool(**clean)
         self.db.add(school)
@@ -311,8 +413,27 @@ class VnSchoolService:
         # Không đổi định danh MOET / is_active qua PATCH (DELETE=deactivate).
         for f in ("moet_school_code", "moet_province_code", "is_active"):
             data.pop(f, None)
+        # Kiểm trạng thái ỨNG VIÊN trước khi gán (lỗi không để lại trường dở dang).
+        internal = is_internal_school_code(school.moet_school_code)
+        if data.get("level") is not None:
+            if internal and data["level"] not in INTERNAL_CODE_LEVELS:
+                raise DomainValidationError(
+                    "Trường mã nội bộ (NB…) chỉ ở cấp THCS hoặc liên cấp THCS-THPT."
+                )
+            if not internal and data["level"] in NO_MOET_CODE_LEVELS:
+                raise DomainValidationError(
+                    "Trường có mã Bộ không chuyển sang cấp THCS. Trường THCS dùng mã "
+                    "nội bộ — tạo trường mới với ô mã để trống."
+                )
+        if "commune_code" in data:
+            new_commune = (data["commune_code"] or "").strip() or None
+            if internal and new_commune is None:
+                raise DomainValidationError(MSG_INTERNAL_COMMUNE_REQUIRED)
+            if new_commune is not None and new_commune != school.commune_code:
+                await self._require_active_commune(new_commune)
+            data["commune_code"] = new_commune
         for key in (
-            "moet_district_code", "name", "address", "province",
+            "moet_district_code", "commune_code", "name", "address", "province",
             "district", "ward", "level", "is_dtnt",
         ):
             if key in data:
@@ -383,6 +504,10 @@ class VnSchoolService:
     ) -> Tuple[VnSchoolKvAssignment, PostCommitCallback]:
         if await self.db.get(VnSchool, school_id) is None:
             raise ResourceNotFoundError(f"VnSchool {school_id} not found")
+        # Nguồn ``xa_hien_hanh`` DÀNH RIÊNG cho ``confirm_kv_from_commune`` (KV do máy chép từ
+        # xã) — đường chung nhận kv_code do người gõ, ghi nguồn ấy là giả mạo dấu vết.
+        if _is_commune_source(data.get("source")):
+            raise DomainValidationError(MSG_KV_SOURCE_RESERVED)
         await self._guard_kv(
             school_id, data["effective_from_year"],
             data.get("effective_to_year"),
@@ -401,6 +526,15 @@ class VnSchoolService:
             raise ResourceNotFoundError(
                 f"VnSchoolKvAssignment {assignment_id} not found"
             )
+        # Dòng KV chép từ xã: KV / nguồn do máy ghi, không sửa tay (chỉ năm + ghi chú).
+        # Dòng khác: không được đổi thành nguồn ``xa_hien_hanh``.
+        if row.source == KV_SOURCE_COMMUNE_CURRENT:
+            if ("kv_code" in data and data["kv_code"] != row.kv_code) or (
+                "source" in data and data["source"] != row.source
+            ):
+                raise BusinessRuleViolation(MSG_KV_COMMUNE_ROW_LOCKED)
+        elif "source" in data and _is_commune_source(data["source"]):
+            raise DomainValidationError(MSG_KV_SOURCE_RESERVED)
         # Validate trạng thái ỨNG VIÊN TRƯỚC khi mutate — guard raise sẽ không
         # để row hỏng trong session (memory partial-update-loses-cross-field).
         new_from = data.get("effective_from_year", row.effective_from_year)
@@ -420,6 +554,113 @@ class VnSchoolService:
                 setattr(row, key, data[key])
         await self.db.flush()
         return row, _noop_callback
+
+    # --- KV gợi ý từ xã (trường nội bộ NB — owner 22-11: KV trường = KV của xã hiện tại) ---
+
+    async def suggest_kv_from_commune(self, school_id: int) -> dict[str, Any]:
+        """KV gợi ý = KV hiện hành của xã nơi trường đặt. Chỉ đọc. Không gợi ý ⇒ ``reason``.
+
+        Chưa có dữ liệu ánh xạ xã cũ → xã mới trong CSDL ⇒ KHÔNG nhận ra được xã gộp từ nhiều xã cũ khác KV (owner:
+        ca ấy Admin xem tay). Giao diện nhắc Admin trước khi xác nhận."""
+        school = await self.db.get(VnSchool, school_id)
+        if school is None:
+            raise ResourceNotFoundError(f"VnSchool {school_id} not found")
+        internal = is_internal_school_code(school.moet_school_code)
+        out: dict[str, Any] = {
+            "school_id": school.id,
+            "is_internal_code": internal,
+            "commune_code": school.commune_code,
+            "commune_ward": None,
+            "commune_province": None,
+            "suggested_kv": None,
+            "reason": None,
+        }
+        if not internal:
+            out["reason"] = "not_internal_school"
+            return out
+        if not school.commune_code:
+            out["reason"] = "no_commune_code"
+            return out
+        commune = await VnLocalityService(self.db).get_active_commune(
+            school.commune_code
+        )
+        if commune is None:
+            out["reason"] = "commune_not_active"
+            return out
+        out["commune_ward"] = commune.ward
+        out["commune_province"] = commune.province
+        out["suggested_kv"] = commune.area_code
+        return out
+
+    async def confirm_kv_from_commune(
+        self,
+        school_id: int,
+        data: dict[str, Any],
+        actor_id: Optional[int] = None,
+    ) -> Tuple[VnSchoolKvAssignment, PostCommitCallback]:
+        """Admin xác nhận KV gợi ý ⇒ một dòng ``vn_school_kv_assignment`` nguồn ``xa_hien_hanh``.
+
+        ``kv_code`` do MÁY CHỦ chép từ dòng xã còn hiệu lực lúc xác nhận — không nhận từ client. Khoảng năm do MÁY điền:
+        từ ``KV_COMMUNE_EFFECTIVE_FROM_YEAR`` (2000), không năm kết thúc — owner 22-11 (L3-a câu 2: "từ năm 2000, phủ
+        mọi hồ sơ"). ``data`` chỉ đọc ``notes``."""
+        school = await self.db.get(VnSchool, school_id, with_for_update=True)
+        if school is None:
+            raise ResourceNotFoundError(f"VnSchool {school_id} not found")
+        if not school.is_active:
+            raise BusinessRuleViolation(
+                "Trường đã ngừng — không xác nhận KV gợi ý."
+            )
+        if not is_internal_school_code(school.moet_school_code):
+            raise BusinessRuleViolation(
+                "Chỉ trường mã nội bộ (NB…) mới lấy KV từ xã. Trường có mã Bộ dùng "
+                "KV theo danh mục của Bộ."
+            )
+        if not school.commune_code:
+            raise BusinessRuleViolation(MSG_INTERNAL_COMMUNE_REQUIRED)
+        commune = await VnLocalityService(self.db).get_active_commune(
+            school.commune_code
+        )
+        if commune is None:
+            raise BusinessRuleViolation(
+                f"Xã {school.commune_code!r} không còn dòng hiệu lực trong bảng xã → "
+                "KV — không có KV để chép."
+            )
+        from_year = KV_COMMUNE_EFFECTIVE_FROM_YEAR
+        to_year = None
+        await self._guard_kv(school.id, from_year, to_year)
+        notes = (data.get("notes") or "").strip() or (
+            f"Chép KV hiện hành của xã {commune.commune_code} "
+            f"({commune.ward}, {commune.province})"
+        )
+        row = VnSchoolKvAssignment(
+            school_id=school.id,
+            kv_code=commune.area_code,
+            effective_from_year=from_year,
+            effective_to_year=to_year,
+            source=KV_SOURCE_COMMUNE_CURRENT,
+            notes=notes,
+            created_by=actor_id,
+        )
+        self.db.add(row)
+        await self.db.flush()
+        return row, _noop_callback
+
+    async def internal_kv_mismatch(self) -> dict[str, Any]:
+        """Câu kiểm lệch: trường nội bộ có KV ``xa_hien_hanh`` đang áp dụng khác KV hiện hành của xã, hoặc xã không
+        còn dòng hiệu lực. Chỉ đọc."""
+        rows = (
+            (await self.db.execute(text(SQL_INTERNAL_KV_MISMATCH_ROWS)))
+            .mappings()
+            .all()
+        )
+        items = [dict(r) for r in rows]
+        return {
+            "mismatch_count": sum(1 for r in items if r["commune_kv"] is not None),
+            "commune_inactive_count": sum(
+                1 for r in items if r["commune_kv"] is None
+            ),
+            "items": items,
+        }
 
     async def delete_kv_assignment(
         self, assignment_id: int
@@ -474,6 +715,18 @@ class VnSchoolService:
                     )
                 if level not in _VN_SCHOOL_LEVELS:
                     raise ValueError(f"level không hợp lệ: {level!r}")
+                # Mã nội bộ NB… do máy sinh: dòng CSV mang mã ấy bị từ chối TRƯỚC khi tra
+                # trường có sẵn ⇒ bộ nạp không bao giờ khớp / bỏ qua nhầm một trường NB.
+                if is_internal_school_code(code):
+                    raise ValueError(
+                        "mã bắt đầu bằng 'NB' là mã nội bộ do máy sinh — không "
+                        "nhập qua CSV"
+                    )
+                if level in NO_MOET_CODE_LEVELS:
+                    raise ValueError(
+                        "trường cấp THCS dùng mã nội bộ do máy sinh — thêm từng "
+                        "trường qua form, không nhập qua CSV"
+                    )
                 if (code, prov) in seen or (
                     await self._active_school(code, prov) is not None
                 ):

@@ -76,7 +76,9 @@ export function ImportSchoolCsvDialog({ open, onOpenChange }: Props) {
             Cột bắt buộc:{" "}
             <code>moet_school_code,moet_province_code,name,province,level</code>
             {" "}(+ moet_district_code/district/ward/is_dtnt tuỳ chọn). UTF-8,
-            idempotent. KV phân loại qua nút &quot;Quản lý KV&quot;.
+            idempotent. KV phân loại qua nút &quot;Quản lý KV&quot;. Trường cấp THCS
+            và mã NB… (mã nội bộ) KHÔNG nhập qua CSV — thêm từng trường qua nút
+            &quot;Thêm trường&quot;.
           </DialogDescription>
         </DialogHeader>
 

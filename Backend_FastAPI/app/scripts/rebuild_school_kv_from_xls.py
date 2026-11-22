@@ -85,7 +85,7 @@ def load_source(path):
 def dry_run(args) -> int:
     src = load_source(args.source)
     provinces = set(p.strip() for p in args.provinces.split(","))
-    src_t = [s for s in src if s["gso"] in provinces]
+    src_t = source_rows_for_apply(src, provinces)
 
     schools = read_csv(os.path.join(args.state_dir, "schools.csv"))
     prof = read_csv(os.path.join(args.state_dir, "profile_schools.csv"))
@@ -117,6 +117,10 @@ def dry_run(args) -> int:
         f"(toàn vùng target; CASCADE kv+name_history)"
     )
     print(
+        "      (--apply KHÔNG xoá trường mã nội bộ NB…; số trên đếm từ dump, "
+        "có thể gồm cả chúng)"
+    )
+    print(
         f"[3] HỒ SƠ DANGLING       : {len(backfill)} "
         f"trường đã chọn sẽ mất link (officer chọn lại)"
     )
@@ -141,6 +145,32 @@ def dry_run(args) -> int:
     return 0
 
 
+def source_rows_for_apply(src, provinces):
+    """Dòng nguồn được nạp: đúng vùng target, BỎ dòng mang mã nội bộ NB… (mã trường
+    THCS do máy sinh — danh mục Bộ không bao giờ có; ghi vào là đè lên trường nội bộ)."""
+    from app.models.vn_school_internal_code import is_internal_school_code
+
+    return [
+        s
+        for s in src
+        if s["gso"] in provinces
+        and not is_internal_school_code(s.get("moet_code"))
+        and not is_internal_school_code((s.get("moet_code") or "")[2:])
+    ]
+
+
+def region_school_filter(old_names):
+    """Vị từ chọn trường CŨ vùng target để xoá cứng — KHÔNG BAO GIỜ gồm trường nội bộ
+    NB… (trường THCS do Admin tạo từ hồ sơ, không thuộc danh mục Bộ)."""
+    from app.models.vn_school import VnSchool
+    from app.models.vn_school_internal_code import not_internal_code_sql
+
+    return (
+        VnSchool.province.in_(old_names),
+        not_internal_code_sql(VnSchool.moet_school_code),
+    )
+
+
 async def apply(args) -> int:
     from app.database import AsyncSessionLocal
     from app.models.vn_school import VnSchool, VnSchoolKvAssignment
@@ -149,21 +179,21 @@ async def apply(args) -> int:
 
     src = load_source(args.source)
     provinces = set(p.strip() for p in args.provinces.split(","))
-    src_t = [s for s in src if s["gso"] in provinces]
+    src_t = source_rows_for_apply(src, provinces)
 
     old_names = [n for n, g in OLD_TO_GSO.items() if g in provinces]
     async with AsyncSessionLocal() as db:
         async with db.begin():
-            # (2) XÓA CỨNG toàn bộ cũ vùng target.
+            # (2) XÓA CỨNG toàn bộ cũ vùng target — TRỪ trường nội bộ NB….
             # FK: kv_assignment + name_history = CASCADE (tự xóa).
             # merged_into_id (self-ref, NO ACTION): set NULL trước.
             await db.execute(
                 update(VnSchool)
-                .where(VnSchool.province.in_(old_names))
+                .where(*region_school_filter(old_names))
                 .values(merged_into_id=None)
             )
             res = await db.execute(
-                sa_delete(VnSchool).where(VnSchool.province.in_(old_names))
+                sa_delete(VnSchool).where(*region_school_filter(old_names))
             )
             react = res.rowcount or 0
             # (1) INSERT catalog mới (idempotent theo moet_code)

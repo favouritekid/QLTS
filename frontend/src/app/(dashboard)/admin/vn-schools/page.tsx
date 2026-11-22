@@ -1,5 +1,6 @@
 /**
- * Admin — Quản lý Trường THPT (vn_school + KV assignment) — PR-B.
+ * Admin — Danh mục trường (vn_school + KV assignment) — PR-B; trường THCS mã
+ * nội bộ NB… (owner 22-11).
  *
  * Thin Suspense wrapper. Admin auth = BE require_admin + nav role filter.
  */

@@ -9,7 +9,9 @@ from __future__ import annotations
 from datetime import date
 from typing import Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
+
+from app.models.vn_school_internal_code import is_internal_school_code
 
 
 class VnCommuneAreaMapRow(BaseModel):
@@ -132,9 +134,14 @@ _KV_CODE_PATTERN = r"^KV[1-9](-NT)?$"
 
 
 class VnSchoolCreate(BaseModel):
-    moet_school_code: str = Field(min_length=1, max_length=10)
+    """Tạo trường. ``moet_school_code`` BỎ TRỐNG ⇒ máy sinh mã nội bộ ``NB`` + 6 số (chỉ cấp THCS / liên cấp — luật ở
+    ``VnSchoolService.create_school``). Trường nội bộ BẮT BUỘC ``commune_code`` có trong bảng xã → KV (dòng còn hiệu
+    lực)."""
+
+    moet_school_code: Optional[str] = Field(default=None, max_length=10)
     moet_province_code: str = Field(min_length=1, max_length=3)
     moet_district_code: Optional[str] = Field(default=None, max_length=5)
+    commune_code: Optional[str] = Field(default=None, max_length=10)
     name: str = Field(min_length=1, max_length=255)
     address: Optional[str] = None
     province: str = Field(min_length=1, max_length=100)
@@ -146,9 +153,11 @@ class VnSchoolCreate(BaseModel):
 
 class VnSchoolUpdate(BaseModel):
     """PATCH — KHÔNG đổi moet_school_code/moet_province_code (định danh MOET) và
-    KHÔNG đổi is_active (dùng DELETE=deactivate)."""
+    KHÔNG đổi is_active (dùng DELETE=deactivate). ``commune_code`` của trường nội
+    bộ ``NB…`` không được xoá trống."""
 
     moet_district_code: Optional[str] = Field(default=None, max_length=5)
+    commune_code: Optional[str] = Field(default=None, max_length=10)
     name: Optional[str] = Field(default=None, min_length=1, max_length=255)
     address: Optional[str] = None
     province: Optional[str] = Field(default=None, min_length=1, max_length=100)
@@ -165,6 +174,7 @@ class VnSchoolAdminResponse(BaseModel):
     moet_school_code: str
     moet_province_code: str
     moet_district_code: Optional[str] = None
+    commune_code: Optional[str] = None
     name: str
     address: Optional[str] = None
     province: str
@@ -174,6 +184,12 @@ class VnSchoolAdminResponse(BaseModel):
     is_dtnt: bool
     is_active: bool
     current_kv: Optional[str] = None
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def is_internal_code(self) -> bool:
+        """Mã nội bộ ``NB…`` (máy sinh) — giao diện đọc cờ này, không tự dò tiền tố."""
+        return is_internal_school_code(self.moet_school_code)
 
 
 class VnSchoolListResponse(BaseModel):
@@ -220,3 +236,47 @@ class VnSchoolKvAssignmentResponse(BaseModel):
     effective_to_year: Optional[int] = None
     source: str
     notes: Optional[str] = None
+
+
+# --- KV gợi ý từ xã (trường nội bộ NB — owner 22-11: KV trường = KV hiện hành của xã) ---
+
+
+class VnSchoolKvSuggestionResponse(BaseModel):
+    """KV gợi ý cho trường nội bộ = KV của xã hiện tại (bảng xã → KV, dòng còn hiệu lực). Admin xem rồi xác nhận.
+
+    ``reason`` khi KHÔNG có gợi ý: ``not_internal_school`` · ``no_commune_code`` · ``commune_not_active``.
+    """
+
+    school_id: int
+    is_internal_code: bool
+    commune_code: Optional[str] = None
+    commune_ward: Optional[str] = None
+    commune_province: Optional[str] = None
+    suggested_kv: Optional[str] = None
+    reason: Optional[str] = None
+
+
+class VnSchoolKvFromCommuneCreate(BaseModel):
+    """Xác nhận KV gợi ý. KHÔNG nhận ``kv_code`` lẫn năm: máy chủ chép KV hiện hành của xã lúc xác nhận, hiệu lực từ
+    năm 2000, không năm kết thúc (owner 22-11, L3-a câu 2). Trường lạ (``kv_code``, năm…) bị bỏ qua."""
+
+    notes: Optional[str] = None
+
+
+class VnSchoolKvMismatchItem(BaseModel):
+    school_id: int
+    moet_school_code: str
+    name: str
+    is_active: bool
+    commune_code: Optional[str] = None
+    school_kv: str
+    commune_kv: Optional[str] = None
+
+
+class VnSchoolKvMismatchResponse(BaseModel):
+    """Câu kiểm lệch: trường nội bộ có dòng KV ``xa_hien_hanh`` đang áp dụng (``effective_to_year`` trống) mà KV ấy
+    khác KV hiện hành của xã (``mismatch_count``), hoặc xã không còn dòng hiệu lực (``commune_inactive_count``)."""
+
+    mismatch_count: int
+    commune_inactive_count: int
+    items: list[VnSchoolKvMismatchItem]

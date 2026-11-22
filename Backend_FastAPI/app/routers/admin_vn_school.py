@@ -20,6 +20,9 @@ from app.schemas.vn_locality import (
     VnSchoolKvAssignmentCreate,
     VnSchoolKvAssignmentResponse,
     VnSchoolKvAssignmentUpdate,
+    VnSchoolKvFromCommuneCreate,
+    VnSchoolKvMismatchResponse,
+    VnSchoolKvSuggestionResponse,
     VnSchoolListResponse,
     VnSchoolProvinceItem,
     VnSchoolUpdate,
@@ -42,6 +45,7 @@ def _school_resp(school: VnSchool, current_kv) -> VnSchoolAdminResponse:
         moet_school_code=school.moet_school_code,
         moet_province_code=school.moet_province_code,
         moet_district_code=school.moet_district_code,
+        commune_code=school.commune_code,
         name=school.name,
         address=school.address,
         province=school.province,
@@ -248,6 +252,64 @@ async def add_kv_assignment(
         actor=user.id,
     )
     return VnSchoolKvAssignmentResponse.model_validate(row)
+
+
+@admin_router.get(
+    "/schools/{school_id}/kv-suggestion",
+    response_model=VnSchoolKvSuggestionResponse,
+)
+async def kv_suggestion(
+    school_id: int,
+    db: AsyncSession = Depends(database.get_db),
+    _user=Depends(require_admin),
+) -> VnSchoolKvSuggestionResponse:
+    """KV gợi ý cho trường nội bộ NB = KV hiện hành của xã (chỉ đọc)."""
+    service = VnSchoolService(db)
+    return VnSchoolKvSuggestionResponse(
+        **await service.suggest_kv_from_commune(school_id)
+    )
+
+
+@admin_router.post(
+    "/schools/{school_id}/kv/from-commune",
+    response_model=VnSchoolKvAssignmentResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def confirm_kv_from_commune(
+    school_id: int,
+    payload: VnSchoolKvFromCommuneCreate,
+    db: AsyncSession = Depends(database.get_db),
+    user=Depends(require_admin),
+) -> VnSchoolKvAssignmentResponse:
+    """Admin xác nhận KV gợi ý ⇒ dòng KV nguồn ``xa_hien_hanh`` (KV do máy chủ chép từ xã)."""
+    service = VnSchoolService(db)
+    row, callback = await service.confirm_kv_from_commune(
+        school_id, payload.model_dump(), actor_id=user.id
+    )
+    await db.commit()
+    if callback:
+        await callback()
+    log.info(
+        "vn_school_kv_confirmed_from_commune",
+        id=row.id,
+        school_id=school_id,
+        kv=row.kv_code,
+        actor=user.id,
+    )
+    return VnSchoolKvAssignmentResponse.model_validate(row)
+
+
+@admin_router.get(
+    "/internal/kv-mismatch",
+    response_model=VnSchoolKvMismatchResponse,
+)
+async def internal_kv_mismatch(
+    db: AsyncSession = Depends(database.get_db),
+    _user=Depends(require_admin),
+) -> VnSchoolKvMismatchResponse:
+    """Câu kiểm lệch: trường nội bộ có KV chép từ xã khác KV hiện hành của xã (chỉ đọc)."""
+    service = VnSchoolService(db)
+    return VnSchoolKvMismatchResponse(**await service.internal_kv_mismatch())
 
 
 @admin_router.patch(
