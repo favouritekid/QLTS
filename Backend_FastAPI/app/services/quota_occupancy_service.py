@@ -818,11 +818,13 @@ async def lock_quota_for_profiles(
     ``locked_years`` bắt buộc (= kết quả :func:`lock_years_of_profiles` / :func:`try_lock_years_of_profiles`): năm THẬT dưới khoá
     hồ sơ ngoài tập đã khoá (hồ sơ vừa đổi năm ở nơi khác) ⇒ 409 "thử lại" — khoá thêm năm sau khi giữ dòng là phá thứ tự."""
     ids = _ids(profile_ids)
-    missing = await _years_of_profiles(db, ids) - set(locked_years)
+    # Dòng hiệu lực đọc MỘT lần (dưới khoá hồ sơ) cho cả phép kiểm năm lẫn tập ô — năm và ô cùng một ảnh chụp.
+    set_rows = await _effective_set_rows_of_profiles(db, ids)
+    missing = await _years_of(db, set_rows, ids) - set(locked_years)
     if missing:
         log.warning("quota_nam_ngoai_khoa_nam", years=sorted(missing), where="lock_quota_for_profiles")
         raise ConflictError(CONFLICT_MESSAGE)
-    ai, path = await profile_quota_cells(db, ids)
+    ai, path = await profile_quota_cells(db, ids, effective_set_rows=set_rows)
     ai |= {int(x) for x in extra_ai_ids if x is not None}
     path |= {int(x) for x in extra_path_ids if x is not None}
     await lock_quota_cells(db, ai, path)

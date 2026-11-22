@@ -712,17 +712,26 @@ async def test_f10e_lo_hai_ho_so_mot_em_thieu_khoa_chi_em_ay_loi_em_kia_duoc_duy
 
 # ═══════════════════════════════ F11 — kiểm kê mã (AST) ══════════════════════════════════════════
 _THU_MUC_APP = Path(asv.__file__).resolve().parents[1]
-#: Đích làm đổi số chỗ: trạng thái chiếm chỗ, ``draft`` (trả về Nháp), ``withdrawn`` (rút / trả chỗ Phần B). Đích là BIẾN ⇒ coi như
-#: đổi số (``_BIEN``).
+#: Đích làm đổi số chỗ: trạng thái chiếm chỗ, ``draft`` (trả về Nháp), ``withdrawn`` (rút / trả chỗ Phần B). Đích là BIẾN (hoặc
+#: tham chiếu tới hàm chuyển trạng thái mà không gọi ngay) ⇒ coi như đổi số (``_BIEN``).
 _DICH_DOI_SO = frozenset(qos.OCCUPYING_STATUSES) | {"draft", qos.RELEASED_STATUSES}
 _BIEN = "<biến>"
-#: Bảng kiểm kê: MỌI hàm có lời gọi ``transition`` / ``state_transition`` tới đích đổi số → (cách khoá, {đích: số lời gọi}).
-#: * ``tu_khoa``: khoá năm CÓ CHỜ trước câu khoá hồ sơ, một lần ``lock_quota_for_profiles`` trước lời gọi;
-#: * ``qua_lo``: khoá ở ``_lock_before_batch_approval`` (gọi trước lời gọi; hàm ấy theo ``tu_khoa``);
-#: * ``qua_finalize``: ``locked_years`` bắt buộc, một lần ``lock_quota_for_profiles`` trước lời gọi (nơi gọi: ``_NOI_GOI_FINALIZE``);
-#: * ``khong_cho``: hồ sơ đã khoá ở ``deps.py`` ⇒ CHỈ bản khoá năm KHÔNG CHỜ, trước một lần ``lock_quota_for_profiles``;
+#: Module chủ sở hữu trạng thái; miễn trừ ĐÚNG một phạm vi — chính hàm ``transition`` (không cả tệp).
+_MODULE_TRANG_THAI = "admission_state_service"
+_CHU_SO_HUU = "services/admission_state_service.py:transition"
+_KHOA_NAM_CO_CHO = frozenset({"lock_years_of_profiles"})
+_KHOA_NAM = frozenset({"lock_years_of_profiles", "try_lock_years_of_profiles"})
+#: Bảng kiểm kê: MỌI phạm vi có lời gọi / tham chiếu hàm chuyển trạng thái tới đích đổi số → (cách khoá, {đích: số lần}).
+#: * ``tu_khoa``: khoá năm CÓ CHỜ chặn MỌI đường tới câu khoá hồ sơ; câu khoá hồ sơ chặn mọi đường tới khoá ô; một lần
+#:   ``lock_quota_for_profiles`` chặn mọi đường tới lời gọi;
+#: * ``qua_lo``: ``_lock_before_batch_approval`` chặn mọi đường tới lời gọi (hàm ấy theo ``tu_khoa``);
+#: * ``qua_finalize``: ``locked_years`` bắt buộc, một lần ``lock_quota_for_profiles`` chặn mọi đường tới lời gọi (nơi gọi:
+#:   ``_NOI_GOI_FINALIZE``);
+#: * ``khong_cho``: hồ sơ đã khoá ở ``deps.py`` ⇒ CHỈ bản khoá năm KHÔNG CHỜ, chặn mọi đường tới một lần ``lock_quota_for_profiles``;
 #: * ``khong_doi_so``: cạnh trong tập chiếm chỗ (từ trạng thái đã chiếm chỗ) hoặc đích bị khoá trạng thái Quyết định chặn — không
 #:   đổi số; chỉ được đúng các đích kê ở đây.
+#: "Chặn mọi đường" = theo LUỒNG CHẠY (``_bi_chan``), không theo số dòng: câu khoá trong nhánh ``if`` / vòng lặp / ``lambda`` không
+#: chặn được lời gọi nằm ngoài nhánh.
 _KIEM_KE = {
     "services/admission_service.py:approve_profile": ("tu_khoa", {"approved": 1}),
     "services/admission_service.py:bulk_approve": ("qua_lo", {"approved": 1}),
@@ -735,8 +744,8 @@ _KIEM_KE = {
     "services/admission_service.py:verify_and_confirm": ("khong_doi_so", {"confirmed": 1}),  # approved / admitted → confirmed
     "services/admission_service.py:cancel_withdrawal": ("khong_doi_so", {"draft": 1}),  # withdrawal_pending → draft (QĐ: chặn)
 }
-#: Nơi gọi ``_finalize_withdrawn`` (rút route / thư, chốt rút sau hoàn tiền): khoá năm CÓ CHỜ trước câu khoá hồ sơ, truyền
-#: ``locked_years``.
+#: Nơi gọi ``_finalize_withdrawn`` (rút route / thư, chốt rút sau hoàn tiền): khoá năm (có chờ; đường thư: không chờ) chặn mọi
+#: đường tới câu khoá hồ sơ và tới lời gọi; truyền ``locked_years``.
 _NOI_GOI_FINALIZE = {
     "services/admission_service.py:withdraw_profile",
     "services/payment_service.py:RefundService.process_approved_refund",
@@ -748,31 +757,75 @@ def _ten_goi(call):
     return f.id if isinstance(f, ast.Name) else f.attr if isinstance(f, ast.Attribute) else None
 
 
+def _bi_danh(cay, rel):
+    """(tên trỏ tới HÀM ``admission_state_service.transition``, tên trỏ tới MODULE ấy) trong một tệp — đọc từ MỌI câu import
+    (kể cả import lười trong thân hàm), không viết cứng tên: ``from …admission_state_service import transition [as x]`` ⇒ hàm;
+    ``from … import admission_state_service [as m]`` / ``import …admission_state_service as m`` ⇒ module. Chính module chủ sở hữu:
+    thêm tên hàm ``transition``."""
+    ham = {"transition"} if Path(rel).stem == _MODULE_TRANG_THAI else set()
+    mod = set()
+    for n in ast.walk(cay):
+        if isinstance(n, ast.ImportFrom):
+            if (n.module or "").split(".")[-1] == _MODULE_TRANG_THAI:
+                ham |= {a.asname or a.name for a in n.names if a.name == "transition"}
+            mod |= {a.asname or a.name for a in n.names if a.name == _MODULE_TRANG_THAI}
+        elif isinstance(n, ast.Import):
+            mod |= {a.asname for a in n.names if a.asname and a.name.split(".")[-1] == _MODULE_TRANG_THAI}
+    return ham, mod
+
+
+def _la_getattr_chuyen(nut):
+    return (
+        isinstance(nut, ast.Call)
+        and isinstance(nut.func, ast.Name)
+        and nut.func.id == "getattr"
+        and len(nut.args) >= 2
+        and isinstance(nut.args[1], ast.Constant)
+        and nut.args[1].value == "transition"
+    )
+
+
+def _la_ham_chuyen(nut, bi_danh, *, goi):
+    """``nut`` trỏ tới hàm chuyển trạng thái: tên bí danh hàm (khi được GỌI: thêm tên trần ``transition`` ở mọi tệp — rộng hơn
+    cần, chủ ý); ``.transition`` — khi được GỌI: mọi đối tượng, khi chỉ tham chiếu: đối tượng là bí danh module (``.transition``
+    của enum ở chỗ khác không phải hàm này); ``getattr(…, "transition")``."""
+    ham, mod = bi_danh
+    if isinstance(nut, ast.Name):
+        return isinstance(nut.ctx, ast.Load) and (nut.id in ham or (goi and nut.id == "transition"))
+    if isinstance(nut, ast.Attribute):
+        return (
+            isinstance(nut.ctx, ast.Load)
+            and nut.attr == "transition"
+            and (goi or (isinstance(nut.value, ast.Name) and nut.value.id in mod))
+        )
+    return _la_getattr_chuyen(nut)
+
+
 def _quet_app():
-    """{khoá hàm "tệp:Lớp.hàm": (nút hàm, [lời gọi trong hàm — KHÔNG kể hàm lồng])} cho mọi tệp ``app/**.py``."""
+    """{khoá phạm vi: (nút, [mọi nút thuộc phạm vi], bí danh của tệp)} cho mọi tệp ``app/**.py``. Phạm vi = mỗi hàm ("tệp:Lớp.hàm"),
+    thân mỗi lớp ("tệp:Lớp.<lớp>"), thân module ("tệp:<module>"). Hàm / lớp lồng là phạm vi riêng; thân ``lambda`` THUỘC phạm vi
+    bao nó (được quét)."""
     ra = {}
     for tep in sorted(_THU_MUC_APP.rglob("*.py")):
         cay = ast.parse(tep.read_text(encoding="utf-8"))
         rel = tep.relative_to(_THU_MUC_APP).as_posix()
+        bi_danh = _bi_danh(cay, rel)
 
-        def di(nut, tien_to):
-            for con in ast.iter_child_nodes(nut):
-                if isinstance(con, ast.ClassDef):
-                    di(con, tien_to + con.name + ".")
-                elif isinstance(con, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    goi = []
-                    ngan = list(ast.iter_child_nodes(con))
-                    while ngan:
-                        x = ngan.pop()
-                        if isinstance(x, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
-                            continue
-                        if isinstance(x, ast.Call):
-                            goi.append(x)
-                        ngan.extend(ast.iter_child_nodes(x))
-                    ra["%s:%s%s" % (rel, tien_to, con.name)] = (con, goi)
-                    di(con, tien_to + con.name + ".")
+        def thu(nut, khoa, tien_to):
+            cac, ngan = [], list(ast.iter_child_nodes(nut))
+            while ngan:
+                x = ngan.pop()
+                if isinstance(x, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    thu(x, "%s:%s%s" % (rel, tien_to, x.name), tien_to + x.name + ".")
+                    continue
+                if isinstance(x, ast.ClassDef):
+                    thu(x, "%s:%s%s.<lop>" % (rel, tien_to, x.name), tien_to + x.name + ".")
+                    continue
+                cac.append(x)
+                ngan.extend(ast.iter_child_nodes(x))
+            ra[khoa] = (nut, cac, bi_danh)
 
-        di(cay, "")
+        thu(cay, "%s:<module>" % rel, "")
     return ra
 
 
@@ -786,8 +839,18 @@ def _dich(call):
     return _BIEN
 
 
-def _la_goi_chuyen(call):
-    return _ten_goi(call) in ("transition", "state_transition")
+def _chuyen_trong(cac, bi_danh):
+    """[(nút, đích)] mọi lời gọi hàm chuyển trạng thái trong ``cac`` + mọi tham chiếu KHÔNG gọi ngay (gán, truyền đi, ``getattr``
+    tách rời — đích ``_BIEN``)."""
+    goi = [c for c in cac if isinstance(c, ast.Call) and _la_ham_chuyen(c.func, bi_danh, goi=True)]
+    la_func = {id(c.func) for c in goi}
+    tham_chieu = [x for x in cac if id(x) not in la_func and _la_ham_chuyen(x, bi_danh, goi=False)]
+    # ``getattr(m, "transition")`` là ``func`` của lời gọi ngoài ⇒ đã tính ở ``goi``; ``m`` trong ``m.transition`` không phải hàm.
+    return [(c, _dich(c)) for c in goi] + [(x, _BIEN) for x in tham_chieu]
+
+
+def _goi(cac, ten):
+    return [c for c in cac if isinstance(c, ast.Call) and _ten_goi(c) == ten]
 
 
 def _la_khoa_ho_so(call):
@@ -801,68 +864,205 @@ def _la_khoa_ho_so(call):
     )
 
 
-def _dong(goi, ten):
-    return sorted(c.lineno for c in goi if _ten_goi(c) == ten)
+# ── luồng chạy: "câu khoá CHẮC CHẮN đã chạy trên MỌI đường tới nút đích" ─────────────────────────
+def _goi_chac_chan(bt, la_khoa):
+    """Biểu thức ``bt`` CHẮC CHẮN chạy một lời gọi thoả ``la_khoa`` — không tính nhánh ``x if c else y``, vế sau của ``and`` /
+    ``or``, thân comprehension, ``lambda`` / hàm lồng (chạy sau hoặc không chạy)."""
+    if isinstance(bt, (ast.Lambda, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return False
+    if isinstance(bt, ast.Call) and la_khoa(bt):
+        return True
+    if isinstance(bt, ast.IfExp):
+        return _goi_chac_chan(bt.test, la_khoa)
+    if isinstance(bt, ast.BoolOp):
+        return _goi_chac_chan(bt.values[0], la_khoa)
+    if isinstance(bt, (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp)):
+        return _goi_chac_chan(bt.generators[0].iter, la_khoa)
+    return any(_goi_chac_chan(x, la_khoa) for x in ast.iter_child_nodes(bt))
 
 
-def _kiem_tu_khoa(khoa, goi, cho_phep_ban_thu=False):
-    co_cho, ho_so = _dong(goi, "lock_years_of_profiles"), sorted(c.lineno for c in goi if _la_khoa_ho_so(c))
-    assert len(co_cho) == 1 and ho_so and co_cho[0] < ho_so[0], (khoa, "khoá năm CÓ CHỜ phải đứng TRƯỚC câu khoá hồ sơ", co_cho, ho_so)
-    if not cho_phep_ban_thu:
-        assert not _dong(goi, "try_lock_years_of_profiles"), (khoa, "đường tự khoá hồ sơ không dùng bản không chờ")
+def _ket_thuc(ds):
+    return bool(ds) and isinstance(ds[-1], (ast.Raise, ast.Return))
+
+
+def _ds_chac_chan(ds, la_khoa):
+    """Đi hết danh sách câu ``ds`` thì CHẮC CHẮN đã gọi ``la_khoa``; danh sách luôn kết thúc bằng ``raise`` / ``return`` (không tới
+    câu sau) coi như đạt."""
+    return any(_cau_chac_chan(c, la_khoa) for c in ds) or _ket_thuc(ds)
+
+
+def _cau_chac_chan(cau, la_khoa):
+    if isinstance(cau, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return False
+    if isinstance(cau, ast.If):
+        return _goi_chac_chan(cau.test, la_khoa) or (
+            _ds_chac_chan(cau.body, la_khoa) and _ds_chac_chan(cau.orelse, la_khoa)
+        )
+    if isinstance(cau, (ast.With, ast.AsyncWith)):
+        return any(_goi_chac_chan(i.context_expr, la_khoa) for i in cau.items) or _ds_chac_chan(cau.body, la_khoa)
+    if isinstance(cau, (ast.Try, getattr(ast, "TryStar", ast.Try))):
+        # thân try chắc chắn chạy hết khi MỌI except đều ném tiếp / trả về (không đi tiếp xuống câu sau)
+        return (_ds_chac_chan(cau.body, la_khoa) and all(_ket_thuc(h.body) for h in cau.handlers)) or _ds_chac_chan(
+            cau.finalbody, la_khoa
+        )
+    if isinstance(cau, (ast.For, ast.AsyncFor)):
+        return _goi_chac_chan(cau.iter, la_khoa)
+    if isinstance(cau, ast.While):
+        return _goi_chac_chan(cau.test, la_khoa)
+    if isinstance(cau, ast.Match):
+        return _goi_chac_chan(cau.subject, la_khoa)
+    return _goi_chac_chan(cau, la_khoa)
+
+
+def _chua(nut, dich):
+    return any(x is dich for x in ast.walk(nut))
+
+
+def _duong(ds, dich):
+    """[(danh sách câu, chỉ số, nhánh)] từ ``ds`` xuống câu trong cùng chứa ``dich`` (nhánh = tên thân con chứa nó, None nếu
+    ``dich`` nằm ở phần biểu thức của chính câu)."""
+    for i, cau in enumerate(ds):
+        if not _chua(cau, dich):
+            continue
+        for ten in ("body", "orelse", "finalbody"):
+            con = getattr(cau, ten, None)
+            if isinstance(con, list) and any(isinstance(c, ast.stmt) and _chua(c, dich) for c in con):
+                return [(ds, i, ten)] + _duong(con, dich)
+        for h in getattr(cau, "handlers", None) or []:
+            if _chua(h, dich):
+                return [(ds, i, "handlers")] + _duong(h.body, dich)
+        for ca in getattr(cau, "cases", None) or []:
+            if _chua(ca, dich):
+                return [(ds, i, "cases")] + _duong(ca.body, dich)
+        return [(ds, i, None)]
+    return []
+
+
+def _bi_chan(ham, dich, la_khoa):
+    """MỌI đường chạy từ đầu ``ham`` tới nút ``dich`` đều đã qua một lời gọi ``la_khoa`` (theo luồng, không theo số dòng)."""
+    duong = _duong(ham.body, dich)
+    assert duong, "phép đo hỏng: không tìm thấy nút đích trong thân hàm"
+    for ds, i, nhanh in duong:
+        if any(_cau_chac_chan(c, la_khoa) for c in ds[:i]):
+            return True
+        cau = ds[i]
+        if nhanh is None:
+            continue
+        dau = []
+        if isinstance(cau, (ast.If, ast.While)):
+            dau = [cau.test]
+        elif isinstance(cau, (ast.For, ast.AsyncFor)):
+            dau = [cau.iter]
+        elif isinstance(cau, (ast.With, ast.AsyncWith)):
+            dau = [it.context_expr for it in cau.items]
+        elif isinstance(cau, ast.Match):
+            dau = [cau.subject]
+        if any(_goi_chac_chan(x, la_khoa) for x in dau):
+            return True
+        if isinstance(cau, ast.Try) and nhanh == "orelse" and _ds_chac_chan(cau.body, la_khoa):
+            return True
+    return False
+
+
+def _ten_la(*ten):
+    return lambda c: _ten_goi(c) in ten
+
+
+def _kiem_khoa_nam_truoc_ho_so(khoa, ham, cac, la_nam, cam_ban_thu):
+    co_cho = _goi(cac, "lock_years_of_profiles")
+    ho_so = [c for c in cac if isinstance(c, ast.Call) and _la_khoa_ho_so(c)]
+    assert len(co_cho) == 1 and ho_so, (khoa, "đúng MỘT lần khoá năm CÓ CHỜ + có câu khoá hồ sơ", len(co_cho), len(ho_so))
+    for c in ho_so:
+        assert _bi_chan(ham, c, la_nam), (khoa, "khoá năm phải chặn MỌI đường tới câu khoá hồ sơ", c.lineno)
+    if cam_ban_thu:
+        assert not _goi(cac, "try_lock_years_of_profiles"), (khoa, "đường tự khoá hồ sơ không dùng bản không chờ")
+    return ho_so
 
 
 def test_f11_kiem_ke_ast_moi_duong_doi_so_cho_deu_khoa_dung_thu_tu():
-    """Quét AST MỌI ``app/**.py``: (1) mọi hàm có lời gọi ``transition`` / ``state_transition`` tới đích đổi số (chiếm chỗ, ``draft``,
-    ``withdrawn``, đích là biến) phải nằm trong ``_KIEM_KE`` với ĐÚNG các đích ấy và ngược lại; (2) cách khoá của từng hàm đúng
-    mục kê (thứ tự, một lần khoá ô, không gọi thẳng ``lock_quota_cells``; ``khong_cho`` không dùng bản có chờ); (3) mọi lời gọi
-    ``_finalize_withdrawn`` truyền ``locked_years`` và nơi gọi khoá năm trước khoá hồ sơ; (4) ``transition()`` gọi chốt."""
-    ham = _quet_app()
+    """Quét AST MỌI ``app/**.py`` (hàm, thân lớp, thân module; kể cả thân ``lambda``): (1) mọi lời gọi / tham chiếu hàm chuyển
+    trạng thái (bí danh lấy từ câu import của ``admission_state_service``, ``.transition``, ``getattr(…, "transition")``) tới đích
+    đổi số (chiếm chỗ, ``draft``, ``withdrawn``, biến) phải nằm trong ``_KIEM_KE`` đúng đích, đúng số lần — và ngược lại; miễn trừ
+    ĐÚNG ``admission_state_service.py:transition``; (2) cách khoá từng phạm vi đúng mục kê, thứ tự THEO LUỒNG CHẠY (không gọi
+    thẳng ``lock_quota_cells``; ``khong_cho`` không dùng bản có chờ); (3) mọi lời gọi ``_finalize_withdrawn`` truyền
+    ``locked_years``, nơi gọi khoá năm chặn mọi đường tới câu khoá hồ sơ và tới lời gọi; (4) chốt ở ``transition()`` chặn mọi
+    đường tới câu đặt ``.status``."""
+    pham_vi = _quet_app()
     thay = {}
-    for khoa, (_, goi) in ham.items():
-        dich = [_dich(c) for c in goi if _la_goi_chuyen(c)]
-        dich = [d for d in dich if d == _BIEN or d in _DICH_DOI_SO]
-        if dich and not khoa.startswith("services/admission_state_service.py:"):
+    for khoa, (_, cac, bi_danh) in pham_vi.items():
+        if khoa == _CHU_SO_HUU:
+            continue
+        dich = [d for _, d in _chuyen_trong(cac, bi_danh) if d == _BIEN or d in _DICH_DOI_SO]
+        if dich:
             thay[khoa] = {d: dich.count(d) for d in set(dich)}
     assert thay == {k: v[1] for k, v in _KIEM_KE.items()}, (
-        "lời gọi chuyển trạng thái đổi số chỗ NGOÀI bảng kiểm kê (hoặc bảng kê thừa / lệch đích) — %r" % thay
+        "lời gọi / tham chiếu chuyển trạng thái đổi số chỗ NGOÀI bảng kiểm kê (hoặc bảng kê thừa / lệch đích) — %r" % thay
     )
     for khoa, (cach, _) in _KIEM_KE.items():
-        nut, goi = ham[khoa]
-        dong_chuyen = min(c.lineno for c in goi if _la_goi_chuyen(c) and (_dich(c) == _BIEN or _dich(c) in _DICH_DOI_SO))
+        ham, cac, bi_danh = pham_vi[khoa]
+        chuyen = [n for n, d in _chuyen_trong(cac, bi_danh) if d == _BIEN or d in _DICH_DOI_SO]
         if cach == "khong_doi_so":
             continue
-        assert not _dong(goi, "lock_quota_cells"), (khoa, "không gọi thẳng lock_quota_cells")
+        assert not _goi(cac, "lock_quota_cells"), (khoa, "không gọi thẳng lock_quota_cells")
         if cach == "qua_lo":
-            truoc = _dong(goi, "_lock_before_batch_approval")
-            assert len(truoc) == 1 and truoc[0] < dong_chuyen, khoa
-            _, goi_lo = ham["services/admission_service.py:_lock_before_batch_approval"]
-            _kiem_tu_khoa("_lock_before_batch_approval", goi_lo)
-            assert len(_dong(goi_lo, "lock_quota_for_profiles")) == 1 and not _dong(goi_lo, "lock_quota_cells")
+            assert len(_goi(cac, "_lock_before_batch_approval")) == 1, khoa
+            for n in chuyen:
+                assert _bi_chan(ham, n, _ten_la("_lock_before_batch_approval")), (khoa, "khoá lô phải chặn mọi đường", n.lineno)
+            ham_lo, cac_lo, _ = pham_vi["services/admission_service.py:_lock_before_batch_approval"]
+            ho_so = _kiem_khoa_nam_truoc_ho_so("_lock_before_batch_approval", ham_lo, cac_lo, _ten_la(*_KHOA_NAM_CO_CHO), True)
+            khoa_o_lo = _goi(cac_lo, "lock_quota_for_profiles")
+            assert len(khoa_o_lo) == 1 and not _goi(cac_lo, "lock_quota_cells"), "_lock_before_batch_approval"
+            assert ho_so and _bi_chan(ham_lo, khoa_o_lo[0], _la_khoa_ho_so), (
+                "_lock_before_batch_approval",
+                "khoá hồ sơ phải chặn mọi đường tới khoá ô",
+            )
             continue
-        khoa_o = _dong(goi, "lock_quota_for_profiles")
-        assert len(khoa_o) == 1 and khoa_o[0] < dong_chuyen, (khoa, "một lần lock_quota_for_profiles TRƯỚC lời gọi", khoa_o)
+        khoa_o = _goi(cac, "lock_quota_for_profiles")
+        assert len(khoa_o) == 1, (khoa, "đúng MỘT lần lock_quota_for_profiles", len(khoa_o))
+        for n in chuyen:
+            assert _bi_chan(ham, n, _ten_la("lock_quota_for_profiles")), (
+                khoa,
+                "lock_quota_for_profiles phải chặn MỌI đường tới lời gọi chuyển trạng thái",
+                n.lineno,
+            )
         if cach == "tu_khoa":
-            _kiem_tu_khoa(khoa, goi)
+            _kiem_khoa_nam_truoc_ho_so(khoa, ham, cac, _ten_la(*_KHOA_NAM_CO_CHO), True)
+            assert _bi_chan(ham, khoa_o[0], _la_khoa_ho_so), (khoa, "khoá hồ sơ phải chặn mọi đường tới khoá ô")
         elif cach == "khong_cho":
-            thu = _dong(goi, "try_lock_years_of_profiles")
-            assert not _dong(goi, "lock_years_of_profiles"), (khoa, "đường nhận hồ sơ đã khoá KHÔNG được dùng bản có chờ")
-            assert len(thu) == 1 and thu[0] < khoa_o[0], (khoa, "bản không chờ đứng trước khoá ô", thu)
+            assert not _goi(cac, "lock_years_of_profiles"), (khoa, "đường nhận hồ sơ đã khoá KHÔNG được dùng bản có chờ")
+            assert len(_goi(cac, "try_lock_years_of_profiles")) == 1, (khoa, "đúng MỘT lần khoá năm không chờ")
+            assert _bi_chan(ham, khoa_o[0], _ten_la("try_lock_years_of_profiles")), (
+                khoa,
+                "bản không chờ phải chặn mọi đường tới khoá ô",
+            )
         elif cach == "qua_finalize":
-            ten_tham_so = [a.arg for a in nut.args.kwonlyargs]
+            ten_tham_so = [a.arg for a in ham.args.kwonlyargs]
             assert "locked_years" in ten_tham_so, "_finalize_withdrawn phải có tham số chỉ-từ-khoá locked_years"
-            assert nut.args.kw_defaults[ten_tham_so.index("locked_years")] is None, "locked_years phải BẮT BUỘC (không mặc định)"
+            assert ham.args.kw_defaults[ten_tham_so.index("locked_years")] is None, "locked_years phải BẮT BUỘC (không mặc định)"
     noi_goi = {}
-    for khoa, (_, goi) in ham.items():
-        for c in goi:
-            if _ten_goi(c) == "_finalize_withdrawn":
-                assert any(kw.arg == "locked_years" for kw in c.keywords), (khoa, c.lineno, "thiếu locked_years")
-                noi_goi[khoa] = goi
+    for khoa, (ham, cac, _) in pham_vi.items():
+        for c in _goi(cac, "_finalize_withdrawn"):
+            assert any(kw.arg == "locked_years" for kw in c.keywords), (khoa, c.lineno, "thiếu locked_years")
+            noi_goi.setdefault(khoa, []).append(c)
     assert set(noi_goi) == _NOI_GOI_FINALIZE, sorted(noi_goi)
-    for khoa, goi in noi_goi.items():
-        _kiem_tu_khoa(khoa, goi, cho_phep_ban_thu=True)
-    _, goi_chot = ham["services/admission_state_service.py:transition"]
-    assert _dong(goi_chot, "check_quota_locked_for_transition"), "transition() phải gọi chốt"
+    for khoa, goi_finalize in noi_goi.items():
+        ham, cac, _ = pham_vi[khoa]
+        _kiem_khoa_nam_truoc_ho_so(khoa, ham, cac, _ten_la(*_KHOA_NAM), False)
+        for c in goi_finalize:
+            assert _bi_chan(ham, c, _ten_la(*_KHOA_NAM)), (khoa, "khoá năm phải chặn mọi đường tới _finalize_withdrawn", c.lineno)
+    ham_ts, cac_ts, _ = pham_vi[_CHU_SO_HUU]
+    dat_trang_thai = [
+        x
+        for x in cac_ts
+        if isinstance(x, (ast.Assign, ast.AugAssign, ast.AnnAssign))
+        and any(isinstance(t, ast.Attribute) and t.attr == "status" for t in getattr(x, "targets", [getattr(x, "target", None)]))
+    ]
+    assert dat_trang_thai, "phép đo hỏng: transition() không còn câu đặt .status"
+    for x in dat_trang_thai:
+        assert _bi_chan(ham_ts, x, _ten_la("check_quota_locked_for_transition")), (
+            "chốt ở transition() phải chặn MỌI đường tới câu đặt .status",
+            x.lineno,
+        )
 
 
 # ═══════════════════════════════ F12 — Phê duyệt: MỘT lần khoá ô ═════════════════════════════════
