@@ -780,13 +780,17 @@ async def lock_years_of_profiles(db: AsyncSession, profile_ids: Iterable[Optiona
     return frozenset(years)
 
 
-async def try_lock_years_of_profiles(db: AsyncSession, profile_ids: Iterable[Optional[int]]) -> FrozenSet[int]:
-    """F230: bản KHÔNG CHỜ (hồ sơ ĐÃ bị khoá ở ``deps.py`` — Công bố, Chuyển chờ, Trả về Nháp). Một giao dịch đang giữ / chờ khoá
-    năm ĐỘC QUYỀN (cấu hình cùng năm) ⇒ 409 "thử lại" (owner Q3) — không chờ khi đang giữ dòng hồ sơ ⇒ không khép vòng."""
+async def try_lock_years_of_profiles(
+    db: AsyncSession, profile_ids: Iterable[Optional[int]], *, busy_message: str = CONFLICT_MESSAGE
+) -> FrozenSet[int]:
+    """F230: bản KHÔNG CHỜ (hồ sơ ĐÃ bị khoá ở ``deps.py`` — Công bố, Chuyển chờ, Trả về Nháp; đường dẫn thư). Một giao dịch đang
+    giữ / chờ khoá năm ĐỘC QUYỀN (cấu hình cùng năm) ⇒ 409 (owner Q3) — không chờ khi đang giữ dòng hồ sơ ⇒ không khép vòng.
+    ``busy_message``: câu của 409 — mặc định câu "thử lại" chung; đường ứng viên tự rút qua thư dùng câu owner riêng
+    (``magic_link_service.WITHDRAW_CONFIG_BUSY_MESSAGE``)."""
     years = await _years_of_profiles(db, _ids(profile_ids))
     if not await try_lock_review_years_shared(db, years):
         log.info("quota_khoa_nam_ban_thu_khong_lay_duoc", years=sorted(years))
-        raise ConflictError(CONFLICT_MESSAGE)
+        raise ConflictError(busy_message)
     _record_locks(db, years=years)
     return frozenset(years)
 

@@ -24,10 +24,16 @@ phép so "trước / sau" của A sai (mất cảnh báo khi B trả chỗ; sai 
 * F10 — Chốt ở ``transition()``: chuyển trạng thái chiếm chỗ mà chưa khoá ⇒ ``ServiceError`` (500), trạng thái không đổi.
 * F11 — Kiểm kê mã (đọc nguồn): đủ các đường, đúng thứ tự khoá, một lần khoá ô.
 * F12 — Phê duyệt (ô cổng CAO, ô lead THẤP) ‖ Phê duyệt hàng loạt [thấp, cao]: MỘT lần khoá ô ⇒ không vòng chờ.
+* F14a / F14b — owner 22-11 (``…/pr-f230/QUYET-DINH-OWNER-F230-RUT-QUA-THU-2026-11-22.md``): ứng viên tự rút qua liên kết trong
+  thư khi cấu hình cùng năm đang giữ khoá năm ⇒ 409 NGAY câu owner; hồ sơ, liên kết giữ nguyên, 0 thông báo; nhả khoá ⇒ CHÍNH
+  liên kết ấy rút được ĐÚNG MỘT lần, lần thứ ba bị từ chối theo luật liên kết đã dùng.
 """
 import asyncio
 import inspect
 import re
+import secrets
+import time
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import select, text
@@ -36,10 +42,12 @@ from sqlalchemy.orm import selectinload
 import app.database as csdl
 from app import models
 from app.core.advisory_lock_keys import REVIEW_YEAR_NS
+from app.config import settings
 from app.database import AsyncSessionLocal
 from app.services import admission_choice_engine_service as engine
 from app.services import admission_service as asv
 from app.services import admission_state_service as state_service
+from app.services import magic_link_service as mls
 from app.services import payment_service as ps
 from app.services import quota_occupancy_service as qos
 from app.utils.exceptions import ServiceError
@@ -611,3 +619,104 @@ async def test_f12_phe_duyet_o_cong_cao_o_lead_thap_va_hang_loat_khong_vong_cho(
     assert r_pd.status_code == 200, r_pd.text
     assert r_lo.status_code == 200 and (r_lo.json()["success_count"], r_lo.json()["failed_ids"]) == (2, []), r_lo.text
     assert do == "chan", "phép đo không hợp lệ: lô không chờ khoá ô của Phê duyệt"
+
+
+# ═══════════════════════════════ F14 — rút qua liên kết trong thư khi khoá năm bận (owner 22-11) ═════════
+#: Trần thời gian của lần 409 "ngay" (một request bình thường dưới 2 s; chờ khoá năm thì treo tới khi phiên cấu hình nhả).
+TRAN_409_GIAY = 5.0
+
+
+async def _lien_ket_rut(hs):  # noqa: F811
+    """Liên kết rút còn hạn cho em E ("Trúng tuyển", không Quyết định — rút thẳng về "Đã rút"). Trả (giá trị, 4 số CCCD, id)."""
+    pid = hs[E][1]
+    await qd._sql("UPDATE admission_profile SET status = 'admitted' WHERE id = :p", p=pid)
+    gia_tri = secrets.token_urlsafe(32)
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            tk_ = models.AdmissionConfirmationToken(
+                profile_id=pid,
+                action_type="withdraw",
+                token=gia_tri,
+                expires_at=datetime.now(timezone.utc) + timedelta(days=7),
+                confirmed_at=None,
+                attempt_count=0,
+            )
+            s.add(tk_)
+            await s.flush()
+            id_ = tk_.id
+    return gia_tri, hs[E][0][-settings.ADMISSION_CONFIRM_CCCD_DIGITS:], id_
+
+
+def _rut_qua_thu(client, gia_tri, so_cccd):  # noqa: F811
+    return client.post("/api/v2/admissions/magic-link/withdraw/%s" % gia_tri, json={"cccd": so_cccd})
+
+
+async def _trang_thai_lien_ket(id_):
+    r = await qd._q(
+        "SELECT confirmed_at, attempt_count, locked_at, lock_until, expires_at, lock_count "
+        "FROM admission_confirmation_token WHERE id = :i",
+        i=id_,
+    )
+    return tuple(r[0])
+
+
+async def _so_thong_bao():
+    """Tổng dòng thông báo (hàng đợi + thông báo + lần gửi) — đọc từ kết nối mới."""
+    return tuple(
+        [await qd._q1("SELECT count(*) FROM %s" % bang) for bang in ("notification_outbox", "notification", "notification_delivery")]
+    )
+
+
+async def _so_lan_rut(pid):
+    return await qd._q1(
+        "SELECT count(*) FROM admission_profile_status_history WHERE profile_id = :p AND to_status = 'withdrawn'", p=pid
+    )
+
+
+async def _rut_khi_khoa_nam_ban(client, gia_tri, so_cccd):  # noqa: F811
+    """Phiên cấu hình giữ khoá năm 2026 ĐỘC QUYỀN; gửi yêu cầu rút qua thư. Trả (phản hồi, giây, pid bị chặn bởi phiên cấu hình,
+    xong trước khi nhả)."""
+    async with PhienCauHinh() as c:
+        await c.khoa_nam(2026)
+        bd = time.monotonic()
+        t = asyncio.create_task(_rut_qua_thu(client, gia_tri, so_cccd))
+        pid_t = await cho_bi_chan_boi(c.pid, t, giay=TRAN_409_GIAY)
+        xong_truoc = t.done()
+        giay = time.monotonic() - bd
+        await c.tha()
+        r = await t
+    return r, giay, pid_t, xong_truoc
+
+
+async def test_f14a_rut_qua_thu_khi_cau_hinh_giu_khoa_nam_tra_409_ngay_khong_tieu_thu_lien_ket(client, hs):  # noqa: F811
+    gia_tri, so_cccd, id_ = await _lien_ket_rut(hs)
+    pid = hs[E][1]
+    lien_ket_truoc, thong_bao_truoc = await _trang_thai_lien_ket(id_), await _so_thong_bao()
+    r, giay, pid_t, xong_truoc = await _rut_khi_khoa_nam_ban(client, gia_tri, so_cccd)
+    assert r.status_code == 409, r.text
+    assert r.json()["detail"] == mls.WITHDRAW_CONFIG_BUSY_MESSAGE, r.text  # câu owner nguyên văn
+    # kiểm từ phiên mới
+    assert (await _ban(pid))[0] == "admitted", "hồ sơ phải giữ nguyên trạng thái"
+    assert await _trang_thai_lien_ket(id_) == lien_ket_truoc, "liên kết phải giữ nguyên (chưa dùng, không trừ lượt, không đổi hạn)"
+    assert await _so_thong_bao() == thong_bao_truoc, "lần 409 KHÔNG được gửi / xếp hàng thông báo"
+    assert await _so_lan_rut(pid) == 0, "lần 409 KHÔNG ghi nhận rút"
+    # phép đo: trả NGAY, không chờ phiên cấu hình
+    assert xong_truoc and pid_t is None and giay < TRAN_409_GIAY, (
+        "phép đo: rút qua thư KHÔNG được chờ khoá năm — xong trước khi nhả: %s, %.2f s, bị chặn bởi: %r" % (xong_truoc, giay, pid_t)
+    )
+
+
+async def test_f14b_nha_khoa_thi_chinh_lien_ket_rut_dung_mot_lan_lan_ba_bi_tu_choi(client, hs):  # noqa: F811
+    gia_tri, so_cccd, id_ = await _lien_ket_rut(hs)
+    pid = hs[E][1]
+    r1, _, _, _ = await _rut_khi_khoa_nam_ban(client, gia_tri, so_cccd)
+    assert r1.status_code == 409, r1.text
+    assert (await _trang_thai_lien_ket(id_))[0] is None, "lần 409 không được đánh dấu liên kết đã dùng"
+    r2 = await _rut_qua_thu(client, gia_tri, so_cccd)  # khoá đã nhả — CHÍNH liên kết ấy, còn hạn
+    assert r2.status_code == 200, r2.text
+    assert (await _ban(pid))[0] == "withdrawn"
+    assert (await _trang_thai_lien_ket(id_))[0] is not None, "lần thành công đánh dấu liên kết đã dùng"
+    assert await _so_lan_rut(pid) == 1, "rút thành công ĐÚNG MỘT lần"
+    r3 = await _rut_qua_thu(client, gia_tri, so_cccd)
+    assert r3.status_code == 400 and "already been used" in r3.text, r3.text  # luật hiện hành của liên kết đã dùng
+    assert await _so_lan_rut(pid) == 1
