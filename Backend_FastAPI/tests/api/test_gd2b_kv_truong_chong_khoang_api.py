@@ -5,8 +5,10 @@ trước khi chèn). T6 phải chọn ĐÚNG dòng theo thứ tự chung ``model
 rồi ``id`` lớn nhất) — CÙNG dòng mà máy xét GĐ2-B chọn ở đường lô.
 
 Dữ liệu: trường của bộ gieo ``seed_cascade_profile`` có KV3 cho 2020–2024 (dòng CŨ, chèn trước); thêm KV1 từ 2022, không hạn (dòng
-MỚI, chèn sau). Quá trình học 2020→2024: 2020–2021 chỉ khớp KV3; 2022–2024 khớp CẢ HAI ⇒ chọn KV1 ⇒ KV1 3 năm > KV3 2 năm ⇒ KV1
-(mức 0,75). Chọn bừa dòng đầu (thứ tự vật lý) ⇒ KV3 cả 5 năm ⇒ mức 0,00.
+MỚI, chèn sau). Quá trình học 2020→2024 — sau G5 (khoá = NĂM BẮT ĐẦU của năm học: tra 2020, 2021, 2022, 2023; không tra 2024):
+2020–2021 chỉ khớp KV3; 2022–2023 khớp CẢ HAI ⇒ chọn KV1 ⇒ KV3 2 năm = KV1 2 năm ⇒ HOÀ ⇒ tra trường tốt nghiệp (chính trường ấy)
+ở năm học cuối 2023 ⇒ lại chọn KV1 ⇒ KV1, ``tiebreak_graduation_school`` (mức 0,75). (Trước G5: 2022–2024 ⇒ KV1 3 năm > KV3 2 năm.)
+Chọn bừa dòng đầu (thứ tự vật lý) ⇒ KV3 cả 4 năm ⇒ ``longest_duration`` KV3 ⇒ mức 0,00.
 """
 from __future__ import annotations
 
@@ -55,4 +57,8 @@ async def test_publish_result_kv_truong_chong_khoang_chon_dong_nam_bat_dau_moi_n
             )
         ).scalar_one()
     assert anh_chup["kv_resolved"] == "KV1", anh_chup
+    # Codex GĐ2-B lượt 2 P4: sau G5 ca này đi nhánh HOÀ 2–2 — khoá đúng nhánh, không chỉ đúng KV.
+    assert anh_chup["rule_applied"] == "tiebreak_graduation_school", anh_chup
+    assert anh_chup["breakdown"]["kv_totals"] == {"KV3": 2, "KV1": 2}, anh_chup["breakdown"]
+    assert anh_chup["breakdown"]["graduation_lookup_year"] == 2023, anh_chup["breakdown"]
     assert diem_kv is not None and Decimal(diem_kv) == Decimal("0.75"), diem_kv

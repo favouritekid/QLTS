@@ -689,9 +689,8 @@ async def lookup_kv_for_school_year(
     return result.scalar_one_or_none()
 
 
-#: Bậc học của ``academic_history`` mà luật nhiều trường (TT 05/2021 Phụ lục 01 Mục 5.a) tính — MỘT nguồn cho bộ quyết định và
-#: cho :func:`kv_lookup_keys`.
-_KV_HISTORY_LEVELS = frozenset({"THPT", "THCS_THPT", "GDTX"})
+# Bậc học của ``academic_history`` mà luật nhiều trường tính: MỘT định nghĩa ``_KV_HISTORY_LEVELS`` (khối G5, cạnh
+# ``kv_history_basis_entry``) — bộ quyết định và :func:`kv_lookup_keys` cùng đi qua ``kv_history_basis_entry`` (Codex GĐ2-B lượt 2 P4).
 #: Loại phép tra mà bộ quyết định KV yêu cầu.
 KV_LOOKUP_COMMUNE = "commune"
 KV_LOOKUP_SCHOOL = "school"
@@ -778,8 +777,12 @@ def kv_lookup_keys(
 ) -> tuple[frozenset, frozenset]:
     """Tập KHOÁ TRA (bao trùm) mà bộ quyết định có thể cần cho ``profile`` — ``(xã: {(mã xã, năm)}, trường: {(id trường, năm)})``
     — để đường lô nạp TRƯỚC bằng hai câu cho mọi hồ sơ. Chỉ khoá đúng kiểu (mã xã chuỗi; id trường / năm số nguyên); dữ liệu
-    lạ không sinh khoá ⇒ bộ quyết định gặp khoá vắng ⇒ :class:`KvLookupNotLoaded` (fail-closed). Bao trùm: mọi năm của mọi mục
-    ``academic_history`` hợp lệ + năm ``year_to`` của mọi mục (ứng viên trường tốt nghiệp)."""
+    lạ không sinh khoá ⇒ bộ quyết định gặp khoá vắng ⇒ :class:`KvLookupNotLoaded` (fail-closed).
+
+    Dựng bằng CHÍNH các helper G5 của bộ quyết định (Codex GĐ2-B lượt 2 P4 / P5 — không giữ luật năm riêng): mục =
+    ``kv_history_basis_entry`` không có mã dừng ``kv_entry_problem`` (mục dừng ⇒ bộ quyết định dừng trước mọi phép tra); năm đếm =
+    ``kv_entry_school_years``; ứng viên trường tốt nghiệp = ``kv_last_school_year`` của MỌI mục ấy, kể cả mục thiếu / ngược
+    ``year_from`` (bị bỏ khỏi phép đếm nhưng vẫn được xếp ở bước hoà)."""
     try:
         kv_year = priority_academic_year(profile)
     except ValueError:
@@ -801,16 +804,17 @@ def kv_lookup_keys(
             communes.add((commune_code, kv_year))
     elif basis == "LICH_SU_THPT":
         for entry in history:
-            if not (isinstance(entry, dict) and entry.get("level") in _KV_HISTORY_LEVELS and entry.get("school_id")):
+            if not kv_history_basis_entry(entry) or kv_entry_problem(entry) is not None:
                 continue
-            sid = entry["school_id"]
+            sid = entry.get("school_id")
             if not _plain_int(sid):
                 continue
             y_from, y_to = entry.get("year_from"), entry.get("year_to")
-            if _plain_int(y_to):
-                schools.add((sid, y_to))
+            last_year = kv_last_school_year(entry)
+            if _plain_int(last_year):
+                schools.add((sid, last_year))
             if _plain_int(y_from) and _plain_int(y_to) and y_to >= y_from:
-                for year in range(y_from, y_to + 1):
+                for year in kv_entry_school_years(entry):
                     schools.add((sid, year))
     return frozenset(communes), frozenset(schools)
 
