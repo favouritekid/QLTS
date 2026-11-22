@@ -53,6 +53,8 @@ NAM = 2026
 #: Lý do xin vượt hợp lệ (≥ 20 ký tự — lược đồ chặn lý do ngắn bằng 422 trước khi tới dịch vụ).
 LY_DO_XIN_VUOT = "GIA Hiệu trưởng cho nhận thêm một em vào ngành đã đóng"
 CAU_DONG = "Ngành đã đóng tuyển (chỉ tiêu 0)"
+#: Owner 22-11 Q1 (phương án c) — câu NGUYÊN VĂN khi không ghi được vết từ chối bắt buộc (viết tay, không lấy hằng của lớp lỗi).
+CAU_LOI_VET = "Không ghi được nhật ký từ chối — hồ sơ chưa đổi, vui lòng thử lại."
 
 
 def _cau_mong_doi(bang_da_khoa):
@@ -313,21 +315,25 @@ def _hong_vet(monkeypatch, kieu):
 async def test_n4_7_loi_ghi_vet_bat_buoc_thi_bao_loi_ky_thuat_ho_so_giu_nguyen(  # noqa: F811
     client, hs, ad, monkeypatch, duong, loi
 ):
-    # Codex 22-11 lượt 2 (A-P2 / A-P3 a): vết N4-7 BẮT BUỘC ⇒ ghi / commit vết hỏng thì KHÔNG trả lỗi nghiệp vụ "ngành đóng"
-    # như thể vết đã có. Đơn: lỗi kỹ thuật (503 ``SERVICE_UNAVAILABLE``); lô: HTTP 200 theo hợp đồng lô, mục ấy báo lỗi kỹ thuật
-    # (câu chung có sẵn của lô). Cả hai: hồ sơ giữ nguyên, không có vết dở (đọc từ phiên mới).
+    # Codex 22-11 lượt 2 (A-P2 / A-P3 a) + owner 22-11 Q1 (phương án c): vết N4-7 BẮT BUỘC ⇒ ghi / commit vết hỏng thì KHÔNG
+    # trả lỗi nghiệp vụ "ngành đóng" như thể vết đã có. Đơn: 503 mã riêng ``AUDIT_TRAIL_UNAVAILABLE`` + câu riêng; lô: HTTP 200
+    # theo hợp đồng lô, mục ấy báo ĐÚNG câu riêng (không phải "Unexpected error"). Cả hai: hồ sơ giữ nguyên, không vết dở.
     await _dam_bao_sts09()
     pid, _ = await _ho_so_nganh(hs, 0)
     ver = (await _ban(pid))[1]
     _hong_vet(monkeypatch, loi)
     if duong == "don":
         r = await _duyet(client, ad, pid, ver, xin_vuot=True)
-        assert r.status_code == 503 and r.json()["error_code"] == "SERVICE_UNAVAILABLE", r.text
+        assert (r.status_code, r.json().get("error_code"), r.json().get("detail")) == (
+            503,
+            "AUDIT_TRAIL_UNAVAILABLE",
+            CAU_LOI_VET,
+        ), r.text
     else:
         r = await _duyet_lo(client, ad, (pid, ver, True))
         assert r.status_code == 200, r.text
         kq = r.json()
-        assert kq["failed_ids"] == [pid] and kq["errors"][str(pid)].startswith("Unexpected error (ref:"), kq
+        assert kq["failed_ids"] == [pid] and kq["errors"][str(pid)] == CAU_LOI_VET, kq
     monkeypatch.undo()
     assert (await _ban(pid))[0] == "submitted"
     assert await _vet_xin_vuot(pid) == []

@@ -1221,6 +1221,40 @@ class TestQuotaDeniedAudit:
             assert rows[0].actor_user_id == admin.id
 
 
+class TestVetTuChoiKhaiTuongMinh:
+    """Owner 22-11 Q2: ``_audit_quota_bypass_denied`` KHÔNG có mặc định cho ``fail_closed`` — mọi nơi gọi khai tường minh
+    (vết ``quota_bypass_denied_closed`` bắt buộc; hai vết ADM-026 best-effort), để nơi gọi mới không âm thầm rơi vào
+    best-effort."""
+
+    def test_ham_ghi_vet_tu_choi_khong_co_mac_dinh_fail_closed(self):
+        import inspect
+
+        tham_so = inspect.signature(admission_service._audit_quota_bypass_denied).parameters["fail_closed"]
+        assert tham_so.default is inspect.Parameter.empty
+
+    def test_moi_noi_goi_ham_ghi_vet_tu_choi_khai_fail_closed_dung_kieu(self):
+        """Quét AST ``app/``: mỗi lời gọi khai ``fail_closed`` bằng hằng bool; vết ngành đóng = True, hai vết ADM-026 = False."""
+        import ast
+        import pathlib
+
+        app_dir = pathlib.Path(admission_service.__file__).resolve().parents[1]
+        thay = {}
+        for p in app_dir.rglob("*.py"):
+            for n in ast.walk(ast.parse(p.read_text(encoding="utf-8"))):
+                if isinstance(n, ast.Call) and getattr(n.func, "id", getattr(n.func, "attr", None)) == (
+                    "_audit_quota_bypass_denied"
+                ):
+                    kw = {k.arg: k.value for k in n.keywords}
+                    hanh_dong = kw["denial_action"].value
+                    assert isinstance(kw.get("fail_closed"), ast.Constant), (p.name, n.lineno, "thiếu fail_closed")
+                    thay[hanh_dong] = kw["fail_closed"].value
+        assert thay == {
+            "quota_bypass_denied_closed": True,
+            "quota_bypass_denied_role": False,
+            "quota_bypass_denied_reason": False,
+        }, thay
+
+
 # =========================================================================
 # Test-gap follow-ups: Pydantic 422, boundary 1/1+1, legacy fallback
 # =========================================================================

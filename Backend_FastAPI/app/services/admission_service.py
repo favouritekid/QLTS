@@ -75,13 +75,13 @@ from ..utils.admission_status import (
 )
 from ..utils.exceptions import (
     ResourceNotFoundError,
+    AuditTrailUnavailable,
     BadRequest,
     BusinessRuleViolation,
     PermissionDeniedError,
     ConflictError,
     DuplicateResourceError,
     ServiceError,
-    ServiceUnavailableError,
     ValidationError,
 )
 from ..utils.admission_round_guards import assert_round_open
@@ -120,6 +120,8 @@ _BULK_SAFE_DOMAIN_EXCEPTIONS = (
     PermissionDeniedError,
     ConflictError,
     ValidationError,
+    # N4 (owner 22-11 Q1): câu "Không ghi được nhật ký từ chối — hồ sơ chưa đổi, vui lòng thử lại." hiện ở mục lô bị lỗi.
+    AuditTrailUnavailable,
 )
 
 
@@ -789,8 +791,9 @@ async def _raise_offering_closed(
     (không xin vượt) KHÔNG ghi vết xin vượt. Lô: mỗi mục xin vượt bị chặn một vết.
 
     Codex 22-11 lượt 2 (A-P2): vết này BẮT BUỘC (owner N4-7 "đúng một vết", Admin lẫn Quản lý) ⇒ ghi / commit vết lỗi thì
-    KHÔNG trả lỗi nghiệp vụ "ngành đóng" như thể vết đã có: ``fail_closed=True`` ⇒ ``ServiceUnavailableError`` (503) — đơn:
-    giao dịch router lùi; lô: mục ấy rơi vào nhánh lỗi kỹ thuật của lô (savepoint mục lùi). Hồ sơ giữ nguyên ở cả hai."""
+    KHÔNG trả lỗi nghiệp vụ "ngành đóng" như thể vết đã có: ``fail_closed=True`` ⇒ ``AuditTrailUnavailable`` (503, mã + câu
+    riêng — owner 22-11 Q1) — đơn: giao dịch router lùi; lô: mục ấy báo đúng câu ấy (lớp thuộc ``_BULK_SAFE_DOMAIN_EXCEPTIONS``,
+    savepoint mục lùi). Hồ sơ giữ nguyên ở cả hai."""
     if bypass_quota:
         await _audit_quota_bypass_denied(
             entity_id=profile.id,
@@ -1013,6 +1016,7 @@ async def _assert_quota_or_bypass(
             transition=transition,
             source=source,
             attempted_reason=bypass_reason,
+            fail_closed=False,  # ADM-026 best-effort — owner 22-11 Q2 giữ, khai tường minh
         )
         raise PermissionDeniedError(
             "Chỉ Admin được phép ghi đè chỉ tiêu tuyển sinh (bypass_quota). "
@@ -1035,6 +1039,7 @@ async def _assert_quota_or_bypass(
             transition=transition,
             source=source,
             attempted_reason=bypass_reason,
+            fail_closed=False,  # ADM-026 best-effort — owner 22-11 Q2 giữ, khai tường minh
         )
         raise ValidationError(
             "bypass_reason là bắt buộc và phải có ít nhất 20 ký tự khi bypass_quota=true."
@@ -1087,7 +1092,7 @@ async def _audit_quota_bypass_denied(
     transition: str,
     source: str,
     attempted_reason: Optional[str],
-    fail_closed: bool = False,
+    fail_closed: bool,
 ) -> None:
     """
     ADM-026 review (Major #3): persist a denied bypass-attempt audit row.
@@ -1101,16 +1106,19 @@ async def _audit_quota_bypass_denied(
     independent session, the audit write would also rollback and the
     attempt would leave no trace.
 
+    ``fail_closed`` KHÔNG có giá trị mặc định (owner 22-11 Q2): mọi nơi gọi khai tường
+    minh, để nơi gọi mới không âm thầm rơi vào best-effort.
+
     Best-effort (``fail_closed=False`` — ADM-026 ``quota_bypass_denied_role`` /
-    ``quota_bypass_denied_reason``, chỉ tiêu > 0, GIỮ nguyên): any exception here is
-    logged but swallowed so we never convert "bypass denied" into "bypass denied +
-    500 audit error".
+    ``quota_bypass_denied_reason``, chỉ tiêu > 0, GIỮ nguyên — owner 22-11 Q2): any
+    exception here is logged but swallowed so we never convert "bypass denied" into
+    "bypass denied + 500 audit error".
 
     ``fail_closed=True`` (N4 ``quota_bypass_denied_closed`` — owner N4-7: vết BẮT
     BUỘC, Codex 22-11 lượt 2 A-P2): lỗi ghi HOẶC commit vết ⇒ log rồi ném
-    ``ServiceUnavailableError`` (503, câu có sẵn của lớp) — người gọi KHÔNG được trả
-    lỗi nghiệp vụ như thể vết đã ghi. Phiên vết chưa commit ⇒ đóng phiên = lùi ⇒
-    không có vết dở.
+    ``AuditTrailUnavailable`` (503, mã + câu riêng — owner 22-11 Q1) — người gọi
+    KHÔNG được trả lỗi nghiệp vụ như thể vết đã ghi. Phiên vết chưa commit ⇒ đóng
+    phiên = lùi ⇒ không có vết dở.
     """
     from ..database import AsyncSessionLocal
     from ..services import audit_service
@@ -1153,7 +1161,7 @@ async def _audit_quota_bypass_denied(
             fail_closed=fail_closed,
         )
         if fail_closed:
-            raise ServiceUnavailableError() from audit_err
+            raise AuditTrailUnavailable() from audit_err
 
 
 async def check_enrollment_fee_eligibility(
