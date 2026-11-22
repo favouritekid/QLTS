@@ -376,7 +376,7 @@ describe("AcademicHistoryTab — soft data-quality notices (Tầng 2/3)", () => 
     })
     expect(
       screen.getByText(
-        'Trường #1: "Từ năm" và "Đến năm" đều là 2025, chưa có năm học nào. Một năm học ghi hai năm liền nhau, vd năm học 2024–2025 ghi 2024 → 2025; đối chiếu học bạ.',
+        'Trường #1: "Từ năm" và "Đến năm" cùng là 2025 — theo cách ghi năm học hiện nay, dòng này chưa có năm học nào.',
       ),
     ).toBeInTheDocument()
   })
@@ -448,6 +448,93 @@ describe("AcademicHistoryTab — nhắc dòng liên cấp ghi gộp nhiều năm
   it("KHÔNG bật với THPT 2021→2025 lớp 12 (THPT tính đủ mọi năm học)", () => {
     renderTab({ defaults: mot("THPT", 2021, 2025) })
     expect(screen.queryByText(/ghi gộp nhiều năm/)).not.toBeInTheDocument()
+  })
+})
+
+describe("AcademicHistoryTab — owner 'điểm 1 và 2' + Codex G5 lượt 2", () => {
+  it("việc 1: 'Thêm trường' KHÔNG mặc định năm (kể cả khi đồng hồ ở năm khác); lưu thiếu năm ⇒ báo tiếng Việt", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] })
+    vi.setSystemTime(new Date("2031-03-01T00:00:00Z"))
+    let capturedForm: UseFormReturn<AdmissionProfileUpdateInput> | null = null
+    try {
+      renderTab({ isEditable: true, withResolver: true, exposeForm: (f) => { capturedForm = f } })
+      fireEvent.click(screen.getByRole("button", { name: /Thêm trường/ }))
+      const row = (capturedForm!.getValues("academic_history") ?? [])[0]
+      expect(row.year_from).toBeUndefined()
+      expect(row.year_to).toBeUndefined()
+      expect(screen.getAllByLabelText("Từ năm")[0]).toHaveValue(null)
+      expect(screen.getAllByLabelText("Đến năm")[0]).toHaveValue(null)
+      await act(async () => {
+        await capturedForm!.trigger("academic_history.0")
+      })
+      expect(screen.getByText("Vui lòng nhập năm bắt đầu")).toBeInTheDocument()
+      expect(screen.getByText("Vui lòng nhập năm kết thúc")).toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("việc 2: mỗi dòng có câu giải thích cách ghi năm và xem trước năm học của dòng", () => {
+    renderTab({
+      defaults: {
+        academic_history: [
+          { school_id: 1, school_name: "Trường X", level: "THPT", year_from: 2022, year_to: 2025, grade_to: 12, gpa: null },
+          { school_id: 2, school_name: "Trường Y", level: "THPT", year_from: 2025, year_to: 2025, grade_to: 12, gpa: null },
+        ],
+      } as Partial<AdmissionProfileUpdateInput>,
+    })
+    expect(screen.getByTestId("academic-row-year-hint-0")).toHaveTextContent("Năm học 2022–2023 ghi 2022 → 2023.")
+    expect(screen.getByTestId("academic-row-years-0")).toHaveTextContent(
+      "Dòng này: năm học 2022–2023, 2023–2024, 2024–2025.",
+    )
+    expect(screen.getByTestId("academic-row-years-1")).toHaveTextContent("Dòng này: chưa có năm học nào.")
+  })
+
+  it("việc 2: dòng do nút thêm nhanh sinh ra xem trước đúng một năm học", () => {
+    renderTab({ isEditable: true })
+    typeYear("academic-quick-add-thpt-start", "2022")
+    fireEvent.click(screen.getByTestId("academic-quick-add-thpt"))
+    expect(screen.getByTestId("academic-row-years-0")).toHaveTextContent("Dòng này: năm học 2022–2023.")
+    expect(screen.getByTestId("academic-row-years-2")).toHaveTextContent("Dòng này: năm học 2024–2025.")
+  })
+
+  it("việc 4: hồ sơ đang ấn định KV thủ công ⇒ cảnh báo sửa lịch sử học làm bản ấn định hết hiệu lực", () => {
+    renderTab({
+      isEditable: true,
+      defaults: { area_resolution_basis: "manual_override" } as Partial<AdmissionProfileUpdateInput>,
+    })
+    expect(screen.getByTestId("academic-kv-override-warning")).toHaveTextContent(
+      "Hồ sơ này đang được ấn định khu vực thủ công. Nếu sửa trường, năm, lớp cuối hoặc trình độ ở đây, bản ấn định sẽ hết hiệu lực và quản lý phải ấn định lại (sửa điểm TB không ảnh hưởng).",
+    )
+  })
+
+  it("việc 4: KHÔNG cảnh báo khi hồ sơ không ấn định tay, hoặc khi chỉ xem", () => {
+    const { unmount } = renderTab({
+      isEditable: true,
+      defaults: { area_resolution_basis: "high_school" } as Partial<AdmissionProfileUpdateInput>,
+    })
+    expect(screen.queryByTestId("academic-kv-override-warning")).not.toBeInTheDocument()
+    unmount()
+    renderTab({
+      isEditable: false,
+      defaults: { area_resolution_basis: "manual_override" } as Partial<AdmissionProfileUpdateInput>,
+    })
+    expect(screen.queryByTestId("academic-kv-override-warning")).not.toBeInTheDocument()
+  })
+
+  it("Codex P2: dòng liên cấp thiếu Lớp cuối ⇒ nhắc cần ghi Lớp cuối", () => {
+    renderTab({
+      defaults: {
+        academic_history: [
+          { school_id: 7, school_name: "Liên cấp X", level: "THCS_THPT", year_from: 2016, year_to: 2023, grade_to: null, gpa: null },
+        ],
+      } as Partial<AdmissionProfileUpdateInput>,
+    })
+    expect(
+      screen.getByText(
+        'Trường #1 là trường liên cấp: cần ghi "Lớp cuối" (lớp cuối cùng em học ở trường này) để tính được khu vực.',
+      ),
+    ).toBeInTheDocument()
   })
 })
 

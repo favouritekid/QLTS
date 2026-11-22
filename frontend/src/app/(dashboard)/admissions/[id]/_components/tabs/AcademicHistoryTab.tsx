@@ -23,14 +23,18 @@ import { VN_SCHOOL_LEVELS } from "@/lib/zod/admissions"
 import type { AdmissionProfileUpdateInput } from "@/lib/zod/admissions"
 import {
   GRADE_BANDS,
+  YEAR_INPUT_HINT,
+  type AcademicRow,
   type GradeBand,
   bandGradesLabel,
   bandGraduationYear,
   bandPreviewLabel,
   bandYears,
   buildBandRecords,
+  lienCapMissingGradeNotices,
   mergedLienCapNotices,
   parseBandStartYear,
+  rowSchoolYearsLabel,
   suggestThcsStartYear,
   yearNotices,
 } from "./academic-history-years"
@@ -49,16 +53,16 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
   const [thptStartText, setThptStartText] = useState("")
   const [thcsStartText, setThcsStartText] = useState("")
 
+  // Owner "điểm 1 và 2" việc 1: KHÔNG mặc định năm (trước đây năm nay − 3 → năm
+  // nay). Hai ô năm để trống, cán bộ phải gõ — thiếu thì form báo khi lưu.
   const addRecord = () => {
     append({
       school_id: null,
       school_name: "",
       level: null,
-      year_from: new Date().getFullYear() - 3,
-      year_to: new Date().getFullYear(),
       grade_to: null,
       gpa: null,
-    })
+    } as AcademicRow)
   }
 
   // Thêm nhanh toàn bộ các lớp của một cấp (THPT 10→12, THCS 6→9) — owner
@@ -135,6 +139,14 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
   // Owner 22-11 "ở lại lớp": dòng liên cấp ghi gộp nhiều năm hơn phần lớp 10+ được
   // tính (phản chiếu Q8 của phía tính KV) — nhắc tách mỗi năm học một dòng.
   softNotices.push(...mergedLienCapNotices(records))
+  // Codex G5 lượt 2 P2: dòng liên cấp thiếu "Lớp cuối" ⇒ phía tính dừng; nhắc trước.
+  softNotices.push(...lienCapMissingGradeNotices(records))
+
+  // Owner "điểm 1 và 2" việc 4: hồ sơ đang được ấn định KV thủ công (cột
+  // `area_resolution_basis` có sẵn trong phản hồi hồ sơ, đã nạp vào form) — sửa
+  // trường / năm / lớp cuối / trình độ làm bản ấn định hết hiệu lực ở backend
+  // (`stale_inputs`). Chỉ nhắc; backend quyết.
+  const kvManualOverride = form.watch("area_resolution_basis") === "manual_override"
 
   // Gợi ý năm bắt đầu lớp 6 = năm bắt đầu lớp 10 − 4 khi đã có dòng THPT.
   const thcsSuggestion = suggestThcsStartYear(records)
@@ -159,6 +171,20 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
             </CardHeader>
 
             <CardContent className="space-y-6 pt-6">
+                {isEditable && kvManualOverride && (
+                    <div
+                        role="alert"
+                        data-testid="academic-kv-override-warning"
+                        className="rounded-md border border-warning-300 bg-warning-50 px-3 py-2 text-xs text-warning-900 flex items-start gap-2"
+                    >
+                        <span aria-hidden="true">⚠</span>
+                        <span>
+                            Hồ sơ này đang được ấn định khu vực thủ công. Nếu sửa trường, năm, lớp cuối hoặc
+                            trình độ ở đây, bản ấn định sẽ hết hiệu lực và quản lý phải ấn định lại (sửa điểm TB
+                            không ảnh hưởng).
+                        </span>
+                    </div>
+                )}
                 {/* NOTICES — soft data-quality hints (Tầng 2) + KV-readiness (Tầng 3).
                     KHÔNG chặn lưu/nộp; engine BE là nguồn KV/eligibility chính thức. */}
                 {(softNotices.length > 0 || needsThptCatalogPick) && (
@@ -322,6 +348,7 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
                                         min={1900}
                                         max={2100}
                                         disabled={!isEditable}
+                                        value={field.value ?? ""}
                                         className="bg-background"
                                         onChange={(e) => field.onChange(parseInt(e.target.value) || undefined)}
                                     />
@@ -344,6 +371,7 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
                                         min={1900}
                                         max={2100}
                                         disabled={!isEditable}
+                                        value={field.value ?? ""}
                                         className="bg-background"
                                         onChange={(e) => field.onChange(parseInt(e.target.value) || undefined)}
                                     />
@@ -431,6 +459,17 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
                                 </FormItem>
                                 )}
                             />
+                        </div>
+                        {/* Owner "điểm 1 và 2" việc 2: cách ghi năm + xem trước năm học của dòng. */}
+                        <div className="col-span-2 md:col-span-5 space-y-0.5 text-xs">
+                            <p className="text-muted-foreground" data-testid={`academic-row-year-hint-${index}`}>
+                                {YEAR_INPUT_HINT}
+                            </p>
+                            {rowSchoolYearsLabel(records[index]) && (
+                                <p className="text-foreground" data-testid={`academic-row-years-${index}`}>
+                                    {rowSchoolYearsLabel(records[index])}
+                                </p>
+                            )}
                         </div>
                         </div>
                     </div>

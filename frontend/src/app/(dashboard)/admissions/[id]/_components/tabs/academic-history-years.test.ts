@@ -10,9 +10,12 @@ import {
   bandGraduationYear,
   bandPreviewLabel,
   buildBandRecords,
+  YEAR_INPUT_HINT,
   isMergedLienCapRow,
+  lienCapMissingGradeNotices,
   mergedLienCapNotices,
   parseBandStartYear,
+  rowSchoolYearsLabel,
   suggestThcsStartYear,
   yearNotices,
 } from "./academic-history-years"
@@ -65,19 +68,45 @@ describe("parseBandStartYear", () => {
 })
 
 describe("suggestThcsStartYear", () => {
-  it("năm bắt đầu SỚM NHẤT của dòng lớp 10–12, trừ 4", () => {
+  it("năm bắt đầu lớp 10 SỚM NHẤT suy từ các dòng THPT, trừ 4", () => {
     expect(
       suggestThcsStartYear([
-        { grade_to: 11, year_from: 2023 },
-        { grade_to: 10, year_from: 2022 },
-        { grade_to: 9, year_from: 2015 },
+        { grade_to: 11, year_from: 2023, year_to: 2024 },
+        { grade_to: 10, year_from: 2022, year_to: 2023 },
+        { grade_to: 9, year_from: 2015, year_to: 2016 },
       ]),
     ).toBe(2018)
   })
 
-  it("chưa có dòng THPT có năm ⇒ không gợi ý", () => {
+  it("vào trường ở lớp 11 (chỉ có dòng 2023 → 2025, lớp 12) ⇒ lớp 10 bắt đầu 2022 ⇒ gợi ý 2018 (không lệch 1 năm)", () => {
+    expect(suggestThcsStartYear([{ level: "THPT", grade_to: 12, year_from: 2023, year_to: 2025 }])).toBe(2018)
+  })
+
+  it("ở lại lớp ghi một dòng 2021 → 2025 lớp 12 ⇒ lớp 10 bắt đầu 2021 ⇒ gợi ý 2017", () => {
+    expect(suggestThcsStartYear([{ level: "THPT", grade_to: 12, year_from: 2021, year_to: 2025 }])).toBe(2017)
+  })
+
+  it("BỎ dòng liên cấp (dòng gộp từ lớp 6 làm lệch phép suy) và dòng 0 năm", () => {
+    expect(suggestThcsStartYear([{ level: "THCS_THPT", grade_to: 12, year_from: 2016, year_to: 2023 }])).toBeNull()
+    expect(suggestThcsStartYear([{ level: "THPT", grade_to: 12, year_from: 2025, year_to: 2025 }])).toBeNull()
+    expect(
+      suggestThcsStartYear([
+        { level: "THCS_THPT", grade_to: 12, year_from: 2016, year_to: 2023 },
+        { level: "THPT", grade_to: 12, year_from: 2022, year_to: 2025 },
+      ]),
+    ).toBe(2018)
+  })
+
+  it("chưa có dòng THPT đủ năm ⇒ không gợi ý", () => {
     expect(suggestThcsStartYear([])).toBeNull()
-    expect(suggestThcsStartYear([{ grade_to: 9, year_from: 2015 }, { grade_to: 10, year_from: null }, null])).toBeNull()
+    expect(
+      suggestThcsStartYear([
+        { grade_to: 9, year_from: 2015, year_to: 2016 },
+        { grade_to: 10, year_from: null, year_to: 2023 },
+        { grade_to: 10, year_from: 2022, year_to: null },
+        null,
+      ]),
+    ).toBeNull()
   })
 })
 
@@ -96,7 +125,7 @@ describe("yearNotices", () => {
         undefined,
       ]),
     ).toEqual([
-      'Trường #2: "Từ năm" và "Đến năm" đều là 2024, chưa có năm học nào. Một năm học ghi hai năm liền nhau, vd năm học 2023–2024 ghi 2023 → 2024; đối chiếu học bạ.',
+      'Trường #2: "Từ năm" và "Đến năm" cùng là 2024 — theo cách ghi năm học hiện nay, dòng này chưa có năm học nào.',
     ])
   })
 
@@ -115,6 +144,70 @@ describe("yearNotices", () => {
         { year_from: 2023, year_to: 2024 },
       ]),
     ).toEqual(["Trường #1 và #2 cùng có năm học 2019–2020 — xem lại nếu không phải chuyển trường giữa năm."])
+  })
+})
+
+describe("yearNotices — năm gõ dở, dòng thiếu năm (Codex G5 lượt 2 P2)", () => {
+  it("năm gõ dở (202) không phải năm hợp lệ ⇒ không nhắc trùng / 0 năm với năm vô lý", () => {
+    expect(yearNotices([{ year_from: 202, year_to: 2023 }, { year_from: 2022, year_to: 2023 }])).toEqual([])
+    expect(yearNotices([{ year_from: 202, year_to: 202 }])).toEqual([])
+  })
+
+  it("dòng thiếu Đến năm nằm giữa ⇒ KHÔNG báo hở giữa hai dòng kề nó", () => {
+    expect(
+      yearNotices([
+        { year_from: 2021, year_to: 2022 },
+        { year_from: 2022, year_to: null },
+        { year_from: 2023, year_to: 2024 },
+      ]),
+    ).toEqual([])
+  })
+
+  it("đủ năm mọi dòng thì vẫn báo hở (đối chứng)", () => {
+    expect(
+      yearNotices([
+        { year_from: 2021, year_to: 2022 },
+        { year_from: 2023, year_to: 2024 },
+      ]),
+    ).toEqual(["Hở năm học 2022–2023 (giữa Trường #1 và #2) — bỏ qua nếu em nghỉ học thời gian đó."])
+  })
+})
+
+describe("rowSchoolYearsLabel / YEAR_INPUT_HINT (owner 'điểm 1 và 2' việc 2)", () => {
+  it("câu giải thích cách ghi năm", () => {
+    expect(YEAR_INPUT_HINT).toBe("Năm học 2022–2023 ghi 2022 → 2023.")
+  })
+
+  it("xem trước năm học của một dòng theo quy ước a … b − 1", () => {
+    expect(rowSchoolYearsLabel({ year_from: 2022, year_to: 2023 })).toBe("Dòng này: năm học 2022–2023.")
+    expect(rowSchoolYearsLabel({ year_from: 2022, year_to: 2025 })).toBe(
+      "Dòng này: năm học 2022–2023, 2023–2024, 2024–2025.",
+    )
+    expect(rowSchoolYearsLabel({ year_from: 2016, year_to: 2023 })).toBe(
+      "Dòng này: 7 năm học, 2016–2017 đến 2022–2023.",
+    )
+    expect(rowSchoolYearsLabel({ year_from: 2025, year_to: 2025 })).toBe("Dòng này: chưa có năm học nào.")
+    expect(rowSchoolYearsLabel({ year_from: 2025, year_to: 2024 })).toBeNull()
+    expect(rowSchoolYearsLabel({ year_from: 2022, year_to: undefined })).toBeNull()
+    expect(rowSchoolYearsLabel({ year_from: 202, year_to: 2023 })).toBeNull()
+  })
+})
+
+describe("lienCapMissingGradeNotices (Codex G5 lượt 2 P2)", () => {
+  it("dòng liên cấp thiếu / sai Lớp cuối ⇒ nhắc; đủ lớp hoặc không phải liên cấp ⇒ không", () => {
+    expect(
+      lienCapMissingGradeNotices([
+        { level: "THPT", grade_to: null },
+        { level: "THCS_THPT", grade_to: null },
+        { level: "THCS_THPT", grade_to: 12 },
+        { level: "THCS_THPT", grade_to: 9 },
+        { level: "THCS_THPT", grade_to: 13 },
+        null,
+      ]),
+    ).toEqual([
+      'Trường #2 là trường liên cấp: cần ghi "Lớp cuối" (lớp cuối cùng em học ở trường này) để tính được khu vực.',
+      'Trường #5 là trường liên cấp: cần ghi "Lớp cuối" (lớp cuối cùng em học ở trường này) để tính được khu vực.',
+    ])
   })
 })
 
