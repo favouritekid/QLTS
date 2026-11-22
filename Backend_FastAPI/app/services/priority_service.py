@@ -970,9 +970,9 @@ async def resolve_kv_for_profile(
 
     grad_entry = sorted_entries[0][1]
     # G5 (owner 22-11): tra trường tốt nghiệp ở NĂM HỌC CUỐI (khoá năm bắt đầu ``year_to − 1``), không phải năm sau tốt nghiệp.
-    grad_kv = await lookup_kv_for_school_year(
-        db, grad_entry["school_id"], kv_last_school_year(grad_entry)
-    )
+    # ``graduation_lookup_year`` ghi ĐÚNG khoá đã đem tra (Codex G5 P1) — ``graduation_year`` vẫn là ``year_to`` như cũ.
+    grad_lookup_year = kv_last_school_year(grad_entry)
+    grad_kv = await lookup_kv_for_school_year(db, grad_entry["school_id"], grad_lookup_year)
     if grad_kv is None:
         # Graduation school year miss catalog → fail-closed.
         return None, _meta_base(
@@ -985,6 +985,7 @@ async def resolve_kv_for_profile(
                 "tied_kv": winners,
                 "graduation_school_id": grad_entry["school_id"],
                 "graduation_year": grad_entry["year_to"],
+                "graduation_lookup_year": grad_lookup_year,
             },
         )
     return grad_kv, _meta_base(
@@ -995,6 +996,7 @@ async def resolve_kv_for_profile(
             "tied_kv": winners,
             "graduation_school_id": grad_entry["school_id"],
             "graduation_year": grad_entry["year_to"],
+            "graduation_lookup_year": grad_lookup_year,
         },
     )
 

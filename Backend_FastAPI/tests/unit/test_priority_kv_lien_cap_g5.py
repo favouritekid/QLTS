@@ -7,7 +7,9 @@ Căn cứ (owner):
   Q15(b) (mục k năm học tính k năm, mục 0 năm dừng);
 * 22-11: ``logs-P5/cong-bo-ket-qua/gd2/QUYET-DINH-OWNER-KV-NAM-THUC-HOC-VA-L3-2026-11-22.md`` mục 1–2 (khoá năm học = năm bắt đầu;
   THPT 2022 → tốt nghiệp 2025 chỉ tra 2022, 2023, 2024; liên cấp thiếu lớp kết thúc ⇒ dừng);
-  ``…/QUYET-DINH-OWNER-G5-HAS-THPT-HISTORY-2026-11-22.md`` (``_has_thpt_history`` dùng chung luật lớp 10–12).
+  ``…/QUYET-DINH-OWNER-G5-HAS-THPT-HISTORY-2026-11-22.md`` (``_has_thpt_history`` dùng chung luật lớp 10–12);
+  ``…/g5/QUYET-DINH-OWNER-G5-NUT-THEM-NHANH-VA-DO-2026-11-22.md`` mục C (test theo CẶP với nút thêm nhanh ở giao diện) + Codex G5
+  lượt 1 (``…/g5/KET-QUA-CODEX-GON-G5-2026-11-22.md`` P1, P4, P5).
 
 Giá trị mong đợi VIẾT TAY. Hàm đọc danh mục KV trường được thay bằng bảng tra trong bộ nhớ (ghi lại từng lần hỏi); không CSDL.
 """
@@ -49,7 +51,8 @@ def _thpt(sid, tu, den, lop=12):
     return {"level": "THPT", "school_id": sid, "year_from": tu, "year_to": den, "grade_to": lop}
 
 
-def _chay(monkeypatch, lich_su, danh_muc=None):
+def _chay(monkeypatch, lich_su, danh_muc=None, *, target_level=None, admission_type=None, **cot):
+    """Chạy ``resolve_kv_for_profile`` thật trên hồ sơ giả; ``cot`` đè cột hồ sơ (vd trình độ văn hoá / chuyên môn)."""
     bang = danh_muc if danh_muc is not None else _danh_muc()
     hoi = []
 
@@ -58,7 +61,7 @@ def _chay(monkeypatch, lich_su, danh_muc=None):
         return bang.get((sid, nam))
 
     monkeypatch.setattr(ps, "lookup_kv_for_school_year", _tra)
-    ho_so = SimpleNamespace(
+    cot_ho_so = dict(
         id=1,
         academic_year=2026,
         cultural_education_level="graduated_thpt",
@@ -67,8 +70,16 @@ def _chay(monkeypatch, lich_su, danh_muc=None):
         permanent_commune_code=None,
         academic_history=lich_su,
     )
-    kv, meta = asyncio.run(ps.resolve_kv_for_profile(ho_so, db=None))
+    cot_ho_so.update(cot)
+    ho_so = SimpleNamespace(**cot_ho_so)
+    kv, meta = asyncio.run(
+        ps.resolve_kv_for_profile(ho_so, db=None, target_level=target_level, admission_type=admission_type)
+    )
     return kv, meta, hoi
+
+
+def _lech(meta):
+    return [(m["index"], m["case"]) for m in meta["breakdown"]["entries"]]
 
 
 # ═══════════════════════════════ quy ước năm: khoá = năm bắt đầu ═══════════════════════════════
@@ -93,6 +104,8 @@ def test_hoa_tra_truong_tot_nghiep_o_nam_hoc_cuoi(monkeypatch):
     )
     assert (kv, meta["rule_applied"]) == ("KV3", "tiebreak_graduation_school"), meta
     assert hoi[-1] == (B, 2024) and (B, 2025) not in hoi, hoi
+    # Codex G5 P1: kết quả chi tiết ghi năm thực sự đem tra (khoá năm học cuối), cạnh năm tốt nghiệp ``year_to`` như cũ.
+    assert (meta["breakdown"]["graduation_year"], meta["breakdown"]["graduation_lookup_year"]) == (2025, 2024), meta
 
 
 def test_muc_0_nam_hoc_thi_dung_co_nhan(monkeypatch):
@@ -101,6 +114,92 @@ def test_muc_0_nam_hoc_thi_dung_co_nhan(monkeypatch):
     assert (kv, meta["rule_applied"], meta["reason"]) == (None, "insufficient_data", "history_entries_inconsistent"), meta
     assert [(m["index"], m["case"]) for m in meta["breakdown"]["entries"]] == [(1, "zero_length_entry")]
     assert hoi == []
+
+
+# ═══════════════════════════════ CẶP với nút thêm nhanh ở giao diện (owner 22-11 mục C) ═══════════════════════════════
+#: Chép NGUYÊN từ ``frontend/src/app/(dashboard)/admissions/[id]/_components/tabs/AcademicHistoryTab.test.tsx``
+#: (``CAP_FE_NUT_THEM_NHANH_2022``): cán bộ gõ "Năm bắt đầu lớp 10" = 2022, bấm "Thêm 3 năm THPT (lớp 10/11/12)", rồi chọn trường từ
+#: danh mục cho cả 3 dòng (mock: school_id 42, level THPT). ĐỔI một bên thì đổi cả hai.
+CAP_FE_NUT_THEM_NHANH_2022 = [
+    {"school_id": 42, "school_name": "THPT Chuyên Nguyễn Du", "level": "THPT", "year_from": 2022, "year_to": 2023, "grade_to": 10, "gpa": None, "graduation_type": "THPT"},
+    {"school_id": 42, "school_name": "THPT Chuyên Nguyễn Du", "level": "THPT", "year_from": 2023, "year_to": 2024, "grade_to": 11, "gpa": None, "graduation_type": "THPT"},
+    {"school_id": 42, "school_name": "THPT Chuyên Nguyễn Du", "level": "THPT", "year_from": 2024, "year_to": 2025, "grade_to": 12, "gpa": None, "graduation_type": "THPT"},
+]
+TRUONG_FE = 42
+
+#: Dữ liệu nút thêm nhanh CŨ (trước G5) cho em tốt nghiệp 2026, đã chọn trường: mỗi lớp một mục y→y, y = năm KẾT THÚC của năm học
+#: (``AcademicHistoryTab.tsx`` ``addBand`` tại ``d4b7a69f``; Codex G5 P3).
+NUT_CU_TOT_NGHIEP_2026 = [
+    {"school_id": 42, "school_name": "THPT Chuyên Nguyễn Du", "level": "THPT", "year_from": y, "year_to": y, "grade_to": lop, "gpa": None, "graduation_type": "THPT"}
+    for y, lop in ((2024, 10), (2025, 11), (2026, 12))
+]
+
+
+def _danh_muc_fe(doi_tu=None):
+    """Trường 42: KV1 mọi năm; ``doi_tu`` = (năm bắt đầu đổi, KV mới)."""
+    out = {(TRUONG_FE, nam): "KV1" for nam in range(2010, 2031)}
+    if doi_tu:
+        out.update({(TRUONG_FE, nam): doi_tu[1] for nam in range(doi_tu[0], 2031)})
+    return out
+
+
+def test_cap_fe_nut_them_nhanh_2022_moi_lop_mot_nam_tra_dung_2022_2023_2024(monkeypatch):
+    """Codex P5(b) + owner mục C: mỗi lớp một mục 1 năm cùng trường ⇒ ĐÚNG 3 lần tra 2022, 2023, 2024 (mã trước G5 tra 6 lần)."""
+    kv, meta, hoi = _chay(monkeypatch, CAP_FE_NUT_THEM_NHANH_2022, _danh_muc_fe())
+    assert hoi == [(TRUONG_FE, 2022), (TRUONG_FE, 2023), (TRUONG_FE, 2024)], hoi
+    assert (kv, meta["rule_applied"], meta["breakdown"]["kv_totals"]) == ("KV1", "longest_duration", {"KV1": 3}), meta
+    assert [e["counted_school_years"] for e in meta["breakdown"]["entries"]] == [[2022], [2023], [2024]]
+
+
+def test_cap_fe_nut_them_nhanh_2022_ca_bat_buoc_truong_doi_kv_tu_nam_hoc_2025_2026(monkeypatch):
+    """Ca BẮT BUỘC trên ĐÚNG dữ liệu nút sinh ra: tốt nghiệp 2025, trường đổi KV1 → KV3 từ năm học 2025–2026 ⇒ vẫn KV1."""
+    kv, meta, hoi = _chay(monkeypatch, CAP_FE_NUT_THEM_NHANH_2022, _danh_muc_fe((2025, "KV3")))
+    assert (kv, meta["rule_applied"]) == ("KV1", "longest_duration"), meta
+    assert (TRUONG_FE, 2025) not in hoi, hoi
+
+
+def test_du_lieu_nut_them_nhanh_cu_ba_muc_y_y_deu_lech(monkeypatch):
+    """Codex P5(a): khoá hành vi hiện tại với dữ liệu nút CŨ — 3 mục 0 năm ⇒ DỪNG, liệt kê CẢ BA (index 0, 1, 2), không tra."""
+    kv, meta, hoi = _chay(monkeypatch, NUT_CU_TOT_NGHIEP_2026, _danh_muc_fe())
+    assert (kv, meta["rule_applied"], meta["reason"]) == (None, "insufficient_data", "history_entries_inconsistent"), meta
+    assert _lech(meta) == [(0, "zero_length_entry"), (1, "zero_length_entry"), (2, "zero_length_entry")], meta
+    assert [(m["year_from"], m["year_to"], m["grade_to"]) for m in meta["breakdown"]["entries"]] == [
+        (2024, 2024, 10),
+        (2025, 2025, 11),
+        (2026, 2026, 12),
+    ]
+    assert hoi == []
+
+
+def test_nhieu_muc_lech_co_thcs_dung_truoc_liet_ke_moi_muc_index_theo_academic_history(monkeypatch):
+    """Codex P5(c): mục THCS (không vào tập đếm) đứng ĐẦU ⇒ index phải tính theo ``academic_history`` (1, 3), không theo tập đếm
+    (0, 2); và phải liệt kê MỌI mục lệch, không chỉ mục đầu."""
+    lich_su = [
+        {"level": "THCS", "school_id": A, "year_from": 2016, "year_to": 2020, "grade_to": 9},
+        _thpt(A, 2020, 2020, 10),
+        _thpt(B, 2021, 2023),
+        _lc(B, 2016, 2023),
+    ]
+    kv, meta, hoi = _chay(monkeypatch, lich_su)
+    assert (kv, meta["rule_applied"], meta["reason"]) == (None, "insufficient_data", "history_entries_inconsistent"), meta
+    assert _lech(meta) == [(1, "zero_length_entry"), (3, "lien_cap_missing_grade_to")], meta
+    assert hoi == []
+
+
+def test_hoa_truong_tot_nghiep_lien_cap_tra_nam_hoc_cuoi(monkeypatch):
+    """Codex P5(d): hoà 2–2, trường tốt nghiệp là LIÊN CẤP. A THPT (KV1) lớp 10–11 ``2020→2022`` ⇒ 2020, 2021; B liên cấp (KV3) lớp
+    12 (học hai năm) ``2022→2024`` ⇒ 2022, 2023 ⇒ hoà ⇒ tốt nghiệp B (2024, lớp 12) tra ở khoá 2023; KV của B đổi từ 2024 không dùng."""
+    kv, meta, hoi = _chay(
+        monkeypatch, [_thpt(A, 2020, 2022, 11), _lc(B, 2022, 2024, 12)], _danh_muc({B: (2024, "KV2")})
+    )
+    assert (kv, meta["rule_applied"]) == ("KV3", "tiebreak_graduation_school"), meta
+    assert meta["breakdown"]["kv_totals"] == {"KV1": 2, "KV3": 2}, meta["breakdown"]
+    assert hoi[-1] == (B, 2023) and (B, 2024) not in hoi, hoi
+    assert (
+        meta["breakdown"]["graduation_school_id"],
+        meta["breakdown"]["graduation_year"],
+        meta["breakdown"]["graduation_lookup_year"],
+    ) == (B, 2024, 2023), meta
 
 
 # ═══════════════════════════════ liên cấp: chỉ lớp 10–12 ═══════════════════════════════
@@ -205,6 +304,42 @@ def test_cd_lien_thong_lien_cap_thieu_lop_khong_lang_le_ve_thuong_tru(monkeypatc
     """Liên cấp thiếu lớp: không loại được phần THPT ⇒ vẫn là "có lịch sử THPT" ⇒ LICH_SU_THPT ⇒ phép đếm DỪNG có nhãn (không rơi
     lặng lẽ về thường trú)."""
     assert _can_cu_cd_lien_thong([_lc(A, 2016, 2023)]) == "LICH_SU_THPT"
+
+
+#: Ngữ cảnh CĐ liên thông "khối lượng VH THPT + TC" (nhánh lai ``_derive_kv_basis_level`` 5a) cho ``resolve_kv_for_profile``.
+_CD_LIEN_THONG = dict(
+    target_level="cao_dang",
+    admission_type="lien_thong",
+    cultural_education_level="completed_thpt",
+    vocational_qualification="trung_cap",
+)
+
+
+def test_cd_lien_thong_chay_het_resolve_lien_cap_thieu_lop_thi_dung(monkeypatch):
+    """Codex P4: CĐ liên thông chạy HẾT ``resolve_kv_for_profile`` (không chỉ bước chọn căn cứ): liên cấp thiếu lớp ⇒ căn cứ lịch sử
+    THPT ⇒ DỪNG có nhãn ``lien_cap_missing_grade_to``, không tra danh mục, không về thường trú."""
+    kv, meta, hoi = _chay(monkeypatch, [_lc(A, 2016, 2023)], **_CD_LIEN_THONG)
+    assert (meta["basis"], meta["basis_reason"]) == ("LICH_SU_THPT", "cd_lien_thong_khoi_luong_with_thpt_history"), meta
+    assert (kv, meta["rule_applied"], meta["reason"]) == (None, "insufficient_data", "history_entries_inconsistent"), meta
+    assert _lech(meta) == [(0, "lien_cap_missing_grade_to")]
+    assert hoi == []
+
+
+@pytest.mark.parametrize(
+    "lich_su, can_cu, ket_qua, hoi_mong_doi",
+    [
+        ([_lc(A, 2016, 2022, 11)], "LICH_SU_THPT", ("KV1", "longest_duration"), [(A, 2020), (A, 2021)]),
+        ([_lc(A, 2016, 2020, 9)], "THUONG_TRU", (None, "address_not_normalized"), []),
+    ],
+    ids=["lien_cap_lop_6_11_tra_lop_10_11", "lien_cap_lop_6_9_ve_thuong_tru"],
+)
+def test_cd_lien_thong_chay_het_resolve_doi_chung(monkeypatch, lich_su, can_cu, ket_qua, hoi_mong_doi):
+    """Đối chứng cho ca trên, cùng ngữ cảnh CĐ liên thông: liên cấp lớp 6–11 ⇒ tra ĐÚNG lớp 10–11; lớp 6–9 ⇒ thường trú (hồ sơ giả
+    không có xã ⇒ ``address_not_normalized``), không tra trường nào."""
+    kv, meta, hoi = _chay(monkeypatch, lich_su, **_CD_LIEN_THONG)
+    assert meta["basis"] == can_cu, meta
+    assert (kv, meta["rule_applied"]) == ket_qua, meta
+    assert hoi == hoi_mong_doi
 
 
 def test_mot_vi_tu_cho_phep_dem_va_has_thpt_history():
