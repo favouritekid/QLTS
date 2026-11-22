@@ -329,3 +329,36 @@ def test_bt25_bt42_ma_l4_khong_goi_ham_ghi_ho_so_hay_vuot_chi_tieu_khong_dinh_da
         elif isinstance(n, ast.alias):
             ten.add(n.asname or n.name)
     assert not [t for t in ten if "bypass" in t.lower()], rel
+
+
+async def test_hd4_e9_order_by_ket_thuc_bang_profile_id_tang():
+    """HĐ4 — câu SQL thật của E9 (``admission_review_repository.list_rows``, biên dịch theo PostgreSQL): ORDER BY = tab → ngành →
+    học vụ → tổng điểm GIẢM → ``profile_id`` TĂNG ở CUỐI (khoá phụ chỉ để phân trang ổn định). Bắt câu bằng một đối tượng ghi lại
+    lời gọi ``execute`` (không CSDL) — hành vi trên dữ liệu đo ở ``tests/api/test_gd2b_chay_kiem_api.py``."""
+    from sqlalchemy.dialects import postgresql
+
+    from app.repositories import admission_review_repository as repo
+
+    cau = []
+
+    class _KetQua:
+        def scalar_one(self):
+            return 0
+
+        def scalars(self):
+            return []
+
+    class _GhiLai:
+        async def execute(self, stmt, *a, **k):
+            cau.append(stmt)
+            return _KetQua()
+
+    await repo.list_rows(_GhiLai(), 1, offset=0, limit=50)
+    sql = str(cau[-1].compile(dialect=postgresql.dialect()))
+    thu_tu = [x.strip() for x in sql.split("ORDER BY", 1)[1].split("LIMIT", 1)[0].split(",")]
+    assert thu_tu[-1] == "admission_review_row.profile_id ASC", thu_tu
+    assert thu_tu[-2] == "admission_review_row.review_total DESC NULLS LAST", thu_tu
+    assert thu_tu[1:3] == [
+        "admission_review_row.considered_major_code ASC NULLS LAST",
+        "admission_review_row.considered_offering_academic_info_id ASC NULLS LAST",
+    ], thu_tu

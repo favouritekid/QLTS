@@ -171,6 +171,46 @@ async def test_e9_bon_tab_thu_tu_co_dinh_ghep_trang_dung_tap_khong_trung(client:
     assert r.status_code == 200 and r.json()["items"] == [] and r.json()["total"] == 6
 
 
+async def test_e9_bang_moi_khoa_sap_thi_profile_id_tang_du_chen_nguoc(client: AsyncClient, admin_token_headers, nen):
+    """HĐ4 (khoá phụ ``profile_id``): run thứ hai (chèn tay, như GĐ2-C chạy nền) mang CÙNG ba dòng ``auto`` của run thật — bằng nhau ở
+    MỌI khoá sắp (tab, ngành, học vụ, tổng điểm) — chèn theo ``profile_id`` GIẢM. E9 (một trang, và ghép trang cỡ 1) vẫn trả
+    ``profile_id`` TĂNG. Bỏ khoá phụ ⇒ thứ tự rơi về thứ tự đọc của CSDL (ca ghim câu SQL ở ``test_gd2b_lan_xet_hop_dong.py``)."""
+    from app.repositories.admission_review_repository import ROW_INSERT_COLUMNS
+
+    h, d = admin_token_headers, nen
+    sid = await _lan_xet_co_san(client, h, d)
+    run = await _chay(client, h, sid)
+    cot = ", ".join('"%s"' % c for c in ROW_INSERT_COLUMNS)
+    async with csdl.engine.begin() as conn:
+        rid2 = (
+            await conn.execute(
+                text(
+                    "INSERT INTO admission_review_run (session_id, kind, status, rule_version, requested_by_user_id, started_at, "
+                    "inputs) SELECT session_id, kind, 'running', rule_version, requested_by_user_id, now(), inputs "
+                    "FROM admission_review_run WHERE id = :r RETURNING id"
+                ),
+                {"r": run["id"]},
+            )
+        ).scalar_one()
+        for pid in sorted(d["hs"]["auto"], reverse=True):
+            await conn.execute(
+                text("INSERT INTO admission_review_row (run_id, %s) SELECT :r2, %s FROM admission_review_row "
+                     "WHERE run_id = :r AND profile_id = :p" % (cot, cot)),
+                {"r2": rid2, "r": run["id"], "p": pid},
+            )
+        await conn.execute(
+            text(
+                "UPDATE admission_review_run SET status = 'done', finished_at = now(), duration_ms = 0, "
+                "summary = (SELECT summary FROM admission_review_run WHERE id = :r), "
+                "quota_view = (SELECT quota_view FROM admission_review_run WHERE id = :r) WHERE id = :r2"
+            ),
+            {"r": run["id"], "r2": rid2},
+        )
+    r = await client.get(f"{P}/{sid}/runs/{rid2}/rows", headers=h, params={"page_size": 200})
+    assert [x["profile_id"] for x in r.json()["items"]] == sorted(d["hs"]["auto"]), r.text
+    assert [x["profile_id"] for x in await _moi_dong(client, h, sid, rid2, co=1)] == sorted(d["hs"]["auto"])
+
+
 async def test_e9_loc_ket_hop_va_tab_counts_ca_run(client: AsyncClient, admin_token_headers, nen):
     h, d = admin_token_headers, nen
     sid = await _lan_xet_co_san(client, h, d)

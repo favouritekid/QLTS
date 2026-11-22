@@ -1,24 +1,18 @@
 # app/routers/admission_review.py
-"""API "Lần xét tuyển" GĐ2 — router MỎNG. GĐ2-A: bảng chỉ tiêu năm / nhóm ngành (đặc tả GĐ2 bản 3 §11). GĐ2-B (đợt 2, L4): 9
-route của lần xét nháp, điểm sàn, chạy kiểm hồ sơ, xem run / dòng — hợp đồng API GĐ2-B bản 4 ``b877fba1…`` E1–E9. Ban thư ký,
-lựa chọn, điều chỉnh, khoá lần xét đến ở GĐ2-C trở đi.
+"""API "Lần xét tuyển" GĐ2 (đặc tả GĐ2 bản 3 §11) — router MỎNG. PR đầu (GĐ2-A) chỉ có bảng chỉ tiêu năm / nhóm ngành;
+lần xét, Ban thư ký, run, điều chỉnh, khoá lần xét đến ở GĐ2-B trở đi.
 
 Dưới tiền tố ``/api/admission-config`` — tiền tố ĐÃ nằm trong ``FROZEN_PREFIXES`` (``app/middleware/admission_freeze.py``)
 và khối đóng băng của nginx ⇒ cần gạt đóng băng tuyển sinh chặn mọi route GHI ở đây (503). Module khai trong
-``ADMISSION_ROUTER_MODULES``; route ghi (3 của bảng chỉ tiêu + 4 của lần xét: E1, E4, E5, E6) trong ``ADMISSION_WRITE_ROUTES``.
+``ADMISSION_ROUTER_MODULES``, ba route ghi trong ``ADMISSION_WRITE_ROUTES``.
 
-Quyền: ``CasbinAuth`` (tầng chủ sở hữu vai — chỉ admin có dòng, wildcard) + lớp phụ fail-closed ``deps.require_quota_table_admin``
-(bảng chỉ tiêu) / ``deps.require_review_admin`` (lần xét — QĐB:26 chỉ Admin ở GĐ2-B). Kiểm vai TRƯỚC khi đọc bất cứ gì của lần
-xét; "lần xét / run không có" ⇒ 404 ở dịch vụ (biên bản K3 21-11).
+Quyền (đặc tả §10: "Bảng chỉ tiêu … Admin — lớp 'chỉ Admin'"): ``CasbinAuth`` (chỉ admin có dòng — wildcard) +
+``deps.require_quota_table_admin`` (lớp phụ fail-closed). Quyền xem của Ban thư ký đến cùng bảng quyền Ban thư ký (GĐ2-B).
 
-Router chỉ dịch HTTP ↔ dịch vụ và COMMIT (dịch vụ chỉ ``flush``). Log chỉ id + số đếm; không dữ liệu cá nhân. E3, E8, E9 trả
-``Cache-Control: no-store`` (hợp đồng §1.7); E6 trả 202 + ``Location`` (hợp đồng §2 E6 — GĐ2-B chạy đồng bộ, 202 đã mang run
-``done``).
+Log chỉ năm + số đếm; không dữ liệu cá nhân (bảng chỉ tiêu không mang dữ liệu cá nhân).
 """
-from typing import Optional
-
 import structlog
-from fastapi import APIRouter, Depends, Path, Query, Request, Response
+from fastapi import APIRouter, Depends, Path, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import database, models
@@ -30,6 +24,14 @@ from ..schemas.admission_quota_table import (
     QuotaTablePut,
     QuotaTableUnlockIn,
 )
+from ..services import admission_quota_table_service as quota_table_service
+
+# ── GĐ2-B đợt 2 (L4) — import của 9 route lần xét nháp: KHỐI THÊM RIÊNG, không sửa dòng import có sẵn (gộp với GĐ2-C chỉ xung
+# đột cơ học). Router mỏng; mô tả của khối route ở cuối tệp.
+from typing import Optional
+
+from fastapi import Query, Response
+
 from ..schemas.admission_review import (
     LIST_PAGE_SIZE_DEFAULT,
     LIST_PAGE_SIZE_MAX,
@@ -49,7 +51,6 @@ from ..schemas.admission_review import (
     SessionPageOut,
     SessionStatus,
 )
-from ..services import admission_quota_table_service as quota_table_service
 from ..services import admission_review_run_service as review_run_service
 from ..services import admission_review_service as review_service
 
@@ -142,8 +143,13 @@ async def unlock_quota_table(
 
 
 # =====================================================================================================================
-# GĐ2-B — lần xét nháp (hợp đồng API bản 4 E1–E9). Thứ tự tham số: CasbinAuth → lớp phụ chỉ Admin → CSDL; FastAPI gọi
-# dependency TRƯỚC khi báo lỗi dạng của thân / tham số ⇒ vai khác nhận 403 trước 422 / 404 (kiểm vai trước khi đọc).
+# GĐ2-B (đợt 2, L4) — 9 route của lần xét nháp, điểm sàn, chạy kiểm hồ sơ, xem run / dòng: hợp đồng API GĐ2-B bản 4 ``b877fba1…``
+# E1–E9. Route ghi E1, E4, E5, E6 trong ``ADMISSION_WRITE_ROUTES`` (đóng băng ⇒ 503); route đọc không bị đóng băng.
+# Quyền: ``CasbinAuth`` (tầng chủ sở hữu vai — chỉ admin có dòng, wildcard) + lớp phụ fail-closed ``deps.require_review_admin``
+# (QĐB:26 — chỉ Admin ở GĐ2-B). Thứ tự tham số: CasbinAuth → lớp phụ → CSDL; FastAPI gọi dependency TRƯỚC khi báo lỗi dạng của thân /
+# tham số ⇒ vai khác nhận 403 trước 422 / 404 (kiểm vai trước khi đọc); "lần xét / run không có" ⇒ 404 ở dịch vụ (biên bản K3).
+# Router chỉ dịch HTTP ↔ dịch vụ và COMMIT (dịch vụ chỉ ``flush``). E3, E8, E9 ``Cache-Control: no-store``; E6 202 + ``Location``
+# (GĐ2-B chạy đồng bộ — 202 đã mang run ``done``). Log chỉ id + số đếm; không dữ liệu cá nhân.
 # =====================================================================================================================
 #: Đường dẫn con (dưới ``ROUTER_PREFIX``) — MỘT nguồn cho route, header ``Location`` và test kiểm kê.
 REVIEW_SESSIONS_PATH = "/review-sessions"
