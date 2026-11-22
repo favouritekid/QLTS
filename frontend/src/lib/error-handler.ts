@@ -15,6 +15,8 @@ import axios, { AxiosError } from 'axios'
 import { toast } from 'sonner'
 import type { QueryClient } from '@tanstack/react-query'
 
+import { userFacingUnavailableDetail } from '@/lib/api/error-codes'
+
 // =============================================================================
 // ERROR CODE TAXONOMY
 // =============================================================================
@@ -166,8 +168,13 @@ export function handleApiError(
       break
       
     case 'SERVER_ERROR':
-      toast.error('Lỗi hệ thống', { 
-        description: 'Vui lòng thử lại sau hoặc liên hệ hỗ trợ' 
+      // 503 của họ fail-closed (`USER_FACING_UNAVAILABLE_ERROR_CODES` / mã 503 của T6) ⇒ hiện câu máy chủ viết cho
+      // người dùng (vd "Không ghi được nhật ký từ chối — hồ sơ chưa đổi, vui lòng thử lại."). 500 / 502 / 504, 503 không
+      // thân JSON (nginx, mạng) hay mã khác ⇒ câu chung, KHÔNG in `detail` (tránh lộ chuỗi nội bộ).
+      toast.error('Lỗi hệ thống', {
+        description:
+          userFacingUnavailableDetail({ status, data: parsed.data }) ??
+          'Vui lòng thử lại sau hoặc liên hệ hỗ trợ'
       })
       break
       

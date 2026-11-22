@@ -11,6 +11,7 @@ import {
   AUTH_STATE_UNAVAILABLE_ERROR_CODE,
   isAuthStateUnavailable,
   t6PublishStopDetail,
+  userFacingUnavailableDetail,
 } from "./error-codes";
 
 const NGINX_503_HTML =
@@ -68,5 +69,31 @@ describe("t6PublishStopDetail — T6 dừng có nhãn ở MỌI status", () => {
   it("mã khác hoặc thân không phải JSON ⇒ null", () => {
     expect(t6PublishStopDetail({ status: 500, data: { error_code: "INTERNAL_ERROR", detail: "x" } })).toBeNull();
     expect(t6PublishStopDetail({ status: 503, data: NGINX_503_HTML })).toBeNull();
+  });
+});
+
+describe("userFacingUnavailableDetail — 503 họ fail-closed", () => {
+  it.each([
+    ["SERVICE_UNAVAILABLE"],
+    ["INITIAL_LEAD_STATUS_NOT_CONFIGURED"],
+    ["AUTH_STATE_UNAVAILABLE"],
+    ["PRIORITY_RATE_NOT_CONFIGURED"],
+    ["CHOICE_TARGET_LEVEL_NOT_CONFIGURED"],
+  ])("503 + %s + detail ⇒ trả detail", (code) => {
+    expect(userFacingUnavailableDetail({ status: 503, data: { error_code: code, detail: `d-${code}` } })).toBe(`d-${code}`);
+  });
+
+  it.each([
+    ["no response (network error)", undefined],
+    ["nginx 503, HTML body", { status: 503, data: NGINX_503_HTML }],
+    ["503, empty JSON body", { status: 503, data: {} }],
+    ["503, null body", { status: 503, data: null }],
+    ["503, HTTPException code", { status: 503, data: { error_code: "HTTP_503", detail: "Celery service unavailable" } }],
+    ["503, code without detail", { status: 503, data: { error_code: "SERVICE_UNAVAILABLE" } }],
+    ["503, code in another case", { status: 503, data: { error_code: "service_unavailable", detail: "x" } }],
+    ["500 carrying a family code", { status: 500, data: { error_code: "SERVICE_UNAVAILABLE", detail: "x" } }],
+    ["503 frozen (code, no error_code)", { status: 503, data: { code: "ADMISSION_FROZEN", detail: "x" } }],
+  ])("null for %s", (_name, response) => {
+    expect(userFacingUnavailableDetail(response)).toBeNull();
   });
 });

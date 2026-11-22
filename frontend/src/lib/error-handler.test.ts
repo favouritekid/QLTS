@@ -250,6 +250,60 @@ describe("handleApiError", () => {
     })
   })
 
+  // Codex N4 (22-11) Q1: toast từng gộp 500 và 503 thành câu cố định "Lỗi hệ thống — Vui lòng thử lại sau…", NÉM ĐI câu
+  // máy chủ viết cho người dùng của họ 503 fail-closed (CLAUDE.md dự án, mục Error Handling).
+  describe("503 họ fail-closed — hiện câu của máy chủ; 500 / 503 khác — câu chung", () => {
+    const CAU_CHUNG = "Vui lòng thử lại sau hoặc liên hệ hỗ trợ"
+
+    it.each([
+      ["SERVICE_UNAVAILABLE", "Dịch vụ tạm thời chưa sẵn sàng."],
+      [
+        "INITIAL_LEAD_STATUS_NOT_CONFIGURED",
+        "Hệ thống chưa có trạng thái khởi tạo hợp lệ cho lead mới. Liên hệ quản trị để seed lại bảng trạng thái tư vấn.",
+      ],
+      ["AUTH_STATE_UNAVAILABLE", "Hệ thống xác thực tạm thời không sẵn sàng. Vui lòng thử lại sau."],
+      ["PRIORITY_RATE_NOT_CONFIGURED", "Chưa có mức điểm ưu tiên đang áp dụng."],
+    ])("503 %s có detail ⇒ hiện NGUYÊN detail của máy chủ", (ma, detail) => {
+      handleApiError(createAxiosError(503, { detail, error_code: ma }), { context: "phê duyệt hồ sơ" })
+
+      expect(toast.error).toHaveBeenCalledWith("Lỗi hệ thống", expect.objectContaining({ description: detail }))
+    })
+
+    it.each([
+      ["mã chung của handler cuối", { detail: "Lỗi CSDL khi đọc hồ sơ cho bộ văn bản.", error_code: "INTERNAL_ERROR" }],
+      ["mã của họ 503 nhưng status 500", { detail: "Dịch vụ tạm thời chưa sẵn sàng.", error_code: "SERVICE_UNAVAILABLE" }],
+    ])("500 (%s) ⇒ câu chung, KHÔNG in detail", (_ten, than) => {
+      handleApiError(createAxiosError(500, than))
+
+      expect(toast.error).toHaveBeenCalledWith("Lỗi hệ thống", expect.objectContaining({ description: CAU_CHUNG }))
+    })
+
+    it.each([
+      [
+        "thân HTML của nginx",
+        "<html>\r\n<head><title>503 Service Temporarily Unavailable</title></head>\r\n<body>nginx</body>\r\n</html>\r\n",
+      ],
+      ["thân rỗng", ""],
+      ["JSON rỗng", {}],
+      ["HTTPException (mã HTTP_503, câu nội bộ)", { detail: "Celery service unavailable", error_code: "HTTP_503" }],
+      ["mã lạ", { detail: "x", error_code: "SOMETHING_ELSE" }],
+      ["mã đúng nhưng không có detail", { error_code: "SERVICE_UNAVAILABLE" }],
+    ])("503 %s ⇒ câu chung", (_ten, than) => {
+      handleApiError(createAxiosError(503, than as unknown as ApiErrorResponse))
+
+      expect(toast.error).toHaveBeenCalledWith("Lỗi hệ thống", expect.objectContaining({ description: CAU_CHUNG }))
+    })
+
+    it.each(["ADMISSION_FROZEN", "NGINX_ADMISSION_FROZEN"])("503 đóng băng (%s) ⇒ như cũ: tiêu đề theo ngữ cảnh + detail", (code) => {
+      const detail = "Tuyển sinh đang tạm đóng băng."
+      handleApiError(createAxiosError(503, { detail, code } as unknown as ApiErrorResponse), {
+        context: "phê duyệt hồ sơ",
+      })
+
+      expect(toast.error).toHaveBeenCalledWith("Lỗi phê duyệt hồ sơ", expect.objectContaining({ description: detail }))
+    })
+  })
+
   describe("Unknown Error", () => {
     it("should show generic error for unknown status", () => {
       const error = createAxiosError(418, { message: "I'm a teapot" }) // Unsupported status

@@ -66,3 +66,45 @@ export function isAuthStateUnavailable(
     AUTH_STATE_UNAVAILABLE_ERROR_CODE
   );
 }
+
+/**
+ * 503 "fail-closed" của backend mà `detail` ĐÃ viết cho người dùng cuối (tiếng
+ * Việt, nói phải làm gì / thử lại): họ `ServiceUnavailableError` trong
+ * `Backend_FastAPI/app/utils/exceptions.py` (CLAUDE.md dự án, mục Error
+ * Handling). Lớp con không tự đặt mã đi ra mã của lớp cha
+ * (`AccountLockoutStateUnavailable` / `RefreshStateUnavailable` /
+ * `AccessStateUnavailable` ⇒ `AUTH_STATE_UNAVAILABLE`). Hai mã 503 của T6
+ * (`PRIORITY_RATE_NOT_CONFIGURED`, `CHOICE_TARGET_LEVEL_NOT_CONFIGURED`) đã ở
+ * `T6_PUBLISH_STOP_ERROR_CODES` — KHÔNG chép lại (một chỗ cho mỗi mã).
+ *
+ * KHÔNG phủ: 503 không có thân JSON / không mã (nginx, mạng), mã `HTTP_503`
+ * (`HTTPException` — câu có thể tiếng Anh, nội bộ), 503 đóng băng (khoá `code`,
+ * đi nhánh riêng).
+ *
+ * Một test backend (`tests/unit/test_fe_ma_loi_503_mot_nguon.py`) khoá: tập này
+ * ∪ (mã 503 trong `T6_PUBLISH_STOP_ERROR_CODES`) = mã của MỌI lớp
+ * `ServiceUnavailableError`. Lớp 503 mới ở backend (vd `AUDIT_TRAIL_UNAVAILABLE`
+ * của N4 khi lên main) mà quên thêm ở đây ⇒ ĐỎ.
+ */
+export const USER_FACING_UNAVAILABLE_ERROR_CODES: ReadonlySet<string> = new Set([
+  "SERVICE_UNAVAILABLE",
+  "INITIAL_LEAD_STATUS_NOT_CONFIGURED",
+  AUTH_STATE_UNAVAILABLE_ERROR_CODE,
+]);
+
+/**
+ * `detail` của một 503 thuộc họ fail-closed (mã ở
+ * `USER_FACING_UNAVAILABLE_ERROR_CODES` hoặc mã 503 của T6), hoặc null cho mọi
+ * phản hồi khác — kể cả 500 (không bao giờ in `detail` của 500).
+ */
+export function userFacingUnavailableDetail(
+  response: { status?: number; data?: unknown } | undefined,
+): string | null {
+  if (response?.status !== 503) return null;
+  const data = response.data;
+  if (typeof data !== "object" || data === null) return null;
+  const { error_code: code, detail } = data as { error_code?: unknown; detail?: unknown };
+  if (typeof code !== "string") return null;
+  if (!USER_FACING_UNAVAILABLE_ERROR_CODES.has(code) && !T6_PUBLISH_STOP_ERROR_CODES.has(code)) return null;
+  return typeof detail === "string" && detail ? detail : null;
+}
