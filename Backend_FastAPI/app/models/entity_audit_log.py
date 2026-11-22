@@ -25,7 +25,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 
-from .base import Base
+from .base import Base, TruncatedString
 
 
 class EntityAuditLog(Base):
@@ -122,8 +122,9 @@ class EntityAuditLog(Base):
         nullable=True,
         comment="Client IP address (IPv4 or IPv6)"
     )
+    # PR-D (F12): cắt theo độ dài cột ở tầng kiểu — nơi gọi ``log_audit`` không tự cắt ``[:500]``.
     user_agent = Column(
-        String(500),
+        TruncatedString(500),
         nullable=True,
         comment="Client user agent string"
     )

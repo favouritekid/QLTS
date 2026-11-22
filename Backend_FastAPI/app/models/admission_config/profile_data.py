@@ -7,12 +7,12 @@ Replaces JSON fields in AdmissionProfile:
 - documents_checklist → ProfileDocument
 """
 
-from sqlalchemy import Boolean, CheckConstraint, Column, Date, Index, Integer, String, ForeignKey, Numeric, DateTime, UniqueConstraint, Text, BigInteger, text
+from sqlalchemy import Boolean, CheckConstraint, Column, Date, FetchedValue, Index, Integer, String, ForeignKey, Numeric, DateTime, UniqueConstraint, Text, BigInteger, text
 from sqlalchemy.orm import backref, relationship
 from sqlalchemy.dialects.postgresql import JSONB
 from datetime import datetime, timezone
 
-from app.models.base import Base
+from app.models.base import Base, TruncatedString
 
 
 class ProfileSubjectScore(Base):
@@ -230,11 +230,16 @@ class ProfileDocument(Base):
         comment="Giấy bản giấy đã nhận nhưng mất người nhận (§4.4 bước 5)"
     )
     # Tăng bởi trigger CSDL ở MỌI lệnh UPDATE (``document_row_version_ddl``). Mã ứng dụng KHÔNG tự gán.
+    # PR-D (F9): ``server_onupdate=FetchedValue()`` báo cho ORM biết CSDL đổi cột này ở mỗi UPDATE; cùng
+    # ``eager_defaults=True`` (``__mapper_args__`` bên dưới) mỗi UPDATE qua ORM mang ``RETURNING row_version`` ⇒ đối tượng
+    # trong phiên giữ ĐÚNG giá trị trigger vừa tăng. Thiếu vế này, đối tượng giữ số cũ ⇒ phản hồi / checklist trả phiên bản
+    # cũ ⇒ thao tác kế tiếp 409 giả.
     row_version = Column(
         Integer,
         nullable=False,
         default=1,
         server_default=text("1"),
+        server_onupdate=FetchedValue(),
         comment="Phiên bản dòng — trigger tăng ở mỗi UPDATE (GĐ1b)"
     )
 
@@ -318,6 +323,15 @@ class ProfileDocument(Base):
             name="ck_profile_document_receiver_known",
         ),
     )
+
+    __mapper_args__ = {
+        # PR-D (F9) — MỘT chỗ chủ sở hữu cho "đối tượng giấy trong phiên mang đúng ``row_version`` của CSDL" ở MỌI đường ghi
+        # ``profile_document`` bằng ORM (tải tệp, nhận bản giấy, đổi loại giấy tốt nghiệp, tải minh chứng ưu tiên, và đường
+        # mới về sau): ``True`` (không phải ``"auto"`` — ``"auto"`` chỉ áp cho INSERT) ⇒ UPDATE lấy cột ``server_onupdate``
+        # bằng RETURNING ngay trong câu, không để hết hạn (hết hạn ⇒ đọc lại kiểu lazy trong async ⇒ MissingGreenlet).
+        # Đường ghi lõi ``transition_document`` dùng ``update(...).returning(row_version)`` + ``populate_existing`` riêng.
+        "eager_defaults": True,
+    }
 
     def __repr__(self):
         return f"<ProfileDocument profile={self.profile_id} type={self.document_type_id} status={self.status}>"
@@ -447,8 +461,9 @@ class DocumentAuditLog(Base):
         nullable=True,
         comment="Client IP address"
     )
+    # PR-D (F12): cắt theo độ dài cột ở tầng kiểu — mọi đường ghi nhật ký giấy (lẻ, lô, chéo, tải xuống) dùng chung.
     user_agent = Column(
-        String(500),
+        TruncatedString(500),
         nullable=True,
         comment="Client user agent"
     )
