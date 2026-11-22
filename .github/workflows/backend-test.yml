@@ -1336,6 +1336,7 @@ jobs:
               tests/unit/test_priority_service.py
               tests/unit/test_priority_kv_resolution.py
               tests/unit/test_priority_kv_phase_e4_matrix.py
+              tests/unit/test_priority_kv_lien_cap_g5.py
               tests/unit/test_status_history_runtime_writer.py
               tests/unit/test_upload_image_verify.py
               tests/unit/test_admission_file_signature.py

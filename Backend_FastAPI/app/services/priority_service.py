@@ -351,6 +351,47 @@ async def _resolve_object_bonus(
 # =============================================================================
 
 
+#: G5 — mục LIÊN CẤP (THCS + THPT cùng trường). Owner 11-10 (``bang-chung/QUYET-DINH-OWNER-2026-10-11-TRA-LOI-DANH-SACH-CAU-HOI-v2.md``
+#: T5c "Chỉ tính THPT"; ``…-TRA-LOI-V3.md`` Q8 "Suy 3 năm cuối (từ năm kết thúc + lớp kết thúc)"): khi áp luật học nhiều trường, mục
+#: liên cấp chỉ đóng góp PHẦN THPT (lớp 10 tới lớp kết thúc), suy từ ``year_to`` + ``grade_to``.
+KV_LIEN_CAP_LEVEL = "THCS_THPT"
+_THPT_FIRST_GRADE = 10
+_THPT_LAST_GRADE = 12
+
+
+def _history_grade(value: Any) -> Optional[int]:
+    """``grade_to`` hợp lệ (số nguyên 1..12 — khớp ``AcademicRecordSchema``) hoặc ``None`` (thiếu / lạ)."""
+    if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= _THPT_LAST_GRADE:
+        return value
+    return None
+
+
+def kv_lien_cap_without_thpt(entry: Any) -> bool:
+    """Mục liên cấp có lớp kết thúc hợp lệ ≤ 9 ⇒ chỉ có năm THCS ⇒ KHÔNG được đếm (owner T5c), không là ứng viên trường tốt nghiệp."""
+    if not isinstance(entry, dict) or entry.get("level") != KV_LIEN_CAP_LEVEL:
+        return False
+    grade = _history_grade(entry.get("grade_to"))
+    return grade is not None and grade < _THPT_FIRST_GRADE
+
+
+def kv_counted_first_year(entry: dict) -> Any:
+    """Năm ĐẦU được đếm của một mục trong luật học nhiều trường — mỗi số nguyên từ năm này tới ``year_to`` là một lần tra KV trường.
+
+    * Mục THPT / GDTX (và mọi mục không phải liên cấp): ``year_from`` — KHÔNG đổi.
+    * Mục liên cấp, lớp kết thúc 10..12: phần THPT = các năm học lớp 10..``grade_to`` (``grade_to − 9`` năm học) kết thúc ở
+      ``year_to``. Biểu diễn bằng CÙNG quy ước với mục THPT (một mục THPT ``a→b`` gồm ``b − a`` năm học, đếm các số ``a..b``) ⇒ năm đầu
+      ``year_to − (grade_to − 9)``. Vd lớp 6–12 ``2016→2023`` ⇒ đếm ``2020..2023`` — ĐÚNG như một mục THPT lớp 10–12 ``2020→2023``.
+      Không sớm hơn ``year_from`` (mục ngắn: chỉ đếm phần học tại trường ấy).
+    * Mục liên cấp thiếu / sai lớp kết thúc: GIỮ hành vi cũ (đếm cả mục) — Q8 không nói, chờ owner (bàn giao G5)."""
+    y_from = entry.get("year_from")
+    if entry.get("level") != KV_LIEN_CAP_LEVEL:
+        return y_from
+    grade = _history_grade(entry.get("grade_to"))
+    if grade is None or grade < _THPT_FIRST_GRADE:
+        return y_from
+    return max(y_from, entry.get("year_to") - (grade - (_THPT_FIRST_GRADE - 1)))
+
+
 def _has_thpt_history(academic_history: Optional[list]) -> bool:
     """True khi profile có ít nhất 1 academic_history entry mức THPT/GDTX hợp lệ.
 
@@ -722,12 +763,15 @@ async def resolve_kv_for_profile(
     # tie → graduation school (year_to + grade_to).
     accepted_levels = {"THPT", "THCS_THPT", "GDTX"}
 
+    # G5 (owner 11-10 T5c "Chỉ tính THPT", Q8 "Suy 3 năm cuối"): mục liên cấp chỉ có năm THCS (lớp kết thúc ≤ 9) KHÔNG đóng góp
+    # năm nào và KHÔNG là ứng viên trường tốt nghiệp — loại khỏi tập mục (như mục THCS).
     basis_entries = [
         e
         for e in academic_history
         if isinstance(e, dict)
         and e.get("level") in accepted_levels
         and e.get("school_id")
+        and not kv_lien_cap_without_thpt(e)
     ]
 
     pathway = "lich_su_thpt"
@@ -755,7 +799,9 @@ async def resolve_kv_for_profile(
             continue
 
         entry_years_by_kv: list[dict[str, Any]] = []
-        for year in range(y_from, y_to + 1):
+        # G5: mục liên cấp chỉ đếm PHẦN THPT (suy từ năm kết thúc + lớp kết thúc) — cùng quy ước đếm với mục THPT.
+        y_first = kv_counted_first_year(entry)
+        for year in range(y_first, y_to + 1):
             kv = await lookup_kv_for_school_year(db, sid, year)
             if kv:
                 kv_years[kv] = kv_years.get(kv, 0) + 1
@@ -769,6 +815,7 @@ async def resolve_kv_for_profile(
                 "school_name_at_time": entry.get("school_name"),
                 "year_from": y_from,
                 "year_to": y_to,
+                "counted_year_from": y_first,
                 "years_by_kv": entry_years_by_kv,
             }
         )
