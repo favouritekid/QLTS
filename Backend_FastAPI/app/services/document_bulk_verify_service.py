@@ -14,6 +14,11 @@
   dòng quyền cũng không vòng chờ; đổi vai / khoá xếp hàng sau duyệt chéo ở DÒNG QUYỀN (``FOR UPDATE`` ↔ ``FOR SHARE``).
   ``FOR SHARE`` trên người (bản cũ của lõi / §5.4 khi lô chéo) + giữ dòng quyền ⇒ vòng chờ với Q4; ``FOR SHARE`` trên
   người TRƯỚC lead ⇒ vòng chờ với giao lead cho chính người ấy (lead ``FOR UPDATE`` → ``UPDATE user.last_assigned_at``).
+- Dòng ``user`` ↔ dòng ``user`` (PR-B lượt 5, Codex 22-11 P2): mọi đường GHI tài khoản đang có (đổi vai / đơn vị / trạng
+  thái, gỡ / xoá vai, đồng bộ vai, gắn CTV) khoá người đích ``FOR NO KEY UPDATE`` ∪ người được tham chiếu (người thao tác…)
+  ``FOR KEY SHARE`` theo id TĂNG TRƯỚC mọi câu ghi (``user_deletion_policy.lock_users_in_id_order``) — cùng chiều K4
+  (``FOR UPDATE ORDER BY id``). Lô ở đây chỉ giữ dòng CHÍNH người bấm, khoá ngoại tới người khác chỉ lấy ``FOR KEY SHARE`` —
+  không xung đột hai khoá trên ⇒ không vòng chờ với các đường ấy.
 - ``preview_batch`` (§5.2): khoá theo người ``(ns_preview, user_id)`` → dọn bản xem trước của CHÍNH người bấm → đếm lại
   (≥ 3 ⇒ 409 ``TOO_MANY_PREVIEWS``) → tính tập giấy (luật ``document_review_rules.decide``, một nguồn với cổng ghi) → giới hạn
   (422, không tự cắt) → chèn dòng lô ``previewed`` + dòng mục. Router commit.

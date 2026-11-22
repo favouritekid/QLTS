@@ -282,7 +282,9 @@ async def _create_or_update_user_assignment(
         New UserUnitAssignment object if assignment was created, None if skipped
 
     Note:
-        - If user has no unit (new_unit_id is None), we don't create assignment
+        - If user has no unit (new_unit_id is None), we don't create assignment — but the old active one IS still
+          closed (step 2 runs first; PR-B lượt 5, Codex 22-11 P1: gỡ đơn vị của Quản lý mà để bản ghi cũ hiệu lực ⇒ bộ chọn
+          người nhận vẫn chọn người ấy làm Quản lý đơn vị cũ)
         - This function must be called INSIDE a transaction
         - Caller is responsible for commit/rollback
     """
@@ -314,24 +316,14 @@ async def _create_or_update_user_assignment(
                 exc_info=True
             )
 
-    # Skip if user has no unit (regular users without unit assignment)
-    if new_unit_id is None:
-        log.debug(
-            "Skipping assignment creation - user has no unit",
-            user_id=user.id,
-            role=new_role
-        )
-        # Still update cache fields
-        user.role = new_role
-        user.unit_id = None
-        user.current_assignment_id = None
-        return None
-
     # ✅ SPRINT 5: Use Repository for active assignment lookup
     from app.repositories import UserRepository
     user_repo = UserRepository(db)
-    
+
     # 1. Find and deactivate old active assignment (if exists)
+    # PR-B lượt 5 (Codex 22-11 P1): đóng bản ghi đang hiệu lực TRƯỚC nhánh "không đơn vị" — bản cũ trả về sớm ở nhánh ấy
+    # (xoá ``user.unit_id`` + ``current_assignment_id``) mà KHÔNG đóng bản ghi ⇒ Quản lý vừa bị gỡ đơn vị vẫn được bộ chọn
+    # người nhận (đọc ``user_unit_assignment``) chọn làm Quản lý của đơn vị cũ.
     old_assignment = await user_repo.get_active_assignment_by_user(user.id)
 
     if old_assignment:
@@ -346,6 +338,19 @@ async def _create_or_update_user_assignment(
         old_assignment.end_date = now
         old_assignment.updated_at = now
         db.add(old_assignment)
+
+    # Skip if user has no unit (regular users without unit assignment) — SAU khi đã đóng bản ghi cũ (bước 1).
+    if new_unit_id is None:
+        log.debug(
+            "Skipping assignment creation - user has no unit",
+            user_id=user.id,
+            role=new_role
+        )
+        # Still update cache fields
+        user.role = new_role
+        user.unit_id = None
+        user.current_assignment_id = None
+        return None
 
     # 2. Create new active assignment
     new_assignment = models.UserUnitAssignment(
@@ -756,7 +761,6 @@ async def update_user(
         # hạn, CÙNG giao dịch (router commit một lần). Đặt TRƯỚC đồng bộ Casbin (adapter ghi bằng phiên RIÊNG, không rollback
         # được): lỗi ghi nhật ký thu hồi ⇒ ném ra trước khi Casbin bị đụng ⇒ rollback cả đổi vai / khoá lẫn thu hồi.
         # Vai / trạng thái CŨ đọc DƯỚI khoá dòng người trong hàm (không dùng ``db_user`` nạp từ đầu yêu cầu).
-        from app.repositories import document_bulk_repository as bulk_repo
         from app.services.document_cross_review_service import revoke_grants_on_account_change
 
         # PR-B lượt 4 (rà nhánh "CHỈ đổi đơn vị"): khoá dòng người ``FOR NO KEY UPDATE`` cho MỌI lần cập nhật, không chỉ
@@ -764,7 +768,11 @@ async def update_user(
         # MỚI mang ``role`` = vai hiện hành mà hàm này tính ⇒ tính từ bản nạp đầu yêu cầu thì một lệnh đổi vai đã commit trong
         # lúc ấy để lại bản ghi phân công còn hiệu lực mang vai CŨ (``user.role`` thì không bị ghi đè — ORM bỏ UPDATE khi gán
         # trùng giá trị đã nạp; đo bằng kiểm ngược l4_m7b 22-11).
-        await bulk_repo.lock_user_no_key_update(db, db_user.id)
+        # PR-B lượt 5 (Codex 22-11 P2): khoá CÙNG người thao tác (khoá ngoại phân công / thu hồi / nhật ký của router) theo
+        # id TĂNG, TRƯỚC mọi câu ghi — cùng chiều K4 (``user_deletion_policy.lock_users_in_id_order``).
+        from app.services.user_deletion_policy import lock_users_in_id_order
+
+        await lock_users_in_id_order(db, target_ids=[db_user.id], referenced_ids=[assigned_by_user_id])
         await revoke_grants_on_account_change(
             db,
             user_id=db_user.id,
@@ -1674,9 +1682,20 @@ async def perform_bulk_action(
             # dịch, TRƯỚC khi đổi trạng thái. Đi theo id TĂNG (mỗi người: dòng user → dòng quyền) ⇒ hai lệnh hàng loạt chồng
             # nhau khoá cùng chiều. Cùng điều kiện bỏ qua với vòng đổi trạng thái bên dưới (tự khoá chính mình).
             from app.services.document_cross_review_service import revoke_grants_on_account_change
+            from app.services.user_deletion_policy import lock_users_in_id_order
 
+            def _tu_khoa_minh(u: models.User) -> bool:
+                return u.id == admin_user.id and new_status in ["banned", "pending"]
+
+            # PR-B lượt 5 (Codex 22-11 P2): khoá TRƯỚC toàn tập (người đổi trạng thái ∪ Admin bấm — khoá ngoại thu hồi /
+            # nhật ký) theo id TĂNG, rồi mới ghi ai — cùng chiều K4. Khoá lại trong ``revoke_grants_on_account_change`` là no-op.
+            await lock_users_in_id_order(
+                db,
+                target_ids=[u.id for u in users_to_process if not _tu_khoa_minh(u)],
+                referenced_ids=[admin_user.id],
+            )
             for user in sorted(users_to_process, key=lambda u: u.id):
-                if user.id == admin_user.id and new_status in ["banned", "pending"]:
+                if _tu_khoa_minh(user):
                     continue
                 await revoke_grants_on_account_change(
                     db,
@@ -1945,6 +1964,11 @@ async def sync_users_to_casbin(
     from app.services.document_cross_review_service import revoke_grants_on_account_change
 
     # Process each user — id TĂNG (PR-B Q4: mỗi người khoá dòng user → dòng quyền; hai lượt đồng bộ khoá cùng chiều).
+    # PR-B lượt 5 (Codex 22-11 P2): khoá TRƯỚC toàn tập (người đích ∪ người thao tác — khoá ngoại phân công / thu hồi /
+    # nhật ký) theo id TĂNG, rồi mới ghi ai — cùng chiều K4. Khoá lại trong vòng là no-op, giữ để đọc vai dưới khoá.
+    from app.services.user_deletion_policy import lock_users_in_id_order
+
+    await lock_users_in_id_order(db, target_ids=[u.id for u in users], referenced_ids=[actor_id])
     for user in sorted(users, key=lambda u: u.id):
         # PR-B lượt 3 (vá nhánh cùng khuôn Codex lượt 2 điểm chặn 3): TUẦN TỰ HOÁ THEO TÀI KHOẢN — khoá dòng người TRƯỚC khi
         # đọc vai Casbin, so với vai CSDL đọc DƯỚI khoá (không với bản nạp đầu lệnh). Một lệnh đổi vai đang giữ dòng người

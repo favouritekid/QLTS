@@ -126,3 +126,34 @@ def test_chi_ham_phan_cong_gan_vai():
                 if any(isinstance(t, ast.Attribute) and isinstance(t.value, ast.Name) and t.attr == "role" for t in targets):
                     gan.add((rel, f.name))
     assert gan == {("services/user_service.py", "_create_or_update_user_assignment")}, sorted(gan)
+
+
+#: PR-B lượt 5 (Codex 22-11 P2): hàm khoá dòng ``user`` theo id TĂNG trên (người đích ∪ người được tham chiếu) TRƯỚC mọi câu
+#: ghi — cùng chiều K4 (``user_deletion_policy.assert_user_deletable``).
+KHOA_THEO_THU_TU = "lock_users_in_id_order"
+#: Hai sổ trên trừ các hàm KHÔNG cần khoá theo thứ tự (lý do bên cạnh) = đường ghi tài khoản ĐANG CÓ.
+KHONG_CAN_KHOA_THEO_THU_TU = {
+    # Hàm chung — người gọi khoá (chính là các đường trong sổ).
+    ("services/user_service.py", "_create_or_update_user_assignment"),
+    # Tự sửa hồ sơ: chỉ dòng của CHÍNH mình + khoá ngoại tới chính mình ⇒ một dòng ``user`` ⇒ không thể vòng chờ với K4.
+    ("services/user_service.py", "update_profile"),
+}
+
+
+def test_duong_ghi_tai_khoan_dang_co_khoa_nguoi_theo_thu_tu_k4():
+    """Codex 22-11 P2 (CLAUDE.md §6): đường ghi tài khoản ĐANG CÓ khoá người đích rồi ghi khoá ngoại tới người khác (người
+    thao tác…) — phải khoá TRƯỚC cả hai theo id tăng bằng ``KHOA_THEO_THU_TU``, nếu không thì vòng chờ với K4 (xoá lô gồm
+    người thao tác + người đích). Tài khoản MỚI tạo (``MOI``) chưa ai thấy ⇒ không cần. Đường mới / bỏ lời gọi ⇒ ĐỎ.
+
+    Giới hạn: chỉ kiểm CÓ lời gọi trong hàm, không kiểm vị trí / thứ tự — phần ấy do ca hai phiên
+    ``tests/api/test_gd1b_cheo_phan_cong_vai.py::test_hai_phien_admin_ghi_tai_khoan_trong_luc_admin_khac_xoa_lo_gom_ca_hai_khong_be_tac``."""
+    can = {
+        k for k, q in {**SO_DUONG_GHI, **NGUOI_GOI_HAM_PHAN_CONG}.items() if q != "MOI"
+    } - KHONG_CAN_KHOA_THEO_THU_TU
+    goi_khoa = set()
+    for p in APP.rglob("*.py"):
+        rel = p.relative_to(APP).as_posix()
+        for f in ast.walk(ast.parse(p.read_text(encoding="utf-8"))):
+            if isinstance(f, (ast.FunctionDef, ast.AsyncFunctionDef)) and _goi(f, KHOA_THEO_THU_TU):
+                goi_khoa.add((rel, f.name))
+    assert goi_khoa == can, f"  thiếu khoá: {sorted(can - goi_khoa)}\n  ngoài sổ: {sorted(goi_khoa - can)}"

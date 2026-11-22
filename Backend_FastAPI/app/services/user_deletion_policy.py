@@ -308,3 +308,39 @@ async def assert_user_deletable(db: AsyncSession, user_ids: Iterable[int], actor
             {"ids": targets},
         )
     return targets
+
+
+async def lock_users_in_id_order(
+    db: AsyncSession, *, target_ids: Iterable[int], referenced_ids: Iterable[Optional[int]] = ()
+) -> Dict[int, object]:
+    """THỨ TỰ KHOÁ DÒNG ``user`` cho mọi đường GHI tài khoản (PR-B lượt 5, Codex 22-11 P2) — cùng chiều K4.
+
+    Đường đổi vai / đơn vị / trạng thái khoá người ĐÍCH rồi GHI dòng có khoá ngoại tới NGƯỜI KHÁC (người thao tác:
+    ``user_unit_assignment.assigned_by_user_id``, ``document_cross_review_grant.revoked_by_user_id``, nhật ký; người quản
+    lý CTV…). Khoá ngoại tự lấy ``FOR KEY SHARE`` trên dòng người ấy LÚC GHI — tức SAU khi đã giữ người đích, và trong
+    vòng lặp nhiều người thì SAU người đích ĐẦU TIÊN được ghi. :func:`assert_user_deletable` khoá ``FOR UPDATE ORDER BY
+    id``; người được tham chiếu A có id NHỎ hơn một người đích U ⇒ đường ghi giữ U chờ A, K4 giữ A chờ U ⇒ vòng chờ.
+
+    Luật: khoá TRƯỚC mọi câu ghi, theo id TĂNG trên hợp (người đích ∪ người được tham chiếu) — người đích ``FOR NO KEY
+    UPDATE`` (đúng khoá ``UPDATE "user"`` sắp lấy), người được tham chiếu ``FOR KEY SHARE`` (đúng khoá của khoá ngoại; chỉ
+    xung đột ``FOR UPDATE`` của K4 nên không chặn ai khác). Sau đó mọi khoá ngoại tới ``user`` của giao dịch trỏ vào dòng
+    ĐÃ giữ ⇒ không chờ thêm dòng ``user`` nào. Người gọi khoá lại từng người trong vòng (đọc dưới khoá) là no-op.
+
+    Trả ``{id: (id, role, status)}`` các người đích còn tồn tại (người đích không còn ⇒ bỏ qua, người gọi quyết 404).
+    Người được tham chiếu không còn ⇒ bỏ qua, KHÔNG báo lỗi ở đây: phép kiểm sẵn có của người gọi (vd cán bộ quản lý CTV
+    không tồn tại ⇒ 404) hoặc chính khoá ngoại lúc ghi quyết như trước — hàm này chỉ đổi THỨ TỰ khoá, không đổi kết quả.
+    Không tự xả thay đổi đang chờ (``no_autoflush``): không câu ghi nào chen trước khoá."""
+    from app.repositories import document_bulk_repository as bulk_repo
+
+    targets = {int(u) for u in target_ids}
+    referenced = {int(u) for u in referenced_ids if u is not None} - targets
+    rows: Dict[int, object] = {}
+    with db.no_autoflush:
+        for uid in sorted(targets | referenced):
+            if uid in targets:
+                row = await bulk_repo.lock_user_no_key_update(db, uid)
+                if row is not None:
+                    rows[uid] = row
+            else:
+                await bulk_repo.lock_user_key_share(db, uid)
+    return rows

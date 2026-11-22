@@ -162,7 +162,11 @@ async def remove_role_from_users(
     # Người đã có vai trong CSDL là vai bị gỡ mà ``casbin_rule`` không còn vai ấy (CSDL lệch từ trước) ⇒ ĐỒNG BỘ LẠI vai
     # CSDL theo các vai còn lại + tự thu hồi, không bỏ qua.
     from app.repositories import document_bulk_repository as bulk_repo
+    from app.services.user_deletion_policy import lock_users_in_id_order
 
+    # PR-B lượt 5 (Codex 22-11 P2): khoá TRƯỚC toàn tập (người đích ∪ người thao tác — khoá ngoại phân công / thu hồi /
+    # nhật ký) theo id TĂNG, rồi mới ghi ai — cùng chiều K4. Khoá lại ở (0) là no-op, giữ để đọc vai dưới khoá.
+    await lock_users_in_id_order(db, target_ids=user_ids, referenced_ids=[actor_id])
     for user_id in sorted(user_ids):
         # (0)
         locked = await bulk_repo.lock_user_no_key_update(db, user_id)
@@ -334,7 +338,10 @@ async def delete_role_atomic(
 
     user_repo = UserRepository(db)
     db_role = role_name.replace("role:", "")
+    from app.services.user_deletion_policy import lock_users_in_id_order
+
     locked_ids: List[int] = []  # thứ tự đã khoá trong savepoint hiện hành — luôn TĂNG
+    held_ref_ids: List[int] = []  # PR-B lượt 5: người thao tác đã khoá ``FOR KEY SHARE`` trong savepoint hiện hành
     reassigned_ids: set = set()
     sp = None
 
@@ -345,16 +352,22 @@ async def delete_role_atomic(
 
     for _vong in range(_MAX_LAN_ANH):
         moi = sorted(candidate_ids - set(locked_ids))
-        if moi and locked_ids and moi[0] < locked_ids[-1]:
+        dang_giu = locked_ids + held_ref_ids
+        if moi and dang_giu and moi[0] < max(dang_giu):
             # Codex lượt 3 điểm chặn 5: người MỚI có id NHỎ hơn người đã khoá ⇒ khoá tiếp là GIỮ id lớn CHỜ id nhỏ — ngược
             # chiều mọi đường khoá nhiều người theo id tăng (đồng bộ vai, gỡ vai hàng loạt, khoá tài khoản hàng loạt) ⇒ bế
             # tắc. Bảo toàn thứ tự khoá TOÀN giao dịch: rollback savepoint (khoá dòng lấy trong savepoint được NHẢ, đổi vai
-            # trong đó cũng mất) rồi khoá lại TOÀN tập theo id tăng.
+            # trong đó cũng mất) rồi khoá lại TOÀN tập theo id tăng. PR-B lượt 5: "đã khoá" gồm cả người thao tác.
             await sp.rollback()
-            sp, locked_ids, reassigned_ids = None, [], set()
+            sp, locked_ids, held_ref_ids, reassigned_ids = None, [], [], set()
             moi = sorted(candidate_ids)
         if sp is None:
             sp = await db.begin_nested()
+        # PR-B lượt 5 (Codex 22-11 P2): khoá TRƯỚC mọi câu ghi của vòng, theo id TĂNG trên (người mới ∪ người thao tác —
+        # khoá ngoại phân công / thu hồi / nhật ký), TRONG savepoint (khởi động lại vòng ⇒ nhả cùng mọi khoá khác).
+        refs = [] if actor_id is None or actor_id in held_ref_ids or actor_id in moi else [actor_id]
+        await lock_users_in_id_order(db, target_ids=moi, referenced_ids=refs)
+        held_ref_ids += refs
         # (B) STEP 4 — đổi vai CSDL cho người CÒN mang vai bị xoá (vai đọc DƯỚI khoá dòng ``user``).
         for user_id in moi:
             locked_ids.append(user_id)

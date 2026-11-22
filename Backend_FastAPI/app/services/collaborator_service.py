@@ -117,6 +117,17 @@ async def create_collaborator(
     if not is_unique:
         raise DuplicateResourceError("Số điện thoại CTV đã tồn tại trong hệ thống")
 
+    # PR-B lượt 5 (Codex 22-11 P2, rà cùng khuôn): dòng CTV + bản ghi phân công tham chiếu người tạo (``approved_by_id``,
+    # ``assigned_by_user_id``) và cán bộ quản lý (``managed_by_officer_id``) bằng khoá ngoại ⇒ khoá họ ``FOR KEY SHARE``
+    # cùng tài khoản được gắn (``FOR NO KEY UPDATE``) theo id TĂNG, TRƯỚC mọi câu ghi — cùng chiều K4.
+    from app.services.user_deletion_policy import lock_users_in_id_order
+
+    await lock_users_in_id_order(
+        db,
+        target_ids=[data.user_id] if data.user_id else [],
+        referenced_ids=[created_by.id, data.managed_by_officer_id],
+    )
+
     # Validate user_id if provided
     if data.user_id:
         # PR-B lượt 2 (Codex điểm chặn 4): KHOÁ dòng người được gắn (``FOR NO KEY UPDATE`` — đúng khoá của lệnh ghi vai bên
