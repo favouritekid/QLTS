@@ -82,6 +82,8 @@ function segmentToLabel(segment: string): string {
     config: "Config",
     monitoring: "Monitoring",
     officer: "Officer Dashboard",
+    // GĐ1b / GĐ2-F1: trang không có mục menu riêng ⇒ không tra được nhãn từ cấu hình điều hướng.
+    "cross-review-grants": "Quyền duyệt chéo",
   };
 
   if (specialCases[segment]) {

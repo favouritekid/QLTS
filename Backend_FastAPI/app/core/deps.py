@@ -4549,3 +4549,43 @@ async def get_cross_review_action_target(
     ):
         raise ResourceNotFoundError(detail=CROSS_REVIEW_NOT_FOUND_DETAIL)
     return body
+
+
+# =====================================================================================================================
+# GĐ2-0 — minh chứng ưu tiên (quyết định owner C1, 17-11). CHỈ THÊM hàm mới.
+# =====================================================================================================================
+#: Câu 403 khi người trong phạm vi hồ sơ (vd cán bộ phụ trách) không phải người duyệt minh chứng ưu tiên.
+PRIORITY_EVIDENCE_REVIEWER_DETAIL = (
+    "Chỉ Quản lý trong đơn vị của hồ sơ hoặc Admin được duyệt / từ chối minh chứng ưu tiên."
+)
+
+
+async def require_priority_evidence_reviewer(
+    current_user: models.User = Depends(check_permission),
+    profile: models.AdmissionProfile = Depends(get_admission_for_user),
+) -> models.AdmissionProfile:
+    """C1(b) — TẦNG CHỦ SỞ HỮU của câu "ai được duyệt / từ chối minh chứng ưu tiên": Admin hoặc Quản lý trong đơn vị của
+    hồ sơ (vị từ MỘT nguồn ``document_review_rules.priority_evidence_reviewer`` — cũng là nguồn của cờ
+    ``permissions.verify_priority_object``). Thứ tự: Casbin (vai) → ``get_admission_for_user`` (phạm vi, khoá hồ sơ
+    ``FOR UPDATE``; ngoài phạm vi ⇒ 404) → ở đây: trong phạm vi mà không phải người duyệt ⇒ 403 (hồ sơ người gọi vốn đã
+    thấy — không lộ gì). Luật "người tải không tự duyệt" (C1a) đọc dòng giấy DƯỚI khoá ở ``priority_override_service``."""
+    from ..services.admission_document_policy import DocumentActionPolicy
+    from ..services.document_review_rules import priority_evidence_reviewer
+
+    if not priority_evidence_reviewer(DocumentActionPolicy.for_(profile, current_user)):
+        raise PermissionDeniedError(detail=PRIORITY_EVIDENCE_REVIEWER_DETAIL)
+    return profile
+
+
+# =====================================================================================================================
+# GĐ2-A — bảng chỉ tiêu năm / nhóm ngành (đặc tả GĐ2 bản 3 §10: "Bảng chỉ tiêu … Admin — lớp 'chỉ Admin'"). CHỈ THÊM.
+# Tầng chủ sở hữu VAI = Casbin (chỉ admin có dòng — wildcard; migration KHÔNG thêm dòng cho vai khác). Dependency dưới
+# đây là LỚP PHỤ fail-closed (khuôn ``require_council_document_admin``): vai khác lọt Casbin (cấu hình sai) vẫn 403.
+# Quyền xem của Ban thư ký (đặc tả §11 "GET + Ban thư ký") đến cùng bảng quyền Ban thư ký ở GĐ2-B.
+# =====================================================================================================================
+async def require_quota_table_admin(
+    current_user: models.User = Depends(check_permission),
+) -> models.User:
+    if current_user.role != UserRole.ADMIN:
+        raise PermissionDeniedError(detail="Chỉ Admin được xem / sửa / khoá bảng chỉ tiêu năm.")
+    return current_user

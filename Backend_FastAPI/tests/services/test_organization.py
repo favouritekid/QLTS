@@ -174,22 +174,32 @@ async def test_delete_program_offering_cascade(mock_db_session, mock_user, mock_
                  new_callable=AsyncMock, 
                  return_value=mock_program)
 
-    # Mock the bulk update (cascade)
-    mock_execute = mocker.patch.object(mock_db_session, "execute", new_callable=AsyncMock)
+    # GĐ2-F1 luật C + Codex lượt 3 (helper dùng chung ``_soft_delete_offerings_cascade``): khoá dòng loại hình (FOR NO KEY
+    # UPDATE) → đọc tập năm (``scalars``) → khoá năm → đọc lại dòng học vụ FOR NO KEY UPDATE id tăng dần (``all``) → kiểm bảng
+    # chỉ tiêu → UPDATE học vụ → UPDATE loại hình. Giả lập loại hình CHƯA có học vụ (tập năm rỗng ⇒ không khoá / kiểm thêm).
+    ket_qua_nam = MagicMock()
+    ket_qua_nam.scalars.return_value = []
+    ket_qua_dong = MagicMock()
+    ket_qua_dong.all.return_value = []
+    mock_execute = mocker.patch.object(
+        mock_db_session,
+        "execute",
+        new_callable=AsyncMock,
+        side_effect=[MagicMock(), ket_qua_nam, ket_qua_dong, MagicMock(), MagicMock()],
+    )
 
     _, post_commit = await organization_service.delete_program_offering(
         mock_db_session, mock_offering.id, current_user=mock_user
     )
 
-    # Verify soft delete of offering
-    assert mock_offering.is_active is False
-    
-    # Verify cascade update call was made
-    assert mock_execute.call_count >= 1
-    stmt = mock_execute.call_args_list[0].args[0]
-    sql_str = str(stmt).lower()
-    assert "offering_academic_info" in sql_str
-    assert "is_deleted" in sql_str
+    from sqlalchemy.dialects import postgresql
+
+    cau = [str(c.args[0].compile(dialect=postgresql.dialect())).lower() for c in mock_execute.call_args_list]
+    # Khoá loại hình ĐẦU TIÊN.
+    assert cau[0].startswith("select program_offering.id") and "for no key update" in cau[0], cau[0]
+    # Dây chuyền xoá mềm học vụ + tắt loại hình (CSDL thật: tests/api/test_gd2f_thanh_vien_xoa_va_loai_hinh_api.py).
+    assert any(s.startswith("update offering_academic_info") and "is_deleted" in s for s in cau), cau
+    assert any(s.startswith("update program_offering") and "is_active" in s for s in cau), cau
 
 # =============================================================================
 # TESTS: OFFERING ACADEMIC INFO (LEVEL 3)
@@ -231,6 +241,16 @@ async def test_restore_academic_info_success(mock_db_session, mock_user, mock_ac
     # Mock Repository for the IDOR check internally
     mock_repo = mocker.patch("app.services.organization_service.OrganizationRepository", autospec=True)
     mock_repo.return_value.get_academic_info_by_id = AsyncMock(return_value=mock_academic_info)
+    # Codex lượt 3: khoá cấp loại hình lấy ĐẦU TIÊN — giả lập loại hình đang hoạt động.
+    mocker.patch(
+        "app.services.organization_service._lock_offering_row", new_callable=AsyncMock, return_value=True
+    )
+    # GĐ2-F1 luật C: dịch vụ lấy khoá năm rồi đọc lại (chỉ tiêu, cờ xoá mềm) dưới khoá — giả lập dòng đang xoá mềm, chỉ tiêu trống.
+    mocker.patch(
+        "app.services.organization_service._academic_info_state_under_year_lock",
+        new_callable=AsyncMock,
+        return_value=(None, True),
+    )
 
     result, post_commit = await organization_service.restore_academic_info(
         mock_db_session, mock_academic_info.id, current_user=mock_user
