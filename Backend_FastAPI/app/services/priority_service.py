@@ -351,12 +351,25 @@ async def _resolve_object_bonus(
 # =============================================================================
 
 
-#: G5 — mục LIÊN CẤP (THCS + THPT cùng trường). Owner 11-10 (``bang-chung/QUYET-DINH-OWNER-2026-10-11-TRA-LOI-DANH-SACH-CAU-HOI-v2.md``
-#: T5c "Chỉ tính THPT"; ``…-TRA-LOI-V3.md`` Q8 "Suy 3 năm cuối (từ năm kết thúc + lớp kết thúc)"): khi áp luật học nhiều trường, mục
-#: liên cấp chỉ đóng góp PHẦN THPT (lớp 10 tới lớp kết thúc), suy từ ``year_to`` + ``grade_to``.
+#: G5 — MỘT quy ước năm cho luật học nhiều trường (owner 22-11, ``logs-P5/cong-bo-ket-qua/gd2/
+#: QUYET-DINH-OWNER-KV-NAM-THUC-HOC-VA-L3-2026-11-22.md`` mục 1–2; thay phần "năm kết thúc" của Q12 ngày 11-10):
+#:
+#: * khoá năm học = NĂM BẮT ĐẦU (năm học 2024–2025 ⇒ 2024). Một mục ``year_from → year_to`` (năm vào học → năm học xong /
+#:   tốt nghiệp — ``AcademicRecordSchema``: "Start year (e.g., 2020)", "End year (e.g., 2023)") gồm ĐÚNG ``year_to − year_from`` năm
+#:   học, khoá ``year_from .. year_to − 1`` (Q15(b) ngày 11-10, theo quy ước năm bắt đầu). Vd THPT 2022 → tốt nghiệp 2025 ⇒ 2022, 2023,
+#:   2024 — KHÔNG tra 2025 (năm học 2025–2026, sau khi em đã tốt nghiệp). Trường tốt nghiệp (bước hoà) tra ở năm học CUỐI
+#:   ``year_to − 1``;
+#: * mục 0 năm học (``year_to == year_from``) ⇒ DỪNG có nhãn (Q15(b));
+#: * mục LIÊN CẤP (``THCS_THPT``) chỉ đóng góp lớp 10..``grade_to`` (T5c "Chỉ tính THPT", Q8 "Suy 3 năm cuối (từ năm kết thúc + lớp
+#:   kết thúc)"): ``grade_to − 9`` năm học cuối của mục; ``grade_to`` ≤ 9 ⇒ chỉ năm THCS ⇒ bỏ qua cả mục; THIẾU / sai ``grade_to`` ⇒
+#:   DỪNG có nhãn, không tự xác định KV (owner 22-11, như THPT thiếu lớp — Q16(a)).
 KV_LIEN_CAP_LEVEL = "THCS_THPT"
 _THPT_FIRST_GRADE = 10
 _THPT_LAST_GRADE = 12
+#: Mã ca DỪNG của một mục (``breakdown.entries[].case``) — hồ sơ ra ``insufficient_data`` / ``history_entries_inconsistent``.
+KV_ENTRY_ZERO_LENGTH = "zero_length_entry"
+KV_ENTRY_LIEN_CAP_MISSING_GRADE = "lien_cap_missing_grade_to"
+KV_HISTORY_INCONSISTENT_REASON = "history_entries_inconsistent"
 
 
 def _history_grade(value: Any) -> Optional[int]:
@@ -364,6 +377,10 @@ def _history_grade(value: Any) -> Optional[int]:
     if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= _THPT_LAST_GRADE:
         return value
     return None
+
+
+def _history_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
 
 
 def kv_lien_cap_without_thpt(entry: Any) -> bool:
@@ -374,37 +391,72 @@ def kv_lien_cap_without_thpt(entry: Any) -> bool:
     return grade is not None and grade < _THPT_FIRST_GRADE
 
 
-def kv_counted_first_year(entry: dict) -> Any:
-    """Năm ĐẦU được đếm của một mục trong luật học nhiều trường — mỗi số nguyên từ năm này tới ``year_to`` là một lần tra KV trường.
+#: Bậc học của ``academic_history`` mà luật học nhiều trường xét (THPT, GDTX, liên cấp) — MỘT nguồn cho phép đếm và
+#: :func:`_has_thpt_history`.
+_KV_HISTORY_LEVELS = frozenset({"THPT", "THCS_THPT", "GDTX"})
 
-    * Mục THPT / GDTX (và mọi mục không phải liên cấp): ``year_from`` — KHÔNG đổi.
-    * Mục liên cấp, lớp kết thúc 10..12: phần THPT = các năm học lớp 10..``grade_to`` (``grade_to − 9`` năm học) kết thúc ở
-      ``year_to``. Biểu diễn bằng CÙNG quy ước với mục THPT (một mục THPT ``a→b`` gồm ``b − a`` năm học, đếm các số ``a..b``) ⇒ năm đầu
-      ``year_to − (grade_to − 9)``. Vd lớp 6–12 ``2016→2023`` ⇒ đếm ``2020..2023`` — ĐÚNG như một mục THPT lớp 10–12 ``2020→2023``.
-      Không sớm hơn ``year_from`` (mục ngắn: chỉ đếm phần học tại trường ấy).
-    * Mục liên cấp thiếu / sai lớp kết thúc: GIỮ hành vi cũ (đếm cả mục) — Q8 không nói, chờ owner (bàn giao G5)."""
-    y_from = entry.get("year_from")
-    if entry.get("level") != KV_LIEN_CAP_LEVEL:
-        return y_from
-    grade = _history_grade(entry.get("grade_to"))
-    if grade is None or grade < _THPT_FIRST_GRADE:
-        return y_from
-    return max(y_from, entry.get("year_to") - (grade - (_THPT_FIRST_GRADE - 1)))
+
+def kv_history_basis_entry(entry: Any) -> bool:
+    """MỘT vị từ "mục lịch sử THPT được tính" (owner 22-11 — chung cho phép đếm KV và cho :func:`_has_thpt_history`): object, cấp
+    THPT / GDTX / liên cấp, có ``school_id``, và KHÔNG phải liên cấp chỉ tới lớp ≤ 9 (:func:`kv_lien_cap_without_thpt`). Liên cấp
+    THIẾU lớp kết thúc VẪN được tính (không loại được phần THPT) ⇒ phép đếm DỪNG có nhãn (:func:`kv_entry_problem`)."""
+    return (
+        isinstance(entry, dict)
+        and entry.get("level") in _KV_HISTORY_LEVELS
+        and bool(entry.get("school_id"))
+        and not kv_lien_cap_without_thpt(entry)
+    )
+
+
+def kv_entry_problem(entry: dict) -> Optional[str]:
+    """Mã ca DỪNG của một mục đã vào tập đếm (cấp THPT / GDTX / liên cấp, có ``school_id``), ``None`` = đếm được.
+
+    * liên cấp thiếu / sai ``grade_to`` ⇒ :data:`KV_ENTRY_LIEN_CAP_MISSING_GRADE` (không biết đâu là năm THPT);
+    * ``year_from`` / ``year_to`` là số nguyên và BẰNG nhau ⇒ :data:`KV_ENTRY_ZERO_LENGTH` (0 năm học — Q15(b)).
+    Mục thiếu năm / năm ngược vẫn bị BỎ QUA như trước (schema cấm; không đổi ở G5)."""
+    if entry.get("level") == KV_LIEN_CAP_LEVEL and _history_grade(entry.get("grade_to")) is None:
+        return KV_ENTRY_LIEN_CAP_MISSING_GRADE
+    y_from, y_to = entry.get("year_from"), entry.get("year_to")
+    if _history_int(y_from) and _history_int(y_to) and y_to == y_from:
+        return KV_ENTRY_ZERO_LENGTH
+    return None
+
+
+def kv_entry_school_years(entry: dict) -> range:
+    """Khoá năm học (NĂM BẮT ĐẦU) được tra của một mục đếm được: ``range(năm học đầu, year_to)``.
+
+    * THPT / GDTX: ``year_from .. year_to − 1``.
+    * liên cấp lớp kết thúc ``g`` ∈ 10..12: ``g − 9`` năm học cuối — ``max(year_from, year_to − (g − 9)) .. year_to − 1`` (mục ngắn
+      thì không sớm hơn năm vào học). Vd lớp 6 → hết lớp 10 ``2017→2022`` ⇒ chỉ 2021; lớp 6–12 ``2016→2023`` ⇒ 2020, 2021, 2022 —
+      ĐÚNG như mục THPT ``2020→2023``.
+    Chỉ gọi sau :func:`kv_entry_problem` = ``None`` và đã loại :func:`kv_lien_cap_without_thpt`."""
+    y_from, y_to = entry["year_from"], entry["year_to"]
+    first = y_from
+    if entry.get("level") == KV_LIEN_CAP_LEVEL:
+        grade = _history_grade(entry.get("grade_to"))
+        first = max(y_from, y_to - (grade - (_THPT_FIRST_GRADE - 1)))
+    return range(first, y_to)
+
+
+def kv_last_school_year(entry: dict) -> Any:
+    """Khoá năm học CUỐI của mục (``year_to − 1``) — khoá tra trường tốt nghiệp ở bước hoà. ``year_to`` không phải số ⇒ trả nguyên giá
+    trị (hành vi cũ: phép tra không ra hàng)."""
+    y_to = entry.get("year_to")
+    return y_to - 1 if _history_int(y_to) else y_to
 
 
 def _has_thpt_history(academic_history: Optional[list]) -> bool:
     """True khi profile có ít nhất 1 academic_history entry mức THPT/GDTX hợp lệ.
 
-    "Hợp lệ" = level ∈ {THPT, THCS_THPT, GDTX} + school_id + year_from/year_to
-    không null. Dùng cho hybrid rule CĐ liên thông KHOI_LUONG_VH_THPT + TC
-    (yêu cầu nghiệp vụ #6): có history → LICH_SU_THPT; không có → THUONG_TRU.
+    "Hợp lệ" = :func:`kv_history_basis_entry` (MỘT vị từ với phép đếm KV — owner 22-11: liên cấp chỉ tới lớp ≤ 9 KHÔNG còn là "có
+    THPT") + year_from/year_to không null. Dùng cho hybrid rule CĐ liên thông KHOI_LUONG_VH_THPT + TC (yêu cầu nghiệp vụ #6): có
+    history → LICH_SU_THPT; không có → THUONG_TRU. Liên cấp THIẾU lớp kết thúc vẫn là "có" ⇒ đi LICH_SU_THPT ⇒ phép đếm DỪNG có nhãn
+    (không lặng lẽ rơi về thường trú).
     """
     if not academic_history:
         return False
     return any(
-        isinstance(e, dict)
-        and e.get("level") in {"THPT", "THCS_THPT", "GDTX"}
-        and e.get("school_id")
+        kv_history_basis_entry(e)
         and e.get("year_from") is not None
         and e.get("year_to") is not None
         for e in academic_history
@@ -761,18 +813,9 @@ async def resolve_kv_for_profile(
     # --- LICH_SU_THPT: multi-school rule TT 05/2021 Phụ lục 01 Mục 5.a. ---
     # Aggregate duration per KV qua academic_history, longest duration wins,
     # tie → graduation school (year_to + grade_to).
-    accepted_levels = {"THPT", "THCS_THPT", "GDTX"}
-
-    # G5 (owner 11-10 T5c "Chỉ tính THPT", Q8 "Suy 3 năm cuối"): mục liên cấp chỉ có năm THCS (lớp kết thúc ≤ 9) KHÔNG đóng góp
-    # năm nào và KHÔNG là ứng viên trường tốt nghiệp — loại khỏi tập mục (như mục THCS).
-    basis_entries = [
-        e
-        for e in academic_history
-        if isinstance(e, dict)
-        and e.get("level") in accepted_levels
-        and e.get("school_id")
-        and not kv_lien_cap_without_thpt(e)
-    ]
+    # G5 (owner 22-11): tập mục = MỘT vị từ ``kv_history_basis_entry`` (chung với ``_has_thpt_history``) — mục liên cấp chỉ có năm
+    # THCS (lớp kết thúc ≤ 9) KHÔNG đóng góp năm nào và KHÔNG là ứng viên trường tốt nghiệp (như mục THCS).
+    basis_entries = [e for e in academic_history if kv_history_basis_entry(e)]
 
     pathway = "lich_su_thpt"
 
@@ -783,6 +826,31 @@ async def resolve_kv_for_profile(
             requires_manual_override=True,
             reason="no_qualifying_thpt_history_entries",
             breakdown={"entries": []},
+        )
+
+    # G5: mục lệch (liên cấp thiếu lớp kết thúc; mục 0 năm học) ⇒ DỪNG có nhãn, liệt kê MỌI mục lệch (cán bộ sửa một lần), không
+    # tra danh mục, không tự xác định KV. ``insufficient_data`` nằm ngoài whitelist ⇒ cổng nộp chặn; T6 dừng ``PRIORITY_KV_UNRESOLVED``.
+    inconsistent = [
+        {
+            "index": i,
+            "level": e.get("level"),
+            "grade_to": e.get("grade_to"),
+            "year_from": e.get("year_from"),
+            "year_to": e.get("year_to"),
+            "case": problem,
+        }
+        for i, e in enumerate(academic_history)
+        if kv_history_basis_entry(e)
+        for problem in (kv_entry_problem(e),)
+        if problem is not None
+    ]
+    if inconsistent:
+        return None, _meta_base(
+            rule_applied="insufficient_data",
+            pathway=pathway,
+            requires_manual_override=True,
+            reason=KV_HISTORY_INCONSISTENT_REASON,
+            breakdown={"entries": inconsistent},
         )
 
     # Per-year KV duration map + breakdown per entry. Track lookup failures
@@ -799,9 +867,9 @@ async def resolve_kv_for_profile(
             continue
 
         entry_years_by_kv: list[dict[str, Any]] = []
-        # G5: mục liên cấp chỉ đếm PHẦN THPT (suy từ năm kết thúc + lớp kết thúc) — cùng quy ước đếm với mục THPT.
-        y_first = kv_counted_first_year(entry)
-        for year in range(y_first, y_to + 1):
+        # G5: khoá NĂM BẮT ĐẦU của từng năm học thực học (``year_from .. year_to − 1``); liên cấp chỉ phần lớp 10..``grade_to``.
+        school_years = kv_entry_school_years(entry)
+        for year in school_years:
             kv = await lookup_kv_for_school_year(db, sid, year)
             if kv:
                 kv_years[kv] = kv_years.get(kv, 0) + 1
@@ -815,7 +883,7 @@ async def resolve_kv_for_profile(
                 "school_name_at_time": entry.get("school_name"),
                 "year_from": y_from,
                 "year_to": y_to,
-                "counted_year_from": y_first,
+                "counted_school_years": list(school_years),
                 "years_by_kv": entry_years_by_kv,
             }
         )
@@ -901,8 +969,9 @@ async def resolve_kv_for_profile(
             )
 
     grad_entry = sorted_entries[0][1]
+    # G5 (owner 22-11): tra trường tốt nghiệp ở NĂM HỌC CUỐI (khoá năm bắt đầu ``year_to − 1``), không phải năm sau tốt nghiệp.
     grad_kv = await lookup_kv_for_school_year(
-        db, grad_entry["school_id"], grad_entry["year_to"]
+        db, grad_entry["school_id"], kv_last_school_year(grad_entry)
     )
     if grad_kv is None:
         # Graduation school year miss catalog → fail-closed.
