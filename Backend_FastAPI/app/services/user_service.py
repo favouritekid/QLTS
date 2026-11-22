@@ -1955,7 +1955,8 @@ async def sync_users_to_casbin(
             continue
         # PR-B lượt 4 (Codex lượt 3 điểm chặn 3): đối tượng ``user`` nạp TRƯỚC khoá — làm mới dưới khoá, để lệnh gán bên
         # dưới so với vai HIỆN HÀNH (gán trùng vai cũ của đối tượng ⇒ ORM bỏ UPDATE mà ``synced_count`` vẫn tăng).
-        await db.refresh(user, attribute_names=["role"])
+        # PR-B lượt 5: làm mới cả ``unit_id`` — bản ghi phân công mới lấy đơn vị HIỆN HÀNH dưới khoá.
+        await db.refresh(user, attribute_names=["role", "unit_id"])
         # PR-B lượt 4 (Codex lượt 3 điểm chặn 1): vai Casbin đọc từ BẢNG ``casbin_rule`` (nguồn chung mọi worker), không từ
         # bộ nhớ enforcer của worker này (có thể cũ). Lỗi đọc CSDL ⇒ ném ra (giao dịch không commit gì).
         casbin_role = highest_priority_role(await repo.grouping_roles(user.id))
@@ -1973,7 +1974,17 @@ async def sync_users_to_casbin(
                 request_meta=request_meta,
             )
             old_role = locked.role
-            user.role = casbin_role
+            # PR-B lượt 5 (Codex 22-11 B-P1): đổi vai CSDL qua ĐÚNG hàm PUT dùng — đóng bản ghi phân công đang hiệu lực, mở
+            # bản ghi mới mang vai đồng bộ (cùng giao dịch, dưới khoá dòng người ở trên). ``enforcer=None``: đồng bộ này đi từ
+            # Casbin VỀ CSDL, không ghi Casbin.
+            await _create_or_update_user_assignment(
+                db=db,
+                user=user,
+                new_role=casbin_role,
+                new_unit_id=user.unit_id,
+                assigned_by_user_id=actor_id,
+                enforcer=None,
+            )
             db.add(user)
             synced_count += 1
 

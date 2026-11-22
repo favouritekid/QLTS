@@ -169,7 +169,8 @@ async def remove_role_from_users(
         user = None
         if locked is not None:
             user = await user_repo.get_by_id(user_id)
-            await db.refresh(user, attribute_names=["role"])
+            # PR-B lượt 5: làm mới cả ``unit_id`` — bản ghi phân công mới (bước 3) lấy đơn vị HIỆN HÀNH dưới khoá.
+            await db.refresh(user, attribute_names=["role", "unit_id"])
         # (1)
         rows = await user_repo.lock_grouping_rows(user_id)
         roles = [r for _, r in rows]
@@ -199,7 +200,22 @@ async def remove_role_from_users(
                 actor_id=actor_id,
                 request_meta=request_meta,
             )
-            user.role = db_role_name
+            if locked.role != db_role_name:
+                # PR-B lượt 5 (Codex 22-11 B-P1): đổi vai CSDL qua ĐÚNG hàm PUT dùng (``_create_or_update_user_assignment``,
+                # ``enforcer=None`` — ``casbin_rule`` ghi ở dưới): bản ghi phân công đang hiệu lực (``user_unit_assignment`` —
+                # nguồn chuẩn của vai + đơn vị, ``user.role`` chỉ là bản sao) đóng lại, bản ghi MỚI mang vai mới, cùng giao
+                # dịch, dưới khoá dòng người ở (0). Bản cũ chỉ ghi ``user.role`` ⇒ phân công còn mang vai vừa gỡ ⇒ bộ chọn
+                # người nhận theo vai (``notification_resolvers``) vẫn chọn người đã bị gỡ vai Quản lý.
+                from app.services.user_service import _create_or_update_user_assignment
+
+                await _create_or_update_user_assignment(
+                    db=db,
+                    user=user,
+                    new_role=db_role_name,
+                    new_unit_id=user.unit_id,
+                    assigned_by_user_id=actor_id,
+                    enforcer=None,
+                )
             db.add(user)
         if role_to_remove in roles:
             # Xoá ĐÚNG các dòng đã đọc + khoá ở (1) (theo id) — dòng cùng cặp chèn sau lần đọc là thao tác đến sau, phải còn.
@@ -349,8 +365,20 @@ async def delete_role_atomic(
                 db, user_id=user_id, new_role="user", actor_id=actor_id, request_meta=request_meta
             )
             user = await user_repo.get_by_id(user_id)
-            await db.refresh(user, attribute_names=["role"])  # đối tượng có thể nạp TRƯỚC khoá (Codex lượt 3 điểm chặn 3)
-            user.role = "user"
+            # đối tượng có thể nạp TRƯỚC khoá (Codex lượt 3 điểm chặn 3); PR-B lượt 5: làm mới cả ``unit_id`` (phân công mới).
+            await db.refresh(user, attribute_names=["role", "unit_id"])
+            # PR-B lượt 5 (Codex 22-11 B-P1): đổi vai CSDL qua ĐÚNG hàm PUT dùng — đóng bản ghi phân công đang hiệu lực, mở
+            # bản ghi mới mang vai ``user``, cùng savepoint ``sp`` (khởi động lại vòng ⇒ lùi cả phân công).
+            from app.services.user_service import _create_or_update_user_assignment
+
+            await _create_or_update_user_assignment(
+                db=db,
+                user=user,
+                new_role="user",
+                new_unit_id=user.unit_id,
+                assigned_by_user_id=actor_id,
+                enforcer=None,
+            )
             db.add(user)
             reassigned_ids.add(user_id)
         await db.flush()  # mọi câu ghi dòng ``user`` xong TRƯỚC khi vào lock enforcer

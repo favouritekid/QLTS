@@ -188,8 +188,21 @@ async def create_collaborator(
                 # If user_id provided, set user role to collaborator
                 if data.user_id:
                     user = await db.get(models.User, data.user_id)
-                    if user:
-                        user.role = UserRole.COLLABORATOR
+                    if user and user.role != UserRole.COLLABORATOR:
+                        # PR-B lượt 5 (Codex 22-11 B-P1, rà cùng khuôn): đổi vai CSDL qua ĐÚNG hàm PUT dùng — bản ghi phân
+                        # công đang hiệu lực (vai ``user``) đóng lại, bản ghi mới mang vai CTV; dòng người đã khoá + đọc lại
+                        # ở bước kiểm liên kết phía trên (vai / đơn vị dưới khoá). ``enforcer=None``: đường này xưa nay không
+                        # ghi Casbin (giữ nguyên hành vi đó).
+                        from app.services.user_service import _create_or_update_user_assignment
+
+                        await _create_or_update_user_assignment(
+                            db=db,
+                            user=user,
+                            new_role=UserRole.COLLABORATOR,
+                            new_unit_id=user.unit_id,
+                            assigned_by_user_id=created_by.id,
+                            enforcer=None,
+                        )
                         await db.flush()
 
             break
