@@ -28,8 +28,9 @@ interface AcademicHistoryTabProps {
 
 // Dải lớp theo cấp học — nguồn DUY NHẤT cho quick-add + phân loại notices,
 // tránh magic number rải rác (vd đổi range quick-add nhưng quên đổi filter
-// notices → lệch âm thầm). graduationType gán ở lớp cuối cấp. Engine KV chỉ
-// dùng entry THPT; THCS display-only.
+// notices → lệch âm thầm). graduationType gán ở lớp cuối cấp. Dòng THCS chọn
+// trường từ danh mục (gồm trường THCS mã nội bộ NB…) được BE dùng để xác định KV
+// cho nhóm học xong THCS — luật ở BE (priority_service), FE không suy KV.
 const GRADE_BANDS = {
   THCS: { start: 6, end: 9, graduationType: "THCS" },
   THPT: { start: 10, end: 12, graduationType: "THPT" },
@@ -84,8 +85,8 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
   const addThreeYearsThpt = () => addBand(GRADE_BANDS.THPT, new Date().getFullYear())
 
   // 4 năm THCS (lớp 6/7/8/9). Năm tự lùi: lớp 9 = năm ngay trước khi vào lớp 10
-  // nếu hồ sơ đã có THPT (chuỗi liền mạch), else năm hiện tại − 3. Engine KV
-  // KHÔNG dùng entry THCS (chỉ lưu hồ sơ).
+  // nếu hồ sơ đã có THPT (chuỗi liền mạch), else năm hiện tại − 3. Chọn trường
+  // THCS từ danh mục (ô tìm không lọc cấp) để BE xác định được KV.
   const addFourYearsThcs = () => {
     const existing = form.getValues("academic_history") ?? []
     const thptStartYears = existing

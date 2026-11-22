@@ -1465,17 +1465,22 @@ jobs:
               tests/unit/test_gd2f_trigger_luat_b_lockin.py
               tests/integration/test_gd2f_trigger_luat_b_migration.py
           # GĐ2 L3 — danh mục THCS (owner 22-11): mã nội bộ NB + 6 số, bộ nạp danh mục Bộ bỏ qua NB, mã xã bắt buộc,
-          # KV gợi ý từ xã (từ năm 2000) + câu kiểm lệch. Lát RIÊNG (ca API + migration trên CSDL thật). Ngoài mọi tier thì
+          # KV gợi ý từ xã (từ năm 2000) + câu kiểm lệch; công cụ ghép tên trường THCS gõ tay (bảng ghép + áp ghép có chạy
+          # thử, chạy thật khoá bằng cờ). Lát RIÊNG (ca API + migration trên CSDL thật). Ngoài mọi tier thì
           # required check vẫn xanh mà không chạy (CLAUDE.md §11). Ghim WHOLE-FILE.
           # `tests/unit/test_vn_school_admin_service.py` (tệp cũ, trước đây ngoài mọi tier): ca THCS phải đổi sang mã nội bộ
           # ⇒ cổng độ nhìn thấy đòi phân loại.
-          - tier: Tier 5k — GĐ2 L3 danh mục THCS
+          - tier: Tier 5k — GĐ2 L3 danh mục THCS + công cụ ghép
             tests: >-
               tests/unit/test_vn_school_thcs_noi_bo_ddl.py
               tests/unit/test_vn_school_thcs_noi_bo.py
               tests/unit/test_vn_school_admin_service.py
               tests/api/test_admin_vn_school_thcs_noi_bo_api.py
               tests/integration/test_thcs_danh_muc_migration.py
+              tests/unit/test_thcs_school_name_normalize.py
+              tests/unit/test_thcs_school_mapping_service.py
+              tests/api/test_thcs_school_mapping_api.py
+              tests/integration/test_thcs_mapping_migration.py
 
     env:
       APP_ENV: test

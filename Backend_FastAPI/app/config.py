@@ -777,6 +777,19 @@ class Settings(BaseSettings):
     )  # False = POST /api/invoices/{id}/apply-penalty trả 409
 
     # ---------------------------------------------------------------------
+    # Áp ghép tên trường THCS vào lịch sử học — fail-closed (owner 22-11)
+    # ---------------------------------------------------------------------
+    # Chế độ THẬT của ``POST /api/v2/admissions/thcs-school-mapping/apply`` gắn
+    # ``school_id`` vào dòng THCS gõ tay của hồ sơ. Owner chưa quyết dòng THCS
+    # một năm (y→y, cùng G5) ⇒ chưa được chạy thật. Cờ mang nghĩa CHO PHÉP, mặc
+    # định False: thiếu biến / gõ sai tên / container cũ đều rơi về CHẶN (409,
+    # không ghi gì). Chạy thử không cần cờ. Đổi env phải ``up -d`` (không
+    # ``restart``). Tầng chủ sở hữu: ``ThcsSchoolMappingService.apply_mappings``.
+    THCS_MAPPING_APPLY_ENABLED: bool = Field(
+        default=False, validation_alias="THCS_MAPPING_APPLY_ENABLED"
+    )  # False = áp ghép thật trả 409
+
+    # ---------------------------------------------------------------------
     # Socket.IO — PII leak mitigation (PR #2 admission audit)
     # ---------------------------------------------------------------------
     # When True, `_emit_domain_event` honors the `rooms=` kwarg and fails

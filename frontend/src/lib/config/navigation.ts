@@ -374,6 +374,13 @@ export const navigationConfig: NavigationConfig = {
           roles: ["admin"],
         },
         {
+          // GĐ2 L3 (owner 22-11) — ghép tên trường THCS gõ tay với danh mục. Admin-only.
+          label: "Ghép trường THCS",
+          href: "/admin/thcs-school-mapping",
+          icon: ArrowLeftRight,
+          roles: ["admin"],
+        },
+        {
           label: "Organization Tree",
           href: "/admin/organization-tree",
           icon: FolderTree,

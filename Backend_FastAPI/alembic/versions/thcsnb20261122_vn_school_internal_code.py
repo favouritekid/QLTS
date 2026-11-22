@@ -15,6 +15,10 @@ không còn gì dở dang, phiên bản Alembic chưa đổi, chạy lại đư�
 3. CHECK ``ck_vn_school_internal_code_format`` (mã ``NB…`` đúng khuôn + có mã xã) — chuỗi chép NGUYÊN từ model;
 4. chỉ mục duy nhất ``uq_vn_school_internal_code`` trên các mã ``NB…`` (toàn bảng, kể cả trường đã ngừng).
 
+Mỗi đối tượng chỉ tạo khi CHƯA có (``to_regclass`` / ``pg_constraint``): CSDL test dựng bằng ``create_all`` của model
+HEAD đã có sẵn chúng, và các test migration cũ (vd ``test_gd2a_migration``) nâng tới ``head`` trên CSDL ấy. Câu tạo vẫn
+chép NGUYÊN từ model; ``test_thcs_danh_muc_migration.py`` gỡ chúng rồi nâng để đo đúng đường tạo.
+
 Dòng cũ vi phạm CHECK (mã bắt đầu bằng ``NB`` sẵn có) ⇒ câu ``ALTER TABLE`` lỗi ⇒ cả câu ``DO`` rollback. Trước khi
 nâng cấp production, đo (chỉ đọc): ``SELECT count(*) FROM vn_school WHERE upper(btrim(moet_school_code)) LIKE 'NB%'``
 phải = 0.
@@ -57,14 +61,23 @@ DECLARE
 BEGIN
     PERFORM set_config('lock_timeout', '{LOCK_TIMEOUT}', true);
     LOCK TABLE vn_school IN SHARE ROW EXCLUSIVE MODE;
-    {SQL_CREATE_SEQUENCE};
+    IF to_regclass('vn_school_internal_code_seq') IS NULL THEN
+        {SQL_CREATE_SEQUENCE};
+    END IF;
     SELECT max(substring(moet_school_code FROM 3)::integer) INTO v_max
       FROM vn_school WHERE moet_school_code ~ '^NB[0-9]{{6}}$';
     IF v_max IS NOT NULL THEN
         PERFORM setval('vn_school_internal_code_seq', v_max, true);
     END IF;
-    ALTER TABLE vn_school ADD CONSTRAINT ck_vn_school_internal_code_format CHECK ({SQL_CK_INTERNAL_CODE});
-    CREATE UNIQUE INDEX uq_vn_school_internal_code ON vn_school (moet_school_code) WHERE {SQL_UQ_INTERNAL_CODE_WHERE};
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'ck_vn_school_internal_code_format' AND conrelid = 'vn_school'::regclass
+    ) THEN
+        ALTER TABLE vn_school ADD CONSTRAINT ck_vn_school_internal_code_format CHECK ({SQL_CK_INTERNAL_CODE});
+    END IF;
+    IF to_regclass('uq_vn_school_internal_code') IS NULL THEN
+        CREATE UNIQUE INDEX uq_vn_school_internal_code ON vn_school (moet_school_code) WHERE {SQL_UQ_INTERNAL_CODE_WHERE};
+    END IF;
     RAISE NOTICE 'thcsnb20261122: ma noi bo NB da cai (so lon nhat da cap: %)', coalesce(v_max, 0);
 END
 $thcsnb$

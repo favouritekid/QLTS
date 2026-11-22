@@ -24,6 +24,8 @@ pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 TRUOC = "gd2f20261119"
 NB = "thcsnb20261122"
 GO_NB = (
+    # Bảng ghép (``thcsmap20261122``, nối SAU revision này) cũng gỡ — ``upgrade head`` sẽ tạo lại.
+    "DROP TABLE thcs_school_name_mapping",
     "DROP INDEX uq_vn_school_internal_code",
     "ALTER TABLE vn_school DROP CONSTRAINT ck_vn_school_internal_code_format",
     "DROP SEQUENCE vn_school_internal_code_seq",

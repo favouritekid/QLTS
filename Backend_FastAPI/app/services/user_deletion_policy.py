@@ -57,7 +57,8 @@ C = UserRefGroup.CURRENT_STATE
 O = UserRefGroup.OWNED_CASCADE
 I = UserRefGroup.IGNORE
 
-#: MỘT nguồn — xếp theo (bảng, cột). Đo 17-11: 94 cột cũ + 8 cột GĐ1b = 102; GĐ2-A thêm 1 = 103.
+#: MỘT nguồn — xếp theo (bảng, cột). Đo 17-11: 94 cột cũ + 8 cột GĐ1b = 102; GĐ2-A thêm 1 = 103; GĐ2 L3 (bảng ghép
+#: trường THCS) thêm 1 = 104.
 USER_REFERENCES: Tuple[UserRef, ...] = (
     UserRef("_admission_backfill_exceptions", "resolved_by_user_id", A),
     UserRef("accounting_period", "closed_by_id", A),
@@ -158,6 +159,9 @@ USER_REFERENCES: Tuple[UserRef, ...] = (
     UserRef("sms_opt_out", "revoked_by_id", A),
     UserRef("staff_zalo_bot_link", "user_id", O),
     UserRef("system_config", "updated_by_user_id", A),
+    # GĐ2 L3 (owner 22-11): người ghép tên trường THCS gõ tay → trường (RESTRICT). Huỷ ghép xoá dòng — vết còn ở
+    # ``entity_audit_log``.
+    UserRef("thcs_school_name_mapping", "mapped_by_user_id", A),
     UserRef("trusted_device", "user_id", O),
     UserRef("tuition_discount_policy", "created_by_user_id", A),
     UserRef("tuition_discount_policy", "updated_by_user_id", A),

@@ -129,7 +129,7 @@ export function VnSchoolPicker({
             variant="outline"
             role="combobox"
             aria-expanded={open}
-            aria-label="Chọn trường THPT từ danh mục"
+            aria-label="Chọn trường từ danh mục (THPT hoặc THCS)"
             className="flex-1 justify-between font-normal h-11 md:h-9"
             disabled={disabled}
           >
