@@ -382,6 +382,28 @@ def test_cd_lien_thong_chay_het_resolve_doi_chung(monkeypatch, lich_su, can_cu, 
     assert hoi == hoi_mong_doi
 
 
+#: Codex G5 rà tĩnh ``d4b7a69f`` P4: mục liên cấp đủ hai năm nhưng THIẾU CẢ ``school_id`` lẫn lớp kết thúc (schema chấp nhận).
+_LC_THIEU_TRUONG_VA_LOP = {"level": "THCS_THPT", "school_name": "Liên cấp gõ tay", "year_from": 2016, "year_to": 2023}
+
+
+def test_lien_cap_thieu_truong_va_lop_la_muc_duy_nhat_cd_lien_thong_dung_khong_ve_thuong_tru(monkeypatch):
+    """P4 ca 1: là mục DUY NHẤT của hồ sơ CĐ liên thông ⇒ vẫn là "có lịch sử THPT" ⇒ DỪNG ``lien_cap_missing_grade_to``; trước đây bị
+    loại vì thiếu ``school_id`` rồi rơi lặng lẽ về thường trú."""
+    kv, meta, hoi = _chay(monkeypatch, [dict(_LC_THIEU_TRUONG_VA_LOP)], **_CD_LIEN_THONG)
+    assert meta["basis"] == "LICH_SU_THPT", meta
+    assert (kv, meta["rule_applied"], meta["reason"]) == (None, "insufficient_data", "history_entries_inconsistent"), meta
+    assert _lech(meta) == [(0, "lien_cap_missing_grade_to")]
+    assert hoi == []
+
+
+def test_lien_cap_thieu_truong_va_lop_con_muc_thpt_hop_le_van_dung(monkeypatch):
+    """P4 ca 2: còn một mục THPT hợp lệ ⇒ vẫn DỪNG (index theo ``academic_history``); trước đây KV tính lặng lẽ từ riêng mục THPT."""
+    kv, meta, hoi = _chay(monkeypatch, [_thpt(B, 2020, 2023), dict(_LC_THIEU_TRUONG_VA_LOP)])
+    assert (kv, meta["rule_applied"], meta["reason"]) == (None, "insufficient_data", "history_entries_inconsistent"), meta
+    assert _lech(meta) == [(1, "lien_cap_missing_grade_to")]
+    assert hoi == []
+
+
 def test_mot_vi_tu_cho_phep_dem_va_has_thpt_history():
     """Một nguồn (CLAUDE.md §7): mục được ``_has_thpt_history`` tính ⇔ mục vào tập đếm (khi có đủ hai năm)."""
     mau = [
@@ -391,6 +413,9 @@ def test_mot_vi_tu_cho_phep_dem_va_has_thpt_history():
         _lc(A, 2016, 2023),
         {"level": "THCS", "school_id": A, "year_from": 2016, "year_to": 2020, "grade_to": 9},
         {"level": "THPT", "year_from": 2020, "year_to": 2023},
+        dict(_LC_THIEU_TRUONG_VA_LOP),  # liên cấp thiếu trường + lớp ⇒ CÓ (P4)
+        {"level": "THCS_THPT", "year_from": 2016, "year_to": 2023, "grade_to": 12},  # liên cấp đủ lớp, thiếu trường ⇒ KHÔNG
     ]
     for muc in mau:
         assert ps._has_thpt_history([muc]) is ps.kv_history_basis_entry(muc), muc
+    assert [ps.kv_history_basis_entry(m) for m in mau[-2:]] == [True, False]

@@ -398,18 +398,20 @@ _KV_HISTORY_LEVELS = frozenset({"THPT", "THCS_THPT", "GDTX"})
 
 def kv_history_basis_entry(entry: Any) -> bool:
     """MỘT vị từ "mục lịch sử THPT được tính" (owner 22-11 — chung cho phép đếm KV và cho :func:`_has_thpt_history`): object, cấp
-    THPT / GDTX / liên cấp, có ``school_id``, và KHÔNG phải liên cấp chỉ tới lớp ≤ 9 (:func:`kv_lien_cap_without_thpt`). Liên cấp
-    THIẾU lớp kết thúc VẪN được tính (không loại được phần THPT) ⇒ phép đếm DỪNG có nhãn (:func:`kv_entry_problem`)."""
-    return (
-        isinstance(entry, dict)
-        and entry.get("level") in _KV_HISTORY_LEVELS
-        and bool(entry.get("school_id"))
-        and not kv_lien_cap_without_thpt(entry)
-    )
+    THPT / GDTX / liên cấp, KHÔNG phải liên cấp chỉ tới lớp ≤ 9 (:func:`kv_lien_cap_without_thpt`), và có ``school_id``.
+
+    Liên cấp THIẾU / sai lớp kết thúc được tính BẤT KỂ ``school_id`` (Codex G5 rà tĩnh ``d4b7a69f`` P4): không loại được phần THPT ⇒
+    phải vào tập để phép đếm DỪNG có nhãn (:func:`kv_entry_problem`). Nếu kiểm ``school_id`` trước, mục ấy bị loại lặng lẽ: là mục
+    duy nhất thì CĐ liên thông rơi về thường trú; còn mục THPT khác thì KV chỉ tính từ mục đó — owner đòi dừng ở cả hai ca."""
+    if not isinstance(entry, dict) or entry.get("level") not in _KV_HISTORY_LEVELS:
+        return False
+    if entry.get("level") == KV_LIEN_CAP_LEVEL and _history_grade(entry.get("grade_to")) is None:
+        return True
+    return bool(entry.get("school_id")) and not kv_lien_cap_without_thpt(entry)
 
 
 def kv_entry_problem(entry: dict) -> Optional[str]:
-    """Mã ca DỪNG của một mục đã vào tập đếm (cấp THPT / GDTX / liên cấp, có ``school_id``), ``None`` = đếm được.
+    """Mã ca DỪNG của một mục đã vào tập đếm (:func:`kv_history_basis_entry`), ``None`` = đếm được.
 
     * liên cấp thiếu / sai ``grade_to`` ⇒ :data:`KV_ENTRY_LIEN_CAP_MISSING_GRADE` (không biết đâu là năm THPT);
     * ``year_from`` / ``year_to`` là số nguyên và BẰNG nhau ⇒ :data:`KV_ENTRY_ZERO_LENGTH` (0 năm học — Q15(b)).
