@@ -973,42 +973,115 @@ def test_goi_y_nv_ke_khong_tro_vao_hoc_vu_chi_tieu_0():
     assert R.HINT_CONSIDER_NEXT_CHOICE not in dong_b.decision_hints
 
 
-#: Owner 22-11 "sửa luôn cả hai" (``gd2/gd2b/dot2/QUYET-DINH-OWNER-GD2B-DOT2-MA-DUNG-GOI-Y-2026-11-22.md``; Codex GĐ2-B lượt 2 P3):
-#: NV2 mang MÃ DỪNG của máy xét ⇒ KHÔNG gợi ý ``consider_next_choice`` dù NV3 còn chỉ tiêu — gợi ý và máy xét dừng ở CÙNG chỗ.
-#: Ba mã owner nêu + đứt chuỗi (thiếu học vụ / đường xét — bước "đứt chuỗi" của máy xét, cùng nguyên tắc).
-_MA_DUNG_NV2 = ("nam_khac", "da_xoa", "chi_tieu_trong", "thieu_hoc_vu", "thieu_duong_xet")
+#: Owner 22-11 "MỌI mã dừng của máy xét" (``gd2/gd2b/dot2/QUYET-DINH-OWNER-GD2B-DOT2-MOI-MA-DUNG-2026-11-22.md``; trước đó
+#: ``…MA-DUNG-GOI-Y…``, Codex GĐ2-B lượt 2 P3): NV2 mà máy xét DỪNG ⇒ KHÔNG gợi ý ``consider_next_choice`` dù NV3 còn chỉ tiêu — gợi ý
+#: và máy xét dừng ở CÙNG chỗ, qua MỘT vị từ ``choice_config_verdict``. (nhãn ca, mã dừng mong đợi của NV2) — bước 0–2 và 4–6.
+_MA_DUNG_NV2 = (
+    ("thieu_hoc_vu", (R.CHOICE_CONFIG_INCOMPLETE,)),  # bước 0 — đứt chuỗi
+    ("thieu_duong_xet", (R.CHOICE_CONFIG_INCOMPLETE,)),  # bước 0 — đứt chuỗi
+    ("nam_khac", (R.CHOICE_ACADEMIC_YEAR_MISMATCH,)),  # bước 0
+    ("da_xoa", (R.ACADEMIC_INFO_DELETED,)),  # bước 1
+    ("chi_tieu_trong", (R.QUOTA_NOT_CONFIGURED,)),  # bước 2
+    ("thieu_nhom", (R.GROUP_MISSING,)),  # bước 4
+    ("thieu_diem_san", (R.FLOOR_MISSING,)),  # bước 5
+    ("thieu_loai_hinh", (R.CHOICE_CONFIG_INCOMPLETE,)),  # bước 6 — học vụ không có loại hình
+    ("cong_chua_du_cau_hinh", (R.CHOICE_CONFIG_INCOMPLETE,)),  # bước 6 — cổng ``config_incomplete``
+    ("chua_cau_hinh_trinh_do", (R.TARGET_LEVEL_NOT_CONFIGURED,)),  # bước 6
+    ("e6_hai_bang_diem_khac", ("diem_hai_nguon_khac",)),  # bước 6 — E6 mức NV
+)
 
 
-def _ba_nv_nv1_vuot_chi_tieu(nv2, hv2):
-    """A chiếm chỗ duy nhất của HV1; B: NV1 HV1 (vượt chỉ tiêu ⇒ cần quyết), NV2 theo ca, NV3 HV3 còn chỉ tiêu."""
-    hv = {HV1: _hv(HV1, annual_quota=1), HV2: hv2, HV3: _hv(HV3)}
+def _nv2_theo_ca(ca):
+    """(NV2, học vụ HV2, bảng sàn) của một ca trong ``_MA_DUNG_NV2``."""
+    nv2, hv2, san = _nv(522, 2, HV2), _hv(HV2), None
+    if ca == "thieu_hoc_vu":
+        nv2 = _nv(522, 2, None)
+    elif ca == "thieu_duong_xet":
+        nv2 = _nv(522, 2, HV2, path_id=None)
+    elif ca == "nam_khac":
+        hv2 = _hv(HV2, academic_year=NAM - 1)
+    elif ca == "da_xoa":
+        hv2 = _hv(HV2, is_deleted=True)
+    elif ca == "chi_tieu_trong":
+        hv2 = _hv(HV2, annual_quota=None)
+    elif ca == "thieu_nhom":
+        hv2 = _hv(HV2, group_id=None)
+    elif ca == "thieu_diem_san":
+        san = {HV1: D("15.00"), HV3: D("15.00")}
+    elif ca == "thieu_loai_hinh":
+        hv2 = _hv(HV2, offering_id=None)
+    elif ca == "cong_chua_du_cau_hinh":
+        nv2 = _nv(522, 2, HV2, gate=R.GATE_CONFIG_INCOMPLETE)
+    elif ca == "chua_cau_hinh_trinh_do":
+        nv2 = _nv(522, 2, HV2, gate=R.GATE_TARGET_LEVEL_NOT_CONFIGURED)
+    elif ca == "e6_hai_bang_diem_khac":
+        nv2 = _nv(522, 2, HV2, score_both_differ=1)
+    elif ca != "doi_chung":
+        raise AssertionError(ca)
+    return nv2, hv2, san
+
+
+def _ba_nv_nv1_vuot_chi_tieu(nv2, hv2, san=None, nv3_hv=None):
+    """A chiếm chỗ duy nhất của HV1; B: NV1 HV1 (vượt chỉ tiêu ⇒ cần quyết), NV2 theo ca, NV3 HV3 còn chỉ tiêu (hoặc ``nv3_hv``).
+    Trả (dòng của B, phán quyết vị từ chung cho NV2, phán quyết cho NV3)."""
+    hv = {HV1: _hv(HV1, annual_quota=1), HV2: hv2, HV3: nv3_hv or _hv(HV3)}
+    run = _run(hv=hv, floors=san)
     a = _ho_so(1001, nvs=[_nv(511, 1, HV1, subject_total=D("18"))])
     b = _ho_so(1002, nvs=[_nv(521, 1, HV1, subject_total=D("17")), nv2, _nv(523, 3, HV3)])
-    return {r.profile_id: r for r in _chay(a, b, run=_run(hv=hv)).rows}[1002]
+    dong_b = {r.profile_id: r for r in _chay(a, b, run=run).rows}[1002]
+    return dong_b, R.choice_config_verdict(b.choices[1], run), R.choice_config_verdict(b.choices[2], run)
 
 
-@pytest.mark.parametrize("ma_dung", _MA_DUNG_NV2)
-def test_goi_y_nv_sau_dung_o_nv_mang_ma_dung_du_nv3_con_chi_tieu(ma_dung):
-    nv2, hv2 = _nv(522, 2, HV2), _hv(HV2)
-    if ma_dung == "nam_khac":
-        hv2 = _hv(HV2, academic_year=NAM - 1)
-    elif ma_dung == "da_xoa":
-        hv2 = _hv(HV2, is_deleted=True)
-    elif ma_dung == "chi_tieu_trong":
-        hv2 = _hv(HV2, annual_quota=None)
-    elif ma_dung == "thieu_hoc_vu":
-        nv2 = _nv(522, 2, None)
-    else:
-        nv2 = _nv(522, 2, HV2, path_id=None)
-    dong_b = _ba_nv_nv1_vuot_chi_tieu(nv2, hv2)
+@pytest.mark.parametrize("ca, ma", _MA_DUNG_NV2, ids=[c[0] for c in _MA_DUNG_NV2])
+def test_goi_y_nv_sau_dung_o_nv_mang_ma_dung_du_nv3_con_chi_tieu(ca, ma):
+    dong_b, nv2, nv3 = _ba_nv_nv1_vuot_chi_tieu(*_nv2_theo_ca(ca))
+    # Ca canh ĐÚNG bước của nó: NV2 dừng với đúng mã, NV3 xét được.
+    assert (nv2.kind, nv2.codes) == (R.CHOICE_STEP_STOP, ma), (ca, nv2)
+    assert nv3.kind == R.CHOICE_STEP_CONSIDER, (ca, nv3)
     assert (dong_b.tab, dong_b.considered.choice_id) == (R.TAB_NEEDS_DECISION, 521), dong_b
-    assert dong_b.decision_hints == (R.HINT_ADMIT_OVER_MAJOR_QUOTA,), (ma_dung, dong_b.decision_hints)
+    assert dong_b.decision_hints == (R.HINT_ADMIT_OVER_MAJOR_QUOTA,), (ca, dong_b.decision_hints)
 
 
 def test_goi_y_nv_sau_chi_di_qua_nv_chi_tieu_0_toi_nv3_con_chi_tieu():
     """Đối chứng: NV2 chỉ tiêu 0 (ngành đã đóng — máy xét sang NV kế) ⇒ đi tiếp ⇒ NV3 còn chỉ tiêu ⇒ CÓ gợi ý."""
-    dong_b = _ba_nv_nv1_vuot_chi_tieu(_nv(522, 2, HV2), _hv(HV2, annual_quota=0))
+    dong_b, nv2, _ = _ba_nv_nv1_vuot_chi_tieu(_nv(522, 2, HV2), _hv(HV2, annual_quota=0))
+    assert nv2.kind == R.CHOICE_STEP_NEXT
     assert dong_b.decision_hints == (R.HINT_ADMIT_OVER_MAJOR_QUOTA, R.HINT_CONSIDER_NEXT_CHOICE), dong_b.decision_hints
+
+
+def test_goi_y_qua_nv_chi_tieu_0_roi_nv_sau_dung_o_buoc_4_thi_khong_goi_y():
+    """NV2 chỉ tiêu 0 (đi tiếp) rồi NV3 THIẾU NHÓM ngành (bước 4 — máy xét dừng) ⇒ KHÔNG gợi ý."""
+    dong_b, nv2, nv3 = _ba_nv_nv1_vuot_chi_tieu(
+        _nv(522, 2, HV2), _hv(HV2, annual_quota=0), nv3_hv=_hv(HV3, group_id=None)
+    )
+    assert (nv2.kind, nv3.kind, nv3.codes) == (R.CHOICE_STEP_NEXT, R.CHOICE_STEP_STOP, (R.GROUP_MISSING,))
+    assert dong_b.decision_hints == (R.HINT_ADMIT_OVER_MAJOR_QUOTA,), dong_b.decision_hints
+
+
+def test_goi_y_nv_sau_cong_truot_van_la_nv_xet_duoc():
+    """Đối chứng bước 7: NV2 cổng ``failed`` (máy xét SANG NV kế, không phải mã dừng) ⇒ NV2 vẫn "xét được" ⇒ CÓ gợi ý."""
+    dong_b, nv2, _ = _ba_nv_nv1_vuot_chi_tieu(_nv(522, 2, HV2, gate=R.GATE_FAILED, gate_codes=("x",)), _hv(HV2))
+    assert nv2.kind == R.CHOICE_STEP_CONSIDER
+    assert R.HINT_CONSIDER_NEXT_CHOICE in dong_b.decision_hints, dong_b.decision_hints
+
+
+def test_mot_vi_tu_chung_cho_may_xet_va_goi_y(monkeypatch):
+    """CLAUDE.md §7 + §10 (đo ở chỗ nối): CẢ máy xét lẫn gợi ý gọi ``choice_config_verdict`` — thay vị từ bằng bản "mọi NV ngoài NV1
+    dừng với mã giả" thì máy xét ghi đúng mã giả cho NV1 không, còn gợi ý thì tắt."""
+    goc = R.choice_config_verdict
+
+    def gia(choice, run):
+        if choice.display_order == 1:
+            return goc(choice, run)
+        return R.ChoiceConfigVerdict(R.CHOICE_STEP_STOP, ("ma_gia",))
+
+    monkeypatch.setattr(R, "choice_config_verdict", gia)
+    dong_b, _, _ = _ba_nv_nv1_vuot_chi_tieu(*_nv2_theo_ca("doi_chung"))
+    assert dong_b.decision_hints == (R.HINT_ADMIT_OVER_MAJOR_QUOTA,), dong_b.decision_hints
+    # Máy xét: NV1 đi qua vị từ thật; một hồ sơ chỉ có NV2 (thứ tự 1 giả) ⇒ mã giả là kết quả của máy xét.
+    monkeypatch.setattr(R, "choice_config_verdict", lambda choice, run: R.ChoiceConfigVerdict(R.CHOICE_STEP_STOP, ("ma_gia",)))
+    dong = _dong(_ho_so())
+    assert (dong.tab, dong.reason_codes) == (R.TAB_INELIGIBLE, ("ma_gia",)), dong
 
 
 def test_goi_y_nv_sau_duyet_theo_thu_tu_may_xet_khong_theo_thu_tu_luu():

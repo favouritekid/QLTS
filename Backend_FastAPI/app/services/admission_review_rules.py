@@ -904,38 +904,52 @@ def evaluate_profile(profile: ProfileFacts, run: RunFacts) -> Optional[ProfileEv
     )
 
 
-def _evaluate_choice(
-    choice: ChoiceFacts, profile: ProfileFacts, ethnic: EthnicDecision, run: RunFacts
-) -> Tuple[ChoiceOutcome, Optional[ScoreParts], Optional[AcademicInfoFacts]]:
-    """§6.5 bước 1–9 cho MỘT NV (gặp ô nào thì dừng xét NV ấy). Phụ lục điểm 2: đứt chuỗi TRƯỚC học vụ (thiếu đường xét / học vụ)
-    ⇒ ``choice_config_incomplete`` ngay."""
-    cid, order, ai_id = choice.choice_id, choice.display_order, choice.offering_academic_info_id
+#: Phán quyết bước 0–6 của MỘT NV (§6.5) — :func:`choice_config_verdict`.
+CHOICE_STEP_STOP = "stop"  # máy xét DỪNG ở NV này, không sang NV kế (bước 0, 1, 2, 4, 5, 6)
+CHOICE_STEP_NEXT = "next"  # bước 3 — chỉ tiêu 0 (ngành đã đóng) ⇒ sang NV kế
+CHOICE_STEP_CONSIDER = "consider"  # qua đủ bước 0–6 ⇒ xét tiếp bước 7–9 (cổng, điểm, sàn)
 
-    def stop(codes: Sequence[str], floor: Optional[Decimal] = None) -> Tuple[ChoiceOutcome, None, None]:
-        return ChoiceOutcome(cid, order, ai_id, CHOICE_CONFIG_MISSING, _sorted_unique(codes), None, floor), None, None
 
+@dataclass(frozen=True)
+class ChoiceConfigVerdict:
+    """Kết quả :func:`choice_config_verdict`: ``kind`` ∈ {stop, next, consider}; ``codes`` = mã dừng (stop) / ``quota_closed``
+    (next); ``academic_info`` / ``floor`` có khi đã đọc tới (floor chỉ có từ bước 6)."""
+
+    kind: str
+    codes: Tuple[str, ...] = ()
+    academic_info: Optional[AcademicInfoFacts] = None
+    floor: Optional[Decimal] = None
+
+
+def choice_config_verdict(choice: ChoiceFacts, run: RunFacts) -> ChoiceConfigVerdict:
+    """§6.5 bước 0–6 cho MỘT NV — MỘT vị từ "NV này DỪNG ở đâu / sang NV kế / xét được" cho CẢ máy xét (:func:`_evaluate_choice`)
+    lẫn gợi ý ``consider_next_choice`` (:func:`_later_open_choice`) — owner 22-11
+    (``logs-P5/cong-bo-ket-qua/gd2/gd2b/dot2/QUYET-DINH-OWNER-GD2B-DOT2-MOI-MA-DUNG-2026-11-22.md``, CLAUDE.md §7). Thứ tự bước và mã
+    giữ nguyên như máy xét trước khi tách. Phụ lục điểm 2: đứt chuỗi TRƯỚC học vụ (thiếu đường xét / học vụ) ⇒
+    ``choice_config_incomplete`` ngay. Chỉ đọc ``choice`` + ``run`` (sàn ở ``run.floors``). Dữ kiện lạ ⇒ :class:`ReviewInputError`."""
+    cid, ai_id = choice.choice_id, choice.offering_academic_info_id
     if choice.gate.status not in GATE_STATUSES:
         raise ReviewInputError("NV %s: trạng thái cổng lạ %r." % (cid, choice.gate.status))
     if choice.admission_path_id is None or ai_id is None:
-        return stop((CHOICE_CONFIG_INCOMPLETE,))
+        return ChoiceConfigVerdict(CHOICE_STEP_STOP, (CHOICE_CONFIG_INCOMPLETE,))
     ai = run.academic_infos.get(ai_id)
     if ai is None:
         raise ReviewInputError("Thiếu dữ kiện học vụ %s của NV %s." % (ai_id, cid))
     if int(ai.academic_year) != int(run.academic_year):  # bước 0 — owner Q5 22-11: học vụ năm khác ⇒ DỪNG
-        return stop((CHOICE_ACADEMIC_YEAR_MISMATCH,))
+        return ChoiceConfigVerdict(CHOICE_STEP_STOP, (CHOICE_ACADEMIC_YEAR_MISMATCH,), ai)
     if ai.is_deleted:  # bước 1
-        return stop((ACADEMIC_INFO_DELETED,))
+        return ChoiceConfigVerdict(CHOICE_STEP_STOP, (ACADEMIC_INFO_DELETED,), ai)
     if ai.annual_quota is None:  # bước 2 — chưa cấu hình ⇒ DỪNG (QĐB:17)
-        return stop((QUOTA_NOT_CONFIGURED,))
+        return ChoiceConfigVerdict(CHOICE_STEP_STOP, (QUOTA_NOT_CONFIGURED,), ai)
     if ai.annual_quota < 0:
         raise ReviewInputError("Học vụ %s có chỉ tiêu âm." % ai_id)
     if ai.annual_quota == 0:  # bước 3 — đóng tuyệt đối, xét tiếp NV kế (QĐB:16, QĐO1:9)
-        return ChoiceOutcome(cid, order, ai_id, CHOICE_QUOTA_CLOSED, (QUOTA_CLOSED,)), None, None
+        return ChoiceConfigVerdict(CHOICE_STEP_NEXT, (QUOTA_CLOSED,), ai)
     if ai.group_id is None:  # bước 4
-        return stop((GROUP_MISSING,))
+        return ChoiceConfigVerdict(CHOICE_STEP_STOP, (GROUP_MISSING,), ai)
     floor = run.floors.get(ai_id)
     if floor is None:  # bước 5
-        return stop((FLOOR_MISSING,))
+        return ChoiceConfigVerdict(CHOICE_STEP_STOP, (FLOOR_MISSING,), ai)
     floor = Decimal(floor)
     step6: List[str] = []  # bước 6
     if ai.offering_id is None or choice.major_id is None or choice.gate.status == GATE_CONFIG_INCOMPLETE:
@@ -944,7 +958,22 @@ def _evaluate_choice(
         step6.append(TARGET_LEVEL_NOT_CONFIGURED)
     step6.extend(e6_choice_codes(choice.check))
     if step6:
-        return stop(step6, floor)
+        return ChoiceConfigVerdict(CHOICE_STEP_STOP, _sorted_unique(step6), ai, floor)
+    return ChoiceConfigVerdict(CHOICE_STEP_CONSIDER, (), ai, floor)
+
+
+def _evaluate_choice(
+    choice: ChoiceFacts, profile: ProfileFacts, ethnic: EthnicDecision, run: RunFacts
+) -> Tuple[ChoiceOutcome, Optional[ScoreParts], Optional[AcademicInfoFacts]]:
+    """§6.5 bước 0–9 cho MỘT NV (gặp ô nào thì dừng xét NV ấy): bước 0–6 qua vị từ chung :func:`choice_config_verdict`, rồi bước
+    7–9 (cổng, điểm, sàn)."""
+    cid, order, ai_id = choice.choice_id, choice.display_order, choice.offering_academic_info_id
+    verdict = choice_config_verdict(choice, run)
+    if verdict.kind == CHOICE_STEP_STOP:
+        return ChoiceOutcome(cid, order, ai_id, CHOICE_CONFIG_MISSING, _sorted_unique(verdict.codes), None, verdict.floor), None, None
+    if verdict.kind == CHOICE_STEP_NEXT:
+        return ChoiceOutcome(cid, order, ai_id, CHOICE_QUOTA_CLOSED, (QUOTA_CLOSED,)), None, None
+    ai, floor = verdict.academic_info, verdict.floor
     if choice.gate.status == GATE_FAILED:  # bước 7 — sang NV kế
         return ChoiceOutcome(cid, order, ai_id, CHOICE_FAILED_GATE, _sorted_unique(choice.gate.reason_codes), None, floor), None, None
     scores = choice_score(choice, profile, ethnic, run)  # bước 8–9
@@ -1058,25 +1087,22 @@ def selected_in_other_draft_session(profile_id: int, other_draft_auto_profile_id
 
 # ═══════════════════════════════════════════ dựng dòng ═══════════════════════════════════════════
 def _later_open_choice(evaluation: ProfileEvaluation, run: RunFacts) -> bool:
-    """Gợi ý ``consider_next_choice``: duyệt các NV SAU NV được xếp theo ĐÚNG thứ tự máy xét (:func:`_ordered_choices`).
+    """Gợi ý ``consider_next_choice``: duyệt các NV SAU NV được xếp theo ĐÚNG thứ tự máy xét (:func:`_ordered_choices`), phán từng NV
+    bằng CHÍNH vị từ của máy xét (:func:`choice_config_verdict`) — owner 22-11 "mọi mã dừng của máy xét"
+    (``…/QUYET-DINH-OWNER-GD2B-DOT2-MOI-MA-DUNG-2026-11-22.md``; trước đó ``…MA-DUNG-GOI-Y…``, Codex GĐ2-B lượt 2 P3):
 
-    Owner 22-11 (``logs-P5/cong-bo-ket-qua/gd2/gd2b/dot2/QUYET-DINH-OWNER-GD2B-DOT2-MA-DUNG-GOI-Y-2026-11-22.md``, "sửa luôn cả hai"; Codex
-    GĐ2-B lượt 2 P3): gặp NV mang MÃ DỪNG của máy xét (:func:`_evaluate_choice` bước 0–2: đứt chuỗi — thiếu đường xét / học vụ; học
-    vụ NĂM KHÁC lần xét; học vụ đã xoá; chỉ tiêu trống) ⇒ ``False`` — máy xét dừng ở NV ấy, không sang NV sau, nên gợi ý cũng dừng ở
-    CÙNG chỗ. CHỈ đi tiếp qua NV chỉ tiêu 0 (ngành đã đóng — bước 3, máy xét sang NV kế). Gặp NV chỉ tiêu > 0 ⇒ ``True``. Gợi ý không
-    bao giờ trỏ vào học vụ chỉ tiêu 0 / trống [ĐX]."""
+    * NV mà máy xét DỪNG (bước 0, 1, 2, 4, 5, 6 — và mọi mã dừng thêm sau này) ⇒ ``False``: máy xét không sang NV sau, gợi ý dừng
+      CÙNG chỗ;
+    * CHỈ đi tiếp qua NV chỉ tiêu 0 (bước 3 — máy xét sang NV kế);
+    * NV qua đủ bước 0–6 ⇒ ``True``. Gợi ý không bao giờ trỏ vào học vụ chỉ tiêu 0 / trống [ĐX]."""
     placed = evaluation.placed
     for c in _ordered_choices(evaluation.facts.choices):
         if (c.display_order, c.choice_id) <= (placed.display_order, placed.choice_id):
             continue
-        ai = run.academic_infos.get(c.offering_academic_info_id) if c.offering_academic_info_id is not None else None
-        if c.admission_path_id is None or ai is None:
-            return False
-        if int(ai.academic_year) != int(run.academic_year) or ai.is_deleted or ai.annual_quota is None:
-            return False
-        if ai.annual_quota == 0:
+        verdict = choice_config_verdict(c, run)
+        if verdict.kind == CHOICE_STEP_NEXT:
             continue
-        return ai.annual_quota > 0
+        return verdict.kind == CHOICE_STEP_CONSIDER
     return False
 
 

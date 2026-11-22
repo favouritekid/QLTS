@@ -369,7 +369,9 @@ async def _ho_so_hai_nv(conn, d, so: int, nv2: str, nganh_hp: str) -> int:
 async def test_q5_doi_xung_nv1_da_xep_nv2_nam_khac_khong_doi_ket_qua_va_khong_goi_y_nv_sau(nen):
     """Codex 22-11 lượt 2 B-P4: (a) NV1 hợp lệ đã được xếp, NV2 thuộc năm khác ⇒ NV1 GIỮ kết quả (``auto``), NV2
     ``not_considered``; (b) ``needs_decision`` (lệch ngành học phí) mà NV sau DUY NHẤT thuộc năm khác ⇒ KHÔNG gợi ý
-    ``consider_next_choice``; (c) đối chứng: NV sau cùng năm còn chỉ tiêu ⇒ CÓ gợi ý (phép đo không rỗng)."""
+    ``consider_next_choice``; (c) owner 22-11 "mọi mã dừng" (``gd2/gd2b/dot2/QUYET-DINH-OWNER-GD2B-DOT2-MOI-MA-DUNG-2026-11-22.md``):
+    NV sau cùng năm nhưng THIẾU SÀN (Dược CĐ — bước 5, máy xét dừng) ⇒ KHÔNG gợi ý; (d) đối chứng: thêm sàn cho Dược CĐ rồi nạp lại ⇒
+    CÓ gợi ý (phép đo không rỗng)."""
     d = nen
     async with csdl.engine.begin() as conn:
         ai_cu = await _hoc_vu_nam_khac(conn, d)
@@ -387,7 +389,15 @@ async def test_q5_doi_xung_nv1_da_xep_nv2_nam_khac_khong_doi_ket_qua_va_khong_go
     assert (dong[lech_nam_khac].tab, list(dong[lech_nam_khac].reason_codes)) == ("needs_decision", ["tuition_major_mismatch"])
     assert "consider_next_choice" not in dong[lech_nam_khac].decision_hints, dong[lech_nam_khac].decision_hints
     assert (dong[lech_cung_nam].tab, list(dong[lech_cung_nam].reason_codes)) == ("needs_decision", ["tuition_major_mismatch"])
+    assert "consider_next_choice" not in dong[lech_cung_nam].decision_hints, dong[lech_cung_nam].decision_hints
+    async with csdl.engine.begin() as conn:
+        await chen(conn, "admission_review_floor", session_id=d["lan_xet"], academic_year=NAM,
+                   offering_academic_info_id=d["ai"]["duoc_cd"], floor_score="10.00", updated_by_user_id=d["nguoi"])
+    nap = await _nap(d)
+    dong = {r.profile_id: r for r in rules.evaluate_run(nap.profiles, nap.run).rows}
+    assert (dong[lech_cung_nam].tab, list(dong[lech_cung_nam].reason_codes)) == ("needs_decision", ["tuition_major_mismatch"])
     assert "consider_next_choice" in dong[lech_cung_nam].decision_hints, dong[lech_cung_nam].decision_hints
+    assert "consider_next_choice" not in dong[lech_nam_khac].decision_hints, dong[lech_nam_khac].decision_hints
 
 
 #: Owner f7fe49b3 (22-11) — nghiệm thu B-P1, ba ca × (trường, xã). Dòng CŨ luôn chèn TRƯỚC (thứ tự vật lý ≠ thứ tự chọn). KV mong đợi
