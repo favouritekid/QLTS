@@ -28,7 +28,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
 
-from app.models.base import Base
+from app.models.base import Base, TruncatedString
 
 #: Trần một lần cấp quyền duyệt chéo (owner chốt 6a = 14 ngày). Đổi ⇒ test khoá đỏ.
 CROSS_REVIEW_MAX_DAYS = 14
@@ -57,7 +57,8 @@ class DocumentDownloadLog(Base):
     document_type_code = Column(String(100), nullable=True)
     downloaded_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     ip_address = Column(String(45), nullable=True)
-    user_agent = Column(String(500), nullable=True)
+    #: PR-D (F12): cắt theo độ dài cột ở tầng kiểu (``TruncatedString``) — nơi ghi không tự cắt.
+    user_agent = Column(TruncatedString(500), nullable=True)
     #: Dòng nhật ký giấy cùng lượt tải (NULL khi dòng ấy đã bị xoá dây chuyền). Dùng cho điền ngược không trùng.
     source_audit_id = Column(Integer, nullable=True, unique=True)
 
@@ -151,7 +152,8 @@ class DocumentBulkBatch(Base):
     finalize_reason = Column(Text, nullable=True)
     status = Column(String(20), nullable=False, server_default="previewed")
     ip_address = Column(String(45), nullable=True)
-    user_agent = Column(String(500), nullable=True)
+    #: PR-D (F12): ghi bằng ``__table__.insert()`` (Core) — kiểu cột vẫn cắt; nơi ghi không tự cắt ``[:500]``.
+    user_agent = Column(TruncatedString(500), nullable=True)
 
     __table_args__ = (
         CheckConstraint(

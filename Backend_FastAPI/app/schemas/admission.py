@@ -438,7 +438,21 @@ class DocumentItemSchema(BaseModel):
         "not_pending | not_permitted (single-verify of a scan with no declared format ⇒ missing_format)",
     )
     requires_ack: Optional[bool] = Field(
-        default=None, description="Receiver unknown — the action needs unknown_submitter_ack + reason",
+        default=None,
+        description="Legacy aggregate (verify OR reject OR reset needs the ack) — kept for the current UI; prefer the "
+        "per-action flags below",
+    )
+    # PR-D (F15): yêu cầu cam kết "không rõ người nhận" theo TỪNG thao tác (cùng luật ``document_review_rules.decide``).
+    verify_requires_ack: Optional[bool] = Field(
+        default=None, description="Verify is allowed only with unknown_submitter_ack + reason (receiver unknown)",
+    )
+    reject_requires_ack: Optional[bool] = Field(
+        default=None, description="Reject is allowed only with unknown_submitter_ack + reason (receiver unknown)",
+    )
+    reset_requires_ack: Optional[bool] = Field(
+        default=None,
+        description="Reset is allowed only with unknown_submitter_ack + reason (verified document, receiver unknown); "
+        "false for a document not yet verified",
     )
     reset_requires_reason: Optional[bool] = Field(default=None, description="Reset needs a reason")
     reset_keeps_evidence: Optional[bool] = Field(default=None, description="Reset keeps the verified scan file")

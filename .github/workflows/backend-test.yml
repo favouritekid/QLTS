@@ -1426,6 +1426,8 @@ jobs:
               tests/api/test_gd1b_bang_chung_xoa.py
               tests/api/test_gd1b_bang_chung_toan_ven.py
               tests/api/test_gd1b_tich_hop_dang_ky.py
+              tests/api/test_gd1b_phien_ban_phan_hoi.py
+              tests/api/test_gd1b_cam_ket_theo_thao_tac.py
           - tier: Tier 5i — GĐ1b lô duyệt giấy + duyệt chéo
             tests: >-
               tests/unit/test_gd1b_lo_khoa_tu_van.py
@@ -1440,6 +1442,7 @@ jobs:
               tests/api/test_gd1b_lo_danh_sach.py
               tests/api/test_gd1b_lo_khoa_tu_van_csdl.py
               tests/api/test_gd1b_cheo_quyen.py
+              tests/api/test_gd1b_user_agent_dai.py
           # GĐ2 — PR đầu (owner GO 18-11): GĐ2-0 quy tắc duyệt minh chứng ưu tiên (C1) + GĐ2-A bảng chỉ tiêu năm / nhóm
           # ngành. Lát RIÊNG như GĐ1b (ca API trên CSDL thật chậm; gộp vào lát có sẵn dễ chạm trần 75 phút). Ngoài mọi tier
           # thì required check vẫn xanh mà không chạy (CLAUDE.md §11). Ghim WHOLE-FILE.
