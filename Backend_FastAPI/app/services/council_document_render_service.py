@@ -213,6 +213,45 @@ _RE_OUTSIDE_XML = re.compile(r"[^\t\n\r\x20-\uD7FF\uE000-\uFFFD\U00010000-\U0010
 #: ``DecisionParams`` (số in sẵn lúc dựng bộ) và ``council_decision_service.kiem_so_quyet_dinh`` (số lúc ghi nhận).
 DECISION_NUMBER_LEADING_ZERO_MESSAGE = "Số Quyết định không bắt đầu bằng số 0 — ví dụ nhập 7, không nhập 07."
 
+#: Câu của hai luật GIỮA các trường tham số Quyết định — NGUYÊN VĂN như trước (MSW chép: ``test_hop_dong_msw_cau_loi``).
+BATCH_PAIR_MESSAGE = "đợt xét tuyển cần đủ cả số đợt và tháng"
+MINUTES_AFTER_DECISION_MESSAGE = "ngày Biên bản sau ngày Quyết định căn cứ vào nó"
+#: Q2 (owner 21-11, NGUYÊN VĂN): câu DỪNG của CÙNG luật ngày Biên bản khi Admin nhập ngày ký theo tờ giấy (ghi nhận, tái dựng bản ký
+#: — :func:`check_decision_param_values`); phản hồi kèm CẢ HAI ngày (``ngay_ky``, ``ngay_bien_ban``) để đối chiếu bản giấy. Bước dựng
+#: bộ xét mới (422 của pydantic) GIỮ câu cũ :data:`MINUTES_AFTER_DECISION_MESSAGE` — MSW / test giao diện ghim nguyên câu ấy.
+SIGNING_BEFORE_MINUTES_MESSAGE = "Ngày ký Quyết định phải bằng hoặc sau ngày Biên bản."
+#: Owner 21-11 (bổ sung): câu trên ghép HAI ngày (dd/mm/yyyy, đủ hai chữ số ngày / tháng) — khuôn duyệt: "Ngày ký Quyết định phải bằng
+#: hoặc sau ngày Biên bản. Ngày ký: 10/11/2026; ngày Biên bản: 12/11/2026."
+SIGNING_BEFORE_MINUTES_DATES = " Ngày ký: %s; ngày Biên bản: %s."
+
+
+def _dd_mm_yyyy(value: date) -> str:
+    return "%02d/%02d/%04d" % (value.day, value.month, value.year)
+
+
+def decision_param_cross_errors(
+    dot_so: object, dot_thang: object, ngay_bien_ban: object, ngay_quyet_dinh: object
+) -> List[Tuple[str, str]]:
+    """[(tên trường SAI, câu luật)] theo luật GIỮA các trường của tham số Quyết định; rỗng = đạt. MỘT nguồn (CLAUDE.md §7)
+    cho :meth:`DecisionParams._check_cap` (dựng bộ, tái dựng bản ký, ghi nhận — cả ba dựng model này) và cho phần đổi lỗi
+    :func:`check_decision_param_values` (nêu TÊN trường sai — validator của model không có ``loc``).
+
+    * C12 (owner 21-11): khai đợt thì ĐỦ cặp — chỉ có tháng ⇒ thiếu ``dot_so``; chỉ có số đợt ⇒ thiếu ``dot_thang``. Không suy
+      tháng từ ngày ký, không đoán số đợt.
+    * Q2 (owner 21-11): ngày Biên bản SAU ngày Quyết định (ngày ký) ⇒ ``ngay_bien_ban``."""
+    out: List[Tuple[str, str]] = []
+    if dot_so is not None and dot_thang is None:
+        out.append(("dot_thang", BATCH_PAIR_MESSAGE))
+    elif dot_so is None and dot_thang is not None:
+        out.append(("dot_so", BATCH_PAIR_MESSAGE))
+    if (
+        isinstance(ngay_bien_ban, date)
+        and isinstance(ngay_quyet_dinh, date)
+        and ngay_bien_ban > ngay_quyet_dinh
+    ):
+        out.append(("ngay_bien_ban", MINUTES_AFTER_DECISION_MESSAGE))
+    return out
+
 
 class DecisionParams(BaseModel):
     """Tham số điền vào Quyết định. Mỗi trường độc lập: vắng thì chỗ ấy để trống
@@ -241,14 +280,12 @@ class DecisionParams(BaseModel):
 
     @model_validator(mode="after")
     def _check_cap(self) -> "DecisionParams":
-        if (self.dot_so is None) != (self.dot_thang is None):
-            raise ValueError("đợt xét tuyển cần đủ cả số đợt và tháng")
-        if (
-            self.ngay_bien_ban is not None
-            and self.ngay_quyet_dinh is not None
-            and self.ngay_bien_ban > self.ngay_quyet_dinh
-        ):
-            raise ValueError("ngày Biên bản sau ngày Quyết định căn cứ vào nó")
+        # C12 / Q2 (owner 21-11): luật ở MỘT hàm (:func:`decision_param_cross_errors`) — câu lỗi giữ nguyên (cặp đợt trước).
+        errors = decision_param_cross_errors(
+            self.dot_so, self.dot_thang, self.ngay_bien_ban, self.ngay_quyet_dinh
+        )
+        if errors:
+            raise ValueError(errors[0][1])
         return self
 
 
@@ -2376,19 +2413,69 @@ def recheck_decision_params(
         return None
     if not isinstance(params, DecisionParams):
         raise DataValidationError("Tham số Quyết định không đúng kiểu.")
-    value = {k: getattr(params, k, None) for k in DecisionParams.model_fields}
+    return check_decision_param_values({k: getattr(params, k, None) for k in DecisionParams.model_fields})
+
+
+def _param_date(value: object) -> object:
+    """Ngày của một giá trị tham số (``date`` hoặc chuỗi ISO đã lưu) — chỉ để NÊU TÊN trường của luật giữa các trường sau
+    khi pydantic đã nhận đủ từng trường; không đọc được ⇒ None (khi ấy câu lỗi dùng nhãn chung)."""
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        try:
+            return date.fromisoformat(value)
+        except ValueError:
+            return None
+    return None
+
+
+def check_decision_param_values(value: Dict[str, object]) -> DecisionParams:
+    """Dựng + kiểm tham số Quyết định từ một dict (bản đã lưu của bộ + số / ngày trên giấy) — MỘT chỗ đổi lỗi pydantic thành
+    ``DataValidationError`` (400): :func:`recheck_decision_params`, tái dựng bản ký (U2 — trước đây ``DecisionParams(**…)`` ném
+    lỗi pydantic thô ⇒ 500) và ghi nhận (C12 / Q2 — ``council_decision_service._compare_params``).
+
+    Câu lỗi chỉ nêu TÊN trường (+ câu luật cố định khi sai luật giữa các trường) — KHÔNG nêu giá trị nhập tự do: thông báo /
+    ``errors()`` của pydantic chứa giá trị đầu vào nên không đưa ra (``from None``). Lỗi của validator model (không có ``loc``) ⇒
+    tên trường theo :func:`decision_param_cross_errors`; ``public_payload.truong_sai`` = các tên ấy. Q2 (owner 21-11): sai luật ngày
+    Biên bản ⇒ câu NGUYÊN VĂN :data:`SIGNING_BEFORE_MINUTES_MESSAGE` ghép hai ngày theo khuôn owner (:data:`SIGNING_BEFORE_MINUTES_DATES`,
+    dd/mm/yyyy — đứng một mình khi chỉ sai luật ấy) + hai trường riêng ``ngay_ky``, ``ngay_bien_ban`` (ISO; đã qua kiểm kiểu của
+    pydantic) để Admin đối chiếu bản giấy."""
+    if not isinstance(value, dict):
+        raise DataValidationError("Tham số Quyết định không đúng kiểu.")
     try:
         return DecisionParams.model_validate(value)
     except PydanticValidationError as e:
-        field = sorted(
-            {
-                str(error["loc"][0]) if error.get("loc") else "ràng buộc giữa các trường"
-                for error in e.errors(include_url=False, include_input=False)
-            }
-        )
-        raise DataValidationError(
-            "Tham số Quyết định không hợp lệ ở: %s." % ", ".join(field)
-        ) from None
+        details = e.errors(include_url=False, include_input=False)
+        field = {str(error["loc"][0]) for error in details if error.get("loc")}
+        rule: List[str] = []
+        dates: Dict[str, object] = {}
+        date_message = ""
+        if any(not error.get("loc") for error in details):
+            signing = _param_date(value.get("ngay_quyet_dinh"))
+            minutes = _param_date(value.get("ngay_bien_ban"))
+            cross = decision_param_cross_errors(value.get("dot_so"), value.get("dot_thang"), minutes, signing)
+            field |= {f for f, _ in cross}
+            rule = sorted({m for f, m in cross if f != "ngay_bien_ban"})
+            if any(f == "ngay_bien_ban" for f, _ in cross):
+                # Q2 (owner 21-11): câu NGUYÊN VĂN + hai ngày ghép vào câu (khuôn owner duyệt) + hai trường riêng (ISO).
+                dates = {"ngay_ky": signing.isoformat(), "ngay_bien_ban": minutes.isoformat()}
+                date_message = SIGNING_BEFORE_MINUTES_MESSAGE + SIGNING_BEFORE_MINUTES_DATES % (
+                    _dd_mm_yyyy(signing),
+                    _dd_mm_yyyy(minutes),
+                )
+            if not cross:
+                field.add("ràng buộc giữa các trường")
+        names = sorted(field)
+        if date_message and names == ["ngay_bien_ban"]:
+            message = date_message
+        else:
+            message = "Tham số Quyết định không hợp lệ ở: %s%s." % (
+                ", ".join(names),
+                (" — " + "; ".join(rule)) if rule else "",
+            )
+            if date_message:
+                message += " " + date_message
+        raise DataValidationError(message, public_payload={"truong_sai": names, **dates}) from None
 
 
 def render_council_documents(

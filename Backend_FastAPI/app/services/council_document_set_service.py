@@ -46,7 +46,9 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.config import settings
+from app.constants import admission_circular as _circular_constants
 from app.constants.admission_circular import vn_calendar_date
+from app.models import council_document as _document_models
 from app.models.council_document import (
     MAX_DELETE_REASON_LENGTH,
     CouncilDocumentDownloadLog,
@@ -57,15 +59,20 @@ from app.models.council_document import (
     CouncilDocumentSetRow,
 )
 from app.repositories import council_candidate_repository as _candidate_repo
+from app.repositories import council_decision_repository as _decision_repo
+from app.repositories import council_document_repository as _document_repo
 from app.repositories.council_decision_repository import (
     CouncilDecisionRepository,
     db_error_codes,
 )
 from app.repositories.council_document_repository import CouncilDocumentRepository
+from app.services import admission_choice_engine_service as _choice_engine
 from app.services import council_candidate_service as _candidate_service
+from app.services import council_decision_status_service as _decision_status
 from app.services import council_document_render_service as render_service
 from app.services import council_document_template_service as _template_service
 from app.services import council_set_gate_service as set_gate
+from app.services import priority_service as _priority_service
 from app.services.council_candidate_service import read_profiles_by_code
 from app.services.council_document_template_service import (
     KIND_NAMES,
@@ -79,7 +86,10 @@ from app.utils.exceptions import (
     ServiceError,
 )
 
-#: Các module mà mã nguồn quyết định NỘI DUNG một bộ văn bản (F212).
+#: Các module mà mã nguồn quyết định NỘI DUNG một bộ văn bản (F212). U4 (ultra GĐ1 — owner 21-11): danh sách khoá bằng
+#: ``tests/unit/test_council_phien_ban_ma_bo.py`` — mọi module mà đường đọc + cổng + bộ dựng (6 module lõi đầu) import phải
+#: có ở đây hoặc nằm trong danh sách loại trừ CÓ lý do của test. Đổi danh sách ⇒ dấu kiểm trước cũ lệch (409 "Kiểm tra lại")
+#: sau lần deploy đầu — đã biết, chấp nhận.
 BUILD_CODE_MODULES = (
     render_service,
     _template_service,
@@ -87,6 +97,13 @@ BUILD_CODE_MODULES = (
     _candidate_repo,
     sys.modules[__name__],
     set_gate,  # lượt G: cổng quyết hồ sơ nào vào bộ + điểm KV in
+    _priority_service,  # U4: KV / đối tượng in (resolve_kv_for_profile, select_open_priority_rates, bật / tắt cộng điểm…)
+    _choice_engine,  # U4: resolve_effective_bonus_rule — luật cộng điểm của đường xét
+    _decision_status,  # U4: from_row / decision_state — tình trạng Quyết định quyết dòng nào bị chặn
+    _document_models,  # U4: SQL_DECISION_STATE_COLUMNS (SQL tình trạng Quyết định) + bảng bộ / dòng bộ
+    _document_repo,  # đi import: effective_template — mẫu nào được chọn theo ngày
+    _decision_repo,  # đi import: dòng bộ của bộ in ban đầu (tái dựng), hồ sơ ở bộ khác (thông tin dựng)
+    _circular_constants,  # đi import: vn_calendar_date — ngày (giờ VN) chọn mẫu
 )
 
 
@@ -1258,6 +1275,23 @@ async def create_signed_copy_rebuild_set(
         date_value.isoformat(),
     ):
         raise DataValidationError("Số / ngày trên giấy khác số / ngày bộ in ban đầu đã in.")
+    # U2 (ultra GĐ1 — owner 21-11 Q2): tham số = của ``s0`` + số / ngày trên giấy, kiểm qua ĐÚNG phần đổi lỗi của
+    # ``recheck_decision_params`` (không ``DecisionParams(**…)`` trực tiếp — lỗi pydantic thô thành 500) ⇒ 400 nêu trường sai,
+    # cùng luật với ghi nhận (``council_decision_service._compare_params``). Kiểm TRƯỚC khi đọc / dựng / ghi.
+    params = render_service.check_decision_param_values(
+        {**original_params, "so_quyet_dinh": number, "ngay_quyet_dinh": date_value}
+    )
+    # U1 (ultra GĐ1 — owner 21-11 Q1: GIỮ G10 + báo sớm): bộ R dùng ĐÚNG ba mẫu ``s0`` đã dùng, mà ghi nhận R đòi mẫu đúng theo
+    # NGÀY KÝ (G10) ⇒ kiểm NGAY bằng CÙNG vị từ của ghi nhận, trước khi đọc dữ liệu cá nhân / dựng / lưu: lệch ⇒ 400, KHÔNG lưu
+    # bộ R (bộ chết mang dữ liệu cá nhân). Tờ in mẫu cũ phải in lại bằng mẫu mới và ký lại.
+    used_templates = (s0.thong_tin_dung or {}).get("mau_da_dung") or {}
+    template_mismatch = await decision_service.templates_off_signing_date(db, used_templates, date_value)
+    if template_mismatch:
+        raise DataValidationError(
+            "Mẫu đúng theo ngày ký khác mẫu bộ in ban đầu đã dùng (%s) — tờ in bằng mẫu cũ không ghi nhận được: in lại "
+            "bằng mẫu đúng theo ngày ký rồi ký lại; không tái dựng." % ", ".join(template_mismatch),
+            public_payload={"mau_lech": template_mismatch},
+        )
     missing = [d.stt for d in set0_rows if d.profile_id is None]
     if missing:
         raise DataValidationError(
@@ -1325,11 +1359,7 @@ async def create_signed_copy_rebuild_set(
             "Admin đối chiếu từng dòng khác bản in với bản ký rồi gửi lại đúng danh sách.",
             public_payload={"dong_khac": other},
         )
-    used_templates = (s0.thong_tin_dung or {}).get("mau_da_dung") or {}
     template = await _templates_by_id(db, used_templates)
-    params = render_service.recheck_decision_params(
-        render_service.DecisionParams(**{**original_params, "so_quyet_dinh": number, "ngay_quyet_dinh": date_value})
-    )
     if not await CouncilDocumentRepository(db).try_build_lock():
         raise ConflictError("Đang dựng một bộ văn bản khác — chờ bộ ấy xong rồi thử lại.")
     rendered = await asyncio.to_thread(render_service.render_council_documents, print_rows, template, params)

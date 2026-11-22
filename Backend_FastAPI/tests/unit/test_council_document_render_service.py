@@ -1662,7 +1662,9 @@ CA_THAM_SO_LACH = {
     "so_bien_ban": dict(so_bien_ban="1\nCANARY"),
     "dot_thang": dict(dot_so="03", dot_thang=13),
     "ngay_quyet_dinh": dict(ngay_quyet_dinh="CANARY"),
-    "ràng buộc giữa các trường": dict(dot_so="03"),  # thiếu tháng — kiểm cặp của model
+    # thiếu tháng — kiểm cặp của model. PR-1 GĐ1 (C12 / Q2): lỗi giữa các trường nêu ĐÚNG tên trường thiếu + câu luật
+    # (trước: nhãn chung "ràng buộc giữa các trường").
+    "dot_thang — đợt xét tuyển cần đủ cả số đợt và tháng": dict(dot_so="03"),
 }
 
 

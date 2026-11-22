@@ -57,6 +57,10 @@ async def test_n9_vuot_chi_tieu_nganh_va_duong_xet_van_ghi_kem_canh_bao(client, 
             "admission_path_id": None,
             "da_dung": None,
             "nhan": nganh,
+            # PR-1 GĐ1 (C2): ô CHỤP — không mang ba khoá của ô hiện tại
+            "o_hien_tai": None,
+            "da_dung_truoc": None,
+            "cau": None,
         },
         {
             "loai": "duong_xet",
@@ -67,6 +71,10 @@ async def test_n9_vuot_chi_tieu_nganh_va_duong_xet_van_ghi_kem_canh_bao(client, 
             "admission_path_id": o["path"],
             "da_dung": 1,
             "nhan": duong,
+            # PR-1 GĐ1 (C2): ô CHỤP — không mang ba khoá của ô hiện tại
+            "o_hien_tai": None,
+            "da_dung_truoc": None,
+            "cau": None,
         },
     ], r.text
 
@@ -143,6 +151,10 @@ async def test_f264_chi_phe_duyet_cu_vuot(client, hs, ad):  # noqa: F811
             "admission_path_id": None,
             "da_dung": None,
             "nhan": (await _nhan(o))[0],
+            # PR-1 GĐ1 (C2): ô CHỤP — không mang ba khoá của ô hiện tại
+            "o_hien_tai": None,
+            "da_dung_truoc": None,
+            "cau": None,
         }
     ], r.text
 
@@ -186,6 +198,10 @@ async def test_f264_chi_cong_bo_vuot(client, hs, ad):  # noqa: F811
             "admission_path_id": None,
             "da_dung": None,
             "nhan": (await _nhan(o))[0],
+            # PR-1 GĐ1 (C2): ô CHỤP — không mang ba khoá của ô hiện tại
+            "o_hien_tai": None,
+            "da_dung_truoc": None,
+            "cau": None,
         }
     ], r.text
 
