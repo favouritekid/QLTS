@@ -9,6 +9,7 @@ import {
   createReviewSecretaryGrant,
   listReviewSecretaryGrants,
   revokeReviewSecretaryGrant,
+  searchReviewSecretaryCandidates,
   type ReviewSecretaryGrantFilter,
 } from "@/lib/api/review-secretaries"
 import type { ReviewSecretaryGrantCreateBody } from "@/lib/zod/review-secretaries"
@@ -16,6 +17,7 @@ import type { ReviewSecretaryGrantCreateBody } from "@/lib/zod/review-secretarie
 export const reviewSecretaryKeys = {
   all: ["review-secretaries"] as const,
   list: (f: ReviewSecretaryGrantFilter) => [...reviewSecretaryKeys.all, f] as const,
+  candidates: (q: string) => [...reviewSecretaryKeys.all, "candidates", q] as const,
 }
 
 function noRetryOn4xx(failureCount: number, error: unknown): boolean {
@@ -27,6 +29,16 @@ export function useReviewSecretaryGrants(filter: ReviewSecretaryGrantFilter) {
   return useQuery({
     queryKey: reviewSecretaryKeys.list(filter),
     queryFn: () => listReviewSecretaryGrants(filter),
+    staleTime: 0,
+    retry: noRetryOn4xx,
+  })
+}
+
+/** Ô tìm ứng viên — `q` đã trễ (debounce) ở thành phần. Gán / thu hồi xong ⇒ làm mới (tiền tố `all`). */
+export function useReviewSecretaryCandidates(q: string) {
+  return useQuery({
+    queryKey: reviewSecretaryKeys.candidates(q),
+    queryFn: () => searchReviewSecretaryCandidates(q),
     staleTime: 0,
     retry: noRetryOn4xx,
   })

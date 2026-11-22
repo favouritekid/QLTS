@@ -228,11 +228,13 @@ def test_vi_tu_tu_thu_hoi(cu_vai, cu_tt, moi_vai, moi_tt, mong_doi):
     assert auto_revoke_reason(old_role=cu_vai, old_status=cu_tt, new_role=moi_vai, new_status=moi_tt) == mong_doi
 
 
-def test_vai_duoc_gan_la_quan_ly_va_can_bo():
-    """Thiết kế GĐ2-C §4: Ban thư ký = Casbin ``manager``, ``officer`` + quyền gán. Admin KHÔNG là Thư ký."""
-    from app.services.review_secretary_service import SECRETARY_ELIGIBLE_ROLES
+def test_vai_duoc_gan_la_quan_ly_va_can_bo_admin_luon_la_thu_ky():
+    """Thiết kế GĐ2-C §4: Ban thư ký được GÁN = ``manager``, ``officer``. Owner 22-11 câu 1: Admin LUÔN là Thư ký, không qua bảng
+    quyền (và không được gán — hai tập rời nhau)."""
+    from app.services.review_secretary_service import ALWAYS_SECRETARY_ROLE, SECRETARY_ELIGIBLE_ROLES
 
     assert SECRETARY_ELIGIBLE_ROLES == frozenset({"manager", "officer"})
+    assert ALWAYS_SECRETARY_ROLE == "admin" and ALWAYS_SECRETARY_ROLE not in SECRETARY_ELIGIBLE_ROLES
 
 
 # ── cổng ──────────────────────────────────────────────────────────────────────────────────────────────────────────────

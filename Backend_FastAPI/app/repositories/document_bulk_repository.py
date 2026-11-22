@@ -572,6 +572,8 @@ async def lock_user_role_share(db: AsyncSession, user_id: int) -> Optional[Any]:
     - chốt lô (PR-A, Codex 20-11): Admin chốt lô của người khác — người → lô, không giữ dòng quyền chéo;
     - Admin CẤP quyền chéo (PR-B, Q4): đọc người được cấp dưới khoá — giữ khoá này không chờ dòng nào khác ngoài dòng
       quyền mới chèn ⇒ không vòng chờ với đổi vai / khoá (người ``FOR NO KEY UPDATE`` → quyền ``FOR UPDATE``).
+    - GĐ2-C C1: cổng Thư ký Hội đồng (``review_secretary_service.require_secretary_access``) đọc vai / trạng thái CHÍNH người
+      gọi dưới khoá (Admin luôn là Thư ký — owner 22-11), rồi mới tới dòng quyền ``FOR SHARE`` (người → quyền).
 
     Không xung đột với ``FOR SHARE`` / ``FOR KEY SHARE`` khác (§5.4, khoá khoá-ngoại khi ghi ``finalized_by_user_id``).
     Trả hàng ``(id, status, role, unit_id)`` đọc DƯỚI khoá; ``None`` = dòng không còn (đã xoá). Chỉ chọn CỘT, không nạp

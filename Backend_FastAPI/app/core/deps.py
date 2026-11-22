@@ -4596,10 +4596,11 @@ async def require_quota_table_admin(
 # - Gán / thu hồi / liệt kê: CHỈ Admin. Vai = Casbin (chỉ admin có dòng — wildcard; C1 KHÔNG thêm dòng Casbin nào) + lớp phụ
 #   fail-closed ở đây (khuôn ``require_cross_review_admin`` / ``require_quota_table_admin``).
 # - ``require_review_secretary``: cổng cho route Ban thư ký từ GĐ2-C C2 (Casbin mở ``manager``, ``officer`` ở PR ấy). Đọc
-#   quyền gán còn hiệu lực TRONG giao dịch của chính yêu cầu, khoá ``FOR SHARE`` — phiên ``database.get_db`` là MỘT cho cả
-#   cổng lẫn route (FastAPI dùng lại kết quả dependency trong một yêu cầu) ⇒ thu hồi chen giữa hai lần bấm thì lần bấm sau
-#   bị chặn; thu hồi tới khi lần bấm đang ghi thì thu hồi CHỜ lần bấm ấy commit (T17). Không có quyền ⇒ 404 cùng thân
-#   (không lộ lần xét có tồn tại).
+#   vai / trạng thái người gọi + quyền gán còn hiệu lực TRONG giao dịch của chính yêu cầu, khoá ``FOR SHARE`` — phiên
+#   ``database.get_db`` là MỘT cho cả cổng lẫn route (FastAPI dùng lại kết quả dependency trong một yêu cầu) ⇒ thu hồi / khoá
+#   tài khoản chen giữa hai lần bấm thì lần bấm sau bị chặn; tới khi lần bấm đang ghi thì CHỜ lần bấm ấy commit (T17). Admin
+#   ĐANG HOẠT ĐỘNG luôn là Thư ký (owner 22-11 câu 1) — luật "người đề xuất ≠ người khoá" vẫn áp cho Admin ở C4 / C5b. Không
+#   đạt ⇒ 404 cùng thân (không lộ lần xét có tồn tại).
 # =====================================================================================================================
 async def require_review_secretary_admin(
     current_user: models.User = Depends(check_permission),
@@ -4613,10 +4614,11 @@ async def require_review_secretary(
     current_user: models.User = Depends(check_permission),
     db: AsyncSession = Depends(database.get_db),
 ) -> models.User:
-    """Người gọi phải có quyền Thư ký Hội đồng CÒN HIỆU LỰC (Quản lý / Cán bộ được Admin gán, chưa thu hồi). Admin không tự
-    là Thư ký. Quyền khoá ``FOR SHARE`` tới hết giao dịch của yêu cầu — route dùng cổng này phải ghi trên CÙNG ``db`` (khai
-    ``Depends(database.get_db)``), không mở phiên riêng. Không đạt ⇒ 404 ``Không tìm thấy``."""
-    from ..services.review_secretary_service import require_active_grant
+    """Người gọi phải là Thư ký Hội đồng: Admin đang hoạt động (luôn là Thư ký, không cần gán), hoặc Quản lý / Cán bộ đang
+    hoạt động có quyền gán CÒN HIỆU LỰC. Dòng người + dòng quyền khoá ``FOR SHARE`` tới hết giao dịch của yêu cầu — route dùng
+    cổng này phải ghi trên CÙNG ``db`` (khai ``Depends(database.get_db)``), không mở phiên riêng. Không đạt ⇒ 404
+    ``Không tìm thấy``. Cổng này KHÔNG miễn luật "người đề xuất ≠ người khoá" cho ai (kiểm ở dịch vụ lần xét, C4 / C5b)."""
+    from ..services.review_secretary_service import require_secretary_access
 
-    await require_active_grant(db, user=current_user)
+    await require_secretary_access(db, user=current_user)
     return current_user

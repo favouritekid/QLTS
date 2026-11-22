@@ -8,13 +8,15 @@ dòng quyền. Không hàm nào ở đây khoá dòng ``user``.
 """
 from __future__ import annotations
 
-from typing import Any, List, Optional, Tuple
+import unicodedata
+from typing import Any, List, Optional, Sequence, Tuple
 
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
 from app.repositories.document_bulk_repository import db_clock  # noqa: F401 — một nguồn đồng hồ CSDL
+from app.utils.text_helpers import LIKE_ESCAPE_CHAR, escape_like_pattern
 
 G = models.AdmissionReviewSecretaryGrant
 
@@ -94,6 +96,38 @@ async def list_grants(
         q = q.where(G.user_id == user_id)
     rows = (await db.execute(q.order_by(G.id.desc()).limit(LIST_LIMIT))).all()
     return [(r[0], r[1:] if r[1] is not None else None) for r in rows]
+
+
+async def search_candidates(
+    db: AsyncSession, *, roles: Sequence[str], q: Optional[str], limit: int
+) -> List[Any]:
+    """Người dùng vai thuộc ``roles``, ``status = 'active'``, CHƯA có quyền Thư ký còn hiệu lực; ``q`` khớp (chứa) họ tên bỏ
+    dấu (``f_unaccent`` — khuôn ``admission_repository._name_search_condition``), tên đăng nhập hoặc email. ``q`` được thoát
+    ``%`` / ``_`` / ``\\`` (``escape_like_pattern``) — chuỗi người gõ là CHỮ, không phải mẫu. Hàng ``(id, username, full_name,
+    email, role)``, xếp họ tên (trống xuống cuối) rồi tên đăng nhập, id."""
+    u = models.User
+    dang_co_quyen = select(G.id).where(G.user_id == u.id, G.revoked_at.is_(None)).exists()
+    conds = [u.role.in_(list(roles)), u.status == "active", ~dang_co_quyen]
+    tu_khoa = unicodedata.normalize("NFC", (q or "").strip())
+    if tu_khoa:
+        mau = f"%{escape_like_pattern(tu_khoa)}%"
+        conds.append(
+            or_(
+                func.f_unaccent(u.full_name).ilike(func.f_unaccent(mau), escape=LIKE_ESCAPE_CHAR),
+                u.username.ilike(mau, escape=LIKE_ESCAPE_CHAR),
+                u.email.ilike(mau, escape=LIKE_ESCAPE_CHAR),
+            )
+        )
+    return list(
+        (
+            await db.execute(
+                select(u.id, u.username, u.full_name, u.email, u.role)
+                .where(*conds)
+                .order_by(u.full_name.asc().nulls_last(), u.username.asc(), u.id.asc())
+                .limit(limit)
+            )
+        ).all()
+    )
 
 
 async def user_summary(db: AsyncSession, user_id: int) -> Optional[Any]:

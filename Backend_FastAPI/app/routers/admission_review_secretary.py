@@ -1,6 +1,7 @@
 # app/routers/admission_review_secretary.py
 """API GĐ2-C C1 — quyền "Thư ký Hội đồng" (ĐT3 §11: ``GET / POST · POST`` ``/review-secretaries`` · ``/{grant_id}/revoke`` —
-Admin). Router MỎNG: kiểm quyền ở ``deps``, luật ở ``review_secretary_service``, router commit.
+Admin) + ``GET /review-secretaries/candidates`` (ô tìm người của màn hình gán — owner 22-11 câu 3). Router MỎNG: kiểm quyền ở
+``deps``, luật ở ``review_secretary_service``, router commit.
 
 Dưới tiền tố ``/api/admission-config`` — tiền tố ĐÃ nằm trong ``FROZEN_PREFIXES`` (``app/middleware/admission_freeze.py``) và
 khối đóng băng của nginx ⇒ cần gạt đóng băng tuyển sinh chặn hai route GHI ở đây (503). Module khai trong
@@ -20,6 +21,7 @@ from ..core.client_ip import get_client_ip
 from ..core.rate_limits import RateLimits, limiter
 from ..schemas.review_secretary import (
     INT4_MAX,
+    ReviewSecretaryCandidate,
     ReviewSecretaryGrantCreate,
     ReviewSecretaryGrantRevoke,
     ReviewSecretaryGrantView,
@@ -52,6 +54,23 @@ async def list_review_secretaries(
     db: AsyncSession = Depends(database.get_db),
 ):
     return await secretary_service.list_grants(db, active=active, user_id=user_id)
+
+
+@router.get(
+    "/review-secretaries/candidates",
+    response_model=List[ReviewSecretaryCandidate],
+    summary="Ứng viên gán Thư ký: Quản lý / Cán bộ đang hoạt động, chưa có quyền; tìm theo họ tên / tên đăng nhập / email",
+)
+@limiter.limit(RateLimits.ADMIN_READ)
+async def list_review_secretary_candidates(
+    request: Request,
+    q: Optional[str] = Query(None, max_length=100),
+    limit: int = Query(20, ge=1, le=secretary_service.CANDIDATE_LIMIT_MAX),
+    current_user: models.User = deps.CasbinAuth,
+    _admin: models.User = Depends(deps.require_review_secretary_admin),
+    db: AsyncSession = Depends(database.get_db),
+):
+    return await secretary_service.list_candidates(db, q=q, limit=limit)
 
 
 @router.post(

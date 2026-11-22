@@ -9,11 +9,15 @@ Luật (đã chốt):
   khoản bị khoá / đổi sang vai không còn được gán — tự thu hồi CÙNG giao dịch, cùng tầng chủ sở hữu với quyền duyệt chéo
   (``document_cross_review_service.revoke_grants_on_account_change`` gọi :func:`revoke_on_account_change`). Xoá tài khoản
   đã từng được gán ⇒ K4 409 (``user_deletion_policy``), không thu hồi.
-* Gán cho ai: Quản lý hoặc Cán bộ đang hoạt động (thiết kế §4: "Casbin mở ``manager``, ``officer``"). Admin KHÔNG là Thư ký
-  (Admin có lớp riêng ``require_admin``; người đề xuất ≠ người khoá — ĐT3.2 T15b).
+* Gán cho ai: Quản lý hoặc Cán bộ đang hoạt động (thiết kế §4: "Casbin mở ``manager``, ``officer``").
+* **Admin LUÔN là Thư ký** (owner 22-11, ``gd2c/c1/QUYET-DINH-OWNER-GD2C-C1-4-CAU-2026-11-22.md`` câu 1): Admin ĐANG HOẠT ĐỘNG
+  qua cổng mà không cần (và không được) gán. ⚠️ Luật "người đề xuất ≠ người khoá" của GĐ2-C (ĐT3.2 T15b, thiết kế §4) VẪN áp
+  cho Admin: là Thư ký KHÔNG có nghĩa Admin được vừa đề xuất vừa khoá cùng một lần xét — máy chủ kiểm lúc khoá (C4 / C5b),
+  so ``proposed_by_user_id`` với người khoá, KHÔNG miễn cho vai nào.
 * Phạm vi: TOÀN TRƯỜNG (owner C2 22-11) ⇒ bảng quyền không có cột đơn vị.
-* Cổng ``deps.require_review_secretary`` (:func:`require_active_grant`): đọc quyền còn hiệu lực TRONG giao dịch của chính
-  yêu cầu, khoá ``FOR SHARE`` ⇒ thu hồi chen giữa hai lần bấm thì lần bấm sau bị chặn (T17). Không có quyền ⇒ 404.
+* Cổng ``deps.require_review_secretary`` (:func:`require_secretary_access`): đọc vai + trạng thái của người gọi và quyền gán
+  còn hiệu lực TRONG giao dịch của chính yêu cầu, khoá ``FOR SHARE`` ⇒ thu hồi / khoá tài khoản / đổi vai chen giữa hai lần
+  bấm thì lần bấm sau bị chặn (T17). Không đạt ⇒ 404.
 
 Thứ tự khoá (cùng chiều K4 / PR-B): dòng ``user`` theo id TĂNG qua ``user_deletion_policy.lock_users_in_id_order`` TRƯỚC
 mọi câu ghi → dòng quyền. Gán: người được gán ``FOR NO KEY UPDATE`` (đọc vai / trạng thái dưới khoá; hai lần gán cùng
@@ -39,9 +43,13 @@ log = structlog.get_logger(__name__)
 
 GRANT_ENTITY_TYPE = "admission_review_secretary_grant"
 
-#: Vai được gán Thư ký Hội đồng (thiết kế GĐ2-C §4). Đổi tập này ⇒ đổi luôn luật tự thu hồi (:func:`auto_revoke_reason`)
-#: và cổng (:func:`require_active_grant`) — cả ba đọc ĐÚNG hằng này.
+#: Vai được GÁN Thư ký Hội đồng (thiết kế GĐ2-C §4). Đổi tập này ⇒ đổi luôn luật tự thu hồi (:func:`auto_revoke_reason`),
+#: cổng (:func:`require_secretary_access`) và danh sách ứng viên (:func:`list_candidates`) — cả bốn đọc ĐÚNG hằng này.
 SECRETARY_ELIGIBLE_ROLES = frozenset({UserRole.MANAGER.value, UserRole.OFFICER.value})
+#: Vai LUÔN là Thư ký, không qua bảng quyền gán (owner 22-11 câu 1). Không được gán (``create_grant`` từ chối).
+ALWAYS_SECRETARY_ROLE = UserRole.ADMIN.value
+#: Trần số ứng viên một lần tìm (ô tìm của màn hình gán).
+CANDIDATE_LIMIT_MAX = 50
 
 #: Thân 404 của cổng Thư ký (không có quyền gán / quyền vừa bị thu hồi) — khuôn ``deps.CROSS_REVIEW_NOT_FOUND_DETAIL``.
 NOT_GRANTED_DETAIL = "Không tìm thấy"
@@ -282,15 +290,44 @@ async def revoke_on_account_change(
 # ---------------------------------------------------------------------------------------------------------------------
 # Cổng Thư ký (``deps.require_review_secretary``)
 # ---------------------------------------------------------------------------------------------------------------------
-async def require_active_grant(db: AsyncSession, *, user: Any) -> models.AdmissionReviewSecretaryGrant:
-    """Quyền Thư ký còn hiệu lực của ``user``, đọc + khoá ``FOR SHARE`` TRONG giao dịch ``db`` (phiên của chính yêu cầu —
-    FastAPI dùng chung ``database.get_db`` cho cổng và route). Không có ⇒ :class:`ReviewSecretaryNotGranted` (404).
+async def require_secretary_access(db: AsyncSession, *, user: Any) -> Optional[models.AdmissionReviewSecretaryGrant]:
+    """Người gọi có quyền Thư ký không — quyết TRONG giao dịch ``db`` (phiên của chính yêu cầu; FastAPI dùng chung
+    ``database.get_db`` cho cổng và route). Không đạt ⇒ :class:`ReviewSecretaryNotGranted` (404).
 
-    Vai ngoài :data:`SECRETARY_ELIGIBLE_ROLES` (gồm Admin) ⇒ 404 ngay, không đọc bảng (lớp phụ — quyền gán đã tự thu hồi
-    khi đổi vai). ``revoked_at`` kiểm lại trên giá trị đọc DƯỚI khoá."""
-    if not is_eligible_role(getattr(user, "role", None)):
+    1. Dòng ``user`` của người gọi ``FOR SHARE`` (``document_bulk_repository.lock_user_role_share``): vai + trạng thái đọc DƯỚI
+       khoá, giữ tới commit. Khoá tài khoản / đổi vai (``FOR NO KEY UPDATE``) chen giữa thì hoặc CHỜ lần bấm này commit, hoặc
+       lần bấm CHỜ nó rồi thấy giá trị mới — không quyết bằng bản đọc lúc xác thực. Dòng không còn / không ``active`` ⇒ 404.
+    2. Vai :data:`ALWAYS_SECRETARY_ROLE` (Admin) ⇒ ĐẠT, không đọc bảng quyền, trả ``None`` (owner 22-11 câu 1). Luật "người đề
+       xuất ≠ người khoá" KHÔNG nằm ở cổng này và vẫn áp cho Admin (C4 / C5b).
+    3. Vai ngoài :data:`SECRETARY_ELIGIBLE_ROLES` ⇒ 404.
+    4. Quyền gán còn hiệu lực ``FOR SHARE`` (thứ tự người → quyền, cùng chiều tự thu hồi). Không có ⇒ 404; ``revoked_at`` kiểm
+       lại trên giá trị đọc DƯỚI khoá. Trả dòng quyền."""
+    from app.repositories import document_bulk_repository as bulk_repo
+
+    row = await bulk_repo.lock_user_role_share(db, user.id)
+    if row is None or row.status != "active":
+        raise ReviewSecretaryNotGranted()
+    role = _role_code(row.role)
+    if role == ALWAYS_SECRETARY_ROLE:
+        return None
+    if role not in SECRETARY_ELIGIBLE_ROLES:
         raise ReviewSecretaryNotGranted()
     grant = await repo.lock_active_grant_share(db, user.id)
     if grant is None or grant.revoked_at is not None:
         raise ReviewSecretaryNotGranted()
     return grant
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Ứng viên cho ô tìm của màn hình gán (owner 22-11 câu 3)
+# ---------------------------------------------------------------------------------------------------------------------
+async def list_candidates(db: AsyncSession, *, q: Optional[str], limit: int) -> List[Dict[str, Any]]:
+    """Quản lý / Cán bộ ĐANG HOẠT ĐỘNG, CHƯA có quyền Thư ký còn hiệu lực, khớp ``q`` theo họ tên (bỏ dấu) / tên đăng nhập /
+    email — tối đa ``limit`` (≤ :data:`CANDIDATE_LIMIT_MAX`). Trả TỐI THIỂU: id, tên đăng nhập, họ tên, email, vai. Chỉ là
+    danh sách GỢI Ý: lúc gán máy chủ vẫn kiểm vai + trạng thái dưới khoá (:func:`create_grant`)."""
+    rows = await repo.search_candidates(
+        db, roles=sorted(SECRETARY_ELIGIBLE_ROLES), q=q, limit=min(int(limit), CANDIDATE_LIMIT_MAX)
+    )
+    return [
+        {"id": r[0], "username": r[1], "full_name": r[2], "email": r[3], "role": _role_code(r[4])} for r in rows
+    ]

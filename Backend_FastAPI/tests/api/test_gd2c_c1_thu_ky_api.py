@@ -4,6 +4,9 @@ Nguồn: QĐB:26; thiết kế GĐ2-C 22-11 §2.2, §4, §6 hàng C1; owner C1 2
 (toàn trường). Phần:
 
 1. Admin gán / liệt kê / thu hồi — lý do bắt buộc, vai hợp lệ, một quyền còn hiệu lực mỗi người, nhật ký kiểm toán.
+   1b. Ứng viên cho ô tìm (owner 22-11 câu 3): chỉ Quản lý / Cán bộ đang hoạt động chưa có quyền; tìm họ tên bỏ dấu / tên đăng
+   nhập / email; ký tự mẫu LIKE là chữ; trả tối thiểu trường. Biến thể: bỏ lọc trạng thái / vai / "chưa có quyền" ⇒ ca
+   "chỉ Quản lý …" đỏ; bỏ thoát LIKE ⇒ ca ``%`` đỏ.
 2. Quyền route: chỉ Admin (Casbin + lớp phụ); đóng băng tuyển sinh chặn route GHI (503), GET vẫn được.
 3. Tự thu hồi khi tài khoản bị khoá / đổi sang vai không được gán — MỌI đường đổi vai / trạng thái đi qua ĐÚNG tầng chủ sở hữu
    ``revoke_grants_on_account_change`` (đường lẻ, hàng loạt, gỡ vai); Quản lý ↔ Cán bộ giữ quyền; lỗi ghi nhật ký ⇒ rollback cả.
@@ -163,6 +166,65 @@ async def test_thu_hoi_ma_khong_ton_tai_404(client, admin_user_in_db):
     assert (r.json()["error_code"], r.json()["reason_code"]) == ("RESOURCE_NOT_FOUND", "review_secretary_grant_not_found")
 
 
+# ═════════════════════════════════════════════ 1b. ứng viên (ô tìm của màn hình gán — owner 22-11 câu 3) ═════════════
+@pytest.fixture
+async def ung_vien(client, admin_user_in_db, seed_lead_dependencies):
+    """Bảy người: bốn KHÔNG được hiện (Cán bộ bị khoá, Kế toán, Admin, Cán bộ đang là Thư ký) và ba ĐƯỢC hiện (Cán bộ, Quản lý,
+    Cán bộ có quyền đã thu hồi). Họ tên có dấu đặt bằng SQL."""
+    unit = seed_lead_dependencies["unit_id"]
+    ra = {}
+    for khoa, vai in (
+        ("can_bo", "officer"), ("quan_ly", "manager"), ("da_thu_hoi", "officer"),
+        ("bi_khoa", "officer"), ("ke_toan", "accountant"), ("admin_khac", "admin"), ("dang_la_thu_ky", "officer"),
+    ):
+        ra[khoa] = (await tao_nguoi("gd2c_uv_%s" % khoa, vai, unit))["id"]
+    await sql("UPDATE \"user\" SET full_name = 'Nguyễn Văn Thư' WHERE id = :u", u=ra["can_bo"])
+    await sql("UPDATE \"user\" SET full_name = 'Trần Thị Ký' WHERE id = :u", u=ra["quan_ly"])
+    await sql("UPDATE \"user\" SET status = 'inactive' WHERE id = :u", u=ra["bi_khoa"])
+    await gan(client, admin_user_in_db, ra["dang_la_thu_ky"])
+    g = (await gan(client, admin_user_in_db, ra["da_thu_hoi"]))["id"]
+    await thu_hoi(client, admin_user_in_db, g)
+    return ra
+
+
+async def _tim(client, admin, **params):
+    h = await dn(client, admin)
+    r = await client.get(f"{P}/candidates", headers=h, params=params)
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+async def test_ung_vien_chi_quan_ly_can_bo_dang_hoat_dong_chua_co_quyen(client, admin_user_in_db, ung_vien):
+    ids = {x["id"] for x in await _tim(client, admin_user_in_db)} & set(ung_vien.values())
+    assert ids == {ung_vien["can_bo"], ung_vien["quan_ly"], ung_vien["da_thu_hoi"]}, ids
+
+
+@pytest.mark.parametrize(
+    "q, khoa",
+    [("nguyen van", "can_bo"), ("NGUYỄN", "can_bo"), ("tran thi", "quan_ly"), ("gd2c_uv_quan", "quan_ly"),
+     ("gd2c_uv_can_bo@example", "can_bo")],
+)
+async def test_ung_vien_tim_theo_ho_ten_bo_dau_ten_dang_nhap_email(client, admin_user_in_db, ung_vien, q, khoa):
+    ids = {x["id"] for x in await _tim(client, admin_user_in_db, q=q)} & set(ung_vien.values())
+    assert ids == {ung_vien[khoa]}, (q, ids)
+
+
+@pytest.mark.parametrize("q", ["%", "_", "\\"])
+async def test_ung_vien_ky_tu_mau_like_la_chu_khong_phai_mau(client, admin_user_in_db, ung_vien, q):
+    """``%`` / ``_`` / ``\\`` người gõ là CHỮ (thoát bằng ``escape_like_pattern``): không ai có các ký tự ấy trong họ tên / tên
+    đăng nhập / email ⇒ rỗng. Bỏ bước thoát ⇒ ``%`` khớp TẤT CẢ ⇒ đỏ."""
+    ids = {x["id"] for x in await _tim(client, admin_user_in_db, q=q)} & set(ung_vien.values())
+    assert ids == set(), (q, ids)
+
+
+async def test_ung_vien_tra_toi_thieu_truong(client, admin_user_in_db, ung_vien):
+    ds = [x for x in await _tim(client, admin_user_in_db, q="gd2c_uv_can_bo") if x["id"] == ung_vien["can_bo"]]
+    assert ds == [
+        {"id": ung_vien["can_bo"], "username": "gd2c_uv_can_bo", "full_name": "Nguyễn Văn Thư",
+         "email": "gd2c_uv_can_bo@example.com", "role": "officer"}
+    ]
+
+
 # ═════════════════════════════════════════════ 2. quyền route + đóng băng ═════════════════════════════════════════════
 @pytest.mark.parametrize("vai", ["manager", "officer", "accountant"])
 async def test_chi_admin_403_cho_vai_khac(client, admin_user_in_db, can_bo, seed_lead_dependencies, vai):
@@ -171,6 +233,7 @@ async def test_chi_admin_403_cho_vai_khac(client, admin_user_in_db, can_bo, seed
     h = await dn(client, nguoi)
     for m, duong, than in (
         ("GET", P, None),
+        ("GET", f"{P}/candidates", None),
         ("POST", P, {"user_id": can_bo["id"], "reason": "x"}),
         ("POST", f"{P}/{g}/revoke", {"reason": "x"}),
     ):

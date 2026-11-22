@@ -38,6 +38,17 @@ class ReviewSecretaryUserSummary(BaseModel):
     status: str
 
 
+class ReviewSecretaryCandidate(BaseModel):
+    """Ứng viên cho ô tìm của màn hình gán (owner 22-11 câu 3) — TỐI THIỂU: id, tên đăng nhập, họ tên, email, vai. Không số
+    điện thoại, không cờ bảo mật (khác ``UserAdminResponse`` của ``/api/admin/users``)."""
+
+    id: int
+    username: str
+    full_name: Optional[str] = None
+    email: str
+    role: str
+
+
 class ReviewSecretaryGrantView(BaseModel):
     id: int
     user_id: int

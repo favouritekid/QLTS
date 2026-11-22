@@ -43,6 +43,17 @@ export const reviewSecretaryGrantSchema = z.object({
 })
 export type ReviewSecretaryGrant = z.infer<typeof reviewSecretaryGrantSchema>
 
+/** Ứng viên cho ô tìm (owner 22-11 câu 3) — máy chủ chỉ trả Quản lý / Cán bộ đang hoạt động, chưa có quyền; tối thiểu trường. */
+export const reviewSecretaryCandidateSchema = z.object({
+  id: z.number().int().positive(),
+  username: z.string(),
+  full_name: z.string().nullable(),
+  email: z.string(),
+  role: z.string(),
+})
+export type ReviewSecretaryCandidate = z.infer<typeof reviewSecretaryCandidateSchema>
+export const reviewSecretaryCandidateListSchema = z.array(reviewSecretaryCandidateSchema)
+
 /** Danh sách = MẢNG TRẦN, mới nhất trước, tối đa 500. */
 export const reviewSecretaryGrantListSchema = z.array(reviewSecretaryGrantSchema)
 export type ReviewSecretaryGrantList = z.infer<typeof reviewSecretaryGrantListSchema>

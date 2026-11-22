@@ -80,9 +80,10 @@ class _ChoQuaHet:
 
 
 def ung_dung_cong(diem: Optional[Diem] = None):
-    """Ứng dụng thử: ``POST /thu-ky-thu/ghi`` = cổng THẬT + một câu ghi trên CÙNG phiên + commit. Trả ``{khoa_quyen}``:
-    giao dịch của route (đo TRƯỚC câu ghi) đang giữ khoá ``ROW SHARE`` trên bảng quyền — dấu vết CSDL của ``SELECT … FOR
-    SHARE`` chạy trong CHÍNH giao dịch ấy. ``diem``: dừng sau khi đo, trước câu ghi (giữ nguyên mọi khoá của cổng)."""
+    """Ứng dụng thử: ``POST /thu-ky-thu/ghi`` = cổng THẬT + một câu ghi trên CÙNG phiên + commit. Trả ``{khoa_quyen,
+    khoa_nguoi}``: giao dịch của route (đo TRƯỚC câu ghi) đang giữ khoá ``ROW SHARE`` trên bảng quyền / bảng ``user`` — dấu vết
+    CSDL của ``SELECT … FOR SHARE`` chạy trong CHÍNH giao dịch ấy. ``diem``: dừng sau khi đo, trước câu ghi (giữ nguyên mọi
+    khoá của cổng)."""
     from fastapi import Depends, FastAPI
     from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -100,18 +101,25 @@ def ung_dung_cong(diem: Optional[Diem] = None):
         user: models.User = Depends(deps.require_review_secretary),
         db: AsyncSession = Depends(database.get_db),
     ):
-        khoa = (
-            await db.execute(
-                text(
-                    "SELECT count(*) FROM pg_locks WHERE pid = pg_backend_pid() AND locktype = 'relation'"
-                    " AND relation = CAST('admission_review_secretary_grant' AS regclass) AND mode = 'RowShareLock'"
+        async def khoa(bang_sql: str) -> bool:
+            # ``bang_sql`` là hằng trong tệp này (không phải dữ liệu vào) — chữ SQL, không tham số (tránh ép kiểu regclass).
+            return (
+                await db.execute(
+                    text(
+                        "SELECT count(*) FROM pg_locks WHERE pid = pg_backend_pid() AND locktype = 'relation'"
+                        " AND relation = CAST(%s AS regclass) AND mode = 'RowShareLock'" % bang_sql
+                    )
                 )
-            )
-        ).scalar_one()
+            ).scalar_one() > 0
+
+        do = {
+            "khoa_quyen": await khoa("'admission_review_secretary_grant'"),
+            "khoa_nguoi": await khoa("'\"user\"'"),
+        }
         if diem is not None:
             await diem.cho()
         await log_audit(db, LOAI_GHI_THU, user.id, "ghi_thu", actor_user_id=user.id, source="api")
         await db.commit()
-        return {"khoa_quyen": khoa > 0}
+        return do
 
     return app
