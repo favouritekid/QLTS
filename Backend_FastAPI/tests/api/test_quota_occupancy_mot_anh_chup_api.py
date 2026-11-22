@@ -119,7 +119,7 @@ async def _dem_bon_noi(db, ten, o):
 
 async def _huy_hieu_luc_phien_khac(qd_id, nguoi):
     async with AsyncSessionLocal() as db2:
-        h, _ = await qd_vb.cancel_effect(
+        h, _, _ = await qd_vb.cancel_effect(  # PR-1 GĐ1 (C2): + cảnh báo vượt chỉ tiêu
             db2, qd_id, decision_number="701", signing_date=qd._ngay(), scan=qd.PDF, actor_id=nguoi
         )
         await db2.commit()
@@ -201,7 +201,12 @@ async def test_phe_duyet_cu_khong_duyet_vuot_khi_huy_hieu_luc_chen_giua(  # noqa
 ):
     """Chỉ tiêu 1. P1 chiếm chỗ qua Quyết định X (Phần B). Phê duyệt cũ em P2 (cùng ô): đếm Phần A (P1 đang ở B ⇒
     0) — phiên khác huỷ hiệu lực X rồi commit (P1 về Phần A) — đếm Phần B (0) ⇒ mã hai câu cho 0 / 1 ⇒ duyệt P2
-    ⇒ 2 / 1. Mã một câu ⇒ 1 / 1 ⇒ 400 "Vượt chỉ tiêu", P2 giữ "Đã nộp"."""
+    ⇒ 2 / 1. Mã một câu ⇒ 1 / 1 ⇒ 400 "Vượt chỉ tiêu", P2 giữ "Đã nộp".
+
+    PR-1 GĐ1 (C2 — owner 21-11): huỷ hiệu lực nay KHOÁ ô hiện tại của em quay về Phần A (``lock_quota_for_change``) ⇒ qua
+    đường app, lịch chen này không còn xảy ra (huỷ hiệu lực CHỜ khoá ô mà Phê duyệt đang giữ — tuần tự hoá; ca C2-b ở
+    ``test_council_decision_o_hien_tai_api.py``). Ca này GIỮ đo lớp một-ảnh-chụp F260 (lớp phụ cho mọi bên ghi B → A không
+    khoá — SQL tay, mã sau này): phiên chen thay riêng ``lock_quota_for_change`` bằng bản KHÔNG khoá, không cảnh báo."""
     await _dam_bao_sts09()
     p1, o = await _em_chiem_cho_ca_bon_noi(hs)
     await qd._sql(
@@ -223,6 +228,10 @@ async def test_phe_duyet_cu_khong_duyet_vuot_khi_huy_hieu_luc_chen_giua(  # noqa
     async def chen():
         await _huy_hieu_luc_phien_khac(x["id"], nguoi)
 
+    async def doi_khong_khoa(db, **_):
+        return qos.QuotaChange((), (), (), (), {})  # bên ghi B → A KHÔNG khoá ô (xem docstring)
+
+    monkeypatch.setattr(qd_vb, "lock_quota_for_change", doi_khong_khoa)
     trang = _chen_sau_phan_a(monkeypatch, chen)
     ver = (await _ban(p2))[1]
     r = await client.post(A + "/%d/approve" % p2, json={"version": ver}, headers=ad)

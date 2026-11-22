@@ -470,11 +470,27 @@ async def test_dong_bo_dung_qua_cong_luon_du_khoa_dem_va_dung_chuoi(client, hs, 
 
 
 def test_thu_tu_khoa_ghi_nhan_ho_so_truoc_dong_chi_tieu():
-    """Kiểm kê thứ tự khoá trong MÃ (đọc nguồn): ở ba thao tác làm tăng Phần B, ``lock_quota_of_set_rows`` đứng
-    SAU ``lock_profiles`` (thứ tự chung hồ sơ → học vụ → đường xét)."""
+    """Kiểm kê thứ tự khoá trong MÃ (đọc nguồn): ở mọi thao tác đổi số chỗ (ghi nhận; điều chỉnh / huỷ hiệu lực / huỷ ghi
+    nhận — PR-1 GĐ1 C2), lần khoá dòng chỉ tiêu xuất hiện ĐÚNG MỘT lần và đứng SAU ``lock_profiles`` (thứ tự chung hồ sơ →
+    học vụ → đường xét). Cả bốn thao tác khoá hợp mọi ô đổi số qua ``lock_quota_for_change`` (Codex PR-1 lượt 2 — ghi nhận
+    trước đây dùng ``lock_quota_of_set_rows``, nay đã bỏ), không gọi thẳng ``lock_quota_cells``. P2 (Codex PR-1 lượt 2): khoá
+    năm chia sẻ (``lock_years_of_change``) đúng MỘT lần, là câu khoá ĐẦU TIÊN — trước lượt gửi / gốc chuỗi — và tập năm ấy
+    được truyền cho ``lock_quota_for_change`` (``locked_years=years``)."""
     import inspect
 
-    for ham in (qd_vb.record_decision, qd_vb.record_adjustment_decision, qd_vb.revoke_record):
+    for ham, khoa_dau in (
+        (qd_vb.record_decision, "submission_service.lock_pending_submission("),
+        (qd_vb.record_adjustment_decision, "repo.lock_decision("),
+        (qd_vb.cancel_effect, "_lock_chain_root("),
+        (qd_vb.revoke_record, "_lock_chain_root("),
+    ):
         nguon = inspect.getsource(ham)
-        assert nguon.count("lock_quota_of_set_rows(") == 1, ham.__name__
-        assert nguon.index("repo.lock_profiles(") < nguon.index("lock_quota_of_set_rows("), ham.__name__
+        so_lan = {k: nguon.count(k) for k in ("lock_quota_of_set_rows(", "lock_quota_for_change(", "lock_quota_cells(")}
+        assert so_lan == {"lock_quota_of_set_rows(": 0, "lock_quota_for_change(": 1, "lock_quota_cells(": 0}, (
+            ham.__name__,
+            so_lan,
+        )
+        assert nguon.index("repo.lock_profiles(") < nguon.index("lock_quota_for_change("), ham.__name__
+        assert nguon.count("lock_years_of_change(") == 1, ham.__name__
+        assert nguon.index("lock_years_of_change(") < nguon.index(khoa_dau), ham.__name__
+        assert "years = await lock_years_of_change(" in nguon and "locked_years=years" in nguon, ham.__name__

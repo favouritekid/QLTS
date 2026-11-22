@@ -1352,6 +1352,11 @@ jobs:
           # (đo từ log PR #724, lượt bị huỷ ở trần `timeout-minutes: 75` khi đã chạy 4.087 / 4.183 ca, 0 đỏ).
           # Tách ra thì cả hai dưới trần; wall-clock không tăng (lát dài nhất vẫn là Tier 2a ~51 phút).
           # Lý do từng tệp: xem chú thích phía trên mục Tier 5 (giữ nguyên chỗ cũ). Ghim WHOLE-FILE.
+          # PR-1 GĐ1 (owner 21-11): `test_council_decision_khoa_goc_chuoi_api.py` (C1 — khoá gốc chuỗi, hai phiên + phiên ba),
+          # `test_council_decision_o_hien_tai_api.py` (C2 — ô chỉ tiêu hiện tại: cảnh báo, khoá, một lần khoá; Codex lượt 2:
+          # C2-1 ô mất chỗ hai văn bản khác chuỗi, C2-2 ô hai vai, P2 tạo học vụ chen giữa dò và ghi — khoá năm chia sẻ),
+          # `test_council_decision_giay_va_vet_api.py` (U1 / U2 / Q2 / C12 / C7 / C11) và `tests/unit/test_council_phien_ban_ma_bo.py`
+          # (U4 — danh sách module của phiên bản mã khoá bằng import của đường đọc + cổng).
           - tier: Tier 5g — Văn bản Hội đồng + Quyết định trúng tuyển (GĐ1)
             tests: >-
               tests/unit/test_council_document_render_service.py
@@ -1395,6 +1400,10 @@ jobs:
               tests/integration/test_council_document_casbin_vong_gd_migration.py
               tests/unit/test_hop_dong_msw_ghim_luat.py
               tests/unit/test_hop_dong_msw_cau_loi.py
+              tests/api/test_council_decision_khoa_goc_chuoi_api.py
+              tests/api/test_council_decision_o_hien_tai_api.py
+              tests/api/test_council_decision_giay_va_vet_api.py
+              tests/unit/test_council_phien_ban_ma_bo.py
           # GĐ1b — duyệt giấy nhanh (đặc tả bản 3.6; bổ sung hợp đồng bản 5 A4). Hai lát RIÊNG: ca GĐ1b chậm (đo local ~15–18 s
           # mỗi ca API, tổng ~50 phút một luồng) ⇒ gộp vào một tier có sẵn sẽ vượt trần 75 phút. Trước 18-11 KHÔNG tier nào chứa
           # `test_gd1b_*` (required check xanh mà không chạy — CLAUDE.md §11). Fixture dùng chung của lô ở `tests/api/gd1b_lo_tro_giup.py` (KHÔNG phải tệp test).

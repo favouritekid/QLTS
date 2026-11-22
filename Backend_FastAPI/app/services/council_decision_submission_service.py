@@ -7,8 +7,9 @@ nhân) do máy chủ cấp; trình duyệt không lưu (khôi phục qua id bộ
 Vòng đời (chỉ đổi khi commit; mỗi chuyển là MỘT câu đặt đủ cột — F265):
 
 * mở lượt ⇒ ``cho_gui``;
-* ghi nhận: câu CSDL ĐẦU TIÊN khoá lượt ``cho_gui`` (:func:`lock_pending_submission`, ``FOR UPDATE``, GIỮ ``cho_gui``) —
-  ĐẦU thứ tự khoá chung (lượt → văn bản → mục chờ → bộ → hồ sơ → học vụ → đường xét); câu CUỐI trước commit
+* ghi nhận: câu khoá DÒNG đầu tiên khoá lượt ``cho_gui`` (:func:`lock_pending_submission`, ``FOR UPDATE``, GIỮ ``cho_gui``) —
+  thứ tự khoá chung ([khoá năm chia sẻ — PR-1 GĐ1 P2] → lượt → văn bản → mục chờ → bộ → hồ sơ → học vụ → đường xét); câu CUỐI
+  trước commit
   :func:`finalize_recorded` đặt ``da_ghi`` + ``decision_id`` + sha + ``ket_thuc_luc``. Bị từ chối / lỗi ⇒ rollback ⇒ vẫn
   ``cho_gui`` (gửi lại cùng mã được — sha chỉ chốt khi thành công);
 * phân xử (:func:`adjudicate`): ``UPDATE … WHERE trang_thai = 'cho_gui'`` dưới ``lock_timeout`` ⇒ ``da_chan`` / đọc lại
@@ -151,7 +152,7 @@ async def open_submission(db: AsyncSession, *, set_id: int, actor_id: int) -> Co
 async def lock_pending_submission(
     db: AsyncSession, *, code: uuid.UUID, set_id: int
 ) -> Optional[CouncilDecisionSubmission]:
-    """Câu CSDL ĐẦU TIÊN của ghi nhận: khoá lượt ``cho_gui`` của đúng bộ, GIỮ ``cho_gui`` (F265). Lượt đang bị giao
+    """Câu khoá DÒNG đầu tiên của ghi nhận (sau khoá năm chia sẻ): khoá lượt ``cho_gui`` của đúng bộ, GIỮ ``cho_gui`` (F265). Lượt đang bị giao
     dịch ghi khác giữ ⇒ CHỜ; sau commit PostgreSQL đánh giá lại ``trang_thai = 'cho_gui'`` trên bản mới ⇒ None."""
     return (
         await db.execute(
