@@ -276,14 +276,17 @@ async def test_thao_tac_giu_khoa_truoc_thi_sua_cau_hinh_bi_chan(client, hs, ad, 
         a=o["ai"],
     ) == 0
     diem = _Diem()
-    goc = qd_vb.lock_quota_of_set_rows
+    # PR-1 GĐ1 (C2; Codex lượt 2 C2-1): ghi nhận và điều chỉnh khoá dòng chỉ tiêu qua ``lock_quota_for_change`` (hợp mọi ô đổi
+    # số, MỘT lần).
+    ten_khoa = "lock_quota_for_change"
+    goc = getattr(qd_vb, ten_khoa)
 
     async def boc(*a_, **kw):
         kq = await goc(*a_, **kw)
         await diem.cho()  # GIỮ khoá học vụ / đường xét của dòng sắp ghi
         return kq
 
-    monkeypatch.setattr(qd_vb, "lock_quota_of_set_rows", boc)
+    monkeypatch.setattr(qd_vb, ten_khoa, boc)
     t_lam = asyncio.create_task(lam())
     await asyncio.wait_for(diem.toi.wait(), 30)
     t_ch = asyncio.create_task(_cau_hinh_chen(o["ai"], 2031))

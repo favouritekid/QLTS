@@ -582,10 +582,20 @@ async def test_tao_bo_ghi_metadata_va_bytes_nguyen_tung_tep(hs, monkeypatch):
         }
         assert tt["ngay_ky_chon_mau"] == "2026-09-08"
         assert tt["nam_hoc"] == 2026  # 0.6 — năm học tường minh lưu cùng bộ
-        # F212 — phiên bản mã đã dựng: sha256 NỘI DUNG đúng năm tệp nguồn đang nạp.
+        # F212 — phiên bản mã đã dựng: sha256 NỘI DUNG đúng các tệp nguồn đang nạp. U4 (PR-1 GĐ1): + module tính KV /
+        # đối tượng in, luật cộng điểm, tình trạng Quyết định, model + kho mẫu + dòng bộ, ngày giờ VN (danh sách khoá ở
+        # ``tests/unit/test_council_phien_ban_ma_bo.py``).
+        from app.constants import admission_circular as ngay_vn
+        from app.models import council_document as m_vb
+        from app.repositories import council_decision_repository as kho_qd
+        from app.repositories import council_document_repository as kho_bo
+        from app.services import admission_choice_engine_service as nv
+        from app.services import council_decision_status_service as tt_qd
+        from app.services import priority_service as ut
+
         assert tt["phien_ban_ma"] == {
             m.__name__: hashlib.sha256(Path(m.__file__).read_bytes()).hexdigest()
-            for m in (render_service, kho_mau, doc, kho_doc, bo_vb, cong)
+            for m in (render_service, kho_mau, doc, kho_doc, bo_vb, cong, ut, nv, tt_qd, m_vb, kho_bo, kho_qd, ngay_vn)
         }
         assert tt["giao_dich_doc"] == {
             "transaction_isolation": "repeatable read",

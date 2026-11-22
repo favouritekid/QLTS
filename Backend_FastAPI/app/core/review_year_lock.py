@@ -35,7 +35,17 @@ ngành) không giữ khoá nào khác khi chờ.
 
 Dây chuyền xoá loại hình / xoá ngành khoá DÒNG học vụ bằng MỘT câu ``FOR NO KEY UPDATE ORDER BY id`` TRƯỚC câu UPDATE (Codex
 lượt 3): chỉ ``UPDATE … WHERE offering_id`` thì khoá theo thứ tự QUÉT (vật lý / chỉ mục), có thể ngược chiều id ⇒ vòng chờ ``40P01``
-với ghi nhận / Phê duyệt hàng loạt (``quota_occupancy_service.lock_quota_cells``: ``FOR UPDATE`` id tăng dần, KHÔNG lấy khoá năm).
+với ghi nhận / Phê duyệt hàng loạt (``quota_occupancy_service.lock_quota_cells``: ``FOR UPDATE`` id tăng dần; Phê duyệt KHÔNG lấy
+khoá năm, ghi nhận lấy khoá năm CHIA SẺ ở đầu thao tác — đoạn dưới).
+
+NGƯỜI ĐỌC CHIA SẺ (PR-1 GĐ1 — P2 Codex, 21-11): bốn thao tác Quyết định Hội đồng (ghi nhận / bổ sung, điều chỉnh, huỷ hiệu lực, huỷ
+ghi nhận — ``quota_occupancy_service.lock_years_of_change``) dò ô chỉ tiêu theo CẶP (loại hình, năm) nên cần tập học vụ của năm KHÔNG
+ĐỔI tới lúc commit, nhưng không tự đổi nó ⇒ lấy :func:`lock_review_years_shared` (cùng khoá, chế độ CHIA SẺ): mọi lệnh đổi tập học
+vụ (khoá ĐỘC QUYỀN ở trên) chờ người đọc commit và ngược lại; hai người đọc không chờ nhau. Người đọc lấy khoá năm Ở ĐẦU thao tác,
+khi CHƯA giữ khoá dòng nào (đúng thứ tự "[khoá năm] → lượt gửi → … → hồ sơ → học vụ → đường xét" của đặc tả GĐ2 bản 3 §9) ⇒ chờ khoá
+năm thì không giữ gì; đường giữ khoá năm độc quyền không bao giờ chờ dòng hồ sơ / văn bản Hội đồng ⇒ không vòng chờ. Đường nào cần khoá
+năm ĐỘC QUYỀN trong cùng thao tác (vd GĐ2-C ký Quyết định của lần xét) lấy NGAY bản độc quyền thay cho bản chia sẻ — không lấy chia sẻ
+rồi nâng (hai giao dịch cùng nâng ⇒ vòng chờ).
 
 Khoá DÒNG học vụ lấy SAU khoá năm dùng chế độ YẾU NHẤT đủ việc, lấy MỘT lần, không nâng trong cùng giao dịch (GĐ2-F1 lượt 3b):
 PUT bảng chỉ tiêu chỉ ghi ``annual_admission_quota`` (không cột nào thuộc khoá duy nhất / khoá ngoại) ⇒ ``FOR NO KEY UPDATE`` —
@@ -66,3 +76,12 @@ async def lock_review_years(db: AsyncSession, academic_years: Iterable[Optional[
     không vòng chờ nhau."""
     for nam in sorted({int(y) for y in academic_years if y is not None}):
         await lock_review_year(db, nam)
+
+
+async def lock_review_years_shared(db: AsyncSession, academic_years: Iterable[Optional[int]]) -> None:
+    """Khoá năm chế độ CHIA SẺ (``pg_advisory_xact_lock_shared`` — CÙNG khoá ``(REVIEW_YEAR_NS, năm)``), năm TĂNG DẦN, mỗi năm một
+    lần; nhả khi commit / rollback. Cho NGƯỜI ĐỌC cần tập học vụ của năm không đổi (đoạn "NGƯỜI ĐỌC CHIA SẺ" ở đầu mô-đun)."""
+    for nam in sorted({int(y) for y in academic_years if y is not None}):
+        await db.execute(
+            text("SELECT pg_advisory_xact_lock_shared(:ns, :k)"), {"ns": REVIEW_YEAR_NS, "k": nam}
+        )
