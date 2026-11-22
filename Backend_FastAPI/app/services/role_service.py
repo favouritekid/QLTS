@@ -12,7 +12,7 @@ Business Rules:
 - Role priority: admin > manager > officer > user
 """
 
-from typing import Any, Callable, Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from app.core.log_redaction import chu_loi_an_toan  # V6 vòng 5: lỗi CSDL ra ngoài log ⇒ tóm tắt
 import logging
 
@@ -53,6 +53,12 @@ log = logging.getLogger(__name__)
 # to display in the user.role database field when a user has multiple roles.
 # The actual permissions are handled by Casbin's diamond inheritance.
 #
+#: Số vòng tối đa của ``delete_role_atomic`` khi tập người mang vai mở rộng giữa lúc khoá và lúc kiểm lại. (PR-B lượt 4:
+#: ``remove_role_from_users`` không còn vòng làm lại — quyết từ MỘT lần đọc ``casbin_rule`` dưới khoá.) ``failed_users``
+#: của ``remove_role_from_users`` giữ trường cho thân phản hồi; lỗi CSDL nay ném ra (giao dịch không commit gì).
+_MAX_LAN_ANH = 5
+
+
 ROLE_PRIORITY = {
     "role:admin": 5,
     "role:manager": 4,        # User/Lead management branch
@@ -67,6 +73,8 @@ async def remove_role_from_users(
     enforcer: casbin.AsyncEnforcer,
     user_ids: List[int],
     role_to_remove: str,
+    actor_id: Optional[int] = None,  # PR-B Q4: Admin thao tác (``revoked_by_user_id`` khi tự thu hồi quyền duyệt chéo)
+    request_meta: Optional[Any] = None,
 ) -> Tuple[Dict[str, Any], Callable]:
     """
     Remove a specific role from multiple users.
@@ -129,86 +137,112 @@ async def remove_role_from_users(
     reassigned_count = 0
     failed_users = []
 
-    for user_id in user_ids:
-        user_subject = f"user:{user_id}"
+    from app.repositories import UserRepository
+    from app.services.document_cross_review_service import revoke_grants_on_account_change
 
-        try:
-            from app.services.casbin_service import khoa_enforcer
+    user_repo = UserRepository(db)
+    db_removed = role_to_remove.replace("role:", "")
 
-            # Lock bao TRỌN đọc snapshot -> gỡ role -> gán lại role dự phòng.
-            # Khoá từng lời gọi là chưa đủ: giữa lúc gỡ và lúc gán lại, người
-            # dùng KHÔNG có role nào; và `current_roles` đọc trước đó mà bị một
-            # lượt reload chen ngang thì quyết định "còn role nào không" dựa
-            # trên ảnh cũ.
-            async with khoa_enforcer(enforcer):
-                # Get all current roles for this user
-                current_roles = await enforcer.get_roles_for_user(user_subject)
+    # id TĂNG (PR-B Q4: mỗi người khoá dòng user → dòng quyền chéo; hai lệnh chồng nhau khoá cùng chiều).
+    #
+    # PR-B lượt 4 (Codex lượt 3 điểm chặn 1, 2) — MỌI quyết định tính từ BẢNG ``casbin_rule``, nguồn CHUNG mọi worker
+    # (enforcer trong bộ nhớ là bản RIÊNG từng worker Gunicorn, có thể cũ: worker thứ hai từng đọc lại vai đã bị gỡ ở
+    # worker thứ nhất rồi ghi lại vai ấy vào CSDL). Cho MỖI người:
+    # (0) khoá dòng ``user`` ``FOR NO KEY UPDATE`` — tuần tự theo tài khoản (mọi đường đổi vai CSDL lấy cùng khoá) — và
+    #     làm mới đối tượng ``User`` dưới khoá (gán trùng giá trị cũ của đối tượng nạp trước khoá ⇒ ORM bỏ UPDATE);
+    # (1) đọc vai của người ấy từ ``casbin_rule`` và KHOÁ các dòng ấy ``FOR UPDATE`` — MỘT lần đọc, SAU khoá (0); xoá về
+    #     sau đi theo ID các dòng ĐÃ đọc (dòng cùng cặp chèn sau lần đọc không bị xoá — Codex lượt 4, C2);
+    # (2) từ CHÍNH lần đọc ấy: xử lý / bỏ qua, vai CSDL = vai ưu tiên cao nhất còn lại (không còn ⇒ ``user``);
+    # (3) RỒI mới ghi: tự thu hồi quyền chéo + nhật ký (Q4 — đúng MỘT lần, theo kết quả cuối), vai CSDL, xoá / chèn dòng
+    #     ``casbin_rule`` — TẤT CẢ trong CÙNG giao dịch của router: lỗi ở bất kỳ người nào ⇒ không commit gì (kể cả
+    #     Casbin) ⇒ thử lại bắt đầu từ trạng thái nguyên vẹn (owner câu 7). Không còn vòng làm lại (bản lượt 3: ghi thu
+    #     hồi TRƯỚC khi xác nhận ảnh vai ⇒ tính lại mà vai cuối vẫn Cán bộ thì dấu thu hồi vòng trước vẫn commit).
+    # Bộ nhớ enforcer của worker này nạp lại từ CSDL SAU commit (callback); worker khác giữ bản cũ tới lần nạp kế — không
+    # đường đổi vai CSDL nào quyết từ bộ nhớ ấy nữa.
+    # Người đã có vai trong CSDL là vai bị gỡ mà ``casbin_rule`` không còn vai ấy (CSDL lệch từ trước) ⇒ ĐỒNG BỘ LẠI vai
+    # CSDL theo các vai còn lại + tự thu hồi, không bỏ qua.
+    from app.repositories import document_bulk_repository as bulk_repo
+    from app.services.user_deletion_policy import lock_users_in_id_order
 
-                # Check if user actually has the role to remove
-                if role_to_remove not in current_roles:
-                    log.warning(
-                        f"User {user_id} doesn't have role {role_to_remove}, skipping"
-                    )
-                    continue
-
-                # Remove the specified role from Casbin
-                await enforcer.remove_grouping_policy(user_subject, role_to_remove)
-                removed_count += 1
-
-                # Get remaining roles after removal
-                remaining_roles = [
-                    r for r in current_roles if r != role_to_remove
-                ]
-
-                # SMART BEHAVIOR: If no roles left, auto-assign role:user
-                if not remaining_roles:
-                    await enforcer.add_grouping_policy(user_subject, "role:user")
-                    remaining_roles = ["role:user"]
-                    reassigned_count += 1
-                    log.info(
-                        f"User {user_id} had no roles left, auto-assigned role:user"
-                    )
-
-            # Update database user.role field to highest priority remaining role
-            # ✅ REFACTORED: Use UserRepository
-            from app.repositories import UserRepository
-            user_repo = UserRepository(db)
+    # PR-B lượt 5 (Codex 22-11 P2): khoá TRƯỚC toàn tập (người đích ∪ người thao tác — khoá ngoại phân công / thu hồi /
+    # nhật ký) theo id TĂNG, rồi mới ghi ai — cùng chiều K4. Khoá lại ở (0) là no-op, giữ để đọc vai dưới khoá.
+    await lock_users_in_id_order(db, target_ids=user_ids, referenced_ids=[actor_id])
+    for user_id in sorted(user_ids):
+        # (0)
+        locked = await bulk_repo.lock_user_no_key_update(db, user_id)
+        user = None
+        if locked is not None:
             user = await user_repo.get_by_id(user_id)
-
-            if user:
-                # Find highest priority role from remaining roles
-                highest_priority_role = max(
-                    remaining_roles,
-                    key=lambda r: ROLE_PRIORITY.get(r, 0),
-                    default="role:user",
-                )
-
-                # Extract role name without "role:" prefix for DB
-                db_role_name = highest_priority_role.replace("role:", "")
-                user.role = db_role_name
-                db.add(user)
-
-                # `log` ở module này là `logging.getLogger` CHUẨN, không phải
-                # structlog — nó KHÔNG nhận kwarg tuỳ ý và ném
-                # `TypeError: Logger._log() got an unexpected keyword argument`.
-                # Trường có cấu trúc phải đi qua `extra={...}`.
-                log.info(
-                    "User %s updated",
-                    user_id,
-                    extra={
-                        "removed_role": role_to_remove,
-                        "remaining_roles": remaining_roles,
-                        "db_role": db_role_name,
-                    },
-                )
-
-        except Exception as e:
-            failed_users.append({"user_id": user_id, "error": chu_loi_an_toan(e)})
-            log.error(
-                "Failed to remove role from user %s",
-                user_id,
-                extra={"error": str(e)},
+            # PR-B lượt 5: làm mới cả ``unit_id`` — bản ghi phân công mới (bước 3) lấy đơn vị HIỆN HÀNH dưới khoá.
+            await db.refresh(user, attribute_names=["role", "unit_id"])
+        # (1)
+        rows = await user_repo.lock_grouping_rows(user_id)
+        roles = [r for _, r in rows]
+        # (2)
+        if role_to_remove in roles:
+            pass
+        elif locked is not None and locked.role == db_removed:
+            log.warning("User %s: Casbin no longer has %s but DB role still does — reconciling", user_id, role_to_remove)
+        else:
+            log.warning(f"User {user_id} doesn't have role {role_to_remove}, skipping")
+            continue
+        remaining_roles = [r for r in roles if r != role_to_remove]
+        highest_priority_role = max(
+            remaining_roles or ["role:user"],
+            key=lambda r: ROLE_PRIORITY.get(r, 0),
+            default="role:user",
+        )
+        db_role_name = highest_priority_role.replace("role:", "")
+        # (3)
+        if user is not None:
+            # GĐ1b PR-B Q4: vai CSDL rời Cán bộ ⇒ tự thu hồi quyền duyệt chéo CÙNG giao dịch. Ngoài mọi khối nuốt lỗi: lỗi ⇒
+            # ném ra để router không commit gì (fail-closed).
+            await revoke_grants_on_account_change(
+                db,
+                user_id=user.id,
+                new_role=db_role_name,
+                actor_id=actor_id,
+                request_meta=request_meta,
             )
+            if locked.role != db_role_name:
+                # PR-B lượt 5 (Codex 22-11 B-P1): đổi vai CSDL qua ĐÚNG hàm PUT dùng (``_create_or_update_user_assignment``,
+                # ``enforcer=None`` — ``casbin_rule`` ghi ở dưới): bản ghi phân công đang hiệu lực (``user_unit_assignment`` —
+                # nguồn chuẩn của vai + đơn vị, ``user.role`` chỉ là bản sao) đóng lại, bản ghi MỚI mang vai mới, cùng giao
+                # dịch, dưới khoá dòng người ở (0). Bản cũ chỉ ghi ``user.role`` ⇒ phân công còn mang vai vừa gỡ ⇒ bộ chọn
+                # người nhận theo vai (``notification_resolvers``) vẫn chọn người đã bị gỡ vai Quản lý.
+                from app.services.user_service import _create_or_update_user_assignment
+
+                await _create_or_update_user_assignment(
+                    db=db,
+                    user=user,
+                    new_role=db_role_name,
+                    new_unit_id=user.unit_id,
+                    assigned_by_user_id=actor_id,
+                    enforcer=None,
+                )
+            db.add(user)
+        if role_to_remove in roles:
+            # Xoá ĐÚNG các dòng đã đọc + khoá ở (1) (theo id) — dòng cùng cặp chèn sau lần đọc là thao tác đến sau, phải còn.
+            removed_count += 1 if await user_repo.delete_grouping_ids([i for i, r in rows if r == role_to_remove]) else 0
+        if not remaining_roles:
+            # SMART BEHAVIOR: If no roles left, auto-assign role:user
+            await user_repo.add_grouping(user_id, "role:user")
+            reassigned_count += 1
+            log.info(f"User {user_id} had no roles left, auto-assigned role:user")
+
+        # `log` ở module này là `logging.getLogger` CHUẨN, không phải
+        # structlog — nó KHÔNG nhận kwarg tuỳ ý và ném
+        # `TypeError: Logger._log() got an unexpected keyword argument`.
+        # Trường có cấu trúc phải đi qua `extra={...}`.
+        log.info(
+            "User %s updated",
+            user_id,
+            extra={
+                "removed_role": role_to_remove,
+                "remaining_roles": remaining_roles,
+                "db_role": db_role_name,
+            },
+        )
 
     # ✅ TRANSACTION FIX: Flush instead of commit
     await db.flush()
@@ -217,13 +251,18 @@ async def remove_role_from_users(
     async def _post_commit():
         """Execute after router commits the transaction.
 
-        KHÔNG gọi `save_policy()`. `auto_save` bật nên mọi
-        `add/remove_grouping_policy` ở trên ĐÃ ghi xuống `casbin_rule`. Còn
-        `save_policy()` của adapter async là `DELETE FROM casbin_rule` rồi ghi
-        lại toàn bộ model — chạy SAU `db.commit()`, tức ngoài mọi lock đã giữ
-        lúc mutation, nên một lượt reload chen giữa hai thời điểm là đủ để nó
-        ghi trạng thái CŨ đè lên trạng thái ĐÚNG.
+        KHÔNG gọi `save_policy()` (adapter async = `DELETE FROM casbin_rule` rồi ghi lại toàn bộ model — chạy SAU commit,
+        ngoài mọi lock, một lượt reload chen giữa là đủ để ghi trạng thái CŨ đè lên trạng thái ĐÚNG).
+
+        PR-B lượt 4: dòng ``casbin_rule`` đã ghi TRONG giao dịch vừa commit ⇒ nạp lại bộ nhớ enforcer CỦA WORKER NÀY từ
+        CSDL (``load_policy`` dưới lock enforcer). Nạp hỏng chỉ để bộ nhớ worker này cũ (như mọi worker khác) — CSDL đã
+        đúng, không đường đổi vai CSDL nào quyết từ bộ nhớ ⇒ chỉ ghi cảnh báo.
         """
+        from app.services.casbin_service import dong_bo_tu_nguon_ben_vung
+
+        loi = await dong_bo_tu_nguon_ben_vung(enforcer)
+        if loi is not None:
+            log.warning("remove_role_from_users: reload enforcer after commit failed", extra={"error": loi})
 
     result = {
         "detail": f"Removed {role_to_remove} from {removed_count} user(s), {reassigned_count} auto-assigned to role:user",
@@ -236,10 +275,25 @@ async def remove_role_from_users(
     return result, _post_commit
 
 
+def _user_ids_with_grouping(grouping, role_name: str) -> set:
+    """Id người có dòng grouping ``g, user:<id>, <role_name>`` (bỏ qua chủ thể không đúng dạng ``user:<số>``)."""
+    ids = set()
+    for group in grouping:
+        # group format: ["user:123", "role:support"]
+        if len(group) >= 2 and group[1] == role_name and group[0].startswith("user:"):
+            try:
+                ids.add(int(group[0].split(":")[1]))
+            except (ValueError, IndexError):
+                continue
+    return ids
+
+
 async def delete_role_atomic(
     db: AsyncSession,
     role_name: str,
     enforcer: casbin.AsyncEnforcer,
+    actor_id: Optional[int] = None,  # PR-B lượt 3: người thao tác (Q4 — chỉ dùng nếu đổi vai kéo theo tự thu hồi)
+    request_meta: Optional[Any] = None,
 ) -> Tuple[Dict[str, Any], Callable]:
     """
     Atomically delete a role with all its associations.
@@ -261,150 +315,212 @@ async def delete_role_atomic(
     if role_name in SYSTEM_ROLES:
         raise BadRequest(f"Cannot delete system role: {role_name}")
 
-    # STEP 1b: ĐỒNG BỘ POLICY TỪ CSDL — TRƯỚC cả phép kiểm role tồn tại.
+    # PR-B lượt 3 (Codex lượt 2 điểm chặn 5 / 4.1) — bước CSDL TRƯỚC lock enforcer.
     #
-    # Cả `role_has_policies` bên dưới lẫn `policies_to_remove` ở STEP 2b đều
-    # dựng TỪ MODEL. Sau một lượt thu hồi hỏng, model đã quên rule mà hàng vẫn
-    # nằm trong CSDL — khi ấy phép kiểm này ném `ResourceNotFoundError` (404)
-    # cho một role vẫn còn quyền, còn retry thì chỉ nhìn thấy phần rule sót
-    # trong model. Đồng bộ trước là điều kiện để hai bước đó nói về CSDL thật.
-    # `all_policies` và `policies_to_remove` dựng TỪ MODEL ở trong vùng này,
-    # nên lock phải bao cả lúc dựng — khoá riêng trong helper thì snapshot đã
-    # kịp cũ. Lock TÁI VÀO ĐƯỢC nên helper vẫn tự khoá mà không tự chặn mình.
+    # Bản cũ đọc người mang vai bằng một lần đọc thường rồi GHI ``user.role = "user"`` khi ĐANG giữ lock enforcer:
+    # (a) dữ liệu cũ — người vừa được đổi sang Cán bộ (và cấp quyền duyệt chéo) bị ghi đè thành ``user`` mà không qua tự thu
+    #     hồi (Q4); trả lại vai Cán bộ sau đó là dùng lại quyền cũ;
+    # (b) lấy khoá dòng ``user`` khi đang giữ lock enforcer — NGƯỢC chiều mọi đường đổi vai khác (dòng ``user`` → lock
+    #     enforcer, vd ``update_user``) ⇒ bế tắc giữa lock asyncio và khoá CSDL mà PostgreSQL không phát hiện được.
+    # Nay:
+    # (A) tìm người liên quan — đọc bảng ``casbin_rule`` + vai CSDL (PR-B lượt 4: không đọc bộ nhớ enforcer), không khoá;
+    # (B) KHÔNG giữ lock enforcer: khoá từng dòng ``user`` (id tăng) ``FOR NO KEY UPDATE``, đọc lại vai DƯỚI khoá; chỉ người
+    #     CÒN mang vai bị xoá mới bị đổi sang ``user``, qua ``revoke_grants_on_account_change`` (tầng chủ sở hữu Q4);
+    # (C) lock enforcer: đồng bộ policy, kiểm role tồn tại, tìm lại người liên quan — có người MỚI chưa khoá (vừa được gán
+    #     vai giữa (A) và (C)) ⇒ nhả lock, quay lại (B) cho người ấy, CHƯA đụng Casbin; đủ ⇒ xoá policy + hậu điều kiện
+    #     (fail-closed như cũ) rồi gỡ grouping. Quá ``_MAX_LAN_ANH`` vòng ⇒ lỗi 500 (không commit gì).
+    #     PR-B lượt 4 (Codex lượt 3 điểm chặn 5): (B) chạy trong MỘT savepoint; người mới có id NHỎ hơn người đã khoá ⇒
+    #     rollback savepoint (nhả khoá) rồi khoá lại toàn tập theo id tăng — thứ tự khoá tăng trên TOÀN giao dịch.
+    # Lỗi ở (C) ⇒ router rollback ⇒ các đổi vai ở (B) cũng mất (CSDL rollback được; Casbin chỉ bị đụng sau hậu điều kiện).
+    from app.repositories import document_bulk_repository as bulk_repo
     from app.services.casbin_service import khoa_enforcer
+    from app.services.document_cross_review_service import revoke_grants_on_account_change
 
-    async with khoa_enforcer(enforcer):
-        from app.services.casbin_service import dong_bo_tu_nguon_ben_vung
+    user_repo = UserRepository(db)
+    db_role = role_name.replace("role:", "")
+    from app.services.user_deletion_policy import lock_users_in_id_order
 
-        loi_dong_bo = await dong_bo_tu_nguon_ben_vung(enforcer)
-        if loi_dong_bo is not None:
-            raise ConflictError(
-                f"Không xoá được role {role_name}: không đồng bộ được policy từ "
-                f"CSDL nên chưa chạm vào gì — {loi_dong_bo}"
+    locked_ids: List[int] = []  # thứ tự đã khoá trong savepoint hiện hành — luôn TĂNG
+    held_ref_ids: List[int] = []  # PR-B lượt 5: người thao tác đã khoá ``FOR KEY SHARE`` trong savepoint hiện hành
+    reassigned_ids: set = set()
+    sp = None
+
+    # (A) — PR-B lượt 4 (Codex lượt 3 điểm chặn 1): đọc BẢNG ``casbin_rule`` (nguồn chung mọi worker), không đọc bộ nhớ
+    # enforcer của worker này; cùng vai CSDL. Không khoá.
+    candidate_ids = set(await user_repo.user_ids_with_grouping_role(role_name))
+    candidate_ids |= {u.id for u in await user_repo.get_by_db_role(db_role)}
+
+    for _vong in range(_MAX_LAN_ANH):
+        moi = sorted(candidate_ids - set(locked_ids))
+        dang_giu = locked_ids + held_ref_ids
+        if moi and dang_giu and moi[0] < max(dang_giu):
+            # Codex lượt 3 điểm chặn 5: người MỚI có id NHỎ hơn người đã khoá ⇒ khoá tiếp là GIỮ id lớn CHỜ id nhỏ — ngược
+            # chiều mọi đường khoá nhiều người theo id tăng (đồng bộ vai, gỡ vai hàng loạt, khoá tài khoản hàng loạt) ⇒ bế
+            # tắc. Bảo toàn thứ tự khoá TOÀN giao dịch: rollback savepoint (khoá dòng lấy trong savepoint được NHẢ, đổi vai
+            # trong đó cũng mất) rồi khoá lại TOÀN tập theo id tăng. PR-B lượt 5: "đã khoá" gồm cả người thao tác.
+            await sp.rollback()
+            sp, locked_ids, held_ref_ids, reassigned_ids = None, [], [], set()
+            moi = sorted(candidate_ids)
+        if sp is None:
+            sp = await db.begin_nested()
+        # PR-B lượt 5 (Codex 22-11 P2): khoá TRƯỚC mọi câu ghi của vòng, theo id TĂNG trên (người mới ∪ người thao tác —
+        # khoá ngoại phân công / thu hồi / nhật ký), TRONG savepoint (khởi động lại vòng ⇒ nhả cùng mọi khoá khác).
+        refs = [] if actor_id is None or actor_id in held_ref_ids or actor_id in moi else [actor_id]
+        await lock_users_in_id_order(db, target_ids=moi, referenced_ids=refs)
+        held_ref_ids += refs
+        # (B) STEP 4 — đổi vai CSDL cho người CÒN mang vai bị xoá (vai đọc DƯỚI khoá dòng ``user``).
+        for user_id in moi:
+            locked_ids.append(user_id)
+            locked = await bulk_repo.lock_user_no_key_update(db, user_id)
+            if locked is None or locked.role != db_role:
+                continue
+            await revoke_grants_on_account_change(
+                db, user_id=user_id, new_role="user", actor_id=actor_id, request_meta=request_meta
             )
+            user = await user_repo.get_by_id(user_id)
+            # đối tượng có thể nạp TRƯỚC khoá (Codex lượt 3 điểm chặn 3); PR-B lượt 5: làm mới cả ``unit_id`` (phân công mới).
+            await db.refresh(user, attribute_names=["role", "unit_id"])
+            # PR-B lượt 5 (Codex 22-11 B-P1): đổi vai CSDL qua ĐÚNG hàm PUT dùng — đóng bản ghi phân công đang hiệu lực, mở
+            # bản ghi mới mang vai ``user``, cùng savepoint ``sp`` (khởi động lại vòng ⇒ lùi cả phân công).
+            from app.services.user_service import _create_or_update_user_assignment
 
-        # STEP 2: Check if role exists (has any policies)
-        all_policies = enforcer.get_policy()
-        role_has_policies = any(p[0] == role_name for p in all_policies)
-        if not role_has_policies:
-            raise ResourceNotFoundError(f"Role not found: {role_name}")
+            await _create_or_update_user_assignment(
+                db=db,
+                user=user,
+                new_role="user",
+                new_unit_id=user.unit_id,
+                assigned_by_user_id=actor_id,
+                enforcer=None,
+            )
+            db.add(user)
+            reassigned_ids.add(user_id)
+        await db.flush()  # mọi câu ghi dòng ``user`` xong TRƯỚC khi vào lock enforcer
 
-        # STEP 2b: XOÁ policy + KIỂM HẬU ĐIỀU KIỆN — TRƯỚC mọi mutation khác.
+        # (C)
+        # STEP 1b: ĐỒNG BỘ POLICY TỪ CSDL — TRƯỚC cả phép kiểm role tồn tại.
         #
-        # Thứ tự này là phần fail-closed. Các bước sau đổi hàng DB (STEP 4) và
-        # grouping policy trong enforcer (STEP 5/6); DB thì router rollback được,
-        # nhưng thay đổi trên enforcer thì KHÔNG hoàn tác đồng bộ. Nếu xoá policy
-        # thất bại mà ta đã kịp gán lại user và gỡ grouping, hệ thống rơi vào
-        # trạng thái nửa vời: user mất role, còn policy của role thì vẫn sống.
-        #
-        # Nên xoá policy trước, xác nhận sạch, rồi mới đụng thứ khác. Ném ở đây thì
-        # router `except Exception -> rollback` và KHÔNG log "Role deleted
-        # atomically".
-        from app.services.casbin_service import (
-            chuan_hoa_rule,
-            policy_cua_role,
-            xoa_nhom_rule_fail_closed,
-            xoa_rule_chinh_xac,
-        )
+        # Cả `role_has_policies` bên dưới lẫn `policies_to_remove` ở STEP 2b đều
+        # dựng TỪ MODEL. Sau một lượt thu hồi hỏng, model đã quên rule mà hàng vẫn
+        # nằm trong CSDL — khi ấy phép kiểm này ném `ResourceNotFoundError` (404)
+        # cho một role vẫn còn quyền, còn retry thì chỉ nhìn thấy phần rule sót
+        # trong model. Đồng bộ trước là điều kiện để hai bước đó nói về CSDL thật.
+        # `all_policies` và `policies_to_remove` dựng TỪ MODEL ở trong vùng này,
+        # nên lock phải bao cả lúc dựng — khoá riêng trong helper thì snapshot đã
+        # kịp cũ. Lock TÁI VÀO ĐƯỢC nên helper vẫn tự khoá mà không tự chặn mình.
+        async with khoa_enforcer(enforcer):
+            from app.services.casbin_service import dong_bo_tu_nguon_ben_vung
 
-        policies_to_remove = [
-            chuan_hoa_rule(p) for p in all_policies if p and p[0] == role_name
-        ]
-        removed_p_count = 0
-
-        async def xu_ly(p):
-            nonlocal removed_p_count
-            if await xoa_rule_chinh_xac(enforcer, p):
-                removed_p_count += 1
-                return True
-            return False
-
-        # Thứ tự non-deny -> deny do helper chung giữ. Vòng `for` phẳng ở đây từng
-        # xoá `deny` sau khi `allow` xoá hụt: role "xoá dở" mà quyền lại RỘNG HƠN
-        # trước khi xoá.
-        kq = await xoa_nhom_rule_fail_closed(
-            enforcer, policies_to_remove, xu_ly, da_dong_bo=True
-        )
-
-        # `policy_cua_role` chỉ đọc MODEL BỘ NHỚ, nên nó KHÔNG thấy ca adapter hỏng
-        # (model sạch mà hàng trong CSDL còn). `kq["con_song"]` mới là danh sách
-        # rule chưa được XÁC NHẬN thu hồi — phải kiểm cả hai.
-        policies_con_sot = policy_cua_role(enforcer, role_name)
-        chua_xac_nhan = kq["con_song"]
-        if policies_con_sot or chua_xac_nhan or not kq["an_toan"]:
-            raise ConflictError(
-                f"Không xoá được role {role_name}: {len(policies_con_sot)} policy "
-                f"còn trong model, {len(chua_xac_nhan)} rule chưa xác nhận thu hồi"
-                + (
-                    f" ({len(kq['deny_chua_cham'])} rule deny KHÔNG bị chạm tới vì "
-                    f"non-deny xoá hụt — xoá deny lúc này là MỞ quyền)"
-                    if not kq["an_toan"]
-                    else ""
+            loi_dong_bo = await dong_bo_tu_nguon_ben_vung(enforcer)
+            if loi_dong_bo is not None:
+                raise ConflictError(
+                    f"Không xoá được role {role_name}: không đồng bộ được policy từ "
+                    f"CSDL nên chưa chạm vào gì — {loi_dong_bo}"
                 )
-                + f", quyền cũ VẪN CÒN hiệu lực. Chi tiết: {policies_con_sot}"
+
+            # STEP 2: Check if role exists (has any policies)
+            all_policies = enforcer.get_policy()
+            role_has_policies = any(p[0] == role_name for p in all_policies)
+            if not role_has_policies:
+                raise ResourceNotFoundError(f"Role not found: {role_name}")
+
+            # STEP 3: tìm LẠI người liên quan (grouping trong model vừa đồng bộ + người CSDL còn mang vai — câu đọc thường,
+            # không khoá dòng nào). Có người chưa qua (B) ⇒ nhả lock, quay lại (B); CHƯA đụng gì trong Casbin.
+            all_grouping = enforcer.get_grouping_policy()
+            candidate_ids = _user_ids_with_grouping(all_grouping, role_name) | {
+                u.id for u in await user_repo.get_by_db_role(db_role)
+            }
+            if candidate_ids - set(locked_ids):
+                continue
+
+            # STEP 2b: XOÁ policy + KIỂM HẬU ĐIỀU KIỆN — TRƯỚC mọi mutation khác trên enforcer.
+            #
+            # Thứ tự này là phần fail-closed. Các bước sau đổi grouping policy trong
+            # enforcer (STEP 5/6); DB (STEP 4 ở trên) thì router rollback được,
+            # nhưng thay đổi trên enforcer thì KHÔNG hoàn tác đồng bộ. Nếu xoá policy
+            # thất bại mà ta đã kịp gỡ grouping, hệ thống rơi vào trạng thái nửa
+            # vời: user mất role, còn policy của role thì vẫn sống.
+            #
+            # Nên xoá policy trước, xác nhận sạch, rồi mới đụng thứ khác. Ném ở đây thì
+            # router `except Exception -> rollback` và KHÔNG log "Role deleted
+            # atomically".
+            from app.services.casbin_service import (
+                chuan_hoa_rule,
+                policy_cua_role,
+                xoa_nhom_rule_fail_closed,
+                xoa_rule_chinh_xac,
             )
 
-        user_repo = UserRepository(db)
-    
-        # STEP 3a: Find all users with this role in DB (using Repository)
-        db_role = role_name.replace("role:", "")
-        users_from_db = await user_repo.get_by_db_role(db_role)
+            policies_to_remove = [
+                chuan_hoa_rule(p) for p in all_policies if p and p[0] == role_name
+            ]
+            removed_p_count = 0
 
-        # STEP 3b: Find all users with grouping policy for this role
-        all_grouping = enforcer.get_grouping_policy()
-        user_ids_from_casbin = []
-        for group in all_grouping:
-            # group format: ["user:123", "role:support"]
-            if (
-                len(group) >= 2
-                and group[1] == role_name
-                and group[0].startswith("user:")
-            ):
-                try:
-                    user_id = int(group[0].split(":")[1])
-                    user_ids_from_casbin.append(user_id)
-                except (ValueError, IndexError):
-                    continue
+            async def xu_ly(p):
+                nonlocal removed_p_count
+                if await xoa_rule_chinh_xac(enforcer, p):
+                    removed_p_count += 1
+                    return True
+                return False
 
-        # Merge: Get all unique user IDs
-        all_user_ids = set([u.id for u in users_from_db] + user_ids_from_casbin)
-
-        # STEP 4: Update users in DB to role:user (using Repository)
-        reassigned_count = 0
-        users_to_update = await user_repo.get_by_ids(list(all_user_ids))
-        for user in users_to_update:
-            # Only update if they had this role
-            if user.role == db_role:
-                user.role = "user"
-                db.add(user)
-                reassigned_count += 1
-
-        # STEP 5: Remove grouping policies (user → role)
-        removed_g_user_count = 0
-        for user_id in all_user_ids:
-            user_subject = f"user:{user_id}"
-            removed = await enforcer.remove_grouping_policy(
-                user_subject, role_name
+            # Thứ tự non-deny -> deny do helper chung giữ. Vòng `for` phẳng ở đây từng
+            # xoá `deny` sau khi `allow` xoá hụt: role "xoá dở" mà quyền lại RỘNG HƠN
+            # trước khi xoá.
+            kq = await xoa_nhom_rule_fail_closed(
+                enforcer, policies_to_remove, xu_ly, da_dong_bo=True
             )
-            if removed:
-                removed_g_user_count += 1
 
-            # STEP 6: Add grouping policy (user → role:user) if needed
-            user_roles = await enforcer.get_roles_for_user(user_subject)
-            if not user_roles or len(user_roles) == 0:
-                await enforcer.add_grouping_policy(user_subject, "role:user")
+            # `policy_cua_role` chỉ đọc MODEL BỘ NHỚ, nên nó KHÔNG thấy ca adapter hỏng
+            # (model sạch mà hàng trong CSDL còn). `kq["con_song"]` mới là danh sách
+            # rule chưa được XÁC NHẬN thu hồi — phải kiểm cả hai.
+            policies_con_sot = policy_cua_role(enforcer, role_name)
+            chua_xac_nhan = kq["con_song"]
+            if policies_con_sot or chua_xac_nhan or not kq["an_toan"]:
+                raise ConflictError(
+                    f"Không xoá được role {role_name}: {len(policies_con_sot)} policy "
+                    f"còn trong model, {len(chua_xac_nhan)} rule chưa xác nhận thu hồi"
+                    + (
+                        f" ({len(kq['deny_chua_cham'])} rule deny KHÔNG bị chạm tới vì "
+                        f"non-deny xoá hụt — xoá deny lúc này là MỞ quyền)"
+                        if not kq["an_toan"]
+                        else ""
+                    )
+                    + f", quyền cũ VẪN CÒN hiệu lực. Chi tiết: {policies_con_sot}"
+                )
 
-        # STEP 7: Remove all permission policies (p rules) for this role
-        # (Policy đã được xoá và xác nhận sạch ở STEP 2b, TRƯỚC mọi mutation.)
+            all_user_ids = candidate_ids | reassigned_ids
 
-        # STEP 8: Remove role inheritance grouping policies (g, role:X, role:user)
-        removed_g_inherit_count = 0
-        for group in all_grouping:
-            # Check if this is a role inheriting from another role
-            if len(group) >= 2 and group[0] == role_name:
-                removed = await enforcer.remove_grouping_policy(group[0], group[1])
+            # STEP 5: Remove grouping policies (user → role)
+            removed_g_user_count = 0
+            for user_id in sorted(all_user_ids):
+                user_subject = f"user:{user_id}"
+                removed = await enforcer.remove_grouping_policy(
+                    user_subject, role_name
+                )
                 if removed:
-                    removed_g_inherit_count += 1
+                    removed_g_user_count += 1
+
+                # STEP 6: Add grouping policy (user → role:user) if needed
+                user_roles = await enforcer.get_roles_for_user(user_subject)
+                if not user_roles or len(user_roles) == 0:
+                    await enforcer.add_grouping_policy(user_subject, "role:user")
+
+            # STEP 7: Remove all permission policies (p rules) for this role
+            # (Policy đã được xoá và xác nhận sạch ở STEP 2b, TRƯỚC mọi mutation trên enforcer.)
+
+            # STEP 8: Remove role inheritance grouping policies (g, role:X, role:user)
+            removed_g_inherit_count = 0
+            for group in all_grouping:
+                # Check if this is a role inheriting from another role
+                if len(group) >= 2 and group[0] == role_name:
+                    removed = await enforcer.remove_grouping_policy(group[0], group[1])
+                    if removed:
+                        removed_g_inherit_count += 1
+            break
+    else:
+        # Người mang vai đổi liên tục giữa lúc khoá và lúc kiểm lại ⇒ fail-closed (router không commit).
+        raise RuntimeError(f"delete_role_atomic: danh sách người mang {role_name} đổi liên tục")
+    await sp.commit()  # nhả savepoint (giữ thay đổi + khoá trong giao dịch của router)
+    reassigned_count = len(reassigned_ids)
 
     # ✅ TRANSACTION FIX: Flush instead of commit
     await db.flush()

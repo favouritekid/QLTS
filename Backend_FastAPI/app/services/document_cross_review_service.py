@@ -6,7 +6,10 @@
 - Hàng đợi: phản hồi HẸP; với TỪNG thao tác chọn quyền còn hiệu lực phủ đơn vị lead VÀ cho phép ĐÚNG thao tác ấy —
   ``expires_at`` muộn nhất rồi ``id`` lớn nhất (Codex 69: quyền chỉ-từ-chối không được che quyền duyệt).
 - Duyệt / từ chối lẻ: ``transition_document(via="cross", grant_id=…)`` — lõi kiểm lại dưới khoá (``clock_timestamp()``). Máy
-  chủ KHÔNG tự đổi sang quyền khác: quyền sai / hết hạn / thu hồi / không cho đúng thao tác ⇒ 409 ``actor_not_authorized``.
+  chủ KHÔNG tự đổi sang quyền khác: quyền sai / hết hạn / thu hồi / không cho đúng thao tác ⇒ 409 ``actor_not_authorized``
+  khi người gọi còn quyền hợp lệ khác; không còn quyền nào cho đúng thao tác + đơn vị ⇒ 404 cùng thân (owner Q1, PR-B).
+- Q4 (owner 20-11, PR-B): đổi vai khỏi Cán bộ / khoá tài khoản ⇒ TỰ THU HỒI mọi quyền chưa hết hạn của người ấy ở mọi đơn
+  vị, CÙNG giao dịch — :func:`revoke_grants_on_account_change` (tầng chủ sở hữu; mọi đường đổi vai / trạng thái gọi nó).
 """
 
 from __future__ import annotations
@@ -24,13 +27,30 @@ from app.models.admission_config.document_review import CROSS_REVIEW_MAX_DAYS
 from app.repositories import document_bulk_repository as repo
 from app.services import document_review_rules as rules
 from app.services import document_transition
-from app.services.document_bulk_verify_service import BulkBatchConflict, BulkVerifyUnprocessable
+from app.services.document_bulk_verify_service import (
+    BulkBatchConflict,
+    BulkVerifyUnprocessable,
+    CrossReviewNotFound,
+    grant_allows,
+)
 from app.services.document_transition import ACTOR_NOT_AUTHORIZED, DocumentTransitionConflict, RequestMeta
 from app.utils.exceptions import PermissionDeniedError, ResourceNotFoundError
 
 log = structlog.get_logger(__name__)
 
 GRANT_ENTITY_TYPE = "document_cross_review_grant"
+
+#: Q4 — nhãn vai tiếng Việt cho câu lý do tự thu hồi (vai lạ ⇒ in nguyên mã).
+ROLE_LABELS_VI: Dict[str, str] = {
+    UserRole.OFFICER: "Cán bộ",
+    UserRole.MANAGER: "Quản lý",
+    UserRole.ADMIN: "Admin",
+    UserRole.ACCOUNTANT: "Kế toán",
+    UserRole.COLLABORATOR: "Cộng tác viên",
+    UserRole.USER: "Người dùng",
+}
+AUTO_REVOKE_PREFIX = "Tự thu hồi: "
+AUTO_REVOKE_LOCKED = "tài khoản bị khoá"
 
 
 def _grant_view(grant: models.DocumentCrossReviewGrant, is_active: bool) -> Dict[str, Any]:
@@ -50,12 +70,8 @@ def _grant_view(grant: models.DocumentCrossReviewGrant, is_active: bool) -> Dict
     }
 
 
-def _allows(grant: models.DocumentCrossReviewGrant, action: str) -> bool:
-    if action == rules.ACTION_VERIFY:
-        return bool(grant.allow_verify)
-    if action == rules.ACTION_REJECT:
-        return bool(grant.allow_reject)
-    return False
+#: MỘT nguồn "quyền cho phép đúng thao tác" — ``document_bulk_verify_service.grant_allows`` (bản cũ ở đây là bản chép).
+_allows = grant_allows
 
 
 def pick_grant_for_action(
@@ -81,9 +97,10 @@ async def create_grant(
     reason = body.reason.strip()
     if not reason:
         raise BulkVerifyUnprocessable("REASON_REQUIRED", "Cấp quyền duyệt chéo phải ghi lý do")
-    grantee = (
-        await db.execute(select(models.User).where(models.User.id == body.grantee_user_id))
-    ).scalar_one_or_none()
+    # PR-B (Q4, vá nhánh): người được cấp đọc DƯỚI khoá ``FOR SHARE`` (thứ tự người → quyền) — xung đột với đổi vai / khoá
+    # tài khoản (``FOR NO KEY UPDATE``). Đọc không khoá (bản cũ) thì một lần cấp chen vào lúc tài khoản đang bị khoá / đổi
+    # vai sẽ tạo quyền còn hiệu lực SAU khi lệnh tự thu hồi đã chạy ⇒ mở lại tài khoản là dùng được quyền ấy (trái Q4).
+    grantee = await repo.lock_user_role_share(db, body.grantee_user_id)
     if grantee is None or grantee.role != UserRole.OFFICER or grantee.status != "active":
         raise BulkVerifyUnprocessable(
             "GRANTEE_NOT_ELIGIBLE", "Người được cấp phải là Cán bộ đang hoạt động"
@@ -136,11 +153,43 @@ async def create_grant(
     return _grant_view(grant, True)
 
 
+async def _write_revocations(
+    db: AsyncSession,
+    grants: Sequence[models.DocumentCrossReviewGrant],
+    *,
+    admin_id: int,
+    reason: str,
+    meta: RequestMeta,
+) -> None:
+    """MỘT khuôn ghi thu hồi (Admin thu hồi tay + Q4 tự thu hồi): ``revoked_at`` = đồng hồ CSDL, ``revoked_by_user_id`` =
+    Admin thao tác, mỗi quyền MỘT dòng ``entity_audit_log`` ``revoked`` kèm ``reason`` — cùng giao dịch người gọi, không
+    commit. Dòng quyền phải ĐÃ khoá ``FOR UPDATE``. Lỗi ghi nhật ký ném ra ⇒ người gọi không commit ⇒ rollback cả thu hồi."""
+    from app.services.audit_service import log_audit
+
+    now = await repo.db_clock(db)
+    for grant in grants:
+        grant.revoked_at = now
+        grant.revoked_by_user_id = admin_id
+    await db.flush()
+    for grant in grants:
+        await log_audit(
+            db,
+            GRANT_ENTITY_TYPE,
+            grant.id,
+            "revoked",
+            actor_user_id=admin_id,
+            old_value={"revoked_at": None},
+            new_value={"revoked_at": now},
+            reason=reason,
+            source="api",
+            ip_address=meta.ip_address,
+            user_agent=meta.user_agent or None,  # cột tự cắt theo độ dài (TruncatedString, PR-D F12)
+        )
+
+
 async def revoke_grant(
     db: AsyncSession, *, admin_id: int, grant_id: int, reason: str, request_meta: Optional[RequestMeta] = None
 ) -> Dict[str, Any]:
-    from app.services.audit_service import log_audit
-
     meta = request_meta or RequestMeta()
     reason = (reason or "").strip()
     if not reason:
@@ -150,25 +199,97 @@ async def revoke_grant(
         raise ResourceNotFoundError(detail="Không tìm thấy quyền duyệt chéo")
     if grant.revoked_at is not None:
         raise BulkBatchConflict("GRANT_ALREADY_REVOKED", "Quyền này đã bị thu hồi")
-    now = await repo.db_clock(db)
-    grant.revoked_at = now
-    grant.revoked_by_user_id = admin_id
-    await db.flush()
-    await log_audit(
-        db,
-        GRANT_ENTITY_TYPE,
-        grant.id,
-        "revoked",
-        actor_user_id=admin_id,
-        old_value={"revoked_at": None},
-        new_value={"revoked_at": now},
-        reason=reason,
-        source="api",
-        ip_address=meta.ip_address,
-        user_agent=meta.user_agent or None,  # cột tự cắt theo độ dài (TruncatedString, PR-D F12)
-    )
+    await _write_revocations(db, [grant], admin_id=admin_id, reason=reason, meta=meta)
     log.info("cross_review_revoked", grant_id=grant.id)
     return _grant_view(grant, False)
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Q4 (owner 20-11) — đổi vai / khoá tài khoản ⇒ tự thu hồi
+# ---------------------------------------------------------------------------------------------------------------------
+def _role_label(role: Any) -> str:
+    code = str(getattr(role, "value", role))
+    return ROLE_LABELS_VI.get(code, code)
+
+
+def auto_revoke_reason(
+    *,
+    old_role: Any,
+    old_status: Optional[str],
+    new_role: Any = None,
+    new_status: Optional[str] = None,
+) -> Optional[str]:
+    """MỘT vị từ Q4 "thay đổi tài khoản này có kéo theo tự thu hồi quyền duyệt chéo không" + câu lý do (``None`` = không).
+    Owner chốt 21-11 (câu 1, 2):
+
+    - trạng thái từ ``active`` sang BẤT KỲ trạng thái khác (kể cả chờ duyệt) ⇒ "Tự thu hồi: tài khoản bị khoá";
+    - vai từ Cán bộ sang vai khác ⇒ "Tự thu hồi: tài khoản đổi vai từ Cán bộ sang <vai mới thực tế>";
+    - một thao tác vừa khoá vừa đổi vai ⇒ ghi CẢ HAI câu (nối bằng "; ").
+
+    ``new_role`` / ``new_status`` = ``None`` ⇒ không đổi. Giá trị cũ phải đọc DƯỚI khoá (``revoke_grants_on_account_change``).
+    KHÔNG thu hồi (owner câu 3, 4, 5): khoá đăng nhập tạm (Redis, không đổi trạng thái), đổi đơn vị của Cán bộ, xoá tài
+    khoản (K4 409)."""
+    parts: List[str] = []
+    if new_status is not None and old_status == "active" and new_status != "active":
+        parts.append(AUTO_REVOKE_PREFIX + AUTO_REVOKE_LOCKED)
+    if new_role is not None and str(old_role) == UserRole.OFFICER and str(new_role) != UserRole.OFFICER:
+        parts.append(AUTO_REVOKE_PREFIX + f"tài khoản đổi vai từ {_role_label(old_role)} sang {_role_label(new_role)}")
+    return "; ".join(parts) if parts else None
+
+
+async def revoke_grants_on_account_change(
+    db: AsyncSession,
+    *,
+    user_id: int,
+    new_role: Any = None,
+    new_status: Optional[str] = None,
+    actor_id: Optional[int],
+    request_meta: Optional[RequestMeta] = None,
+) -> List[int]:
+    """Q4 — TẦNG CHỦ SỞ HỮU của "đổi vai / khoá tài khoản ⇒ tự thu hồi". Mọi đường đổi vai / trạng thái tài khoản (PUT lẻ,
+    hàng loạt, đồng bộ vai từ Casbin, gỡ vai) gọi hàm này TRONG giao dịch của chính việc đổi, TRƯỚC khi ghi vai / trạng
+    thái, truyền giá trị MỚI sắp ghi (``None`` = không đổi).
+
+    Thứ tự khoá (toàn cục, đầu ``document_bulk_verify_service``): dòng ``user`` ``FOR NO KEY UPDATE`` (= khoá của lệnh
+    ``UPDATE "user"`` sắp chạy) → MỌI quyền chưa thu hồi, chưa hết hạn của người ấy ``FOR UPDATE`` (id tăng) → ghi thu hồi
+    + nhật ký (:func:`_write_revocations`). Vai / trạng thái CŨ đọc DƯỚI khoá dòng ``user`` (PR-B lượt 2 — cùng khuôn điểm
+    chặn 4 của Codex: không quyết bằng bản đọc từ đầu yêu cầu, vì giữa đó tài khoản có thể vừa được trả vai / mở khoá và
+    cấp quyền mới). Không commit; mọi lỗi ném ra ⇒ người gọi KHÔNG commit ⇒ rollback CẢ việc đổi vai / khoá LẪN việc thu
+    hồi. Quyền đã thu hồi không bao giờ được khôi phục (mở khoá / trả vai ⇒ Admin cấp mới). Trả id các quyền DUYỆT CHÉO vừa
+    thu hồi.
+
+    GĐ2-C C1 (owner C1 22-11 "quyền hết khi tài khoản bị khoá / xoá theo luật thu hồi đã có ở GĐ1b"): CÙNG hàm này thu hồi
+    luôn quyền "Thư ký Hội đồng" (``review_secretary_service``) — vị từ riêng (vai được giữ quyền là Quản lý / Cán bộ), cùng
+    câu lý do, cùng giao dịch, cùng người thao tác. Thứ tự khoá: người → quyền duyệt chéo → quyền Thư ký (mọi người gọi đi
+    qua đây nên thứ tự giữa hai bảng quyền chỉ nằm ở MỘT chỗ)."""
+    from app.services import review_secretary_service as secretary
+
+    if new_role is None and new_status is None:
+        return []
+    with db.no_autoflush:  # đọc dòng TRONG CSDL (giá trị cũ), không xả trước thay đổi đang chờ của chính người ấy
+        locked = await repo.lock_user_no_key_update(db, user_id)
+    if locked is None:
+        return []
+    reason = auto_revoke_reason(old_role=locked.role, old_status=locked.status, new_role=new_role, new_status=new_status)
+    secretary_reason = secretary.auto_revoke_reason(
+        old_role=locked.role, old_status=locked.status, new_role=new_role, new_status=new_status
+    )
+    if reason is None and secretary_reason is None:
+        return []
+    if actor_id is None:
+        # Không có người thao tác thì không ghi được ``revoked_by_user_id`` đúng khuôn — fail-closed.
+        raise RuntimeError("revoke_grants_on_account_change: thiếu người thao tác")
+    grants: List[models.DocumentCrossReviewGrant] = []
+    if reason is not None:
+        grants = await repo.lock_active_grants_of_user_for_update(db, user_id)
+        if grants:
+            await _write_revocations(db, grants, admin_id=actor_id, reason=reason, meta=request_meta or RequestMeta())
+            log.info("cross_review_auto_revoked", user_id=user_id, grant_ids=[g.id for g in grants])
+    if secretary_reason is not None:
+        await secretary.revoke_on_account_change(
+            db, user_id=user_id, actor_id=actor_id, reason=secretary_reason, request_meta=request_meta
+        )
+    return [g.id for g in grants]
 
 
 async def list_grants(
@@ -203,16 +324,24 @@ async def eligibility(db: AsyncSession, *, user_id: int, role: str) -> Dict[str,
 
 
 async def require_grant_for_action(
-    db: AsyncSession, *, actor_id: int, grant_id: Optional[int], action: str
+    db: AsyncSession, *, actor: Any, grant_id: Optional[int], action: str
 ) -> models.DocumentCrossReviewGrant:
-    """Quyền ĐÚNG ``grant_id`` của người gọi, còn hiệu lực, cho phép ĐÚNG thao tác — không thì 409 ``actor_not_authorized``.
-    (Kiểm sớm cho xem trước lô chéo; khi ghi, lõi kiểm lại dưới khoá.)"""
-    if grant_id is None:
-        raise DocumentTransitionConflict(ACTOR_NOT_AUTHORIZED)
-    for g in await repo.active_grants_for_user(db, actor_id):
-        if g.id == grant_id and _allows(g, action):
-            return g
-    raise DocumentTransitionConflict(ACTOR_NOT_AUTHORIZED)
+    """Quyền ĐÚNG ``grant_id`` của người gọi, còn hiệu lực, cho phép ĐÚNG thao tác (kiểm sớm cho xem trước lô chéo; dưới khoá
+    kiểm lại bằng ``_recheck_preview_grant``). Không đạt ⇒ owner câu 9 (Codex lượt 2 PR-B, điểm chặn 4a), xét ở ĐƠN VỊ ghi
+    trên chính quyền được gửi (quyền của người gọi, mọi trạng thái): còn quyền KHÁC hợp lệ cho đúng thao tác ở đúng đơn vị ấy
+    ⇒ 409 ``actor_not_authorized`` (làm mới, máy chủ không tự chọn quyền thay thế); không còn — kể cả khi chỉ còn quyền ở đơn
+    vị khác — hay mã quyền không phải của người gọi ⇒ 404 cùng thân (``cross_denial``, MỘT vị từ)."""
+    from app.services.document_bulk_verify_service import cross_denial, unit_scope
+
+    unit_id = None
+    if grant_id is not None:
+        for g in await repo.active_grants_for_user(db, actor.id):
+            if g.id == grant_id and _allows(g, action):
+                return g
+        unit_id = await repo.own_grant_unit_id(db, grant_id, actor.id)
+    if unit_id is None:
+        raise CrossReviewNotFound()
+    raise await cross_denial(db, actor, action, unit_scope(unit_id))
 
 
 async def queue(db: AsyncSession, *, actor: models.User, page: int, page_size: int) -> Dict[str, Any]:
@@ -296,6 +425,11 @@ async def cross_action(
         # Đường chéo: ``decide`` chỉ trả ``not_permitted`` khi quyền KHÔNG cho đúng thao tác ⇒ 409 actor_not_authorized
         # (hợp đồng §2.2 — giao diện làm mới hàng đợi, máy chủ không tự đổi quyền).
         raise DocumentTransitionConflict(ACTOR_NOT_AUTHORIZED)
+    except CrossReviewNotFound:
+        raise
+    except ResourceNotFoundError:
+        # Owner Q1: hồ sơ / lead / dòng giấy không còn (phát hiện dưới khoá) ⇒ CÙNG thân 404 với cổng vào.
+        raise CrossReviewNotFound()
     return (
         {
             "profile_id": res.profile_id,

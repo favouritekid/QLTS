@@ -662,6 +662,68 @@ class UserRepository(BaseRepository[models.User]):
         return list(result.scalars().all())
 
     # =========================================================================
+    # PR-B lượt 4 (Codex lượt 3 điểm chặn 1): vai Casbin của người dùng đọc / ghi ở BẢNG ``casbin_rule``
+    # =========================================================================
+    # Enforcer trong bộ nhớ là bản RIÊNG của từng worker Gunicorn (``admin_v2_casbin.py``) — worker này có thể chưa thấy
+    # thay đổi worker khác vừa ghi. Quyết vai CSDL phải dựa trên bảng ``casbin_rule`` (nguồn CHUNG), đọc trong giao dịch
+    # của người gọi. Ghi qua các hàm dưới đây nằm TRONG giao dịch ấy (cùng commit / rollback với vai CSDL + thu hồi).
+
+    async def grouping_roles(self, user_id: int) -> List[str]:
+        """Các vai (cột ``v1``) của dòng ``g, user:<id>, <vai>`` trong ``casbin_rule``, id tăng. Đọc, không khoá."""
+        rows = (
+            await self.db.execute(
+                text("SELECT v1 FROM casbin_rule WHERE ptype = 'g' AND v0 = :sub ORDER BY id"), {"sub": f"user:{user_id}"}
+            )
+        ).all()
+        return [r[0] for r in rows]
+
+    async def lock_grouping_rows(self, user_id: int) -> List[Tuple[int, str]]:
+        """``(id, vai)`` các dòng ``g, user:<id>, <vai>`` hiện có, id tăng, KHOÁ ``FOR UPDATE`` tới hết giao dịch (lệnh xoá /
+        sửa chính các dòng ấy của thao tác khác phải chờ; dòng CHÈN sau lần đọc này không bị chặn — và KHÔNG bị xoá: mọi
+        lệnh xoá đi theo :meth:`delete_grouping_ids` trên đúng các id đã đọc — Codex lượt 4 PR-B, C2)."""
+        rows = (
+            await self.db.execute(
+                text("SELECT id, v1 FROM casbin_rule WHERE ptype = 'g' AND v0 = :sub ORDER BY id FOR UPDATE"),
+                {"sub": f"user:{user_id}"},
+            )
+        ).all()
+        return [(r[0], r[1]) for r in rows]
+
+    async def user_ids_with_grouping_role(self, role: str) -> List[int]:
+        """Id người có dòng ``g, user:<id>, <role>`` trong ``casbin_rule`` (bỏ qua chủ thể không đúng dạng ``user:<số>``).
+        Đọc, không khoá."""
+        rows = (
+            await self.db.execute(
+                text("SELECT v0 FROM casbin_rule WHERE ptype = 'g' AND v1 = :role AND v0 LIKE 'user:%'"), {"role": role}
+            )
+        ).all()
+        ids = set()
+        for (v0,) in rows:
+            try:
+                ids.add(int(v0.split(":", 1)[1]))
+            except (ValueError, IndexError):
+                continue
+        return sorted(ids)
+
+    async def delete_grouping_ids(self, row_ids: List[int]) -> int:
+        """Xoá ĐÚNG các dòng ``casbin_rule`` (``g``) theo id — những dòng đã đọc + khoá bằng :meth:`lock_grouping_rows` — trong
+        giao dịch hiện hành. Không xoá theo cặp (người, vai): một dòng cùng cặp chèn + commit SAU lần đọc là thao tác đến
+        sau, phải còn. Trả số dòng đã xoá."""
+        if not row_ids:
+            return 0
+        r = await self.db.execute(
+            text("DELETE FROM casbin_rule WHERE ptype = 'g' AND id = ANY(:ids)"), {"ids": list(row_ids)}
+        )
+        return r.rowcount or 0
+
+    async def add_grouping(self, user_id: int, role: str) -> None:
+        """Chèn dòng ``g, user:<id>, <role>`` trong giao dịch hiện hành."""
+        await self.db.execute(
+            text("INSERT INTO casbin_rule (ptype, v0, v1) VALUES ('g', :sub, :role)"),
+            {"sub": f"user:{user_id}", "role": role},
+        )
+
+    # =========================================================================
     # SPRINT 5: User Service Migration Methods
     # =========================================================================
 

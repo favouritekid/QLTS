@@ -13,11 +13,12 @@ from typing import Optional, Tuple
 
 import casbin
 import structlog
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
-from app.core.constants import UserRole
+from app.core.constants import COLLABORATOR_LINKABLE_ROLES, UserRole
 from app.repositories.collaborator_repository import CollaboratorRepository
 from app.repositories.lead_claim_repository import LeadClaimRepository
 from app.repositories.lead_repository import LeadRepository
@@ -73,6 +74,18 @@ def mask_phone(phone: str) -> str:
 # ============================================================================
 
 
+def collaborator_link_target_allowed(target, caller) -> bool:
+    """MỘT vị từ "được gắn tài khoản ``target`` vào hồ sơ CTV do ``caller`` tạo": tài khoản còn, vai thuộc
+    ``COLLABORATOR_LINKABLE_ROLES`` (không phải nhân sự — áp cho MỌI vai kể cả Admin), và người không phải Admin chỉ gắn
+    tài khoản CÙNG đơn vị mình. Dùng ở cổng ``deps.validate_collaborator_create`` (đọc không khoá) và ở
+    :func:`create_collaborator` trên dòng VỪA KHOÁ ngay trước khi ghi vai."""
+    if target is None or target.role not in COLLABORATOR_LINKABLE_ROLES:
+        return False
+    if caller.role == UserRole.ADMIN:
+        return True
+    return caller.unit_id is not None and target.unit_id == caller.unit_id
+
+
 async def create_collaborator(
     db: AsyncSession,
     data: CollaboratorCreate,
@@ -104,10 +117,32 @@ async def create_collaborator(
     if not is_unique:
         raise DuplicateResourceError("Số điện thoại CTV đã tồn tại trong hệ thống")
 
+    # PR-B lượt 5 (Codex 22-11 P2, rà cùng khuôn): dòng CTV + bản ghi phân công tham chiếu người tạo (``approved_by_id``,
+    # ``assigned_by_user_id``) và cán bộ quản lý (``managed_by_officer_id``) bằng khoá ngoại ⇒ khoá họ ``FOR KEY SHARE``
+    # cùng tài khoản được gắn (``FOR NO KEY UPDATE``) theo id TĂNG, TRƯỚC mọi câu ghi — cùng chiều K4.
+    from app.services.user_deletion_policy import lock_users_in_id_order
+
+    await lock_users_in_id_order(
+        db,
+        target_ids=[data.user_id] if data.user_id else [],
+        referenced_ids=[created_by.id, data.managed_by_officer_id],
+    )
+
     # Validate user_id if provided
     if data.user_id:
-        user = await db.get(models.User, data.user_id)
-        if not user:
+        # PR-B lượt 2 (Codex điểm chặn 4): KHOÁ dòng người được gắn (``FOR NO KEY UPDATE`` — đúng khoá của lệnh ghi vai bên
+        # dưới) và ĐỌC LẠI vai / đơn vị NGAY trước khi liên kết, bằng CÙNG vị từ với cổng ``deps``. Giữa cổng và lúc ghi, tài
+        # khoản có thể vừa thành Cán bộ và được cấp quyền duyệt chéo ⇒ ghi vai CTV sẽ bỏ qua tự thu hồi (Q4). Đã thành vai
+        # không được gắn ⇒ từ chối bằng ĐÚNG lỗi hiện có của luật liên kết (404 "User … not found").
+        user = (
+            await db.execute(
+                select(models.User)
+                .where(models.User.id == data.user_id)
+                .with_for_update(key_share=True)
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
+        if not collaborator_link_target_allowed(user, created_by):
             raise ResourceNotFoundError(f"User {data.user_id} not found")
         existing_collab = await repo.get_by_user_id(data.user_id)
         if existing_collab:
@@ -164,8 +199,21 @@ async def create_collaborator(
                 # If user_id provided, set user role to collaborator
                 if data.user_id:
                     user = await db.get(models.User, data.user_id)
-                    if user:
-                        user.role = UserRole.COLLABORATOR
+                    if user and user.role != UserRole.COLLABORATOR:
+                        # PR-B lượt 5 (Codex 22-11 B-P1, rà cùng khuôn): đổi vai CSDL qua ĐÚNG hàm PUT dùng — bản ghi phân
+                        # công đang hiệu lực (vai ``user``) đóng lại, bản ghi mới mang vai CTV; dòng người đã khoá + đọc lại
+                        # ở bước kiểm liên kết phía trên (vai / đơn vị dưới khoá). ``enforcer=None``: đường này xưa nay không
+                        # ghi Casbin (giữ nguyên hành vi đó).
+                        from app.services.user_service import _create_or_update_user_assignment
+
+                        await _create_or_update_user_assignment(
+                            db=db,
+                            user=user,
+                            new_role=UserRole.COLLABORATOR,
+                            new_unit_id=user.unit_id,
+                            assigned_by_user_id=created_by.id,
+                            enforcer=None,
+                        )
                         await db.flush()
 
             break
