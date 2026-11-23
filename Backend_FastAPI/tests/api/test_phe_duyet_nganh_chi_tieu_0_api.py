@@ -19,6 +19,8 @@ MỘT bất biến; ca đối chứng chỉ khác đúng điều kiện được
 * N4-1 — ``/finalize`` giữ luật cũ: em đã chiếm chỗ hoàn tất nhập học, số chỗ đã dùng giữ nguyên; cơ chế Admin xin vượt cũ
   còn; cùng ngành ấy, hồ sơ MỚI xin Phê duyệt vẫn bị chặn.
 * Đối chứng "trống ≠ 0" và "N4 không lan sang chỉ tiêu dương".
+* R4-đơn (gộp main 563361c8, 23-11) — Phê duyệt ĐƠN đọc chỉ tiêu ô cổng DƯỚI khoá: phiên khác đổi chỉ tiêu chen giữa lần dò
+  không khoá (F230) và lần đọc dưới khoá ⇒ chốt dùng giá trị MỚI (hai chiều: đóng ⇒ chặn; mở lại ⇒ duyệt).
 
 N4-4 (ghi nhận Quyết định vào ngành 0 chỉ cảnh báo) KHÔNG đổi mã — canh bởi
 ``test_council_decision_canh_bao_chi_tieu_api.py::test_n9_vuot_chi_tieu_nganh_va_duong_xet_van_ghi_kem_canh_bao`` (Tier 5g).
@@ -27,6 +29,7 @@ import pytest
 
 from app import models
 from app.database import AsyncSessionLocal
+from app.services import admission_service as asv
 from app.services import quota_occupancy_service as qos
 from tests.api import test_council_decisions_api as qd
 from tests.api.test_council_bulk_ngu_canh_chi_tieu_api import _nganh_khac
@@ -444,3 +447,79 @@ async def test_n4_chi_tieu_am_coi_nhu_dong(client, hs, ad):  # noqa: F811
     r = await _duyet(client, ad, pid, (await _ban(pid))[1], xin_vuot=True)
     assert r.status_code == 400 and r.json()["detail"].startswith(CAU_DONG), r.text
     assert (await _ban(pid))[0] == "submitted"
+
+
+# ═══════════════════════════════ R4-đơn — Phê duyệt ĐƠN đọc chỉ tiêu DƯỚI khoá ═════════════════════════════════════
+# Gộp main 563361c8 (23-11, ``gd2/n4/BAN-GIAO-N4-R4-DON-2026-11-23.md``): từ F230, ``approve_profile`` dò ô cổng KHÔNG khoá
+# (``_resolve_quota_context(lock=False)``) rồi mới khoá ô MỘT lần (``lock_quota_for_profiles``); chốt ngành đóng N4 + trần ADM-026
+# đọc lại ô cổng DƯỚI khoá (``_resolve_quota_context(lock=True)`` trong ``_assert_quota_or_bypass``). Đối tượng của lần dò còn
+# trong identity map của phiên ⇒ câu khoá thiếu ``populate_existing`` trả lại giá trị ĐỌC TRƯỚC khoá. Khuôn theo R4 của nhánh lô
+# (``test_council_bulk_ngu_canh_chi_tieu_api.py::test_r4_dong_nganh_giua_do_va_khoa_khong_duyet_theo_tran_cu`` — chỉ canh nhánh
+# ``probed_context``): phiên khác đổi chỉ tiêu (commit) CHEN ở lần gọi ĐẦU ``qos.lock_quota_cells`` — sau lần dò, trước lần đọc dưới
+# khoá; giữ tham chiếu MẠNH tới mọi ô cổng ``_resolve_quota_context`` trả (như R4 lô — không dựa vào biến cục bộ của mã). Mỗi ca MỘT
+# bất biến: đọc dưới khoá thấy giá trị MỚI (ca đóng ngành ⇒ chặn; ca đối chứng mở lại ⇒ duyệt theo giá trị mới).
+async def _r4_don(client, hs, ad, monkeypatch, truoc, sau):  # noqa: F811
+    """Phê duyệt đơn (không xin vượt) hồ sơ ở ô K chỉ tiêu ``truoc``; phiên khác đặt chỉ tiêu ``sau`` (commit) ở lần gọi ĐẦU
+    ``qos.lock_quota_cells``. Trả (phản hồi, id hồ sơ, ô K, nhật ký [("doc", có khoá, id ô, chỉ tiêu) | ("chen", sau)])."""
+    await _dam_bao_sts09()
+    pid, o = await _ho_so_nganh(hs, truoc)
+    nhat_ky, giu = [], []
+    goc_doc = asv._resolve_quota_context
+    goc_khoa = qos.lock_quota_cells
+
+    async def doc(db, profile, *a, **kw):
+        kq = await goc_doc(db, profile, *a, **kw)
+        if kq[0] is not None:
+            giu.append(kq[0])
+            nhat_ky.append(("doc", bool(kw.get("lock", True)), kq[0].id, kq[1]))
+        return kq
+
+    async def khoa(*a, **kw):
+        if not any(m[0] == "chen" for m in nhat_ky):
+            await qd._sql(
+                "UPDATE offering_academic_info SET annual_admission_quota = :q WHERE id = :a", q=sau, a=o["ai"]
+            )
+            nhat_ky.append(("chen", sau))
+        return await goc_khoa(*a, **kw)
+
+    monkeypatch.setattr(asv, "_resolve_quota_context", doc)
+    monkeypatch.setattr(qos, "lock_quota_cells", khoa)
+    r = await _duyet(client, ad, pid, (await _ban(pid))[1])
+    return r, pid, o, nhat_ky
+
+
+def _chi_tieu_doc_duoi_khoa(nhat_ky, o, truoc):
+    """Phép đo hợp lệ: dò ô K KHÔNG khoá (thấy ``truoc``) → chen đúng một lần → đọc ô K DƯỚI khoá. Trả chỉ tiêu đọc dưới khoá."""
+    chen = [i for i, m in enumerate(nhat_ky) if m[0] == "chen"]
+    assert len(chen) == 1, ("phép đo không hợp lệ: phải chen đúng một lần", nhat_ky)
+    assert ("doc", False, o["ai"], truoc) in nhat_ky[: chen[0]], (
+        "phép đo không hợp lệ: Phê duyệt đơn phải dò ô K KHÔNG khoá (thấy chỉ tiêu cũ) TRƯỚC lần khoá ô",
+        nhat_ky,
+    )
+    duoi_khoa = [m for m in nhat_ky[chen[0] + 1 :] if m[0] == "doc" and m[1] and m[2] == o["ai"]]
+    assert duoi_khoa, ("phép đo không hợp lệ: không có lần đọc ô K DƯỚI khoá sau lúc chen", nhat_ky)
+    return duoi_khoa[0][3]
+
+
+async def test_r4_don_dong_nganh_giua_do_va_khoa_bi_chan(client, hs, ad, monkeypatch):  # noqa: F811
+    # Chỉ tiêu 10 lúc dò → phiên khác đóng ngành (0) trước khi khoá ⇒ đọc dưới khoá thấy 0 ⇒ chốt N4 chặn, hồ sơ giữ "Đã nộp".
+    # Câu khoá thiếu ``populate_existing`` ⇒ đọc lại 10 (giá trị lần dò) ⇒ duyệt vào ngành đã đóng.
+    r, pid, o, nhat_ky = await _r4_don(client, hs, ad, monkeypatch, 10, 0)
+    assert _chi_tieu_doc_duoi_khoa(nhat_ky, o, 10) == 0, (
+        "Phê duyệt đơn phải thấy chỉ tiêu MỚI khi đọc dưới khoá (0), không phải giá trị lần dò trước khoá (10)",
+        nhat_ky,
+    )
+    assert r.status_code == 400 and r.json()["detail"].startswith(CAU_DONG), r.text
+    assert (await _ban(pid))[0] == "submitted"
+
+
+async def test_r4_don_mo_lai_nganh_giua_do_va_khoa_duyet_theo_chi_tieu_moi(client, hs, ad, monkeypatch):  # noqa: F811
+    # Đối chứng chiều ngược: chỉ tiêu 0 lúc dò → phiên khác mở lại (10) trước khi khoá ⇒ đọc dưới khoá thấy 10 ⇒ duyệt được (không
+    # bị "ngành đóng" theo giá trị cũ). Câu khoá thiếu ``populate_existing`` ⇒ đọc lại 0 ⇒ 400 "ngành đóng".
+    r, pid, o, nhat_ky = await _r4_don(client, hs, ad, monkeypatch, 0, 10)
+    assert _chi_tieu_doc_duoi_khoa(nhat_ky, o, 0) == 10, (
+        "Phê duyệt đơn phải thấy chỉ tiêu MỚI khi đọc dưới khoá (10), không phải giá trị lần dò trước khoá (0)",
+        nhat_ky,
+    )
+    assert r.status_code == 200, r.text
+    assert (await _ban(pid))[0] == "approved"
