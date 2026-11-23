@@ -111,7 +111,11 @@ async def test_go_vai_quyet_tu_mot_lan_doc_casbin_rule_sau_khoa_bat_dau_va_ket_t
     assert await _dong_bo_nhat_quan(u["id"]) == ("officer", {"role:manager"}, {"role:manager"}), "tiền đề"
     diem = Diem()
     boc(monkeypatch, bulk_repo, "lock_user_no_key_update", diem)  # P dừng NGAY SAU khoá dòng người
-    cp, hp = await dang_nhap(admin_user_in_db)
+    # PR-B P4 (23-11): P do một Admin KHÁC bấm. Từ lượt 5 (Codex 22-11 P2) lệnh gỡ vai khoá người bấm ``FOR KEY SHARE`` ngay
+    # từ đầu giao dịch; đăng nhập lấy ``FOR UPDATE`` trên dòng của chính mình ⇒ đăng nhập lại CHÍNH Admin của P trong lúc P
+    # bị test giữ vô hạn sẽ chờ mãi (ngoài đời chỉ chờ tới khi lệnh kết thúc). Bất biến của ca không phụ thuộc người bấm.
+    admin_p = await tao_nguoi("prb_l4_admin_p", "admin", None)
+    cp, hp = await dang_nhap(admin_p)
     try:
         viec = asyncio.create_task(_go_vai(cp, hp, u["id"], "role:manager"))
         await asyncio.wait_for(diem.toi.wait(), 30)
