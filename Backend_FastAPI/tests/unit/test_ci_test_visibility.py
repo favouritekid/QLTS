@@ -41,8 +41,11 @@ import ast
 import hashlib
 import importlib.util
 import json
+import os
 import pathlib
 import re
+import shutil
+import subprocess
 import sys
 import unicodedata
 
@@ -3284,3 +3287,433 @@ class TestCapDoiIsolationWorkerId:
         assert _ghi_khong_khoi_phuc(ma) != [], (
             "bộ dò KHÔNG bắt được dạng %r — đường lách này đã mở lại" % nhan
         )
+
+
+# ---------------------------------------------------------------------------
+# 12. `workflow_dispatch` cho HAI cổng PR (23-11-2026)
+# ---------------------------------------------------------------------------
+#
+# Owner muốn chạy cổng backend + frontend trên nhánh `ci/*` đã đẩy mà KHÔNG mở
+# PR. Thêm một trigger dễ làm hỏng NGẦM bốn thứ — mỗi thứ một nhóm ca riêng:
+#
+#   A. hành vi `pull_request` bị đổi kèm (types / paths / thêm khoá lọc), hoặc
+#      một sự kiện khác (`push`, `pull_request_target`) lẻn vào cùng lượt sửa;
+#   B. lượt dispatch mang tên required check ⇒ có thể thoả required check của
+#      một PR trùng SHA, dù nó THIẾU hai guard dựa trên PR;
+#   C. hai guard dựa trên PR chết trên dispatch (`BASE_SHA` rỗng ⇒ đỏ vì lý do
+#      sai), hoặc tệ hơn: nhánh "không áp" của dispatch lan sang lượt PR;
+#   D. dispatch mở thêm quyền — token ghi, secret, environment.
+#
+# Đọc bằng loader NGHIÊM NGẶT (`prc._LoaderNghiemNgat`): `safe_load` im lặng
+# giữ bản CUỐI của khoá trùng, nên một `name:` thứ hai dán nhầm vào job gom sẽ
+# che mất cái thứ nhất mà phép kiểm vẫn xanh.
+
+DUONG_WF_FE = GOC / ".github" / "workflows" / "frontend-test.yml"
+
+#: Hai cổng PR ↔ tệp workflow; khoá là id của tham số hoá.
+HAI_CONG_PR = {"backend": DUONG_WF, "frontend": DUONG_WF_FE}
+CAC_CONG = sorted(HAI_CONG_PR)
+
+#: `pull_request.types` của CẢ HAI cổng. CỐ Ý không có `edited` — lý do ở chú
+#: thích `types:` của backend-test.yml (lỗ ấy được bịt ở dependency-audit.yml).
+TYPES_PR_HAI_CONG = frozenset({"opened", "synchronize", "reopened", "ready_for_review"})
+
+#: Ảnh chụp `pull_request.paths` tại main `df4bf025`. So bằng TẬP CON có chủ ý:
+#: BỚT một đường ⇒ cổng mù với đúng đường ấy (CLAUDE.md §11) ⇒ ĐỎ; THÊM đường
+#: chỉ làm cổng chạy NHIỀU hơn nên không phải sửa hằng này.
+PATHS_PR_TOI_THIEU = {
+    "backend": (
+        "Backend_FastAPI/**", "frontend/**", ".github/workflows/**",
+        ".github/dependabot.yml", ".github/scripts/**", "scripts/**",
+        "docker-compose.yml", "docker-compose.override.yml",
+        "docker-compose.rollback.yml", ".env.production.example", "nginx/**",
+        "tests-e2e/**", "ops/**", ".gitignore",
+        "Documents/ADMISSION_PRODUCTION_REPLACEMENT_RUNBOOK.md",
+        "Documents/PRODUCTION_DEPLOY_GUIDE.md", "CLAUDE.md", "AGENTS.md",
+    ),
+    "frontend": (
+        "frontend/**", "Backend_FastAPI/**", ".github/workflows/**",
+        ".github/dependabot.yml", ".github/scripts/**", "scripts/**",
+        "tests-e2e/**",
+    ),
+}
+
+#: Context mà ruleset 16381130 của `main` đòi, đọc API 23-11-2026. Cùng lượt
+#: còn `Python Dependencies` + `Node.js Dependencies` — thuộc
+#: dependency-audit.yml, workflow KHÔNG có `workflow_dispatch`.
+REQUIRED_BACKEND = "pytest"
+REQUIRED_FRONTEND = frozenset({"Build", "Check (type+lint+test)"})
+REQUIRED_HAI_CONG = REQUIRED_FRONTEND | {REQUIRED_BACKEND}
+
+#: Hình dạng DUY NHẤT được nhận cho tên job mang required context: lượt PR ⇒
+#: đúng tên required; sự kiện khác ⇒ `format()` chèn TÊN SỰ KIỆN vào.
+_MAU_TEN_GOM_BE = re.compile(
+    r"\$\{\{ github\.event_name == 'pull_request' && '(?P<pr>[^']+)' \|\| "
+    r"format\('(?P<khac>[^']*)', github\.event_name\) \}\}"
+)
+_MAU_TEN_FE = re.compile(
+    r"\$\{\{ github\.event_name == 'pull_request' && matrix\.task\.name \|\| "
+    r"format\('(?P<khac>[^']*)', matrix\.task\.name, github\.event_name\) \}\}"
+)
+
+#: Sự kiện KHÔNG phải PR để thử tên check và thân bước guard.
+#: `pull_request_target` có mặt vì nó là sự kiện nguy hiểm nhất có thể lẻn vào
+#: (token ghi + secret chạy trên mã của PR).
+SU_KIEN_KHAC_PR = ("workflow_dispatch", "push", "schedule", "pull_request_target")
+
+SHA_BASE_GIA = "a" * 40
+SHA_HEAD_GIA = "b" * 40
+SHA_MERGE_GIA = "c" * 40
+
+#: Lệnh mà MỖI guard phải gọi trên lượt `pull_request`, ĐÚNG thứ tự — như stub
+#: `git` / `python` ghi lại (tên lệnh + đối số).
+GOI_PR_CUA_GUARD = {
+    "visibility": [
+        "git fetch --no-tags --depth=1 origin " + SHA_BASE_GIA,
+        "python " + DUONG_SCRIPT_TRONG_WF,
+    ],
+    "skip_directive": [
+        "python .github/scripts/deploy_change_classifier.py check-skip-directives"
+        " --base %s --head %s" % (SHA_BASE_GIA, SHA_HEAD_GIA),
+    ],
+}
+CAC_GUARD = sorted(GOI_PR_CUA_GUARD)
+
+
+def _format_gha(mau: str, *doi_so: str) -> str:
+    """`format()` của GitHub Expressions, đủ cho dạng `{0}` / `{1}` dùng ở đây."""
+    for i, gia_tri in enumerate(doi_so):
+        mau = mau.replace("{%d}" % i, gia_tri)
+    return mau
+
+
+def _moi_chuoi(nut):
+    """Mọi chuỗi (khoá lẫn giá trị) trong cây YAML đã nạp — comment YAML không có ở đây."""
+    if isinstance(nut, dict):
+        for khoa, gia_tri in nut.items():
+            yield from _moi_chuoi(khoa)
+            yield from _moi_chuoi(gia_tri)
+    elif isinstance(nut, list):
+        for gia_tri in nut:
+            yield from _moi_chuoi(gia_tri)
+    elif isinstance(nut, str):
+        yield nut
+
+
+@pytest.fixture(scope="module")
+def hai_cong(prc) -> dict:
+    return {
+        ten: prc.yaml.load(duong.read_text(encoding="utf-8"),
+                           Loader=prc._LoaderNghiemNgat)
+        for ten, duong in HAI_CONG_PR.items()
+    }
+
+
+def _buoc_guard(wf_be: dict, loai: str) -> dict:
+    """Tìm bước guard theo THÂN lệnh (đã bỏ comment shell), không theo tên bước."""
+    if loai == "visibility":
+        job, dau_hieu = JOB_SHARD, DUONG_SCRIPT_TRONG_WF
+    else:
+        job, dau_hieu = JOB_CONTRACT, "check-skip-directives"
+    khop = [b for b in wf_be["jobs"][job]["steps"]
+            if dau_hieu in _than_khong_comment_shell(str(b.get("run", "")))]
+    assert len(khop) == 1, (
+        "job %r phải có ĐÚNG MỘT bước gọi %r, thấy %d" % (job, dau_hieu, len(khop)))
+    return khop[0]
+
+
+def _stub(bien_rc: str) -> bytes:
+    """Stub ghi `<tên lệnh> <đối số>` vào `$STUB_LOG`, rồi trả `$<bien_rc>`
+    (mặc định 0). Một đối số RỖNG ⇒ 97, như lệnh thật: `git fetch origin ""`
+    và `check-skip-directives --base ""` đều từ chối SHA rỗng — đúng cách hai
+    guard cũ chết trên lượt dispatch."""
+    return (
+        "#!/bin/sh\n"
+        'printf \'%s %s\\n\' "${0##*/}" "$*" >> "$STUB_LOG"\n'
+        'for a in "$@"; do [ -n "$a" ] || exit 97; done\n'
+        'exit "${' + bien_rc + ':-0}"\n'
+    ).encode("utf-8")
+
+
+def _chay_than_buoc(than: str, su_kien: str, thu_muc: pathlib.Path,
+                    lenh_do: str | None = None):
+    """Chạy thân `run:` như runner Linux (`bash -e`, mặc định khi bước không khai
+    `shell:`), với `git` / `python` / `python3` là stub ghi lại lời gọi.
+
+    `lenh_do` = tên lệnh mà stub của nó trả mã 1. Trả (mã thoát, stdout+stderr,
+    danh sách lời gọi theo thứ tự). Đo HÀNH VI của thân bước, không khớp chuỗi:
+    nhét lời gọi guard vào `echo`, thêm `|| true`, hay đổi điều kiện `case` đều
+    giữ nguyên mọi chuỗi mà phép khớp văn bản tìm.
+
+    Ngoài `pull_request`, `github.event.pull_request.*` KHÔNG tồn tại nên bốn
+    biến lấy từ đó là chuỗi rỗng — dựng đúng như vậy, không mớm SHA giả: mớm
+    SHA thì bản workflow CŨ (gọi guard vô điều kiện) cũng "thoát 0" trên
+    dispatch và ca dispatch mất sức phân biệt. `github.sha` thì luôn có.
+    """
+    la_pr = su_kien == "pull_request"
+    bash = shutil.which("bash")
+    if bash is None:
+        assert not os.environ.get("CI"), "runner CI phải có bash — không đo được thân bước"
+        pytest.skip("không có bash để chạy thân bước")
+    stub = thu_muc / "stub"
+    stub.mkdir()
+    for ten in ("git", "python", "python3"):
+        duong = stub / ten
+        duong.write_bytes(_stub("STUB_RC_" + ten.upper()))
+        duong.chmod(0o755)
+    tep = thu_muc / "than.sh"
+    tep.write_bytes(than.encode("utf-8"))
+    nhat_ky = thu_muc / "goi.log"
+    env = dict(os.environ)
+    # `--noprofile --norc` KHÔNG chặn `BASH_ENV`: shell không tương tác vẫn
+    # nạp tệp nó trỏ tới. Gỡ để thân bước chạy đúng như trên runner sạch.
+    for ten in ("BASH_ENV", "ENV", "STUB_RC_GIT", "STUB_RC_PYTHON", "STUB_RC_PYTHON3"):
+        env.pop(ten, None)
+    env.update({
+        "PATH": str(stub) + os.pathsep + env.get("PATH", ""),
+        "STUB_LOG": str(nhat_ky),
+        "GITHUB_EVENT_NAME": su_kien,
+        "BASE_SHA": SHA_BASE_GIA if la_pr else "",
+        "HEAD_SHA": SHA_HEAD_GIA if la_pr else "",
+        "MERGE_SHA": SHA_MERGE_GIA,
+        "PR_TITLE": "tieu de PR" if la_pr else "",
+        "PR_BODY": "",
+    })
+    if lenh_do is not None:
+        env["STUB_RC_" + lenh_do.upper()] = "1"
+    kq = subprocess.run(
+        [bash, "--noprofile", "--norc", "-e", str(tep)],
+        cwd=thu_muc, env=env, capture_output=True, timeout=60,
+    )
+    ra = (kq.stdout + kq.stderr).decode("utf-8", errors="replace")
+    goi = (nhat_ky.read_text(encoding="utf-8").splitlines()
+           if nhat_ky.exists() else [])
+    return kq.returncode, ra, goi
+
+
+class TestWorkflowDispatchHaiCongPR:
+    """Hai cổng PR nhận `workflow_dispatch` mà KHÔNG đổi gì của lượt PR."""
+
+    # --- A. trigger ------------------------------------------------------------
+
+    @pytest.mark.parametrize("cong", CAC_CONG)
+    def test_co_workflow_dispatch(self, hai_cong, cong):
+        assert "workflow_dispatch" in _khoi_on(hai_cong[cong]), (
+            "%s mất `workflow_dispatch` — `gh workflow run ... --ref ci/<nhánh>` "
+            "sẽ bị từ chối, nhánh `ci/*` không chạy được cổng này nữa."
+            % HAI_CONG_PR[cong].name)
+
+    @pytest.mark.parametrize("cong", CAC_CONG)
+    def test_workflow_dispatch_khong_co_input(self, hai_cong, cong):
+        """Không input nào — nhất là `tiers` (lý do ở chú thích khối `on:`).
+
+        Một input chọn lát trên required gate là một đường để bỏ chạy test mà
+        vẫn xanh. Muốn thêm thì sửa ca này CÓ CHỦ Ý, kèm cổng đối chiếu lát
+        được chọn ↔ lát thật sự chạy.
+        """
+        gia_tri = _khoi_on(hai_cong[cong]).get("workflow_dispatch")
+        assert gia_tri is None or gia_tri == {}, (
+            "%s: `workflow_dispatch` khai %r — cổng PR không nhận input."
+            % (HAI_CONG_PR[cong].name, gia_tri))
+
+    @pytest.mark.parametrize("cong", CAC_CONG)
+    def test_chi_hai_su_kien_pull_request_va_workflow_dispatch(self, hai_cong, cong):
+        su_kien = sorted(str(k) for k in _khoi_on(hai_cong[cong]))
+        assert su_kien == ["pull_request", "workflow_dispatch"], (
+            "%s nhận sự kiện %r. `push` làm cổng chạy trùng; `pull_request_target` "
+            "trao token ghi + secret cho mã của PR. Thêm sự kiện là quyết định "
+            "riêng, không đi kèm lượt sửa trigger dispatch."
+            % (HAI_CONG_PR[cong].name, su_kien))
+
+    @pytest.mark.parametrize("cong", CAC_CONG)
+    def test_pull_request_chi_khai_types_va_paths(self, hai_cong, cong):
+        pr = _khoi_on(hai_cong[cong]).get("pull_request")
+        assert isinstance(pr, dict) and sorted(pr) == ["paths", "types"], (
+            "%s: `pull_request` phải khai ĐÚNG `types` + `paths`, thấy %r — một "
+            "`branches:` / `paths-ignore:` thêm vào âm thầm thu hẹp cổng."
+            % (HAI_CONG_PR[cong].name, pr))
+
+    @pytest.mark.parametrize("cong", CAC_CONG)
+    def test_pull_request_types_giu_nguyen(self, hai_cong, cong):
+        types = _khoi_on(hai_cong[cong])["pull_request"].get("types")
+        assert (isinstance(types, list) and len(types) == len(set(types))
+                and set(types) == TYPES_PR_HAI_CONG), (
+            "%s: `pull_request.types` = %r, phải là %s."
+            % (HAI_CONG_PR[cong].name, types, sorted(TYPES_PR_HAI_CONG)))
+
+    @pytest.mark.parametrize("cong", CAC_CONG)
+    def test_pull_request_paths_khong_mat_duong_nao(self, hai_cong, cong):
+        paths = _khoi_on(hai_cong[cong])["pull_request"].get("paths")
+        assert isinstance(paths, list), "%s: `paths` không phải danh sách" % cong
+        thieu = [p for p in PATHS_PR_TOI_THIEU[cong] if p not in paths]
+        assert not thieu, (
+            "%s: `pull_request.paths` MẤT %r — PR chỉ chạm các đường ấy sẽ không "
+            "kích hoạt cổng, required check treo hoặc guard không bao giờ chạy."
+            % (HAI_CONG_PR[cong].name, thieu))
+
+    # --- B. tên required check ---------------------------------------------------
+
+    def test_ten_required_check_chi_tren_pull_request_backend(self, hai_cong):
+        ten = str(hai_cong["backend"]["jobs"]["pytest"].get("name", ""))
+        m = _MAU_TEN_GOM_BE.fullmatch(ten.strip())
+        assert m, (
+            "tên job gom `pytest` phải có dạng `${{ github.event_name == "
+            "'pull_request' && 'pytest' || format('...{0}...', github.event_name) }}`"
+            ", thấy %r. Tên tĩnh `pytest` ⇒ lượt dispatch (thiếu hai guard dựa "
+            "trên PR) thoả required check của một PR trùng SHA." % ten)
+        assert m.group("pr") == REQUIRED_BACKEND, (
+            "lượt PR mang tên %r — ruleset đòi đúng %r, PR sẽ treo 'expected'."
+            % (m.group("pr"), REQUIRED_BACKEND))
+        assert "{0}" in m.group("khac"), "tên ngoài PR phải chèn tên sự kiện"
+        for su_kien in SU_KIEN_KHAC_PR:
+            ngoai_pr = _format_gha(m.group("khac"), su_kien)
+            assert ngoai_pr not in REQUIRED_HAI_CONG, (
+                "sự kiện %r cho tên %r — trùng required context." % (su_kien, ngoai_pr))
+
+    def test_ten_required_check_chi_tren_pull_request_frontend(self, hai_cong):
+        job = hai_cong["frontend"]["jobs"]["fe-check"]
+        ten = str(job.get("name", ""))
+        m = _MAU_TEN_FE.fullmatch(ten.strip())
+        assert m, (
+            "tên job `fe-check` phải có dạng `${{ github.event_name == 'pull_request'"
+            " && matrix.task.name || format('{0} ... {1}', matrix.task.name, "
+            "github.event_name) }}`, thấy %r." % ten)
+        assert "{0}" in m.group("khac") and "{1}" in m.group("khac"), (
+            "tên ngoài PR phải chèn CẢ tên task lẫn tên sự kiện, thấy %r"
+            % m.group("khac"))
+        for task in job["strategy"]["matrix"]["task"]:
+            for su_kien in SU_KIEN_KHAC_PR:
+                ngoai_pr = _format_gha(m.group("khac"), str(task.get("name")), su_kien)
+                assert ngoai_pr not in REQUIRED_HAI_CONG, (
+                    "task %r, sự kiện %r cho tên %r — trùng required context."
+                    % (task.get("name"), su_kien, ngoai_pr))
+
+    def test_ten_task_frontend_dung_hai_required_context(self, hai_cong):
+        """Lượt PR lấy tên check từ `matrix.task.name` — đổi chữ là PR treo."""
+        ten = [t.get("name") for t in
+               hai_cong["frontend"]["jobs"]["fe-check"]["strategy"]["matrix"]["task"]]
+        assert len(ten) == len(set(ten)) and set(ten) == REQUIRED_FRONTEND, (
+            "tên task %r phải đúng hai required context %s"
+            % (ten, sorted(REQUIRED_FRONTEND)))
+
+    @pytest.mark.parametrize("cong", CAC_CONG)
+    def test_khong_job_nao_khac_mang_ten_required(self, hai_cong, cong):
+        """Job không khai `name:` thì check mang ĐÚNG id job. Một job mới tên
+        tĩnh `pytest` / `Build` thoả required check trên MỌI sự kiện."""
+        giu = {"backend": "pytest", "frontend": "fe-check"}[cong]
+        trung = sorted(
+            "%s → %r" % (jid, job.get("name", jid))
+            for jid, job in hai_cong[cong]["jobs"].items()
+            if jid != giu and str(job.get("name", jid)) in REQUIRED_HAI_CONG)
+        assert not trung, "%s: job ngoài job gom mang tên required: %s" % (cong, trung)
+
+    # --- C. hai guard dựa trên PR: chạy THẬT thân bước ---------------------------
+
+    @pytest.mark.parametrize("loai", CAC_GUARD)
+    def test_pr_goi_guard_dung_lenh_dung_thu_tu(self, hai_cong, loai, tmp_path):
+        than = str(_buoc_guard(hai_cong["backend"], loai)["run"])
+        rc, ra, goi = _chay_than_buoc(than, "pull_request", tmp_path)
+        assert rc == 0, "lượt PR, guard xanh mà bước đỏ (rc=%d):\n%s" % (rc, ra)
+        assert goi == GOI_PR_CUA_GUARD[loai], (
+            "lượt PR phải gọi ĐÚNG %r, thấy %r — guard %s không còn chạy (hoặc "
+            "chạy sai đối số) trên PR." % (GOI_PR_CUA_GUARD[loai], goi, loai))
+
+    @pytest.mark.parametrize("loai,lenh", [
+        (loai, lenh.split()[0])
+        for loai in CAC_GUARD for lenh in GOI_PR_CUA_GUARD[loai]
+    ])
+    def test_pr_lenh_guard_do_thi_buoc_do(self, hai_cong, loai, lenh, tmp_path):
+        than = str(_buoc_guard(hai_cong["backend"], loai)["run"])
+        rc, ra, goi = _chay_than_buoc(than, "pull_request", tmp_path, lenh_do=lenh)
+        assert any(g.split()[0] == lenh for g in goi), (
+            "lệnh %r không được gọi — ca này không đo được gì: %r" % (lenh, goi))
+        assert rc != 0, (
+            "guard %s: `%s` trả 1 mà bước vẫn rc=0 — lỗi bị nuốt (`|| true`, "
+            "`set +e`, lời gọi không phải lệnh cuối…), cổng thành fail-open:\n%s"
+            % (loai, lenh, ra))
+
+    @pytest.mark.parametrize("loai", CAC_GUARD)
+    def test_dispatch_thoat_0(self, hai_cong, loai, tmp_path):
+        than = str(_buoc_guard(hai_cong["backend"], loai)["run"])
+        rc, ra, _ = _chay_than_buoc(than, "workflow_dispatch", tmp_path)
+        assert rc == 0, (
+            "lượt workflow_dispatch: guard %s phải không áp và thoát 0, thấy "
+            "rc=%d:\n%s" % (loai, rc, ra))
+
+    @pytest.mark.parametrize("loai", CAC_GUARD)
+    def test_dispatch_khong_goi_guard(self, hai_cong, loai, tmp_path):
+        than = str(_buoc_guard(hai_cong["backend"], loai)["run"])
+        _, _, goi = _chay_than_buoc(than, "workflow_dispatch", tmp_path)
+        assert goi == [], (
+            "lượt workflow_dispatch gọi %r — không có PR nên `BASE_SHA` rỗng, "
+            "guard %s sẽ đỏ vì lý do sai." % (goi, loai))
+
+    @pytest.mark.parametrize("loai", CAC_GUARD)
+    def test_dispatch_bao_notice_khong_bao_loi(self, hai_cong, loai, tmp_path):
+        than = str(_buoc_guard(hai_cong["backend"], loai)["run"])
+        _, ra, _ = _chay_than_buoc(than, "workflow_dispatch", tmp_path)
+        assert "::notice::" in ra and "::error::" not in ra, (
+            "lượt workflow_dispatch phải NÓI RÕ guard %s không áp (`::notice::`), "
+            "không im lặng, không `::error::`:\n%s" % (loai, ra))
+
+    @pytest.mark.parametrize("loai", CAC_GUARD)
+    @pytest.mark.parametrize(
+        "su_kien", [s for s in SU_KIEN_KHAC_PR if s != "workflow_dispatch"] + [""])
+    def test_su_kien_la_thi_do(self, hai_cong, loai, su_kien, tmp_path):
+        """Sự kiện chưa được thiết kế cho ⇒ ĐỎ, không đoán là PR hay dispatch."""
+        than = str(_buoc_guard(hai_cong["backend"], loai)["run"])
+        rc, ra, _ = _chay_than_buoc(than, su_kien, tmp_path)
+        assert rc != 0, (
+            "sự kiện %r: guard %s thoát 0 — một trigger mới thêm sau này sẽ lặng "
+            "lẽ bỏ qua guard:\n%s" % (su_kien, loai, ra))
+
+    # --- D. quyền: dispatch không mở thêm gì -------------------------------------
+
+    @pytest.mark.parametrize("cong", CAC_CONG)
+    def test_token_chi_doc_noi_dung(self, hai_cong, cong):
+        """Lượt dispatch nhận quyền MẶC ĐỊNH của repo; ghim để không phụ thuộc
+        cài đặt repo (đọc 23-11-2026: `default_workflow_permissions=read`)."""
+        assert hai_cong[cong].get("permissions") == {"contents": "read"}, (
+            "%s: `permissions` cấp workflow phải ĐÚNG `{contents: read}`, thấy %r"
+            % (HAI_CONG_PR[cong].name, hai_cong[cong].get("permissions")))
+
+    @pytest.mark.parametrize("cong", CAC_CONG)
+    def test_khong_job_nao_tu_khai_quyen(self, hai_cong, cong):
+        co = sorted(jid for jid, job in hai_cong[cong]["jobs"].items()
+                    if "permissions" in job)
+        assert not co, (
+            "%s: job %r tự khai `permissions` — ghi đè mức `contents: read` cấp "
+            "workflow." % (HAI_CONG_PR[cong].name, co))
+
+    @pytest.mark.parametrize("cong", CAC_CONG)
+    def test_khong_environment_khong_goi_workflow_khac(self, hai_cong, cong):
+        """`environment` mở secret của môi trường (production); `uses` / `secrets`
+        cấp job gọi workflow khác và có thể truyền secret sang."""
+        vi_pham = sorted("%s.%s" % (jid, khoa)
+                         for jid, job in hai_cong[cong]["jobs"].items()
+                         for khoa in ("environment", "uses", "secrets") if khoa in job)
+        assert not vi_pham, "%s: %r" % (HAI_CONG_PR[cong].name, vi_pham)
+
+    @pytest.mark.parametrize("cong", CAC_CONG)
+    def test_khong_tham_chieu_secret(self, hai_cong, cong):
+        chuoi = list(_moi_chuoi(hai_cong[cong]))
+        assert chuoi, "không đọc được chuỗi nào — phép quét vô nghĩa"
+        trung = [c[:80] for c in chuoi if re.search(r"\bsecrets\b", c)]
+        assert not trung, (
+            "%s tham chiếu `secrets`: %r — cổng PR chạy được trên nhánh bất kỳ "
+            "bằng dispatch, không được cầm secret." % (HAI_CONG_PR[cong].name, trung))
+
+    # --- concurrency -------------------------------------------------------------
+
+    @pytest.mark.parametrize("cong,nhom", [
+        ("backend", "be-pr-${{ github.ref }}"),
+        ("frontend", "fe-pr-${{ github.ref }}"),
+    ])
+    def test_concurrency_nhom_theo_ref(self, hai_cong, cong, nhom):
+        """PR: `refs/pull/<số>/merge`; dispatch: `refs/heads/<nhánh>` ⇒ không
+        chung nhóm. Bỏ `github.ref` khỏi khoá thì MỘT lượt dispatch huỷ mọi
+        lượt PR đang chạy (`cancel-in-progress: true`)."""
+        conc = hai_cong[cong].get("concurrency")
+        assert isinstance(conc, dict) and conc.get("group") == nhom, (
+            "%s: concurrency.group phải là %r, thấy %r"
+            % (HAI_CONG_PR[cong].name, nhom, conc))

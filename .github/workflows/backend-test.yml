@@ -197,7 +197,50 @@ on:
       # tám shard.
       - 'CLAUDE.md'
       - 'AGENTS.md'
+  # 23-11-2026 — CHẠY TAY cổng này trên một nhánh ĐÃ ĐẨY mà KHÔNG mở PR (vd.
+  # `ci/<việc>`), để tận dụng các runner song song của Actions:
+  #
+  #     gh workflow run backend-test.yml --ref ci/<nhánh>
+  #
+  # ⚠️ Chỉ dùng được khi khối này đã có trên nhánh MẶC ĐỊNH (`main`) VÀ trên
+  # nhánh được chạy: GitHub chỉ nhận dispatch cho workflow có `workflow_dispatch`
+  # ở nhánh mặc định, rồi chạy BẢN workflow của `--ref`.
+  #
+  # Lượt dispatch KHÁC lượt PR ở ba điểm — đọc trước khi tin kết quả:
+  #   1. Cây được test là HEAD của nhánh (`github.sha`), KHÔNG phải commit merge
+  #      tạm với base.
+  #   2. Hai guard dựa trên PR — độ-nhìn-thấy của test (job `pytest-shard`) và
+  #      chỉ thị bỏ qua Actions (job `classifier-contract`) — không có base /
+  #      tiêu đề / body để soi, nên in `::notice::` rồi thoát 0. Chúng vẫn chạy
+  #      đủ khi mở PR. Sự kiện lạ (không phải PR, không phải dispatch) thì ĐỎ.
+  #   3. Check gom mang tên `pytest [workflow_dispatch]`, KHÔNG phải `pytest`.
+  #      Ruleset 16381130 đòi context `pytest` của app GitHub Actions trên SHA
+  #      head của PR; một lượt dispatch (yếu hơn, thiếu hai guard trên) mang
+  #      đúng tên ấy trên CÙNG SHA có thể thoả required check của PR. Đổi tên
+  #      thì khỏi phải tin hay không.
+  #
+  # CỐ Ý KHÔNG có input chọn tier (`tiers`): `if:` cấp job không đọc được
+  # `matrix`, nên lọc lát chỉ làm được bằng điều kiện ở TỪNG bước của MỌI leg —
+  # thêm một đường để required gate bỏ chạy test mà vẫn xanh (đúng lớp lỗi
+  # nightly-regression: 15 đêm E2E skipped, job success). Chạy một phần thì dùng
+  # Docker máy dev; chạy toàn bộ backend thì `nightly-backend-pytest.yml`.
+  #
+  # `test_ci_test_visibility.py::TestWorkflowDispatchHaiCongPR` khoá khối này.
+  workflow_dispatch:
 
+# Khai MỘT scope làm mọi scope còn lại thành `none`. `contents: read` đủ cho
+# `actions/checkout` + `git fetch`; không bước nào gọi API hay dùng secret.
+# Repo đặt `default_workflow_permissions=read` (đọc API 23-11-2026), nên khối
+# này không bớt quyền nào mà lượt PR đang DÙNG — nó ghim lại để lượt
+# `workflow_dispatch` (nhận quyền mặc định của repo) không bao giờ cầm token
+# ghi nếu cài đặt repo bị đổi.
+permissions:
+  contents: read
+
+# Nhóm theo `github.ref`: lượt PR có ref `refs/pull/<số>/merge`, lượt dispatch
+# có ref `refs/heads/<nhánh>` ⇒ hai loại KHÔNG BAO GIỜ chung nhóm, dispatch
+# không huỷ được lượt PR nào. Hai dispatch trên CÙNG nhánh thì lượt sau huỷ
+# lượt trước (cancel-in-progress) — muốn chạy song song thì dùng hai nhánh.
 concurrency:
   group: be-pr-${{ github.ref }}
   cancel-in-progress: true
@@ -1547,14 +1590,31 @@ jobs:
       # `github.sha` trên sự kiện `pull_request` là commit MERGE tổng hợp — đúng
       # cây sẽ được áp lên base — nên phép so là `git diff BASE MERGE`, hai cây,
       # không cần merge-base và không cần lịch sử.
+      #
+      # Lượt `workflow_dispatch` (xem khối `on:`) không có PR ⇒ `BASE_SHA` rỗng
+      # ⇒ không có tập thay đổi để phân loại: in notice rồi thoát 0. Sự kiện lạ
+      # ⇒ ĐỎ, không đoán. Rẽ nhánh bằng `case` TRONG thân, KHÔNG bằng `if:` của
+      # bước: `if:` ở đây bị ghim (`IF_HOP_LE`), và một điều kiện sự kiện đặt
+      # sai chỗ thì bước bị skip trên chính PR — GitHub coi skipped là đạt.
       - name: CI test-visibility guard
         if: matrix.visibility_guard
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           MERGE_SHA: ${{ github.sha }}
         run: |
-          git fetch --no-tags --depth=1 origin "$BASE_SHA"
-          python .github/scripts/pytest_visibility_guard.py
+          case "$GITHUB_EVENT_NAME" in
+            pull_request)
+              git fetch --no-tags --depth=1 origin "$BASE_SHA"
+              python .github/scripts/pytest_visibility_guard.py
+              ;;
+            workflow_dispatch)
+              echo "::notice::workflow_dispatch: không có PR nên không có base để so — cổng độ-nhìn-thấy KHÔNG đánh giá ở lượt này; nó chạy đủ khi mở PR."
+              ;;
+            *)
+              echo "::error::Sự kiện '$GITHUB_EVENT_NAME' lạ với cổng độ-nhìn-thấy — từ chối thay vì đoán."
+              exit 1
+              ;;
+          esac
 
   # =======================================================================
   # Cổng SỐNG SÓT PHIÊN — collected == executed
@@ -1759,6 +1819,11 @@ jobs:
       # biến mất hoàn toàn. Required check đã chặn trường hợp token nằm ngay ở
       # HEAD (check sẽ Pending), còn bước này chặn tiêu đề/body PR và các commit
       # cũ có thể đi vào merge/squash/rebase message rồi vô hiệu hoá deploy.
+      #
+      # Lượt `workflow_dispatch` không có PR: không tiêu đề, không body, không
+      # khoảng commit base..head, và không có commit merge nào sắp vào `main` —
+      # in notice rồi thoát 0. Sự kiện lạ ⇒ ĐỎ. Rẽ nhánh TRONG thân vì bước của
+      # job này bị cấm `if:` (`test_khong_buoc_nao_cua_cac_job_gac_bi_vo_hieu`).
       - name: Cấm chỉ thị bỏ qua Actions đi vào commit merge
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -1766,8 +1831,19 @@ jobs:
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}
         run: |
-          python .github/scripts/deploy_change_classifier.py \
-            check-skip-directives --base "$BASE_SHA" --head "$HEAD_SHA"
+          case "$GITHUB_EVENT_NAME" in
+            pull_request)
+              python .github/scripts/deploy_change_classifier.py \
+                check-skip-directives --base "$BASE_SHA" --head "$HEAD_SHA"
+              ;;
+            workflow_dispatch)
+              echo "::notice::workflow_dispatch: không có PR (tiêu đề / body / khoảng commit) nên guard chỉ thị bỏ qua KHÔNG áp ở lượt này; nó chạy đủ khi mở PR."
+              ;;
+            *)
+              echo "::error::Sự kiện '$GITHUB_EVENT_NAME' lạ với guard chỉ thị bỏ qua — từ chối thay vì đoán."
+              exit 1
+              ;;
+          esac
 
       # Bộ ca hợp đồng chỉ kiểm những chuỗi manifest GIẢ dựng trong test. Tệp
       # `domains.yml` THẬT có thể sai mà cổng vẫn xanh — đúng chỗ hở đã đo.
@@ -2021,8 +2097,13 @@ jobs:
   # BỘ shard success. Một shard đỏ ⇒ 'failure'; bị huỷ ⇒ 'cancelled'; bị bỏ
   # qua ⇒ 'skipped'. Nên điều kiện đúng là `!= 'success'`, không phải
   # `== 'failure'` — viết kiểu sau thì lượt bị huỷ giữa chừng sẽ lọt qua.
+  #
+  # Tên `pytest` CHỈ trên lượt `pull_request`. Mọi sự kiện khác (hiện chỉ
+  # `workflow_dispatch`) mang tên `pytest [<sự kiện>]` để không bao giờ thoả
+  # required check của một PR trùng SHA — xem điểm 3 ở khối `on:`. Khoá ở
+  # `TestWorkflowDispatchHaiCongPR::test_ten_required_check_chi_tren_pull_request_backend`.
   pytest:
-    name: pytest
+    name: ${{ github.event_name == 'pull_request' && 'pytest' || format('pytest [{0}]', github.event_name) }}
     # Ghim ảnh runner (18-11-2026): `ubuntu-latest` đã chuyển 24.04 -> 26.04; trên 26.04, 10 ca đo thời gian của
     # tests/unit/test_deploy_dong_cua_ghi.py đỏ ổn định (CI PR #729, run 44239862267 / 44262023326), xanh trên 24.04
     # (run 44005046897, 17-11). Gỡ ghim khi deploy.sh + harness đã đo đạt trên 26.04.
