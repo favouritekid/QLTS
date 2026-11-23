@@ -15,7 +15,7 @@ KỲ dòng quyền nào — kể cả dòng quyền Thư ký C1 thêm.
 2. Hai phiên: Admin KHÁC đang thu hồi tay quyền Thư ký của Quản lý X (giữ dòng quyền ``FOR UPDATE``); Admin lưu gộp {email +
    hạ vai X} ⇒ xong NGAY với 409, không chờ dòng quyền (``pg_blocking_pids`` từ kết nối thứ ba).
 3. Đổi vai riêng (không đổi email): Cán bộ giữ cả hai quyền ⇒ 200, cả hai bị thu hồi cùng câu lý do, cùng người thao tác; tiêm
-   lỗi vào nhật ký thu hồi Thư ký ⇒ 500 và quyền DUYỆT CHÉO (thu hồi TRƯỚC trong cùng hàm) cũng còn nguyên.
+   lỗi vào bước ghi phân công vai (SAU khi đã thu hồi cả hai trong giao dịch) ⇒ 500 và cả hai quyền + vai đều nguyên.
 
 Mọi phép kiểm đọc CSDL từ phiên RIÊNG.
 """
@@ -25,6 +25,7 @@ import asyncio
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import text
 
 from app.repositories import review_secretary_repository as sec_repo
 from tests.api.gd1b_cheo_tro_giup import can_bo_cheo, cap  # noqa: F401
@@ -191,27 +192,32 @@ async def test_doi_vai_rieng_thu_hoi_ca_quyen_cheo_lan_thu_ky_cung_cau_ly_do(
     )
 
 
-async def test_doi_vai_rieng_loi_nhat_ky_thu_hoi_thu_ky_thi_quyen_cheo_cung_con_nguyen(
+async def test_doi_vai_rieng_loi_sau_khi_thu_hoi_ca_hai_thi_ca_hai_quyen_con_nguyen(
     client, monkeypatch, admin_user_in_db, can_bo_cheo, seed_lead_dependencies  # noqa: F811
 ):
-    """Cùng GIAO DỊCH, không chỉ cùng hàm: quyền duyệt chéo bị thu hồi TRƯỚC quyền Thư ký trong ``revoke_grants_on_account_change``;
-    tiêm lỗi vào dòng nhật ký thu hồi Thư ký ⇒ 500 và quyền duyệt chéo vẫn còn hiệu lực (thu hồi duyệt chéo bị rollback cùng).
-    Biến thể "thu hồi duyệt chéo commit riêng / ở phiên riêng trước khi thu hồi Thư ký" ⇒ quyền chéo đã mất ⇒ ca này ĐỎ."""
+    """Cùng GIAO DỊCH với việc đổi vai, không chỉ cùng hàm: tiêm lỗi vào bước ghi phân công vai — chạy SAU
+    ``revoke_grants_on_account_change`` (đã thu hồi xong CẢ quyền duyệt chéo lẫn quyền Thư ký) ⇒ 500; vai, quyền duyệt chéo và
+    quyền Thư ký đều nguyên. Biến thể "thu hồi một trong hai bảng quyền ở giao dịch / phiên riêng rồi commit" ⇒ quyền ấy đã mất
+    ⇒ ca này ĐỎ (ca nhật ký Thư ký của ``test_gd2c_c1_thu_ky_api.py`` tiêm lỗi TRONG bước thu hồi nên không thấy biến thể này)."""
     from app.main import fastapi_app
-    from app.services import audit_service
+    from app.services import user_service
 
     gid_cheo = await cap(client, admin_user_in_db, can_bo_cheo["id"], seed_lead_dependencies["unit_id"], verify=True)
     gid_tk = (await gan(client, admin_user_in_db, can_bo_cheo["id"]))["id"]
-    goc = audit_service.log_audit
     da_tiem = []
 
-    async def hong(db, entity_type, *a, **kw):
-        if entity_type == "admission_review_secretary_grant":
-            da_tiem.append(entity_type)
-            raise RuntimeError("tiêm lỗi ghi nhật ký kiểm toán")
-        return await goc(db, entity_type, *a, **kw)
+    async def hong(*a, **kw):
+        # Đọc TRONG giao dịch của yêu cầu (phiên ``db`` của chính lệnh PUT): lúc lỗi xảy ra, cả hai quyền đã bị thu hồi.
+        da_tiem.append(tuple((await kw["db"].execute(
+            text(
+                "SELECT (SELECT revoked_at IS NOT NULL FROM document_cross_review_grant WHERE id = :c),"
+                " (SELECT revoked_at IS NOT NULL FROM admission_review_secretary_grant WHERE id = :t)"
+            ),
+            {"c": gid_cheo, "t": gid_tk},
+        )).one()))
+        raise RuntimeError("tiêm lỗi ghi phân công vai")
 
-    monkeypatch.setattr(audit_service, "log_audit", hong)
+    monkeypatch.setattr(user_service, "_create_or_update_user_assignment", hong)
     c = AsyncClient(transport=ASGITransport(app=fastapi_app, raise_app_exceptions=False), base_url="http://test",
                     headers={"User-Agent": "gd2c-c1-chan-gop-500"})
     try:
@@ -222,7 +228,7 @@ async def test_doi_vai_rieng_loi_nhat_ky_thu_hoi_thu_ky_thi_quyen_cheo_cung_con_
         r = await c.put(AdminURLs.USER_DETAIL(can_bo_cheo["id"]), headers=h, data={"role": "accountant"})
     finally:
         await c.aclose()
-    assert da_tiem, "tiền đề: lỗi phải được tiêm ĐÚNG ở nhật ký thu hồi Thư ký"
+    assert da_tiem == [(True, True)], f"tiền đề: lỗi tiêm SAU khi cả hai quyền đã thu hồi trong giao dịch ({da_tiem})"
     assert r.status_code == 500, r.text
     assert (await _con_hieu_luc(gid_cheo), await _thu_ky_con(gid_tk), (await _tai_khoan(can_bo_cheo["id"]))[2]) == (
         True,
