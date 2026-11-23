@@ -16,6 +16,11 @@ toàn bộ ``basis_entries``).
 Giá trị mong đợi VIẾT TAY. Hàm đọc KV trường được thay bằng bảng tra trong bộ nhớ (ghi lại từng lần hỏi); không CSDL. Quy ước năm G5
 (owner 22-11): mục ``a → b`` gồm ``b − a`` năm học, tra các khoá ``a .. b − 1``; trường tốt nghiệp tra ở năm học cuối ``b − 1``; mục
 ``a → a`` (0 năm học) ⇒ dừng ``insufficient_data``.
+
+Dựng lại L3 23-11 (Codex lượt 2 B'3, rà hợp nhất J1c): bản vá sống trong bộ quyết định CHUNG ``_kv_resolution_steps`` (hàm
+``kv_graduation_pick`` — một luật hoà với nhánh THCS) ⇒ MỌI ca chạy CẢ đường từng hồ sơ (``resolve_kv_for_profile``) lẫn đường lô
+(``decide_kv_for_profile`` trên khoá ``kv_lookup_keys``) và đòi hai kết quả BẰNG nhau. Owner 23-11
+``QUYET-DINH-OWNER-O-LOP-TRONG-CAN-XET-TAY`` mục 4: "thiếu hẳn khoá lớp" và "khoá lớp = null" xử lý NHƯ NHAU ⇒ thêm ca thiếu khoá.
 """
 from __future__ import annotations
 
@@ -30,15 +35,21 @@ pytestmark = pytest.mark.unit
 
 A, B, C, D = 101, 202, 303, 404
 KV = {A: "KV1", B: "KV3", C: "KV2", D: "KV2"}
+#: Lớp "thiếu hẳn khoá": ``_m`` bỏ khoá ``grade_to`` (khác ``None`` = khoá có, giá trị JSON null).
+_KHONG_KHOA = object()
 
 
 def _m(sid, tu, den, lop=12, **kw):
     muc = {"level": "THPT", "school_id": sid, "school_name": "Trường thử", "year_from": tu, "year_to": den, "grade_to": lop}
+    if lop is _KHONG_KHOA:
+        del muc["grade_to"]
     muc.update(kw)
     return muc
 
 
 def _chay(monkeypatch, lich_su):
+    """Hai đường trên cùng bảng tra; trả ``(kv, meta, các phép tra đường từng hồ sơ)``. Đòi hai đường bằng nhau và khoá nạp trước
+    BAO TRÙM mọi phép tra thật sự hỏi."""
     hoi = []
 
     async def _tra(db, sid, nam):
@@ -48,7 +59,15 @@ def _chay(monkeypatch, lich_su):
     monkeypatch.setattr(ps, "lookup_kv_for_school_year", _tra)
     ho_so = SimpleNamespace(id=1, academic_year=2026, cultural_education_level="graduated_thpt", vocational_qualification="none",
                             area_resolution_basis=None, permanent_commune_code=None, academic_history=lich_su)
-    kv, meta = asyncio.run(ps.resolve_kv_for_profile(ho_so, db=None, target_level="cao_dang", admission_type="chinh_quy"))
+    ngu_canh = dict(target_level="cao_dang", admission_type="chinh_quy")
+    kv, meta = asyncio.run(ps.resolve_kv_for_profile(ho_so, db=None, **ngu_canh))
+
+    xa_k, truong_k = ps.kv_lookup_keys(ho_so, **ngu_canh)
+    lo = ps.decide_kv_for_profile(
+        ho_so, commune_kv={k: None for k in xa_k}, school_kv={k: KV.get(k[0]) for k in truong_k}, **ngu_canh
+    )
+    assert lo == (kv, meta), (lo, kv, meta)
+    assert set(hoi) <= set(truong_k), (hoi, truong_k)
     return kv, meta, hoi
 
 
@@ -60,7 +79,7 @@ def _can_xet_tay(meta, truong):
 
 
 # ═══════════════════════════════ tái hiện: hoà KV + cùng year_to + một mục thiếu / sai kiểu lớp ═══════════════════════════════
-@pytest.mark.parametrize("lop_la", [None, "12"], ids=["grade_to_null", "grade_to_chuoi"])
+@pytest.mark.parametrize("lop_la", [None, "12", _KHONG_KHOA], ids=["grade_to_null", "grade_to_chuoi", "grade_to_thieu_khoa"])
 @pytest.mark.parametrize("muc_la_dung_truoc", [False, True], ids=["muc_la_sau", "muc_la_truoc"])
 def test_hoa_cung_year_to_mot_muc_thieu_lop_thi_can_xet_tay_khong_loi(monkeypatch, lop_la, muc_la_dung_truoc):
     lich_su = [_m(A, 2021, 2023, 12), _m(B, 2021, 2023, lop_la)]
@@ -156,13 +175,14 @@ def test_doi_chung_khong_hoa_co_muc_thieu_lop_van_hoc_lau_nhat(monkeypatch):
     "muc, mong",
     [
         ([_m(A, 2021, 2023, 12), _m(B, 2021, 2023, None)], [A, B]),
+        ([_m(A, 2021, 2023, 12), _m(B, 2021, 2023, _KHONG_KHOA)], [A, B]),
         ([_m(A, 2021, 2023, True), _m(B, 2021, 2023, 12)], [A, B]),
         ([_m(A, 2021, 2023, 12), _m(B, 2021, 2023, 12)], None),
         ([_m(A, 2019, 2020, None), _m(B, 2021, 2022, 12)], None),
         ([_m(A, 2021, "2023", 12), _m(B, 2021, 2023, 12)], "tat_ca"),
         ([_m(A, 2018, 2020, 10), _m(C, 2019, 2020, None), _m(B, 2020, 2022, 12)], None),
     ],
-    ids=["null", "bool", "du_lop", "muc_cu_thieu_lop", "year_to_chuoi", "nhom_thap_cung_nam_lop_null"],
+    ids=["null", "thieu_khoa", "bool", "du_lop", "muc_cu_thieu_lop", "year_to_chuoi", "nhom_thap_cung_nam_lop_null"],
 )
 def test_vi_tu_ung_vien_truong_tot_nghiep(muc, mong):
     thay = ps.kv_graduation_candidates_unclear(muc)

@@ -525,12 +525,16 @@ def kv_entry_thcs_last_school_year(entry: dict) -> int:
     return kv_entry_thcs_end_year(entry) - 1
 
 
-def _kv_thcs_rank_key(entry: dict) -> tuple[int, int]:
-    """Khoá xếp "trường tốt nghiệp THCS": (năm kết thúc phần THCS, lớp cuối của phần THCS — liên cấp lớp ≥ 10 ⇒ 9; thiếu lớp ⇒ 0)."""
-    grade = _history_grade(entry.get("grade_to")) or 0
-    if entry.get("level") == KV_LIEN_CAP_LEVEL:
-        grade = min(grade, _THPT_FIRST_GRADE - 1)
-    return kv_entry_thcs_end_year(entry), grade
+def kv_entry_thcs_last_grade(entry: dict) -> Any:
+    """L3: lớp cuối của PHẦN THCS — khoá thứ hai của bước hoà nhánh THCS (:func:`kv_graduation_pick`, CÙNG luật với THPT). Liên cấp
+    lớp kết thúc ≥ 10 ⇒ 9 (phần THCS dừng ở lớp 9; lớp kết thúc hợp lệ đã được :func:`kv_thcs_entry_case` bảo đảm); dòng khác ⇒
+    ``grade_to`` NGUYÊN giá trị (thiếu khoá ⇒ ``None``). So được hay không do :func:`_history_int` ở bước hoà quyết — owner 23-11
+    ``QUYET-DINH-OWNER-O-LOP-TRONG-CAN-XET-TAY`` (a): lớp trống / null / sai kiểu ở nhóm tốt nghiệp ⇒ cần xét tay, KHÔNG coi là 0
+    (khoá cũ ``_history_grade(...) or 0`` — luật (b) — đã bỏ)."""
+    grade = entry.get("grade_to")
+    if entry.get("level") == KV_LIEN_CAP_LEVEL and _history_int(grade):
+        return min(grade, _THPT_FIRST_GRADE - 1)
+    return grade
 
 
 def kv_last_school_year(entry: dict) -> Any:
@@ -540,35 +544,91 @@ def kv_last_school_year(entry: dict) -> Any:
     return y_to - 1 if _history_int(y_to) else y_to
 
 
-def kv_graduation_year_group(entries: list) -> list[tuple[int, dict]]:
-    """Nhóm ứng viên trường tốt nghiệp ở bước hoà: ``(chỉ số trong entries, mục)`` của các mục có ``year_to`` LỚN NHẤT.
-
-    Trường tốt nghiệp luôn thuộc nhóm này vì khoá xếp đầu tiên của bước hoà là ``year_to``. Bước hoà chỉ xếp TRONG nhóm (rà hợp nhất
-    23-11 mục B-H1): xếp cả các nhóm thấp hơn không đổi kết quả, nhưng bắt hai mục cùng ``year_to`` ở nhóm thấp so lớp với nhau ⇒
-    ``TypeError`` khi một mục có lớp ``null`` / chuỗi. Chỉ gọi khi MỌI ``year_to`` là số nguyên (:func:`_history_int`) — vế đầu
-    của :func:`kv_graduation_candidates_unclear`."""
-    latest = max(e["year_to"] for e in entries)
-    return [(i, e) for i, e in enumerate(entries) if e["year_to"] == latest]
+# ── Bước hoà (trường tốt nghiệp) — MỘT luật cho nhánh THPT và nhánh THCS (L3) ──
+# Owner 23-11 ``QUYET-DINH-OWNER-O-LOP-TRONG-CAN-XET-TAY`` (a) + rà hợp nhất 23-11 J1c / Codex lượt 2 B'3: luật hoà phải MỘT, sống
+# trong bộ quyết định chung :func:`_kv_resolution_steps` (đường lẻ và đường lô cùng tiêu thụ). Hai nhánh chỉ khác HAI bộ truy cập
+# (năm kết thúc, lớp cuối) — THPT: ``year_to`` / ``grade_to``; THCS: năm kết thúc / lớp cuối của PHẦN THCS (cắt liên cấp một chỗ,
+# :func:`kv_lien_cap_split_year`). "So được" = :func:`_history_int` cho cả hai (MỘT helper — CLAUDE.md §7).
 
 
-def kv_graduation_candidates_unclear(entries: list) -> Optional[list]:
-    """Bước hoà (M1) của luật học nhiều trường: các mục CÓ THỂ là trường tốt nghiệp mà KHÔNG so được ⇒ trả danh sách mục ấy (hoà
-    không phân định ⇒ cần xét tay); ``None`` = so được, đi tiếp phép xếp trong nhóm :func:`kv_graduation_year_group`.
+def kv_entry_end_year(entry: dict) -> Any:
+    """Nhánh THPT: năm kết thúc của mục ở bước hoà — ``year_to`` NGUYÊN giá trị (thiếu khoá ⇒ ``None``)."""
+    return entry.get("year_to")
 
-    * Một mục bất kỳ thiếu / sai kiểu ``year_to`` ⇒ không biết mục nào học sau cùng ⇒ MỌI mục.
-    * ``year_to`` đều hợp lệ: nhóm có ``year_to`` lớn nhất có từ 2 mục trở lên mà một mục thiếu / sai kiểu ``grade_to`` ⇒ nhóm ấy.
-    * Nhóm ``year_to`` lớn nhất chỉ có MỘT mục ⇒ so được (lớp không cần) — như cũ. Lớp lạ ở nhóm THẤP hơn không cản: nhóm ấy không
-      được xếp.
 
-    "Hợp lệ" = :func:`_history_int` (số nguyên thật: không ``bool``, chuỗi, số thực, ``None``). Vì sao: khoá sắp xếp cũ
-    ``(.get("year_to", 0), .get("grade_to", 0), -index)`` chỉ thay khi THIẾU khoá; JSON ``null`` (hay chuỗi) ⇒ so ``None`` với
-    ``int`` ⇒ ``TypeError`` (owner GO 22-11 "sửa ngay, PR nhỏ riêng" — phát hiện ở bàn giao L3-a)."""
-    if any(not _history_int(e.get("year_to")) for e in entries):
+def kv_entry_last_grade(entry: dict) -> Any:
+    """Nhánh THPT: lớp cuối của mục ở bước hoà — ``grade_to`` NGUYÊN giá trị (thiếu khoá ⇒ ``None``: owner 23-11 — "thiếu hẳn khoá"
+    và "null" xử lý NHƯ NHAU)."""
+    return entry.get("grade_to")
+
+
+def kv_graduation_year_group(
+    entries: list, year_of: Callable[[dict], Any] = kv_entry_end_year
+) -> list[tuple[int, dict]]:
+    """Nhóm ứng viên trường tốt nghiệp ở bước hoà: ``(chỉ số trong entries, mục)`` của các mục có năm kết thúc (``year_of``) LỚN NHẤT.
+
+    Trường tốt nghiệp luôn thuộc nhóm này vì khoá xếp đầu tiên của bước hoà là năm kết thúc. Bước hoà chỉ xếp TRONG nhóm (rà hợp nhất
+    23-11 mục B-H1): xếp cả các nhóm thấp hơn không đổi kết quả, nhưng bắt hai mục cùng năm ở nhóm thấp so lớp với nhau ⇒
+    ``TypeError`` khi một mục có lớp ``null`` / chuỗi. Chỉ số là chỉ số GỐC (``enumerate`` TRƯỚC khi lọc — khoá ổn định ``-index``).
+    Chỉ gọi khi MỌI năm kết thúc là số nguyên (:func:`_history_int`) — vế đầu của :func:`kv_graduation_candidates_unclear`."""
+    latest = max(year_of(e) for e in entries)
+    return [(i, e) for i, e in enumerate(entries) if year_of(e) == latest]
+
+
+def kv_graduation_candidates_unclear(
+    entries: list,
+    year_of: Callable[[dict], Any] = kv_entry_end_year,
+    grade_of: Callable[[dict], Any] = kv_entry_last_grade,
+) -> Optional[list]:
+    """Chốt thiếu dữ liệu của bước hoà (M1): các mục CÓ THỂ là trường tốt nghiệp mà KHÔNG so được ⇒ trả danh sách mục ấy (hoà không
+    phân định ⇒ cần xét tay); ``None`` = so được, đi tiếp phép xếp trong nhóm :func:`kv_graduation_year_group`.
+
+    * Một mục bất kỳ thiếu / sai kiểu năm kết thúc ⇒ không biết mục nào học sau cùng ⇒ MỌI mục.
+    * Năm đều hợp lệ: nhóm có năm kết thúc lớn nhất có từ 2 mục trở lên mà một mục thiếu / sai kiểu lớp ⇒ nhóm ấy.
+    * Nhóm năm lớn nhất chỉ có MỘT mục ⇒ so được (lớp không cần) — như cũ. Lớp lạ ở nhóm THẤP hơn không cản: nhóm ấy không được xếp.
+
+    "Hợp lệ" = :func:`_history_int` (số nguyên thật: không ``bool``, chuỗi, số thực, ``None``; thiếu khoá = ``None``). Vì sao: khoá
+    sắp xếp cũ ``(.get("year_to", 0), .get("grade_to", 0), -index)`` chỉ thay khi THIẾU khoá; JSON ``null`` (hay chuỗi) ⇒ so ``None``
+    với ``int`` ⇒ ``TypeError`` (owner GO 22-11 "sửa ngay, PR nhỏ riêng"). Owner 23-11 (a): áp CHUNG THPT và THCS."""
+    if any(not _history_int(year_of(e)) for e in entries):
         return list(entries)
-    candidates = [e for _, e in kv_graduation_year_group(entries)]
-    if len(candidates) >= 2 and any(not _history_int(e.get("grade_to")) for e in candidates):
+    candidates = [e for _, e in kv_graduation_year_group(entries, year_of)]
+    if len(candidates) >= 2 and any(not _history_int(grade_of(e)) for e in candidates):
         return candidates
     return None
+
+
+def kv_graduation_pick(
+    entries: list,
+    year_of: Callable[[dict], Any] = kv_entry_end_year,
+    grade_of: Callable[[dict], Any] = kv_entry_last_grade,
+) -> tuple[Optional[dict], list]:
+    """MỘT luật bước hoà của luật học nhiều trường (như ghi ở quyết định owner 23-11 ``QUYET-DINH-OWNER-O-LOP-TRONG-CAN-XET-TAY``: hoà
+    thời gian mà KV khác nhau ⇒ trường tốt nghiệp = năm kết thúc lớn nhất, năm trùng ⇒ lớp cuối lớn nhất) — gọi từ nhánh THPT VÀ
+    nhánh THCS của :func:`_kv_resolution_steps`.
+
+    Trả ``(mục tốt nghiệp, [])`` hoặc ``(None, các mục không phân định)``:
+    * chốt thiếu dữ liệu :func:`kv_graduation_candidates_unclear` ⇒ ``(None, mục không so được)``;
+    * xếp NHÓM năm lớn nhất theo ``(năm, lớp, -chỉ số gốc)`` (:func:`kv_graduation_year_group`); hai mục đầu bằng nhau cả năm lẫn
+      lớp ⇒ ``(None, [mục 1, mục 2])`` (M1).
+    Nhánh THPT đổi ``(None, …)`` thành ``ambiguous_requires_manual``; nhánh THCS thành "KV chờ xác minh"
+    (``thcs_tied_graduation_school``). Dữ liệu đúng kiểu: kết quả như phép xếp toàn bộ cũ (bàn giao hoà THPT G5 §2)."""
+    if not entries:
+        return None, []
+    unclear = kv_graduation_candidates_unclear(entries, year_of, grade_of)
+    if unclear is not None:
+        return None, unclear
+    ranked = sorted(
+        kv_graduation_year_group(entries, year_of),
+        key=lambda pair: (year_of(pair[1]), grade_of(pair[1]), -pair[0]),  # -index: ổn định, ưu tiên mục khai trước
+        reverse=True,
+    )
+    top = ranked[0][1]
+    if len(ranked) >= 2:
+        second = ranked[1][1]
+        if (year_of(top), grade_of(top)) == (year_of(second), grade_of(second)):
+            return None, [top, second]
+    return top, []
 
 
 def _has_thpt_history(academic_history: Optional[list]) -> bool:
@@ -691,18 +751,6 @@ def kv_thcs_history_plan(academic_history: Any) -> tuple[list[dict], list[dict]]
     return countable, problems
 
 
-def kv_thcs_graduation_entry(entries: list[dict]) -> Optional[dict]:
-    """Trường tốt nghiệp lớp 9 trong các dòng THCS đếm được (owner câu 4: "hoà thì theo trường tốt nghiệp THCS"): dòng có phần THCS kết
-    thúc muộn nhất, cùng năm ⇒ lớp cuối cao hơn (:func:`_kv_thcs_rank_key`). Hai dòng đứng đầu bằng nhau ⇒ ``None`` (không phân định
-    được — như ``ambiguous_requires_manual`` của THPT)."""
-    ranked = sorted(entries, key=_kv_thcs_rank_key, reverse=True)
-    if not ranked:
-        return None
-    if len(ranked) >= 2 and _kv_thcs_rank_key(ranked[0]) == _kv_thcs_rank_key(ranked[1]):
-        return None
-    return ranked[0]
-
-
 # =============================================================================
 # L3 (owner 22-11) — KV của thí sinh trung cấp xét sau THCS theo NƠI HỌC THCS; sơ cấp + nhánh cũ "chờ xác minh"
 # =============================================================================
@@ -713,7 +761,8 @@ def kv_thcs_graduation_entry(entries: list[dict]) -> Optional[dict]:
 #
 # * Trung cấp sau THCS (chính quy; liên thông từ sơ cấp / trung cấp) ⇒ căn cứ ``LICH_SU_THCS``: tính từ các dòng lịch sử học THCS có
 #   trường trong danh mục — CÙNG cách đếm năm học (:func:`kv_entry_school_years`), CÙNG phép tra theo năm, CÙNG luật "khu vực học
-#   lâu nhất, hoà ⇒ trường tốt nghiệp" như THPT (owner câu 4 "giống cách tính THPT"). Không tính được ⇒ "KV chờ xác minh".
+#   lâu nhất, hoà ⇒ trường tốt nghiệp" như THPT (owner câu 4 "giống cách tính THPT"; bước hoà là MỘT hàm :func:`kv_graduation_pick`
+#   — lớp trống ở nhóm tốt nghiệp ⇒ cần xét tay, owner 23-11 (a)). Không tính được ⇒ "KV chờ xác minh".
 # * Sơ cấp và nhánh cũ không truyền trình độ (THCS) ⇒ "KV chờ xác minh" (câu 5).
 # * Nhãn ``permanent_address_special`` KHÔNG là căn cứ cho ba nhóm này (câu 2); ấn định tay có nguồn gốc vẫn thắng.
 # * Câu 1 "đo trước rồi quyết": hồ sơ CŨ (ảnh chụp KV do luật cũ ra) giữ luật cũ cho tới khi bật cờ
@@ -1093,10 +1142,6 @@ def decide_kv_for_profile(
         return done.value
 
 
-def _plain_int(value: Any) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool)
-
-
 def kv_lookup_keys(
     profile: "AdmissionProfile",
     *,
@@ -1158,13 +1203,13 @@ def _kv_lookup_plan(
             if not kv_history_basis_entry(entry) or kv_entry_problem(entry) is not None:
                 continue
             sid = entry.get("school_id")
-            if not _plain_int(sid):
+            if not _history_int(sid):  # MỘT helper "số nguyên thật" với bộ quyết định (bỏ bản trùng ``_plain_int`` — Codex B'3)
                 continue
             y_from, y_to = entry.get("year_from"), entry.get("year_to")
             last_year = kv_last_school_year(entry)
-            if _plain_int(last_year):
+            if _history_int(last_year):
                 schools.add((sid, last_year))
-            if _plain_int(y_from) and _plain_int(y_to) and y_to >= y_from:
+            if _history_int(y_from) and _history_int(y_to) and y_to >= y_from:
                 for year in kv_entry_school_years(entry):
                     schools.add((sid, year))
     elif basis == KV_BASIS_THCS_HISTORY:
@@ -1244,8 +1289,10 @@ def _kv_thcs_history_steps(
     meta_base: Callable[..., dict[str, Any]],
 ) -> Generator[KvLookup, Optional[str], tuple[Optional[str], dict[str, Any]]]:
     """Nhánh ``LICH_SU_THCS`` (L3): KV theo các dòng THCS có trường trong danh mục — khu vực học lâu nhất (cùng vòng đếm với THPT),
-    hoà ⇒ KV trường tốt nghiệp lớp 9 tra ở năm học cuối (:func:`kv_last_school_year`). MỌI ca không tính được ⇒ "KV chờ xác minh"
-    (:data:`KV_PENDING_VERIFICATION_RULE`, ``requires_manual_override``), ``reason`` nói đúng việc cán bộ cần làm."""
+    hoà ⇒ KV trường tốt nghiệp lớp 9 (MỘT luật hoà với THPT — :func:`kv_graduation_pick`) tra ở năm học lớp 9
+    (:func:`kv_entry_thcs_last_school_year`). MỌI ca không tính được ⇒ "KV chờ xác minh" (:data:`KV_PENDING_VERIFICATION_RULE`,
+    ``requires_manual_override``), ``reason`` nói đúng việc cán bộ cần làm — kể cả lớp trống / sai kiểu ở nhóm tốt nghiệp khi hoà (owner
+    23-11 (a))."""
     pathway = KV_PATHWAY_THCS_HISTORY
 
     def _pending(reason: str, breakdown: dict[str, Any]) -> tuple[None, dict[str, Any]]:
@@ -1296,9 +1343,16 @@ def _kv_thcs_history_steps(
     if len(winners) == 1:
         return winners[0], meta_base(rule_applied="longest_duration", pathway=pathway, breakdown=breakdown_base)
 
-    grad_entry = kv_thcs_graduation_entry(entries)
+    # Bước hoà: MỘT luật với nhánh THPT (:func:`kv_graduation_pick`) trên phần THCS — năm kết thúc phần THCS, lớp cuối phần THCS
+    # (liên cấp ⇒ 9). Owner 23-11 (a): lớp trống / null / sai kiểu ở nhóm tốt nghiệp ⇒ KHÔNG coi là 0 mà "KV chờ xác minh" — cùng
+    # đường với hai dòng ngang nhau cả năm lẫn lớp (``thcs_tied_graduation_school``; cổng nộp cho qua, T6 dừng có nhãn, F231
+    # ``khu_vuc_cho_xac_minh``), như THPT dùng chung đường M1 cho hai ca ấy.
+    grad_entry, undecided = kv_graduation_pick(entries, kv_entry_thcs_end_year, kv_entry_thcs_last_grade)
     if grad_entry is None:
-        return _pending(KV_PENDING_REASON_THCS_TIED, {**breakdown_base, "tied_kv": winners})
+        return _pending(
+            KV_PENDING_REASON_THCS_TIED,
+            {**breakdown_base, "tied_kv": winners, "tied_entries": [e["school_id"] for e in undecided]},
+        )
     grad_lookup_year = kv_entry_thcs_last_school_year(grad_entry)
     grad_kv = yield KvLookup(KV_LOOKUP_SCHOOL, grad_entry["school_id"], grad_lookup_year)
     graduation = {
@@ -1576,12 +1630,16 @@ def _kv_resolution_steps(
             breakdown=breakdown_base,
         )
 
-    # Tiebreak: graduation school (highest year_to + grade_to, stable index).
-    # M1: detect ambiguous (2+ entries cùng year_to + grade_to) → require manual.
-    # Owner GO 22-11: mục có thể là trường tốt nghiệp mà thiếu / sai kiểu year_to / grade_to ⇒ KHÔNG so (tránh TypeError của khoá
-    # sắp xếp) ⇒ cùng đường M1 (hoà không phân định ⇒ cần xét tay), cùng mã lý do.
-    unclear = kv_graduation_candidates_unclear(basis_entries)
-    if unclear is not None:
+    # Tiebreak: graduation school (highest year_to + grade_to, stable index) — MỘT luật hoà với nhánh THCS: :func:`kv_graduation_pick`
+    # (bộ truy cập mặc định ``year_to`` / ``grade_to``). Hai ca ra ``(None, …)`` cùng đường M1 (hoà không phân định ⇒ cần xét tay,
+    # cùng mã lý do):
+    # * owner GO 22-11 + owner 23-11 (a): mục có thể là trường tốt nghiệp mà thiếu / sai kiểu year_to / grade_to ⇒ KHÔNG so (tránh
+    #   TypeError của khoá sắp xếp) — ``tied_entries`` = các mục ấy;
+    # * M1: hai mục đầu NHÓM year_to lớn nhất cùng year_to + grade_to — ``tied_entries`` = hai mục ấy.
+    # Chỉ xếp NHÓM year_to lớn nhất (rà hợp nhất 23-11 B-H1): nhóm thấp có thể có hai mục cùng năm, một lớp null / chuỗi, một lớp số ⇒
+    # xếp chung buộc so hai lớp ấy ⇒ TypeError. Dữ liệu đúng kiểu: kết quả như xếp toàn bộ cũ.
+    grad_entry, undecided = kv_graduation_pick(basis_entries)
+    if grad_entry is None:
         return None, _meta_base(
             rule_applied="ambiguous_requires_manual",
             pathway=pathway,
@@ -1590,43 +1648,10 @@ def _kv_resolution_steps(
             breakdown={
                 **breakdown_base,
                 "tied_kv": winners,
-                "tied_entries": [e["school_id"] for e in unclear],
+                "tied_entries": [e["school_id"] for e in undecided],
             },
         )
-    # Chỉ xếp NHÓM year_to lớn nhất (rà hợp nhất 23-11 B-H1): trường tốt nghiệp luôn ở nhóm ấy; nhóm thấp hơn có thể có hai mục cùng
-    # năm, một lớp null / chuỗi, một lớp số ⇒ xếp chung buộc so hai lớp ấy ⇒ TypeError. Dữ liệu đúng kiểu: kết quả không đổi (hai phần
-    # tử đầu khi xếp toàn bộ đều thuộc nhóm này, trừ khi nhóm chỉ một mục — khi ấy mục thứ hai khác year_to nên không vào M1).
-    sorted_entries = sorted(
-        kv_graduation_year_group(basis_entries),
-        key=lambda pair: (
-            pair[1].get("year_to", 0),
-            pair[1].get("grade_to", 0),
-            -pair[0],  # stable: prefer earlier index when ties
-        ),
-        reverse=True,
-    )
-    if len(sorted_entries) >= 2:
-        top_entry = sorted_entries[0][1]
-        second_entry = sorted_entries[1][1]
-        if top_entry.get("year_to") == second_entry.get("year_to") and top_entry.get(
-            "grade_to"
-        ) == second_entry.get("grade_to"):
-            return None, _meta_base(
-                rule_applied="ambiguous_requires_manual",
-                pathway=pathway,
-                requires_manual_override=True,
-                reason="tied_graduation_year_and_grade",
-                breakdown={
-                    **breakdown_base,
-                    "tied_kv": winners,
-                    "tied_entries": [
-                        top_entry["school_id"],
-                        second_entry["school_id"],
-                    ],
-                },
-            )
 
-    grad_entry = sorted_entries[0][1]
     # G5 (owner 22-11): tra trường tốt nghiệp ở NĂM HỌC CUỐI (khoá năm bắt đầu ``year_to − 1``), không phải năm sau tốt nghiệp.
     # ``graduation_lookup_year`` ghi ĐÚNG khoá đã đem tra (Codex G5 P1) — ``graduation_year`` vẫn là ``year_to`` như cũ.
     grad_lookup_year = kv_last_school_year(grad_entry)
