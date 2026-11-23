@@ -2,7 +2,8 @@
 """GĐ2-B đợt 2 (L3a + L4) — phần hợp đồng API kiểm được KHÔNG cần CSDL (hợp đồng API GĐ2-B bản 4 ``b877fba1…``):
 
 * HĐ1 — 9 route (method + đường dẫn) có trên bảng route THẬT của ``app.main`` với đúng mã thành công (E1 201, E6 202, còn lại 200);
-  tên trường request / phản hồi GHIM theo hợp đồng §2, §3 (bảng kỳ vọng gõ TAY — đổi tên một trường ⇒ đỏ).
+  tên trường request / phản hồi GHIM theo hợp đồng §2, §3 (bảng kỳ vọng gõ TAY — đổi tên một trường ⇒ đỏ). Dưới cùng tiền tố còn
+  ĐÚNG 3 route lựa chọn của GĐ2-C C2 (sổ ``ROUTE_LUA_CHON_C2``, cổng Thư ký) — route lạ thứ 13 ⇒ đỏ.
 * HĐ9 — MỌI route trong 9 có CẢ Casbin (``deps.check_permission``) LẪN lớp phụ ``deps.require_review_admin`` trong cây dependency
   (bỏ lớp phụ khỏi một route ⇒ đỏ); giới hạn tần suất đúng thứ tự decorator (``__wrapped__``).
 * HĐ10 — không trường / tham số nào kiểu "vượt" (``bypass*`` / ``override*``) ở thân request lẫn tham số truy vấn của 9 route.
@@ -38,9 +39,21 @@ CHIN_ROUTE = {
     ("GET", P + "/{session_id}/runs/{run_id}"): 200,
     ("GET", P + "/{session_id}/runs/{run_id}/rows"): 200,
 }
+#: GĐ2-C C2 (gộp 23-11): 3 route lựa chọn của Ban thư ký nằm DƯỚI cùng tiền tố nhưng thuộc module RIÊNG
+#: ``app.routers.admission_review_selection`` và đi qua cổng Thư ký (``deps.require_review_secretary``), KHÔNG qua lớp phụ chỉ-Admin
+#: của 9 route — hợp đồng + cổng của chúng khoá ở ``tests/unit/test_gd2c_c2_ddl_lockin.py``. Gõ TAY: route mới dưới tiền tố mà không
+#: thuộc sổ nào trong hai sổ ⇒ HĐ1 đỏ.
+ROUTE_LUA_CHON_C2 = frozenset(
+    {
+        ("GET", P + "/{session_id}/selections"),
+        ("GET", P + "/{session_id}/selections/{profile_id}"),
+        ("PUT", P + "/{session_id}/selections/{profile_id}"),
+    }
+)
 
 
-def _route_lan_xet():
+def _route_duoi_tien_to():
+    """MỌI route có đường bắt đầu bằng tiền tố lần xét (mọi module)."""
     from app.main import fastapi_app
 
     out = {}
@@ -51,7 +64,13 @@ def _route_lan_xet():
     return out
 
 
+def _route_lan_xet():
+    """9 route lần xét của GĐ2-B (bỏ 3 route lựa chọn của C2)."""
+    return {k: r for k, r in _route_duoi_tien_to().items() if k not in ROUTE_LUA_CHON_C2}
+
+
 def test_hd1_dung_9_route_dung_ma_thanh_cong():
+    assert set(_route_duoi_tien_to()) == set(CHIN_ROUTE) | ROUTE_LUA_CHON_C2
     routes = _route_lan_xet()
     assert set(routes) == set(CHIN_ROUTE)
     for k, ma in CHIN_ROUTE.items():
