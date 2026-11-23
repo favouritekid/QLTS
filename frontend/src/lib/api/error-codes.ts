@@ -81,10 +81,13 @@ export function isAuthStateUnavailable(
  * (`HTTPException` — câu có thể tiếng Anh, nội bộ), 503 đóng băng (khoá `code`,
  * đi nhánh riêng).
  *
- * Một test backend (`tests/unit/test_fe_ma_loi_503_mot_nguon.py`) khoá: tập này
- * ∪ (mã 503 trong `T6_PUBLISH_STOP_ERROR_CODES`) = mã của MỌI lớp
- * `ServiceUnavailableError`. Lớp 503 mới ở backend (vd `AUDIT_TRAIL_UNAVAILABLE`
- * của N4 khi lên main) mà quên thêm ở đây ⇒ ĐỎ.
+ * Một test backend (`tests/unit/test_fe_ma_loi_503_mot_nguon.py`) khoá: mã của
+ * MỌI lớp `ServiceUnavailableError` phải được PHÂN LOẠI — ở tập này, ở mã 503
+ * của `T6_PUBLISH_STOP_ERROR_CODES`, hoặc ở tập loại trừ `LOAI_TRU_503` của
+ * chính test ấy (mỗi mã kèm lý do; vd `BULK_VERIFY_*`: luồng lô duyệt giấy có
+ * câu riêng ở `document-review/messages.ts`, không qua `handleApiError`). Lớp
+ * 503 mới ở backend (vd `AUDIT_TRAIL_UNAVAILABLE` của N4 khi lên main) mà chưa
+ * phân loại ⇒ ĐỎ; mã ở tập này mà họ 503 backend không có ⇒ cũng ĐỎ.
  */
 export const USER_FACING_UNAVAILABLE_ERROR_CODES: ReadonlySet<string> = new Set([
   "SERVICE_UNAVAILABLE",
