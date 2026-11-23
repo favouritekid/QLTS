@@ -185,7 +185,7 @@ class CombinedKeyChangeAndRevokeError(ConflictError):
     quan trọng. Quyết định đọc DƯỚI khoá dòng người (``document_cross_review_service.revoke_grants_on_account_change``) và
     báo TRƯỚC khi khoá dòng quyền — không ghi gì.
 
-    [ĐX] Câu chữ là ĐỀ XUẤT, chờ owner duyệt."""
+    Câu chữ và mã lỗi: owner duyệt nguyên văn 23-11 (``gd1b/sua/QUYET-DINH-OWNER-PR-B-LUOT8-CAU-CHU-VA-DOCKER-2026-11-23.md``)."""
 
     status_code = status.HTTP_409_CONFLICT
     error_code = "COMBINED_KEY_CHANGE_AND_REVOKE"

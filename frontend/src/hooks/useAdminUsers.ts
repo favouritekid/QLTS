@@ -209,7 +209,7 @@ export function useAdminUpdateUser(userId: number) {
       // PR-B lượt 8 (owner 23-11): lưu gộp "đổi email + khoá / hạ vai" bị máy chủ chặn 409 — hiện NGUYÊN câu máy chủ.
       const chanGop = combinedKeyChangeAndRevokeDetail(error.response);
       if (chanGop) {
-        // [ĐX] tiêu đề là ĐỀ XUẤT, chờ owner duyệt; mô tả là câu của máy chủ.
+        // Tiêu đề: owner duyệt nguyên văn 23-11; mô tả là câu của máy chủ.
         toast.error("Cần lưu làm hai lần", { description: chanGop, duration: 10000 });
         return;
       }
