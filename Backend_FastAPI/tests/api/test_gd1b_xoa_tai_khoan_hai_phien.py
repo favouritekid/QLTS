@@ -308,8 +308,7 @@ async def test_tap_admin_doi_giua_luc_doc_va_luc_khoa_k4_tu_choi_409_khong_xoa(c
     finally:
         diem.di.set()
         await c.aclose()
-    assert (r.status_code, r.json().get("detail"), await _con(t)) == (
-        409,
-        "Danh sách quản trị viên vừa thay đổi — hãy thử lại.",
-        True,
-    ), r.text
+    # Status TRƯỚC (CLAUDE.md §3 — đỏ phải đỏ đúng lý do): bỏ phép kiểm ⇒ lệnh xoá thành công, thân ``null`` ⇒ đọc
+    # ``detail`` trước sẽ vỡ ``AttributeError`` thay vì báo "không phải 409".
+    assert r.status_code == 409, (r.status_code, r.text)
+    assert (r.json().get("detail"), await _con(t)) == ("Danh sách quản trị viên vừa thay đổi — hãy thử lại.", True), r.text

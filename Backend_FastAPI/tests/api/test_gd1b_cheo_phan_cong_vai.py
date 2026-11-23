@@ -459,7 +459,8 @@ async def test_luu_gop_doi_email_va_khoa_hoac_ha_vai_bi_chan_409_khong_ghi_gi(
     r = await client.put(
         f"/api/admin/users/{can_bo_cheo['id']}", headers=h, data={"email": "prb_l8_gop_moi@example.com", **thay_doi}
     )
-    assert (r.status_code, r.json().get("error_code")) == (409, MA_CHAN_GOP), r.text
+    assert r.status_code == 409, (r.status_code, r.text)  # status TRƯỚC khi đọc thân (CLAUDE.md §3)
+    assert r.json().get("error_code") == MA_CHAN_GOP, r.text
     assert (await _email_trang_thai_vai(can_bo_cheo["id"]), await _con_hieu_luc(gid)) == (truoc, True)
 
 
@@ -546,6 +547,7 @@ async def test_hai_phien_lo_cheo_dang_giu_quyen_luu_gop_email_va_khoa_bi_chan_ng
     finally:
         await ca.aclose()
         await cb.aclose()
-    assert (tt, rb.status_code, rb.json().get("error_code"), ra.status_code < 500, loi.loi) == (
+    ma_loi_b = rb.json().get("error_code") if rb.status_code == 409 else None  # chỉ đọc thân khi đúng status
+    assert (tt, rb.status_code, ma_loi_b, ra.status_code < 500, loi.loi) == (
         "xong", 409, MA_CHAN_GOP, True, {}
-    ), (ra.status_code, ra.text, rb.text)
+    ), (ra.status_code, ra.text, rb.status_code, rb.text)
