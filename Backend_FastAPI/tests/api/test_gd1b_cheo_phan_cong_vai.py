@@ -25,6 +25,12 @@ Codex 22-11 (PR-B lượt 5 @``d6601383``):
 Codex 22-11 (PR-B lượt 6 @``160d7e97``) H1: ``UPDATE`` ĐỔI cột có chỉ mục duy nhất (email) cần ``FOR UPDATE`` — khoá người
 đích ``FOR NO KEY UPDATE`` rồi để PostgreSQL nâng lúc flush ⇒ chờ ``FOR KEY SHARE`` của bên kia GIỮA chừng ⇒ ``40P01``. Nay
 đổi THẬT cột khoá ⇒ khoá người đích ``FOR UPDATE`` ngay từ đầu (vẫn theo id tăng).
+
+PR-B lượt 8 (owner 23-11, ``gd1b/sua/QUYET-DINH-OWNER-PR-B-LUOT8-CHAN-GOP-EMAIL-KHOA-2026-11-23.md``): chính bản vá lượt 6
+sinh vòng chờ mới — PUT {email mới + khoá / hạ vai} giữ người đích ``FOR UPDATE`` rồi chờ dòng quyền ``FOR UPDATE``; lô chéo
+§5.4 giữ dòng quyền ``FOR SHARE`` rồi xin người bấm ``FOR KEY SHARE`` ⇒ ``40P01``. Owner chọn "chặn gộp, làm 2 bước": lần
+lưu gộp ⇒ 409 ``COMBINED_KEY_CHANGE_AND_REVOKE`` (quyết DƯỚI khoá, trước khi khoá dòng quyền); đổi email riêng / khoá riêng
+vẫn qua.
 """
 from __future__ import annotations
 
@@ -36,10 +42,11 @@ from app import models, schemas
 from app.database import AsyncSessionLocal
 from app.repositories import document_bulk_repository as bulk_repo
 from app.repositories.collaborator_repository import CollaboratorRepository
+from tests.api.gd1b_cheo_tro_giup import can_bo_cheo, cap, ho_so  # noqa: F401
 from tests.api.gd1b_cheo_tro_giup import hang, mot, tao_nguoi
-from tests.api.gd1b_lo_tro_giup import Diem, PidTheoNhan, bi_chan_boi, boc, dang_nhap, goi
+from tests.api.gd1b_lo_tro_giup import CROSS, Diem, PidTheoNhan, bi_chan_boi, boc, dang_nhap, goi, xac_nhan
 from tests.api.gd1b_lo_tro_giup import dn, lo_config, lo_routers, sql  # noqa: F401
-from tests.api.test_gd1b_cheo_tu_thu_hoi_2 import _vai
+from tests.api.test_gd1b_cheo_tu_thu_hoi_2 import _con_hieu_luc, _vai
 from tests.api.test_gd1b_cheo_tu_thu_hoi_3 import _go_vai, _them_vai_casbin, _vai_tuy_bien
 from tests.api.test_gd1b_xoa_tai_khoan_hai_phien import _admin_dang_nhap_duoc, _LoiCsdl
 from tests.fixtures.constants import AdminURLs
@@ -430,3 +437,96 @@ async def test_xoa_tai_khoan_trong_luc_nguoi_bi_xoa_sua_email_nguoi_xoa_khong_be
         ra, rb = await asyncio.gather(ta, tb, return_exceptions=True)
     assert tt == "chan", f"K4 (U xoá A) phải CHỜ phiên của A đang giữ khoá ({tt})"
     assert (ra, rb, loi.loi) == ("xong", "xong", {}), (repr(ra), repr(rb))
+
+
+# ---------------------------------------------------------------------------------------------------- lượt 8: chặn gộp
+MA_CHAN_GOP = "COMBINED_KEY_CHANGE_AND_REVOKE"
+
+
+async def _email_trang_thai_vai(uid):
+    return tuple((await hang('SELECT email, status, role FROM "user" WHERE id = :u', u=uid))[0].values())
+
+
+@pytest.mark.parametrize("thay_doi", [{"status": "inactive"}, {"role": "accountant"}], ids=["khoa", "ha_vai"])
+async def test_luu_gop_doi_email_va_khoa_hoac_ha_vai_bi_chan_409_khong_ghi_gi(
+    thay_doi, client, admin_user_in_db, can_bo_cheo, lo_config, lo_routers  # noqa: F811
+):
+    """Một lần lưu vừa đổi email vừa khoá / hạ Cán bộ (kéo theo thu hồi quyền chéo) ⇒ 409 mã riêng; email, trạng thái, vai
+    và quyền chéo giữ NGUYÊN (không ghi gì)."""
+    gid = await cap(client, admin_user_in_db, can_bo_cheo["id"], lo_config["unit_id"], verify=True)
+    truoc = await _email_trang_thai_vai(can_bo_cheo["id"])
+    h = await dn(client, admin_user_in_db)
+    r = await client.put(
+        f"/api/admin/users/{can_bo_cheo['id']}", headers=h, data={"email": "prb_l8_gop_moi@example.com", **thay_doi}
+    )
+    assert (r.status_code, r.json().get("error_code")) == (409, MA_CHAN_GOP), r.text
+    assert (await _email_trang_thai_vai(can_bo_cheo["id"]), await _con_hieu_luc(gid)) == (truoc, True)
+
+
+async def test_doi_email_rieng_van_luu_duoc_quyen_cheo_con(
+    client, admin_user_in_db, can_bo_cheo, lo_config, lo_routers  # noqa: F811
+):
+    gid = await cap(client, admin_user_in_db, can_bo_cheo["id"], lo_config["unit_id"], verify=True)
+    h = await dn(client, admin_user_in_db)
+    r = await client.put(f"/api/admin/users/{can_bo_cheo['id']}", headers=h, data={"email": "prb_l8_rieng@example.com"})
+    assert r.status_code == 200, r.text
+    assert ((await _email_trang_thai_vai(can_bo_cheo["id"]))[0], await _con_hieu_luc(gid)) == (
+        "prb_l8_rieng@example.com",
+        True,
+    )
+
+
+async def test_khoa_rieng_van_luu_duoc_va_tu_thu_hoi(
+    client, admin_user_in_db, can_bo_cheo, lo_config, lo_routers  # noqa: F811
+):
+    gid = await cap(client, admin_user_in_db, can_bo_cheo["id"], lo_config["unit_id"], verify=True)
+    h = await dn(client, admin_user_in_db)
+    r = await client.put(f"/api/admin/users/{can_bo_cheo['id']}", headers=h, data={"status": "inactive"})
+    assert r.status_code == 200, r.text
+    assert ((await _email_trang_thai_vai(can_bo_cheo["id"]))[1], await _con_hieu_luc(gid)) == ("inactive", False)
+
+
+async def test_hai_phien_lo_cheo_dang_giu_quyen_luu_gop_email_va_khoa_bi_chan_ngay_khong_be_tac(
+    client, monkeypatch, admin_token_headers, admin_user_in_db, officer_user_in_db, can_bo_cheo, lo_config,
+    lo_routers,  # noqa: F811
+):
+    """Lô duyệt chéo của Cán bộ X (A) dừng NGAY SAU khi giữ dòng quyền ``FOR SHARE`` (§5.4, trước khoá hồ sơ); Admin lưu gộp
+    {email mới + khoá X} (B). B phải xong NGAY với 409 mã riêng — không chờ A (``pg_blocking_pids`` từ kết nối thứ ba);
+    thả A ⇒ lô chạy xong; 0 lỗi CSDL. Gỡ chặn ⇒ B giữ X ``FOR UPDATE`` rồi chờ dòng quyền; A xin X ``FOR KEY SHARE`` ⇒
+    ``40P01``."""
+    from app.services import admission_service
+
+    p = (await ho_so(client, admin_token_headers, officer_user_in_db, lo_config, tien_to="l8hp"))[0]
+    gid = await cap(client, admin_user_in_db, can_bo_cheo["id"], lo_config["unit_id"], verify=True)
+    h = await dn(client, can_bo_cheo)
+    r = await client.post(f"{CROSS}/bulk-verify/preview", headers=h, json={"profile_ids": [p["id"]], "grant_id": gid})
+    assert r.status_code == 201, r.text
+    ma = r.json()["batch_id"]
+    than_chay = await xac_nhan(ma)
+    ca, ha = await dang_nhap(can_bo_cheo)
+    cb, hb = await dang_nhap(admin_user_in_db)
+    diem = Diem()
+    # §5.4: dòng quyền đã giữ FOR SHARE (``lock_grant_share``), CHƯA khoá hồ sơ / người bấm.
+    boc(monkeypatch, admission_service, "_lock_profile_for_document_write", diem, truoc=True)
+    try:
+        with PidTheoNhan() as ghi, _LoiCsdl() as loi:
+            ta = asyncio.create_task(goi("A", lambda: ca.post(f"{CROSS}/bulk-verify/{ma}/execute", headers=ha, json=than_chay)))
+            tb = None
+            try:
+                await asyncio.wait_for(diem.toi.wait(), 30)
+                tb = asyncio.create_task(goi("B", lambda: cb.put(
+                    f"/api/admin/users/{can_bo_cheo['id']}", headers=hb,
+                    data={"email": "prb_l8_hai_phien@example.com", "status": "inactive"},
+                )))
+                tt = await bi_chan_boi(tb, ghi, bi="B", boi="A")
+            finally:
+                diem.di.set()
+                if tb is None:  # A không tới điểm dừng: vẫn chờ A xong để không bỏ lại tác vụ treo
+                    await asyncio.gather(ta, return_exceptions=True)
+            ra, rb = await asyncio.gather(ta, tb)
+    finally:
+        await ca.aclose()
+        await cb.aclose()
+    assert (tt, rb.status_code, rb.json().get("error_code"), ra.status_code < 500, loi.loi) == (
+        "xong", 409, MA_CHAN_GOP, True, {}
+    ), (ra.status_code, ra.text, rb.text)

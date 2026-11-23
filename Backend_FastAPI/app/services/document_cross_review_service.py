@@ -34,7 +34,7 @@ from app.services.document_bulk_verify_service import (
     grant_allows,
 )
 from app.services.document_transition import ACTOR_NOT_AUTHORIZED, DocumentTransitionConflict, RequestMeta
-from app.utils.exceptions import PermissionDeniedError, ResourceNotFoundError
+from app.utils.exceptions import CombinedKeyChangeAndRevokeError, PermissionDeniedError, ResourceNotFoundError
 
 log = structlog.get_logger(__name__)
 
@@ -245,6 +245,7 @@ async def revoke_grants_on_account_change(
     new_status: Optional[str] = None,
     actor_id: Optional[int],
     request_meta: Optional[RequestMeta] = None,
+    target_locked_for_update: bool = False,
 ) -> List[int]:
     """Q4 — TẦNG CHỦ SỞ HỮU của "đổi vai / khoá tài khoản ⇒ tự thu hồi". Mọi đường đổi vai / trạng thái tài khoản (PUT lẻ,
     hàng loạt, đồng bộ vai từ Casbin, gỡ vai) gọi hàm này TRONG giao dịch của chính việc đổi, TRƯỚC khi ghi vai / trạng
@@ -255,7 +256,13 @@ async def revoke_grants_on_account_change(
     + nhật ký (:func:`_write_revocations`). Vai / trạng thái CŨ đọc DƯỚI khoá dòng ``user`` (PR-B lượt 2 — cùng khuôn điểm
     chặn 4 của Codex: không quyết bằng bản đọc từ đầu yêu cầu, vì giữa đó tài khoản có thể vừa được trả vai / mở khoá và
     cấp quyền mới). Không commit; mọi lỗi ném ra ⇒ người gọi KHÔNG commit ⇒ rollback CẢ việc đổi vai / khoá LẪN việc thu
-    hồi. Quyền đã thu hồi không bao giờ được khôi phục (mở khoá / trả vai ⇒ Admin cấp mới). Trả id các quyền vừa thu hồi."""
+    hồi. Quyền đã thu hồi không bao giờ được khôi phục (mở khoá / trả vai ⇒ Admin cấp mới). Trả id các quyền vừa thu hồi.
+
+    ``target_locked_for_update`` (PR-B lượt 8, owner 23-11 "chặn gộp, làm 2 bước"): người gọi đang giữ dòng người ``FOR
+    UPDATE`` (lần lưu ĐỔI cột khoá — email / tên đăng nhập, ``user_deletion_policy.USER_KEY_COLUMNS``). Khi ấy thay đổi mà
+    kéo theo thu hồi (lý do tính DƯỚI khoá bằng :func:`auto_revoke_reason`) ⇒ ``CombinedKeyChangeAndRevokeError`` (409)
+    TRƯỚC khi khoá dòng quyền — luật "không giữ dòng người ``FOR UPDATE`` rồi đi chờ dòng quyền" (lô chéo §5.4 giữ dòng quyền
+    ``FOR SHARE`` rồi xin người bấm ``FOR KEY SHARE`` ⇒ vòng chờ). Không ghi gì: người gọi không commit."""
     if new_role is None and new_status is None:
         return []
     with db.no_autoflush:  # đọc dòng TRONG CSDL (giá trị cũ), không xả trước thay đổi đang chờ của chính người ấy
@@ -265,6 +272,8 @@ async def revoke_grants_on_account_change(
     reason = auto_revoke_reason(old_role=locked.role, old_status=locked.status, new_role=new_role, new_status=new_status)
     if reason is None:
         return []
+    if target_locked_for_update:
+        raise CombinedKeyChangeAndRevokeError()
     if actor_id is None:
         # Không có người thao tác thì không ghi được ``revoked_by_user_id`` đúng khuôn — fail-closed.
         raise RuntimeError("revoke_grants_on_account_change: thiếu người thao tác")

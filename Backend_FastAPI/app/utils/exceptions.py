@@ -174,6 +174,27 @@ class ConflictError(BaseAppException):
     error_code = "CONFLICT"
 
 
+class CombinedKeyChangeAndRevokeError(ConflictError):
+    """Một lần lưu tài khoản vừa ĐỔI cột khoá (email / tên đăng nhập) vừa kéo theo TỰ THU HỒI quyền duyệt chéo (khoá tài
+    khoản, hạ vai khỏi Cán bộ) ⇒ từ chối (HTTP 409) — owner 23-11, PR-B lượt 8 ("chặn gộp, làm 2 bước").
+
+    Vì sao: đổi cột khoá buộc khoá dòng người ``FOR UPDATE`` ngay từ đầu (lượt 6); thu hồi phải đi chờ dòng quyền chéo
+    ``FOR UPDATE``; lô duyệt chéo (§5.4) giữ dòng quyền ``FOR SHARE`` rồi xin người bấm ``FOR KEY SHARE`` ⇒ hai bên chờ nhau
+    (``40P01``). Luật: không đường nào giữ dòng người ở mức ``FOR UPDATE`` rồi đi chờ dòng quyền
+    (``repositories/document_bulk_repository.lock_user_key_share``). Hai lần lưu riêng thì không chờ nhau; thứ tự không
+    quan trọng. Quyết định đọc DƯỚI khoá dòng người (``document_cross_review_service.revoke_grants_on_account_change``) và
+    báo TRƯỚC khi khoá dòng quyền — không ghi gì.
+
+    [ĐX] Câu chữ là ĐỀ XUẤT, chờ owner duyệt."""
+
+    status_code = status.HTTP_409_CONFLICT
+    error_code = "COMBINED_KEY_CHANGE_AND_REVOKE"
+    detail = (
+        "Không thể vừa đổi email vừa khoá tài khoản hoặc chuyển Cán bộ sang vai khác trong cùng một lần lưu. "
+        "Hãy lưu hai lần: đổi email trước, rồi khoá tài khoản / đổi vai (hoặc ngược lại)."
+    )
+
+
 class PaymentDuplicateSuspected(ConflictError):
     """Phiếu thu nghi TRÙNG với một phiếu đã có (HTTP 409).
 

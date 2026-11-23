@@ -253,3 +253,64 @@ def test_chi_doi_that_cot_khoa_moi_tinh_la_doi_cot_khoa():
         for d in ({"email": "b@example.com"}, {"email": "a@example.com"}, {"email": None}, {"full_name": "B"})
     ]
     assert ket_qua == [True, False, False, False]
+
+
+# ---------------------------------------------------------------------------------------------------- cột khoá (lượt 8)
+#: PR-B lượt 8 (owner 23-11; reviewer E2): hàm GHI cột khoá của ``user`` (email / tên đăng nhập — gán ``<tên user>.email``
+#: / ``.username`` hoặc ``setattr(<tên user>, …)``) → quyết định. Đổi cột khoá ⇒ khoá người đích ``FOR UPDATE``; nếu cùng hàm
+#: còn gọi tự thu hồi (``HELPER`` — đi chờ dòng quyền) thì PHẢI truyền ``target_locked_for_update=`` để lần lưu gộp bị chặn
+#: 409 trước khi khoá dòng quyền ("CHAN_GOP"); "KHONG_THU_HOI" = hàm không gọi ``HELPER`` nên không thể gộp.
+SO_GHI_COT_KHOA = {
+    ("services/user_service.py", "update_user"): "CHAN_GOP",  # PUT /api/admin/users/{id}: email + vai / trạng thái
+    # Tự sửa hồ sơ: email / họ tên / số điện thoại của CHÍNH mình — không vai, không trạng thái ⇒ không thu hồi.
+    ("services/user_service.py", "update_profile"): "KHONG_THU_HOI",
+}
+
+
+def _ham_ghi_cot_khoa():
+    found = {}
+    for p in APP.rglob("*.py"):
+        rel = p.relative_to(APP).as_posix()
+        for f in ast.walk(ast.parse(p.read_text(encoding="utf-8"))):
+            if not isinstance(f, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for n in ast.walk(f):
+                targets = n.targets if isinstance(n, ast.Assign) else [n.target] if isinstance(n, (ast.AugAssign, ast.AnnAssign)) else []
+                for t in targets:
+                    if (
+                        isinstance(t, ast.Attribute) and isinstance(t.value, ast.Name)
+                        and t.attr in ("email", "username") and "user" in t.value.id.lower()
+                    ):
+                        found[(rel, f.name)] = f
+                if (
+                    isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "setattr" and n.args
+                    and isinstance(n.args[0], ast.Name) and "user" in n.args[0].id.lower()
+                ):
+                    found[(rel, f.name)] = f
+    return found
+
+
+def _goi_helper_co_tu_khoa(f, tu_khoa):
+    return any(
+        isinstance(n, ast.Call)
+        and ((isinstance(n.func, ast.Name) and n.func.id == HELPER) or (isinstance(n.func, ast.Attribute) and n.func.attr == HELPER))
+        and any(k.arg == tu_khoa for k in n.keywords)
+        for n in ast.walk(f)
+    )
+
+
+def test_duong_ghi_cot_khoa_user_co_trong_so_va_duong_gop_duoc_chan():
+    """Đường ghi email / tên đăng nhập mới ⇒ ĐỎ (quyết chặn gộp hay không). "CHAN_GOP" ⇒ mọi lời gọi ``HELPER`` trong hàm
+    truyền ``target_locked_for_update``; "KHONG_THU_HOI" ⇒ hàm không gọi ``HELPER``. Giới hạn: như sổ đường ghi vai (không
+    bắt ``update(User)`` / SQL thô / ``BaseRepository.update``)."""
+    found = _ham_ghi_cot_khoa()
+    assert set(found) == set(SO_GHI_COT_KHOA), (
+        f"  mới: {sorted(set(found) - set(SO_GHI_COT_KHOA))}\n  mất: {sorted(set(SO_GHI_COT_KHOA) - set(found))}"
+    )
+    sai = []
+    for key, quyet in SO_GHI_COT_KHOA.items():
+        if quyet == "CHAN_GOP" and not _goi_helper_co_tu_khoa(found[key], "target_locked_for_update"):
+            sai.append((key, "gọi tự thu hồi mà không truyền target_locked_for_update"))
+        if quyet == "KHONG_THU_HOI" and _goi(found[key], HELPER):
+            sai.append((key, "gọi tự thu hồi — phải xếp CHAN_GOP"))
+    assert not sai, sai

@@ -66,3 +66,26 @@ export function isAuthStateUnavailable(
     AUTH_STATE_UNAVAILABLE_ERROR_CODE
   );
 }
+
+/**
+ * Một lần lưu tài khoản (Admin sửa người dùng) vừa ĐỔI email vừa khoá tài
+ * khoản / chuyển Cán bộ sang vai khác ⇒ máy chủ từ chối 409 (owner 23-11,
+ * PR-B lượt 8 — "chặn gộp, làm 2 bước"). `detail` của máy chủ nói phải làm gì;
+ * giao diện hiện NGUYÊN câu ấy, không tự viết lại.
+ *
+ * Backend source: `CombinedKeyChangeAndRevokeError` in
+ * `Backend_FastAPI/app/utils/exceptions.py`.
+ */
+export const COMBINED_KEY_CHANGE_AND_REVOKE_ERROR_CODE = "COMBINED_KEY_CHANGE_AND_REVOKE";
+
+/** `detail` của 409 chặn lưu gộp, hoặc null cho mọi phản hồi khác. */
+export function combinedKeyChangeAndRevokeDetail(
+  response: { status?: number; data?: unknown } | undefined,
+): string | null {
+  if (response?.status !== 409) return null;
+  const data = response.data;
+  if (typeof data !== "object" || data === null) return null;
+  const { error_code: code, detail } = data as { error_code?: unknown; detail?: unknown };
+  if (code !== COMBINED_KEY_CHANGE_AND_REVOKE_ERROR_CODE) return null;
+  return typeof detail === "string" && detail ? detail : null;
+}
