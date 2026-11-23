@@ -1400,6 +1400,8 @@ jobs:
           # C2-1 ô mất chỗ hai văn bản khác chuỗi, C2-2 ô hai vai, P2 tạo học vụ chen giữa dò và ghi — khoá năm chia sẻ),
           # `test_council_decision_giay_va_vet_api.py` (U1 / U2 / Q2 / C12 / C7 / C11) và `tests/unit/test_council_phien_ban_ma_bo.py`
           # (U4 — danh sách module của phiên bản mã khoá bằng import của đường đọc + cổng).
+          # PR chặn F230 (Codex 22-11 A-P4): `test_f230_tra_cho_ngoai_van_ban_api.py` (F1–F12 — khoá ô ở Phê duyệt đơn / lô, công
+          # bố, chuyển chờ, rút, trả về Nháp, chốt rút sau hoàn tiền; chốt fail-closed ở ``transition()``).
           - tier: Tier 5g — Văn bản Hội đồng + Quyết định trúng tuyển (GĐ1)
             tests: >-
               tests/unit/test_council_document_render_service.py
@@ -1447,6 +1449,7 @@ jobs:
               tests/api/test_council_decision_o_hien_tai_api.py
               tests/api/test_council_decision_giay_va_vet_api.py
               tests/unit/test_council_phien_ban_ma_bo.py
+              tests/api/test_f230_tra_cho_ngoai_van_ban_api.py
           # GĐ1b — duyệt giấy nhanh (đặc tả bản 3.6; bổ sung hợp đồng bản 5 A4). Hai lát RIÊNG: ca GĐ1b chậm (đo local ~15–18 s
           # mỗi ca API, tổng ~50 phút một luồng) ⇒ gộp vào một tier có sẵn sẽ vượt trần 75 phút. Trước 18-11 KHÔNG tier nào chứa
           # `test_gd1b_*` (required check xanh mà không chạy — CLAUDE.md §11). Fixture dùng chung của lô ở `tests/api/gd1b_lo_tro_giup.py` (KHÔNG phải tệp test).
