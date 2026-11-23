@@ -157,6 +157,12 @@ describe("describeQuotaTableError — 400 / 422 / quyền", () => {
     )
   })
 
+  it("câu 404 của cổng = NGUYÊN VĂN owner duyệt 23-11 (chép tay từ quyết định — đọc từ mã thì sửa chữ vẫn xanh)", () => {
+    expect(QUOTA_TABLE_NO_ACCESS_MESSAGE).toBe(
+      "Không xem được bảng chỉ tiêu — không tìm thấy, hoặc bạn chưa được gán quyền Thư ký Hội đồng.",
+    )
+  })
+
   it("H4: 404 của cổng Thư ký (thân chung, không reason_code) ⇒ KHÔNG nói 'chưa có bảng'", () => {
     const cau = describeQuotaTableError(loi(404, { detail: "Không tìm thấy", error_code: "RESOURCE_NOT_FOUND" }), ctx())
     expect(cau).toBe(QUOTA_TABLE_NO_ACCESS_MESSAGE)

@@ -23,7 +23,8 @@ export function serverAllows(actions: unknown, action: string): boolean {
   return Array.isArray(actions) && actions.includes(action)
 }
 
-/** [ĐX — câu mới, chờ owner duyệt] 404 của cổng: không thấy bảng, hoặc người xem chưa được gán quyền Thư ký Hội đồng. */
+/** 404 của cổng: không thấy bảng, hoặc người xem chưa được gán quyền Thư ký Hội đồng. Owner duyệt NGUYÊN VĂN 23-11
+ * (`gd2\gd2c\c2\QUYET-DINH-OWNER-C2-O1-O2-CAU-404-2026-11-23.md`) — đổi chữ phải hỏi lại. */
 export const QUOTA_TABLE_NO_ACCESS_MESSAGE =
   "Không xem được bảng chỉ tiêu — không tìm thấy, hoặc bạn chưa được gán quyền Thư ký Hội đồng."
 
