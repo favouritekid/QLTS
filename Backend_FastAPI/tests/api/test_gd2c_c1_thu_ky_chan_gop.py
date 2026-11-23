@@ -39,6 +39,12 @@ from tests.fixtures.constants import AdminURLs, AuthURLs
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
 MA_CHAN_GOP = "COMBINED_KEY_CHANGE_AND_REVOKE"
+#: Owner duyệt NGUYÊN VĂN 23-11, chỉ trong nhánh C1 (``gd2/gd2c/c1/QUYET-DINH-OWNER-C1-CHAN-GOP-VA-CAU-409-2026-11-23.md``
+#: câu 2). Chép từ quyết định, KHÔNG đọc từ ``CombinedKeyChangeAndRevokeError.detail`` (đọc từ mã thì sửa chữ vẫn xanh).
+CAU_CHAN_GOP = (
+    "Không thể vừa đổi email vừa khoá tài khoản hoặc đổi vai làm mất quyền duyệt chéo / quyền Thư ký trong cùng một lần lưu."
+    " Hãy lưu hai lần: đổi email trước, rồi khoá tài khoản / đổi vai (hoặc ngược lại)."
+)
 LY_DO_HA_CAN_BO = "Tự thu hồi: tài khoản đổi vai từ Cán bộ sang Kế toán"
 
 
@@ -101,6 +107,8 @@ async def test_quan_ly_giu_quyen_thu_ky_luu_gop_email_va_ha_vai_409_khong_ghi_gi
     )
     assert r.status_code == 409, (r.status_code, r.text)
     assert r.json().get("error_code") == MA_CHAN_GOP, r.text
+    # Câu giao diện hiện NGUYÊN VĂN (``combinedKeyChangeAndRevokeDetail``) — đo trên thân phản hồi THẬT, so bằng ``==``.
+    assert r.json().get("detail") == CAU_CHAN_GOP, r.text
     assert (await _tai_khoan(ql["id"]), await _thu_ky_con(gid), [v["action"] for v in await vet(gid)]) == (
         truoc,
         True,
