@@ -114,7 +114,10 @@ export const thcsMappingApplyResultSchema = z.object({
   draft_profiles_to_change: z.number().int().min(0),
   same_year_rows: z.number().int().min(0),
   same_year_profiles: z.number().int().min(0),
-  manual_kv_override_profiles: z.number().int().min(0),
+  /** Owner 23-11 câu 2: hồ sơ KV ấn định tay KHÔNG bị áp — chỉ liệt kê (chạy thử và chạy thật cùng vị từ). */
+  skipped_manual_kv_override_profiles: z.number().int().min(0),
+  skipped_manual_kv_override_rows: z.number().int().min(0),
+  skipped_manual_kv_override_profile_ids: z.array(z.number().int()),
   skipped_status_profiles: z.number().int().min(0),
   skipped_status_rows: z.number().int().min(0),
   skipped_year_profiles: z.number().int().min(0),

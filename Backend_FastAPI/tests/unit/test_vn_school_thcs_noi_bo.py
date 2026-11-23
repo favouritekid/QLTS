@@ -39,6 +39,8 @@ from app.scripts.import_moet_schools_3_provinces import (
 from app.scripts.rebuild_school_kv_from_xls import (
     ProtectedRegionSchools,
     guard_no_protected_region_schools,
+    protected_region_filter,
+    protected_rows_in_dump,
     region_school_filter,
 )
 from app.services.vn_locality_service import VnLocalityService
@@ -518,6 +520,40 @@ async def test_nap_lai_xls_truong_noi_bo_lien_cap_khong_tinh_vao_chot(db) -> Non
     await _xa(db)
     await _truong_noi_bo(db, level="THCS_THPT", province="Đắk Lắk")
     await guard_no_protected_region_schools(db, ["Đắk Lắk"])
+
+
+async def test_chot_lien_cap_dang_python_cua_chay_thu_khop_dang_sql(db) -> None:
+    """Rà 23-11 F1: chạy thử kiểm chốt trên DUMP bằng ``protected_rows_in_dump``; --apply kiểm bằng SQL
+    ``protected_region_filter``. Hai dạng của MỘT chốt (CLAUDE.md chung §7) ⇒ khoá bằng nhau trên CÙNG dữ liệu: dump dựng
+    từ chính bảng (đúng các cột ``SCHOOL_DUMP_COLS``, kiểu chuỗi như ``\\copy … CSV``)."""
+    await _xa(db)
+    lien_cap_bo = await _truong_bo_lien_cap(db, ma="031", province="Đắk Lắk")  # bị chặn
+    await _truong_bo_lien_cap(db, ma="032", province="Gia Lai")  # ngoài vùng
+    noi_bo = await _truong_noi_bo(db, level="THCS_THPT", province="Đắk Lắk")  # mã NB ⇒ không chặn
+    await VnSchoolService(db).create_school(
+        {"moet_school_code": "033", "moet_province_code": "040", "name": "THPT Thường", "province": "Đắk Lắk",
+         "level": "THPT"}
+    )  # cấp không được bảo vệ
+    await db.flush()
+    ten_cu = ["Đắk Lắk", "Phú Yên"]
+
+    tap_sql = {str(i) for i in (await db.scalars(select(VnSchool.id).where(*protected_region_filter(ten_cu)))).all()}
+    dong = (
+        await db.execute(
+            select(VnSchool.id, VnSchool.name, VnSchool.province, VnSchool.moet_school_code, VnSchool.level,
+                   VnSchool.is_active)
+        )
+    ).all()
+    dump = [
+        {"id": str(r.id), "name": r.name or "", "province": r.province or "", "moet_school_code": r.moet_school_code or "",
+         "level": r.level or "", "is_active": "t" if r.is_active else "f"}
+        for r in dong
+    ]
+    tap_python = {r["id"] for r in protected_rows_in_dump(dump, ten_cu)}
+
+    assert tap_python == tap_sql
+    # Tiền đề (so hai tập rỗng là xanh giả): tập có đúng trường cần chặn và không có trường NB.
+    assert str(lien_cap_bo.id) in tap_sql and str(noi_bo.id) not in tap_sql
 
 
 async def test_csv_truong_lien_cap_co_san_khong_bi_ha_cap(db) -> None:

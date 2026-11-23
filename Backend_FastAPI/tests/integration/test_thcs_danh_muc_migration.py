@@ -6,11 +6,14 @@ CSDL trước nâng cấp = ``create_all()`` của model HIỆN TẠI rồi gỡ
 ⇒ mọi thứ khác y như thật. Sau nâng cấp, lược đồ phần này == CSDL dựng thẳng từ model ("migration = model"). Hạ cấp
 không xoá dòng nào; nâng lại thì sequence NỐI TIẾP số lớn nhất đã cấp (không cấp trùng mã).
 """
+import importlib.util
+
 import asyncpg
 import pytest
 import pytest_asyncio
 
 from tests.integration.test_gd2a_migration import (
+    GOC,
     _alembic,
     _create_all,
     _phien_ban,
@@ -164,5 +167,70 @@ async def test_nang_cap_dung_khi_co_ma_NB_sai_khuon_khong_con_gi_do_dang(csdl_tr
         assert await _phien_ban(k) == TRUOC
         # Câu DO rollback trọn: sequence cũng không còn.
         assert await k.fetchval("SELECT to_regclass('vn_school_internal_code_seq')") is None
+    finally:
+        await k.close()
+
+
+# ---------- đối tượng CÙNG TÊN đã có: so định nghĩa, lệch ⇒ dừng (rà 23-11 F3) ----------
+
+
+def _mig_nb():
+    spec = importlib.util.spec_from_file_location(
+        NB, GOC / "alembic" / "versions" / "thcsnb20261122_vn_school_internal_code.py"
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _ba_doi_tuong_dung():
+    """Ba câu tạo ĐÚNG như migration (sequence, CHECK, chỉ mục)."""
+    mig = _mig_nb()
+    return {
+        "seq": mig.SQL_CREATE_SEQUENCE,
+        "ck": "ALTER TABLE vn_school ADD CONSTRAINT ck_vn_school_internal_code_format CHECK (%s)" % mig.SQL_CK_INTERNAL_CODE,
+        "cm": "CREATE UNIQUE INDEX uq_vn_school_internal_code ON vn_school (moet_school_code) WHERE %s"
+        % mig.SQL_UQ_INTERNAL_CODE_WHERE,
+    }
+
+
+async def test_doi_tuong_da_co_dung_dinh_nghia_thi_nang_cap_qua(csdl_truoc_nb):
+    """Đối chứng (CLAUDE.md chung §3): ba đối tượng dựng ĐÚNG câu của migration ⇒ nhánh "đã có" KHỚP, nâng qua — nên
+    các ca lệch bên dưới đỏ vì biến thể, không phải vì phép so luôn đỏ."""
+    ten = csdl_truoc_nb
+    k = await asyncpg.connect(_url(ten, "postgresql"))
+    try:
+        for cau in _ba_doi_tuong_dung().values():
+            await k.execute(cau)
+        rc, out = await _alembic(ten, "upgrade", NB)
+        assert rc == 0, out[-3000:]
+        assert await _phien_ban(k) == NB
+    finally:
+        await k.close()
+
+
+@pytest.mark.parametrize(
+    "phan,thay_tu,thay_bang,ma",
+    [
+        # Mỗi biến thể lệch ĐÚNG MỘT đối tượng, kiểu tinh vi nhất (cùng tên, gần như cùng câu).
+        ("seq", "MAXVALUE 999999", "MAXVALUE 9999999", "QLT02"),
+        ("ck", " AND commune_code IS NOT NULL", "", "QLT03"),  # NB… không còn bắt buộc mã xã
+        ("cm", "CREATE UNIQUE INDEX", "CREATE INDEX", "QLT04"),  # mất tính duy nhất
+    ],
+    ids=["sequence_maxvalue", "check_bo_dieu_kien_ma_xa", "chi_muc_khong_duy_nhat"],
+)
+async def test_doi_tuong_da_co_lech_dinh_nghia_thi_dung_khong_ghi_head(csdl_truoc_nb, phan, thay_tu, thay_bang, ma):
+    ten = csdl_truoc_nb
+    cau = _ba_doi_tuong_dung()
+    assert thay_tu in cau[phan]  # tiền đề: biến thể thật sự đổi câu
+    cau[phan] = cau[phan].replace(thay_tu, thay_bang, 1)
+    k = await asyncpg.connect(_url(ten, "postgresql"))
+    try:
+        for c in cau.values():
+            await k.execute(c)
+        rc, out = await _alembic(ten, "upgrade", NB)
+        assert rc != 0
+        assert "ExistingObjectMismatch" in out and ma in out, out[-3000:]  # đỏ ĐÚNG lý do, đúng đối tượng
+        assert await _phien_ban(k) == TRUOC
     finally:
         await k.close()

@@ -112,8 +112,12 @@ class ThcsMappingApplyResult(BaseModel):
     )
     same_year_rows: int = Field(description="Trong số dòng sẽ đổi: dòng y→y (năm bắt đầu = năm kết thúc)")
     same_year_profiles: int
-    manual_kv_override_profiles: int = Field(
-        description="Hồ sơ sẽ đổi đang ở chế độ KV ấn định tay — đổi lịch sử học làm ấn định ấy hết hiệu lực"
+    skipped_manual_kv_override_profiles: int = Field(
+        description="Hồ sơ đang ở chế độ KV ấn định tay — KHÔNG áp (owner 23-11 câu 2), chỉ liệt kê"
+    )
+    skipped_manual_kv_override_rows: int
+    skipped_manual_kv_override_profile_ids: list[int] = Field(
+        description="Id hồ sơ bỏ qua vì KV ấn định tay — cán bộ tự xem (cùng vị từ cho chạy thử và chạy thật)"
     )
     skipped_status_profiles: int
     skipped_status_rows: int

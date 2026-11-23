@@ -95,7 +95,9 @@ async def test_luong_admin_nhom_tao_truong_chay_thu_va_khoa_ap_that(
     assert r.status_code == 200, r.text
     assert r.json()["applied"] is True
     dong = (await _lich_su(pid))[0]
-    assert (dong["school_id"], dong["level"]) == (sid, "THCS")
+    # Owner 23-11 câu 1: CHỈ điền mã trường — dòng gõ tay (level rỗng, graduation_type THCS) giữ nguyên cấp.
+    assert (dong["school_id"], dong["level"], dong["graduation_type"]) == (sid, None, "THCS")
+    assert r.json()["skipped_manual_kv_override_profile_ids"] == []  # trường mới có trong phản hồi API
 
     # Huỷ ghép: dòng ghép biến mất, school_id đã áp KHÔNG bị gỡ.
     r = await client.post(f"{NHOM}/groups/unmap", json={"normalized_name": "lê lợi"}, headers=h)

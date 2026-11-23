@@ -8,7 +8,9 @@ Ba việc:
    số đếm, KHÔNG trả dữ liệu cá nhân.
 2. **Ghép / huỷ ghép / tạo trường mới từ nhóm** — bảng ``thcs_school_name_mapping``. Trường đích phải còn hoạt động và
    ở cấp THCS / liên cấp. Tạo trường mới đi qua ``VnSchoolService.create_school`` (mã nội bộ NB, mã xã bắt buộc).
-3. **Áp ghép** — gắn ``school_id`` + ``level`` vào dòng THCS khớp tên đã ghép:
+3. **Áp ghép** — gắn ``school_id`` vào dòng THCS khớp tên đã ghép. CHỈ điền mã trường, KHÔNG ghi ``level`` (owner 23-11
+   ``QUYET-DINH-OWNER-THCS-AP-GHEP-LIEN-CAP-VA-AN-DINH`` câu 1 — "Giữ cấp THCS của dòng"): ghi cấp của TRƯỜNG làm dòng
+   THCS ở trường liên cấp mang ``THCS_THPT`` ⇒ engine đếm năm THCS như năm THPT:
 
    * chạy thử MẶC ĐỊNH; chế độ thật khoá bằng cờ CHO PHÉP ``THCS_MAPPING_APPLY_ENABLED`` (mặc định tắt — owner chưa
      quyết dòng y→y). Tầng chủ sở hữu của cờ = :meth:`ThcsSchoolMappingService.apply_mappings` (không phải router);
@@ -18,8 +20,10 @@ Ba việc:
    * chế độ thật khoá hồ sơ ``FOR UPDATE`` (thứ tự id tăng — thứ tự khoá chung), đọc lại dưới khoá, đối chiếu hai số
      của lượt chạy thử (lệch ⇒ 409, không ghi gì), tăng ``version`` (khoá lạc quan của form hồ sơ: cán bộ đang mở
      form nháp mà lưu bản cũ ⇒ ``ProfileVersionConflict`` có câu rõ ràng), ghi vết từng hồ sơ vào ``entity_audit_log``;
-   * báo trước: số hồ sơ đang ở chế độ KV ấn định tay (đổi lịch sử học ⇒ vân tay đầu vào đổi ⇒ ấn định hết hiệu lực)
-     và số dòng y→y.
+   * BỎ QUA hồ sơ đang ở chế độ KV ấn định tay (owner 23-11 câu 2 — "Bỏ qua, chỉ báo danh sách"; đổi lịch sử học ⇒
+     vân tay đầu vào đổi ⇒ ấn định hết hiệu lực), liệt kê id ở CẢ chạy thử lẫn chạy thật — một vị từ
+     :func:`is_manual_kv_override` trong :meth:`ThcsSchoolMappingService._plan` (hai chế độ cùng đi qua);
+   * báo trước số dòng y→y.
 """
 from __future__ import annotations
 
@@ -67,6 +71,9 @@ APPLY_ACADEMIC_YEAR: Final[int] = 2026
 DRAFT_STATUS: Final[str] = "draft"
 #: Hồ sơ đã / đang rút: không tính vào nhóm (owner đo "bỏ hồ sơ rút").
 WITHDRAWN_STATUSES: Final[frozenset[str]] = frozenset({"withdrawal_pending", "withdrawn"})
+#: ``area_resolution_basis`` của hồ sơ đã ấn định KV bằng tay (CHECK ``admission_profile``) — owner 23-11 câu 2: áp ghép
+#: KHÔNG chạm, chỉ liệt kê.
+MANUAL_KV_OVERRIDE_BASIS: Final[str] = "manual_override"
 
 AUDIT_ENTITY_MAPPING: Final[str] = "ThcsSchoolNameMapping"
 AUDIT_ACTION_APPLIED: Final[str] = "thcs_school_mapping_applied"
@@ -107,6 +114,11 @@ def is_apply_target(profile: dict) -> bool:
         profile.get("status") in APPLY_ELIGIBLE_STATUSES
         and profile.get("academic_year") == APPLY_ACADEMIC_YEAR
     )
+
+
+def is_manual_kv_override(profile: dict) -> bool:
+    """MỘT nguồn: hồ sơ đã ấn định KV bằng tay ⇒ áp ghép bỏ qua (chạy thử và chạy thật cùng dùng)."""
+    return profile.get("area_resolution_basis") == MANUAL_KV_OVERRIDE_BASIS
 
 
 def is_thcs_manual_row(entry: Any) -> bool:
@@ -372,12 +384,15 @@ class ThcsSchoolMappingService:
     def _plan(
         self,
         profiles: list[dict[str, Any]],
-        usable: dict[str, Tuple[int, str]],
+        usable: dict[str, int],
         states: dict[int, Any],
-    ) -> Tuple[list[dict[str, Any]], dict[str, int]]:
+    ) -> Tuple[list[dict[str, Any]], dict[str, int], list[int]]:
+        """Kế hoạch áp ghép — MỘT hàm cho chạy thử lẫn chạy thật (số của hai chế độ khớp nhau). Trả thêm danh sách id
+        hồ sơ bỏ qua vì KV ấn định tay (owner 23-11 câu 2)."""
         eligible = set(APPLY_ELIGIBLE_STATUSES)
         plan: list[dict[str, Any]] = []
         c = Counter()
+        skipped_manual_kv: list[int] = []
         for p in profiles:
             if p["status"] in WITHDRAWN_STATUSES:
                 continue
@@ -386,11 +401,11 @@ class ThcsSchoolMappingService:
             for idx, entry in enumerate(p["academic_history"]):
                 if not is_thcs_manual_row(entry):
                     continue
-                hit = usable.get(normalize_thcs_school_name(entry.get("school_name")))
-                if hit is None:
+                school_id = usable.get(normalize_thcs_school_name(entry.get("school_name")))
+                if school_id is None:
                     unmapped += 1
                     continue
-                changes.append((idx, hit[0], hit[1], entry))
+                changes.append((idx, school_id, entry))
             if is_apply_target(p):
                 c["unmapped_rows"] += unmapped
             if not changes:
@@ -407,18 +422,22 @@ class ThcsSchoolMappingService:
             if st is not None and (st.code != NO_DECISION or st.dau_appsheet or st.named_in_document):
                 c["skipped_decision_profiles"] += 1
                 continue
+            if is_manual_kv_override(p):
+                # Owner 23-11 câu 2: KHÔNG áp (đổi lịch sử học làm ấn định tay hết hiệu lực) — chỉ liệt kê.
+                c["skipped_manual_kv_override_profiles"] += 1
+                c["skipped_manual_kv_override_rows"] += len(changes)
+                skipped_manual_kv.append(p["id"])
+                continue
             plan.append({"profile": p, "changes": changes})
             c["rows_to_change"] += len(changes)
             c["profiles_to_change"] += 1
             if p["status"] == DRAFT_STATUS:
                 c["draft_rows_to_change"] += len(changes)
                 c["draft_profiles_to_change"] += 1
-            same = sum(1 for ch in changes if is_same_year_row(ch[3]))
+            same = sum(1 for ch in changes if is_same_year_row(ch[2]))
             c["same_year_rows"] += same
             c["same_year_profiles"] += 1 if same else 0
-            if p.get("area_resolution_basis") == "manual_override":
-                c["manual_kv_override_profiles"] += 1
-        return plan, c
+        return plan, c, sorted(skipped_manual_kv)
 
     async def apply_mappings(
         self,
@@ -436,7 +455,8 @@ class ThcsSchoolMappingService:
                     "Chế độ thật cần số dòng và số hồ sơ của lượt chạy thử ngay trước."
                 )
         mappings = await self._mappings()
-        usable = {k: (s.id, s.level) for k, (_m, s) in mappings.items() if _school_usable(s)}
+        # Chỉ mã trường — cấp của trường KHÔNG đi vào dòng (owner 23-11 câu 1).
+        usable = {k: s.id for k, (_m, s) in mappings.items() if _school_usable(s)}
         unusable = len(mappings) - len(usable)
 
         profiles = await self._candidate_profiles()
@@ -454,7 +474,7 @@ class ThcsSchoolMappingService:
             )
         ]
         states = await decision_state(self.db, touched, lock=False)
-        plan, c = self._plan(profiles, usable, states)
+        plan, c, skipped_manual_kv = self._plan(profiles, usable, states)
 
         result: dict[str, Any] = {
             "dry_run": dry_run,
@@ -468,7 +488,9 @@ class ThcsSchoolMappingService:
             "draft_profiles_to_change": c["draft_profiles_to_change"],
             "same_year_rows": c["same_year_rows"],
             "same_year_profiles": c["same_year_profiles"],
-            "manual_kv_override_profiles": c["manual_kv_override_profiles"],
+            "skipped_manual_kv_override_profiles": c["skipped_manual_kv_override_profiles"],
+            "skipped_manual_kv_override_rows": c["skipped_manual_kv_override_rows"],
+            "skipped_manual_kv_override_profile_ids": skipped_manual_kv,
             "skipped_status_profiles": c["skipped_status_profiles"],
             "skipped_status_rows": c["skipped_status_rows"],
             "skipped_year_profiles": c["skipped_year_profiles"],
@@ -500,7 +522,7 @@ class ThcsSchoolMappingService:
             p = item["profile"]
             history = copy.deepcopy(p["academic_history"])
             old_rows, new_rows = [], []
-            for idx, school_id, level, entry in item["changes"]:
+            for idx, school_id, entry in item["changes"]:
                 old_rows.append(
                     {
                         "index": idx,
@@ -509,9 +531,9 @@ class ThcsSchoolMappingService:
                         "level": entry.get("level"),
                     }
                 )
+                # CHỈ mã trường; ``level`` của dòng giữ nguyên (owner 23-11 câu 1).
                 history[idx]["school_id"] = school_id
-                history[idx]["level"] = level
-                new_rows.append({"index": idx, "school_id": school_id, "level": level})
+                new_rows.append({"index": idx, "school_id": school_id})
             await self.db.execute(
                 update(t)
                 .where(t.c.id == p["id"])

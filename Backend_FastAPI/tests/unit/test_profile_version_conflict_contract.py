@@ -72,6 +72,13 @@ def test_cau_luu_form_dung_nguyen_van_owner_duyet():
     )
 
 
+def test_cau_thao_tac_dung_nguyen_van_owner_duyet():
+    """Owner 22-11 (``QUYET-DINH-OWNER-THCS-CAU-THAO-TAC``) duyệt nguyên câu cho mọi thao tác dùng mã này."""
+    assert PROFILE_VERSION_CONFLICT_ACTION_DETAIL == (
+        "Hồ sơ vừa được cập nhật ở nơi khác sau khi bạn mở. Thao tác CHƯA được thực hiện. Tải lại trang rồi thử lại."
+    )
+
+
 def test_cau_thao_tac_trung_tinh_khong_nhac_ap_ghep():
     """Owner: câu dùng chung cho thao tác phải trung tính, không nhắc riêng "áp ghép"."""
     cau = PROFILE_VERSION_CONFLICT_ACTION_DETAIL

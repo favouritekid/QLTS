@@ -11,6 +11,7 @@ Biến thể kiểm ngược (CLAUDE.md chung §3) ghi ở biên bản ``logs-P5
 import importlib.util
 import inspect
 from pathlib import Path
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
@@ -211,3 +212,75 @@ def test_nap_lai_xls_kiem_truong_lien_cap_truoc_khi_xoa():
     nguon = inspect.getsource(rebuild.apply)
     goi = nguon.index("await guard_no_protected_region_schools(db, old_names)")
     assert goi < nguon.index("update(VnSchool)") < nguon.index("sa_delete(VnSchool)")
+
+
+# ---------- chạy thử (--dry-run) DỪNG đúng như chạy thật (rà 23-11 F1) ----------
+#: Mỗi ca vi phạm ĐÚNG một điều (CLAUDE.md chung §3). Dạng Python của chốt ≡ dạng SQL: ca CSDL thật ở
+#: ``test_vn_school_thcs_noi_bo.py``.
+
+_NGUON_CSV = "gso,moet_code,commune_code,kv,name,province\n66,66006,66001,KV1,THPT Mới A,Đắk Lắk\n"
+_TIEU_DE_DUMP = ",".join(rebuild.SCHOOL_DUMP_COLS)
+
+
+def _chay_thu(tmp_path, monkeypatch, dong_dump, provinces="66"):
+    """Gọi ``main()`` thật (đúng đường người vận hành gõ), dump có tiêu đề + các dòng cho trước."""
+    (tmp_path / "source.csv").write_text(_NGUON_CSV, encoding="utf-8")
+    (tmp_path / "schools.csv").write_text(
+        "\n".join([_TIEU_DE_DUMP, *dong_dump]) + "\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        ["rebuild", "--source", str(tmp_path / "source.csv"), "--state-dir", str(tmp_path),
+         "--provinces", provinces],
+    )
+    return rebuild.main()
+
+
+#: Trường mã Bộ, Admin đã sửa liên cấp, ở tỉnh cũ thuộc GSO 66 ⇒ --apply DỪNG.
+_DONG_LIEN_CAP_BO = "11,THCS-THPT Liên Cấp,Đắk Lắk,002,THCS_THPT,t"
+_DONG_THPT = "12,THPT Cũ,Đắk Lắk,003,THPT,t"
+
+
+def test_chay_thu_dung_khi_vung_co_truong_lien_cap_ma_bo(tmp_path, monkeypatch, capsys):
+    rc = _chay_thu(tmp_path, monkeypatch, [_DONG_LIEN_CAP_BO, _DONG_THPT])
+    assert rc == 3, "chạy thử phải DỪNG với mã ≠ 0 như --apply"
+    assert "DỪNG" in capsys.readouterr().err
+    assert not (tmp_path / "phu_data_plan.csv").exists(), "dừng thì KHÔNG ghi kế hoạch"
+
+
+def test_chay_thu_dung_ca_khi_truong_lien_cap_da_ngung_hoat_dong(tmp_path, monkeypatch):
+    """Chốt SQL của --apply không lọc ``is_active`` (xoá cứng cả trường đã ngừng) ⇒ chạy thử cũng không lọc."""
+    rc = _chay_thu(tmp_path, monkeypatch, [_DONG_LIEN_CAP_BO[:-1] + "f", _DONG_THPT])
+    assert rc == 3
+
+
+def test_chay_thu_khong_dung_vi_truong_lien_cap_mang_ma_noi_bo(tmp_path, monkeypatch):
+    """Trường ``NB…`` không bị xoá (``region_school_filter``) ⇒ không làm chốt dừng; kế hoạch xoá cũng không gồm nó."""
+    rc = _chay_thu(tmp_path, monkeypatch, ["11,THCS-THPT Nội Bộ,Đắk Lắk,NB000001,THCS_THPT,t", _DONG_THPT])
+    assert rc == 0
+    ke_hoach = (tmp_path / "phu_data_plan.csv").read_text(encoding="utf-8")
+    assert "DELETE,12," in ke_hoach and "DELETE,11," not in ke_hoach
+
+
+def test_chay_thu_khong_dung_vi_truong_lien_cap_o_tinh_ngoai_vung(tmp_path, monkeypatch):
+    rc = _chay_thu(tmp_path, monkeypatch, [_DONG_LIEN_CAP_BO.replace("Đắk Lắk", "Gia Lai"), _DONG_THPT])
+    assert rc == 0
+
+
+def test_chay_thu_tu_choi_dump_theo_vi_tri_khong_co_cot_level(tmp_path):
+    """Dump cũ (không tiêu đề) không kiểm được chốt ⇒ DỪNG, không dựng kế hoạch trông như "đi được"."""
+    (tmp_path / "source.csv").write_text(_NGUON_CSV, encoding="utf-8")
+    (tmp_path / "schools.csv").write_text("11,THPT Cũ,Đắk Lắk,,,,t\n", encoding="utf-8")
+    args = SimpleNamespace(source=str(tmp_path / "source.csv"), state_dir=str(tmp_path), provinces="66")
+    with pytest.raises(SystemExit, match="level"):
+        rebuild.dry_run(args)
+    assert not (tmp_path / "phu_data_plan.csv").exists()
+
+
+def test_chay_thu_tu_choi_khi_thieu_dump(tmp_path):
+    """Trước đây thiếu dump ⇒ kế hoạch "0 xoá" và chốt không chạy (xanh giả)."""
+    (tmp_path / "source.csv").write_text(_NGUON_CSV, encoding="utf-8")
+    args = SimpleNamespace(source=str(tmp_path / "source.csv"), state_dir=str(tmp_path), provinces="66")
+    with pytest.raises(SystemExit, match="Thiếu dump"):
+        rebuild.dry_run(args)
+    assert not (tmp_path / "phu_data_plan.csv").exists()

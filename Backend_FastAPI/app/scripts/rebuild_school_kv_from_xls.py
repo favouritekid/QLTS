@@ -18,9 +18,21 @@ engine năm-học lẫn năm-tuyển-sinh), effective_to_year=NULL.
 
 CHẾ ĐỘ:
   --dry-run (mặc định): đọc --source + --state-dir (dump prod), KHÔNG DB.
+           Chạy CÙNG chốt dừng liên cấp với --apply, trên CHÍNH dump dựng kế
+           hoạch (không đọc CSDL của máy đang chạy — máy ấy có thể không phải
+           prod). Vùng có trường bị chặn ⇒ DỪNG, mã thoát 3, không ghi kế hoạch.
   --apply: kết nối DB, 1 transaction, idempotent theo moet_code. Chạy sau
            backup + duyệt.
   --export-source XLS: sinh source.csv từ file XLS MOET (cần pandas+xlrd).
+
+DUMP ``<state-dir>/schools.csv`` cho --dry-run: BẮT BUỘC có dòng tiêu đề gồm
+``SCHOOL_DUMP_COLS`` (thiếu tệp / thiếu cột ⇒ DỪNG — không kiểm được chốt thì
+không dựng kế hoạch trông như "đi được"). Lệnh xuất (psql)::
+
+  \\copy (SELECT id, name, province, moet_school_code, level, is_active
+          FROM vn_school) TO 'schools.csv' CSV HEADER
+
+Dump theo vị trí cũ (không tiêu đề, không có ``level``) bị từ chối.
 """
 
 from __future__ import annotations
@@ -55,6 +67,10 @@ REQUIRED_SOURCE_COLS = {
 }
 
 
+#: Cột BẮT BUỘC của dump ``schools.csv`` (có tiêu đề): đủ để dựng kế hoạch VÀ chạy chốt dừng liên cấp như --apply.
+SCHOOL_DUMP_COLS = ("id", "name", "province", "moet_school_code", "level", "is_active")
+
+
 def nkv(k: str) -> str:
     return str(k).strip().upper().replace("_", "-")
 
@@ -64,6 +80,26 @@ def read_csv(path):
         return []
     with open(path, encoding="utf-8") as f:
         return [r for r in csv.reader(f) if r]
+
+
+def load_school_dump(path) -> list[dict]:
+    """Dump ``vn_school`` (có tiêu đề) cho chạy thử. FAIL-CLOSED: thiếu tệp hoặc thiếu cột ⇒ dừng — trước đây thiếu tệp
+    thì kế hoạch ra "0 xoá" và chốt liên cấp không chạy, tức chạy thử XANH trong khi --apply sẽ DỪNG."""
+    if not os.path.exists(path):
+        raise SystemExit(
+            f"Thiếu dump {path} — chạy thử không dựng được kế hoạch và không kiểm được chốt liên cấp. Dừng."
+        )
+    with open(path, encoding="utf-8", newline="") as f:
+        reader = csv.DictReader(f)
+        missing = set(SCHOOL_DUMP_COLS) - set(reader.fieldnames or [])
+        if missing:
+            raise SystemExit(
+                f"Dump {path} thiếu cột (cần dòng tiêu đề): {', '.join(sorted(missing))}. Chạy thử phải kiểm chốt "
+                "liên cấp như --apply. Xuất lại: \\copy (SELECT "
+                + ", ".join(SCHOOL_DUMP_COLS)
+                + " FROM vn_school) TO 'schools.csv' CSV HEADER"
+            )
+        return list(reader)
 
 
 def load_source(path):
@@ -82,23 +118,41 @@ def load_source(path):
     return rows
 
 
+def old_province_names(provinces) -> list[str]:
+    """Tên tỉnh CŨ (cột ``vn_school.province``) thuộc các mã GSO target — MỘT chỗ cho cả chạy thử lẫn --apply."""
+    return [n for n, g in OLD_TO_GSO.items() if g in provinces]
+
+
 def dry_run(args) -> int:
+    from app.models.vn_school_internal_code import is_internal_school_code
+
     src = load_source(args.source)
     provinces = set(p.strip() for p in args.provinces.split(","))
     src_t = source_rows_for_apply(src, provinces)
 
-    schools = read_csv(os.path.join(args.state_dir, "schools.csv"))
+    schools = load_school_dump(os.path.join(args.state_dir, "schools.csv"))
     prof = read_csv(os.path.join(args.state_dir, "profile_schools.csv"))
 
+    # (0) CÙNG chốt dừng với --apply (owner 22-11 câu 3), chạy TRƯỚC khi in / ghi kế hoạch — trên chính dump.
+    bi_chan = protected_rows_in_dump(schools, old_province_names(provinces))
+    if bi_chan:
+        for r in bi_chan[:50]:
+            print(
+                f"  [chặn] school_id={r.get('id')} | {r.get('level')} | {(r.get('name') or '')[:46]}",
+                file=sys.stderr,
+            )
+        raise ProtectedRegionSchools(protected_stop_message(len(bi_chan)))
+
     db_region = [
-        (r + [""] * 7)[:7]
+        r
         for r in schools
-        if (r + [""] * 7)[6].lower() in ("t", "true", "1")
-        and OLD_TO_GSO.get((r + [""] * 7)[2].strip()) in provinces
+        if (r.get("is_active") or "").strip().lower() in ("t", "true", "1")
+        and OLD_TO_GSO.get((r.get("province") or "").strip()) in provinces
+        and not is_internal_school_code(r.get("moet_school_code"))
     ]
 
     sel_ids = set(r[2] for r in prof if len(r) >= 3 and r[2])
-    sch_by_id = {r[0]: r for r in db_region}
+    sch_by_id = {r["id"]: r for r in db_region}
     backfill = [sch_by_id[sid] for sid in sel_ids if sid in sch_by_id]
 
     print("=" * 70)
@@ -117,15 +171,14 @@ def dry_run(args) -> int:
         f"(toàn vùng target; CASCADE kv+name_history)"
     )
     print(
-        "      (--apply KHÔNG xoá trường mã nội bộ NB…; số trên đếm từ dump, "
-        "có thể gồm cả chúng)"
+        "      (đã loại trường mã nội bộ NB… như --apply; chốt liên cấp: 0 trường bị chặn)"
     )
     print(
         f"[3] HỒ SƠ DANGLING       : {len(backfill)} "
         f"trường đã chọn sẽ mất link (officer chọn lại)"
     )
     for r in backfill:
-        print(f"        school_id={r[0]:>4} | {r[1][:46]}")
+        print(f"        school_id={r['id']:>4} | {r['name'][:46]}")
     print("-" * 70)
     print("[note] vn_commune_area_map KHÔNG đụng (nguồn riêng QĐ 60).")
     print(f"=> active vùng target sau apply = {len(src_t)}")
@@ -138,9 +191,9 @@ def dry_run(args) -> int:
         for s in src_t:
             w.writerow(["INSERT", s["moet_code"], s["name"], s["kv"]])
         for r in db_region:
-            w.writerow(["DELETE", r[0], r[1], ""])
+            w.writerow(["DELETE", r["id"], r["name"], ""])
         for r in backfill:
-            w.writerow(["BACKFILL_DEFER", r[0], r[1], r[2]])
+            w.writerow(["BACKFILL_DEFER", r["id"], r["name"], r["province"]])
     print(f"Kế hoạch -> {out}")
     return 0
 
@@ -186,6 +239,31 @@ def protected_region_filter(old_names):
     )
 
 
+def protected_rows_in_dump(schools, old_names) -> list[dict]:
+    """Dạng Python của :func:`protected_region_filter` cho dump của chạy thử — ĐÚNG ba vế: ``province`` thuộc tên tỉnh cũ
+    (khớp nguyên văn như ``IN`` của SQL), mã KHÔNG thuộc vùng ``NB…`` (:func:`is_internal_school_code` ≡
+    ``not_internal_code_sql``), ``level`` thuộc ``MOET_LOADER_PROTECTED_LEVELS``. Không lọc ``is_active`` (SQL cũng
+    không). Hai dạng phải cho cùng tập: ``tests/unit/test_vn_school_thcs_noi_bo.py`` so trên CSDL thật."""
+    from app.models.vn_school_internal_code import MOET_LOADER_PROTECTED_LEVELS, is_internal_school_code
+
+    ten = set(old_names)
+    return [
+        r
+        for r in schools
+        if r.get("province") in ten
+        and not is_internal_school_code(r.get("moet_school_code"))
+        and r.get("level") in MOET_LOADER_PROTECTED_LEVELS
+    ]
+
+
+def protected_stop_message(n: int) -> str:
+    """MỘT câu dừng cho cả chạy thử lẫn --apply."""
+    return (
+        f"DỪNG: vùng target có {n} trường cấp liên cấp do Admin đặt (THCS_THPT). Nạp lại kiểu xoá-rồi-tạo sẽ hạ "
+        "chúng về THPT — không xoá gì. Xử lý tay các trường ấy trước."
+    )
+
+
 async def guard_no_protected_region_schools(db, old_names) -> None:
     """Đường này XOÁ CỨNG rồi TẠO LẠI trường từ XLS (cấp luôn "THPT"): trường liên cấp Admin đã sửa thành THCS_THPT sẽ
     bị hạ về THPT (và mất ghép tên THCS / KV). Không có khoá đối chiếu tin cậy giữa bản ghi cũ và dòng XLS (mã tỉnh cũ
@@ -198,10 +276,7 @@ async def guard_no_protected_region_schools(db, old_names) -> None:
         select(func.count()).select_from(VnSchool).where(*protected_region_filter(old_names))
     )
     if n:
-        raise ProtectedRegionSchools(
-            f"DỪNG: vùng target có {n} trường cấp liên cấp do Admin đặt (THCS_THPT). Nạp lại kiểu xoá-rồi-tạo sẽ hạ "
-            "chúng về THPT — không xoá gì. Xử lý tay các trường ấy trước."
-        )
+        raise ProtectedRegionSchools(protected_stop_message(n))
 
 
 async def apply(args) -> int:
@@ -214,7 +289,7 @@ async def apply(args) -> int:
     provinces = set(p.strip() for p in args.provinces.split(","))
     src_t = source_rows_for_apply(src, provinces)
 
-    old_names = [n for n, g in OLD_TO_GSO.items() if g in provinces]
+    old_names = old_province_names(provinces)
     async with AsyncSessionLocal() as db:
         async with db.begin():
             # (0) Có trường liên cấp do Admin đặt ⇒ DỪNG trước mọi ghi (owner 22-11 câu 3).
@@ -345,11 +420,16 @@ def main() -> int:
     if not args.source:
         print("Cần --source (hoặc --export-source). Dừng.", file=sys.stderr)
         return 2
-    if args.apply:
-        import asyncio
+    try:
+        if args.apply:
+            import asyncio
 
-        return asyncio.run(apply(args))
-    return dry_run(args)
+            return asyncio.run(apply(args))
+        return dry_run(args)
+    except ProtectedRegionSchools as e:
+        # Mã thoát phản ánh kết quả: chạy thử và chạy thật DỪNG cùng một chỗ, cùng câu, cùng mã ≠ 0.
+        print(str(e), file=sys.stderr)
+        return 3
 
 
 if __name__ == "__main__":

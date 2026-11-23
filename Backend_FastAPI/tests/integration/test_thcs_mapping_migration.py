@@ -157,3 +157,64 @@ async def test_ha_cap_con_dong_ghep_thi_dung_khong_xoa_co_cho_phep_moi_xoa(csdl_
         assert await _phien_ban(k) == SAU
     finally:
         await k.close()
+
+
+# ---------- bảng CÙNG TÊN đã có: so định nghĩa, lệch ⇒ dừng (rà 23-11 F3) ----------
+
+
+def _mig_map():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        SAU, GOC / "alembic" / "versions" / "thcsmap20261122_thcs_school_name_mapping.py"
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _cau_tao_dung() -> list[str]:
+    mig = _mig_map()
+    return [mig.CREATE_TABLE, *mig.CREATE_INDEXES]
+
+
+async def test_bang_da_co_dung_dinh_nghia_thi_nang_cap_qua(csdl_truoc_map):
+    """Đối chứng (CLAUDE.md chung §3): bảng dựng ĐÚNG câu của migration ⇒ nhánh "đã có" KHỚP, nâng qua."""
+    ten = csdl_truoc_map
+    k = await asyncpg.connect(_url(ten, "postgresql"))
+    try:
+        for cau in _cau_tao_dung():
+            await k.execute(cau)
+        rc, out = await _alembic(ten, "upgrade", SAU)
+        assert rc == 0, out[-3000:]
+        assert await _phien_ban(k) == SAU
+    finally:
+        await k.close()
+
+
+@pytest.mark.parametrize(
+    "vi_tri,thay_tu,thay_bang",
+    [
+        # Mỗi biến thể lệch ĐÚNG MỘT chỗ (cột / ràng buộc / khoá ngoại / chỉ mục), kiểu tinh vi nhất.
+        (0, "normalized_name VARCHAR(255) NOT NULL", "normalized_name VARCHAR(200) NOT NULL"),
+        (0, "CHECK (length(btrim(normalized_name)) > 0)", "CHECK (length(normalized_name) > 0)"),
+        (0, "REFERENCES vn_school (id) ON DELETE RESTRICT", "REFERENCES vn_school (id) ON DELETE CASCADE"),
+        (2, "ON thcs_school_name_mapping (school_id)", "ON thcs_school_name_mapping (school_id, mapped_at)"),
+    ],
+    ids=["cot_do_dai", "check_bo_btrim", "khoa_ngoai_cascade", "chi_muc_them_cot"],
+)
+async def test_bang_da_co_lech_dinh_nghia_thi_dung_khong_ghi_head(csdl_truoc_map, vi_tri, thay_tu, thay_bang):
+    ten = csdl_truoc_map
+    cau = _cau_tao_dung()
+    assert thay_tu in cau[vi_tri]  # tiền đề: biến thể thật sự đổi câu
+    cau[vi_tri] = cau[vi_tri].replace(thay_tu, thay_bang, 1)
+    k = await asyncpg.connect(_url(ten, "postgresql"))
+    try:
+        for c in cau:
+            await k.execute(c)
+        rc, out = await _alembic(ten, "upgrade", SAU)
+        assert rc != 0
+        assert "ExistingTableMismatch" in out and "QLT05" in out, out[-3000:]
+        assert await _phien_ban(k) == TRUOC
+    finally:
+        await k.close()

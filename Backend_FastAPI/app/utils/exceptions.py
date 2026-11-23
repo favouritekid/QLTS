@@ -289,7 +289,8 @@ PROFILE_VERSION_CONFLICT_SAVE_DETAIL = (
 )
 #: Câu TRUNG TÍNH cho mọi THAO TÁC trên hồ sơ (duyệt, từ chối, yêu cầu bổ sung, nộp lại, ghi đè, nhận / bỏ nhận duyệt,
 #: hoàn tất, rút, đánh dấu bỏ học, hiệu chỉnh nhỏ, ấn định KV, duyệt / từ chối / bỏ tick minh chứng ưu tiên, đổi thông
-#: tư, mục lô duyệt / từ chối). ĐỀ XUẤT — chờ owner duyệt.
+#: tư, mục lô duyệt / từ chối). Owner 22-11 (``QUYET-DINH-OWNER-THCS-CAU-THAO-TAC``) DUYỆT NGUYÊN CÂU — không đổi chữ
+#: nào (test khoá nguyên văn).
 PROFILE_VERSION_CONFLICT_ACTION_DETAIL = (
     "Hồ sơ vừa được cập nhật ở nơi khác sau khi bạn mở. Thao tác CHƯA được thực hiện. Tải lại trang rồi thử lại."
 )
