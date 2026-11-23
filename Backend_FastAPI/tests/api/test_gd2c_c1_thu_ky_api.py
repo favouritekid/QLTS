@@ -22,6 +22,7 @@ from httpx import ASGITransport, AsyncClient
 from app.config import settings
 from tests.api.gd1b_cheo_tro_giup import hang, mot, tao_nguoi
 from tests.api.gd1b_lo_tro_giup import dn, sql
+from tests.api.gd2b_lan_xet_tro_giup import client_500, so_vet
 from tests.api.gd2c_thu_ky_tro_giup import P, dong_quyen, gan, thu_hoi, vet
 from tests.fixtures.constants import AdminURLs, AuthURLs
 
@@ -164,6 +165,31 @@ async def test_thu_hoi_ma_khong_ton_tai_404(client, admin_user_in_db):
     r = await client.post(f"{P}/2147480000/revoke", headers=h, json={"reason": "x"})
     assert r.status_code == 404, r.text
     assert (r.json()["error_code"], r.json()["reason_code"]) == ("RESOURCE_NOT_FOUND", "review_secretary_grant_not_found")
+
+
+@pytest.mark.parametrize("duong", ["gan", "thu_hoi"])
+async def test_i1_phan_hoi_lech_schema_500_khong_ghi_gi(client, admin_user_in_db, can_bo, monkeypatch, duong):
+    """Rà hợp nhất 23-11 I1 + quyết định owner O2 23-11: thân phản hồi lệch ``ReviewSecretaryGrantView`` ⇒ người gọi nhận 500 và
+    CSDL KHÔNG đổi — không dòng quyền / không ghi thu hồi, không dòng nhật ký (router kiểm phản hồi TRƯỚC ``commit``). Thiếu phép
+    kiểm ⇒ cùng 500 nhưng quyền + nhật ký ĐÃ ghi — mã 500 một mình không phân biệt hai bản, nên ca ĐẾM CSDL. Lệch giả lập ở ĐÚNG chỗ
+    dịch vụ dựng phản hồi (``_grant_view``), SAU câu ghi và SAU nhật ký."""
+    from app.services import review_secretary_service as svc
+
+    g = (await gan(client, admin_user_in_db, can_bo["id"]))["id"] if duong == "thu_hoi" else None
+    vet_truoc = await so_vet(svc.GRANT_ENTITY_TYPE)
+    h = await dn(client, admin_user_in_db)
+    monkeypatch.setattr(svc, "_grant_view", lambda *a, **k: {"id": "khong-phai-so"})
+    async with client_500() as c:
+        if duong == "gan":
+            r = await c.post(P, headers=h, json={"user_id": can_bo["id"], "reason": "Ban thư ký đợt 1"})
+        else:
+            r = await c.post(f"{P}/{g}/revoke", headers=h, json={"reason": "Hết nhiệm vụ"})
+    assert r.status_code == 500, r.text
+    assert await so_vet(svc.GRANT_ENTITY_TYPE) == vet_truoc
+    if duong == "gan":
+        assert await _so_dong(can_bo["id"]) == 0
+    else:
+        assert (await dong_quyen(g))["revoked_at"] is None
 
 
 # ═════════════════════════════════════════════ 1b. ứng viên (ô tìm của màn hình gán — owner 22-11 câu 3) ═════════════

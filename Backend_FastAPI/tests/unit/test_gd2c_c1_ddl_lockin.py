@@ -345,3 +345,26 @@ def test_ham_giu_nguoi_for_update_khong_goi_thang_ham_khoa_dong_quyen():
             giu.add(khoa)
             sai += [(khoa, _ten_goi(n.func)) for n in goi if re.fullmatch(r"lock_\w*grant\w*", _ten_goi(n.func))]
     assert (giu, sai) == (GIU_NGUOI_FOR_UPDATE, [])
+
+
+@pytest.mark.parametrize("ten", ["create_review_secretary", "revoke_review_secretary"])
+def test_route_ghi_kiem_phan_hoi_truoc_commit_bang_helper_cua_l4(ten):
+    """Rà hợp nhất 23-11 I1 + quyết định owner O2 23-11 (``gd2\\gd2c\\c2\\QUYET-DINH-OWNER-C2-O1-O2-CAU-404-2026-11-23.md``): hai route
+    ghi của C1 gọi ``response_checked_before_commit`` — ĐÚNG hàm của ``app.routers.admission_review`` (MỘT helper) — với ĐÚNG
+    ``response_model`` của route, một lần, TRƯỚC ``db.commit()``. Hành vi (CSDL không đổi khi thân lệch):
+    ``tests/api/test_gd2c_c1_thu_ky_api.py::test_i1_phan_hoi_lech_schema_500_khong_ghi_gi``."""
+    from fastapi.routing import APIRoute
+
+    from app.main import fastapi_app
+    from app.routers import admission_review as l4
+    from app.routers import admission_review_secretary as r
+
+    assert r.response_checked_before_commit is l4.response_checked_before_commit
+    ham = getattr(r, ten)
+    goi = [n for n in ast.walk(ast.parse(inspect.getsource(ham))) if isinstance(n, ast.Call)]
+    kiem = [n for n in goi if isinstance(n.func, ast.Name) and n.func.id == "response_checked_before_commit"]
+    commit = [n for n in goi if isinstance(n.func, ast.Attribute) and n.func.attr == "commit"]
+    assert len(kiem) == 1 and len(commit) == 1, (ten, len(kiem), len(commit))
+    assert (kiem[0].lineno, kiem[0].col_offset) < (commit[0].lineno, commit[0].col_offset), ten
+    route = next(x for x in fastapi_app.routes if isinstance(x, APIRoute) and x.endpoint is ham)
+    assert isinstance(kiem[0].args[0], ast.Name) and kiem[0].args[0].id == route.response_model.__name__, ten

@@ -28,6 +28,7 @@ from ..schemas.review_secretary import (
 )
 from ..services import review_secretary_service as secretary_service
 from ..services.document_transition import RequestMeta
+from .admission_review import response_checked_before_commit
 
 #: Tiền tố (dưới ``/api``) — dùng chung tiền tố đã đóng băng của cấu hình tuyển sinh.
 ROUTER_PREFIX = "/admission-config"
@@ -90,6 +91,9 @@ async def create_review_secretary(
     result = await secretary_service.create_grant(
         db, admin_id=current_user.id, user_id=body.user_id, reason=body.reason, request_meta=_meta(request)
     )
+    # Rà hợp nhất 23-11 I1 + quyết định owner O2 23-11: kiểm thân phản hồi theo ``ReviewSecretaryGrantView`` TRƯỚC ``commit`` (MỘT
+    # helper của L4) — lệch schema ⇒ nổ khi giao dịch chưa commit ⇒ quyền + nhật ký không được ghi.
+    response_checked_before_commit(ReviewSecretaryGrantView, result)
     await db.commit()
     return result
 
@@ -111,5 +115,7 @@ async def revoke_review_secretary(
     result = await secretary_service.revoke_grant(
         db, admin_id=current_user.id, grant_id=grant_id, reason=body.reason, request_meta=_meta(request)
     )
+    # Như route gán (I1 + owner O2 23-11).
+    response_checked_before_commit(ReviewSecretaryGrantView, result)
     await db.commit()
     return result
