@@ -223,6 +223,7 @@ on:
   # `matrix`, nên lọc lát chỉ làm được bằng điều kiện ở TỪNG bước của MỌI leg —
   # thêm một đường để required gate bỏ chạy test mà vẫn xanh (đúng lớp lỗi
   # nightly-regression: 15 đêm E2E skipped, job success). Chạy một phần thì dùng
+  # `ci-chon-ca.yml` (vài tệp / node id, một job, KHÔNG phải required check) hoặc
   # Docker máy dev; chạy toàn bộ backend thì `nightly-backend-pytest.yml`.
   #
   # `test_ci_test_visibility.py::TestWorkflowDispatchHaiCongPR` khoá khối này.

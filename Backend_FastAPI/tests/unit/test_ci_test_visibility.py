@@ -3717,3 +3717,604 @@ class TestWorkflowDispatchHaiCongPR:
         assert isinstance(conc, dict) and conc.get("group") == nhom, (
             "%s: concurrency.group phải là %r, thấy %r"
             % (HAI_CONG_PR[cong].name, nhom, conc))
+
+
+# ===========================================================================
+# Workflow "chạy chọn ca" — `ci-chon-ca.yml` (23-11-2026)
+# ===========================================================================
+#
+# Owner (23-11) cho thêm một workflow NHỎ, chỉ `workflow_dispatch`, chạy RIÊNG
+# vài tệp / node id backend trên nhánh `ci/*`. Khác hai cổng PR ở trên, nó nhận
+# một CHUỖI TỰ DO từ người gọi, nên bốn lớp rủi ro là:
+#
+#   A. input thành LỆNH — `${{ inputs.ca }}` dán vào thân `run:` (bị thay chuỗi
+#      TRƯỚC khi shell đọc), một mục bắt đầu bằng `-` thành cờ pytest, `..`
+#      thoát khỏi `tests/`;
+#   B. xanh GIẢ — collect 0 ca, một mục skip cả module, phiên dừng giữa chừng,
+#      mã lỗi bị nuốt;
+#   C. lượt chạy MỘT PHẦN mang tên required check ⇒ thoả required của một PR;
+#   D. thêm quyền / secret / sự kiện; huỷ lượt khác.
+#
+# Thân ba bước `kiem` / `thu-thap` / `chay` được chạy THẬT bằng bash, với
+# `python` là stub đóng vai pytest — đo HÀNH VI, không khớp chuỗi. Mỗi guard
+# có ca riêng, dựng sao cho CHỈ guard ấy đứng giữa đầu vào xấu và mã thoát 0
+# (CLAUDE.md §3: một ca chỉ vi phạm một bất biến).
+
+DUONG_WF_CHON_CA = GOC / ".github" / "workflows" / "ci-chon-ca.yml"
+DUONG_WF_NIGHTLY_PYTEST = GOC / ".github" / "workflows" / "nightly-backend-pytest.yml"
+JOB_CHON_CA = "chon-ca"
+JOB_LAT_NIGHTLY = "pytest-shard"
+ID_KIEM, ID_THU_THAP, ID_CHAY = "kiem", "thu-thap", "chay"
+NHOM_CHON_CA = "ci-chon-ca-${{ github.ref }}-${{ github.run_id }}"
+#: Trần của một lát nightly; workflow cho VÀI tệp không được dài hơn.
+TRAN_PHUT_CHON_CA = 75
+
+#: MỌI required context của ruleset 16381130 (đọc API 23-11-2026), kể cả hai
+#: context của dependency-audit.yml.
+REQUIRED_MOI_CONTEXT = REQUIRED_HAI_CONG | {"Python Dependencies", "Node.js Dependencies"}
+
+#: Cây Backend_FastAPI GIẢ cho các ca chạy thân bước (bước `kiem` đòi tệp có thật).
+TEP_GIA = ("tests/unit/test_a.py", "tests/api/test_b.py", "tests/test_goc.py")
+
+#: Nuốt mã lỗi trong thân `run:`. `|| rc=$?` (ghi lại rồi xét) thì được.
+_MAU_NUOT_LOI = re.compile(r"\|\|\s*(?:true\b|:(?=\s|$))|\bset\s+\+e\b")
+#: Mọi đường dẫn tới input: `inputs.*` lẫn `github.event.inputs.*` / `toJSON(github.event)`.
+_MAU_THAM_CHIEU_INPUT = re.compile(r"\binputs\b|\bgithub\.event\b")
+
+#: Mục PHẢI bị từ chối: (id, mục). `${IFS}` thay khoảng trắng — đúng mẹo của tải
+#: chèn lệnh thật khi đầu vào bị tách theo khoảng trắng.
+MUC_BI_TU_CHOI = [
+    ("co-ngan", "-p"),
+    ("co-dai", "--collect-only"),
+    ("co-gan-gia-tri", "--rootdir=/"),
+    ("thoat-thu-muc", "tests/../app/main.py"),
+    ("thoat-roi-quay-lai", "tests/unit/../unit/test_a.py"),
+    ("cham-cham-trong-tham-so", "tests/unit/test_a.py::test_x[a..b]"),
+    ("duong-tuyet-doi", "/etc/passwd"),
+    ("ngoai-tests", "app/main.py"),
+    ("cham-dau-duong", "./tests/unit/test_a.py"),
+    ("hai-gach", "tests//unit/test_a.py"),
+    ("cham-phay", "tests/unit/test_a.py;touch${IFS}PWNED"),
+    ("thay-lenh-dola", "$(touch${IFS}PWNED)"),
+    ("thay-lenh-backtick", "`touch${IFS}PWNED`"),
+    ("bien-dola", "tests/unit/test_a.py${IFS}"),
+    ("ong-dan", "tests/unit/test_a.py|touch${IFS}PWNED"),
+    ("va-va", "tests/unit/test_a.py&&touch${IFS}PWNED"),
+    ("chuyen-huong", "tests/unit/test_a.py>PWNED"),
+    ("nhay-don", "tests/unit/test_a.py'"),
+    ("nhay-kep", 'tests/unit/test_a.py"'),
+    ("gach-nguoc", "tests/unit/test_a.py::test_x[a\\b]"),
+    ("glob", "tests/unit/test_*.py"),
+    ("chu-co-dau", "tests/unit/test_\u00e1.py"),
+    ("khoang-trang-khong-ngat", "tests/unit/test_a.py\u00a0"),
+    ("khong-phai-tep-test", "tests/conftest.py"),
+    ("thu-muc", "tests/unit"),
+    ("thu-muc-gach-cuoi", "tests/unit/"),
+    ("ten-rong", "tests/unit/test_a.py::"),
+    ("tham-so-khong-ten", "tests/unit/test_a.py[x]"),
+    ("tham-so-rong", "tests/unit/test_a.py::test_x[]"),
+    ("ten-bat-dau-bang-so", "tests/unit/test_a.py::1abc"),
+    ("tham-so-giua-chung", "tests/unit/test_a.py::test_x[p]::y"),
+]
+
+#: pytest GIẢ: `python -m pytest …` ⇒ ghi lời gọi, in `$STUB_OUT`, chép
+#: `$STUB_JUNIT` vào đường `--junit-xml=`, trả `$STUB_RC`. Mọi lời gọi khác
+#: (`python - <<'PY'` đếm JUnit) chuyển sang trình thông dịch THẬT.
+_STUB_PYTEST = (
+    "#!/bin/sh\n"
+    'if [ "$1" = "-m" ] && [ "$2" = "pytest" ]; then\n'
+    '  printf \'%s %s\\n\' "${0##*/}" "$*" >> "$STUB_LOG"\n'
+    '  for a in "$@"; do\n'
+    '    case "$a" in\n'
+    '      --junit-xml=*)\n'
+    '        if [ -n "${STUB_JUNIT:-}" ]; then cp "$STUB_JUNIT" "${a#--junit-xml=}"; fi\n'
+    '        ;;\n'
+    '    esac\n'
+    '  done\n'
+    '  if [ -n "${STUB_OUT:-}" ]; then cat "$STUB_OUT"; fi\n'
+    '  exit "${STUB_RC:-0}"\n'
+    'fi\n'
+    'exec "$REAL_PY" "$@"\n'
+)
+
+
+@pytest.fixture(scope="module")
+def wf_chon_ca(prc) -> dict:
+    return prc.yaml.load(DUONG_WF_CHON_CA.read_text(encoding="utf-8"),
+                         Loader=prc._LoaderNghiemNgat)
+
+
+@pytest.fixture(scope="module")
+def job_chon_ca(wf_chon_ca) -> dict:
+    return wf_chon_ca["jobs"][JOB_CHON_CA]
+
+
+@pytest.fixture(scope="module")
+def lat_nightly(prc) -> dict:
+    wf = prc.yaml.load(DUONG_WF_NIGHTLY_PYTEST.read_text(encoding="utf-8"),
+                       Loader=prc._LoaderNghiemNgat)
+    return wf["jobs"][JOB_LAT_NIGHTLY]
+
+
+def _moi_chuoi_kem_duong(nut, duong=()):
+    """(đường khoá, chuỗi) cho mọi chuỗi — khoá lẫn giá trị — trong cây YAML."""
+    if isinstance(nut, dict):
+        for khoa, gia_tri in nut.items():
+            yield from _moi_chuoi_kem_duong(khoa, duong + (khoa,))
+            yield from _moi_chuoi_kem_duong(gia_tri, duong + (khoa,))
+    elif isinstance(nut, list):
+        for i, gia_tri in enumerate(nut):
+            yield from _moi_chuoi_kem_duong(gia_tri, duong + (i,))
+    elif isinstance(nut, str):
+        yield duong, nut
+
+
+def _cac_buoc_run(wf: dict) -> list:
+    """(id job, chỉ số bước, bước) của MỌI bước có `run:` trong workflow."""
+    return [(jid, i, b) for jid, job in wf["jobs"].items()
+            for i, b in enumerate(job.get("steps", []))
+            if isinstance(b, dict) and "run" in b]
+
+
+def _doc_dong(duong: pathlib.Path) -> list:
+    return duong.read_text(encoding="utf-8").splitlines()
+
+
+def _ra_collect(*node: str) -> str:
+    """Đầu ra `--collect-only -qq`: mỗi node id một dòng."""
+    return "".join(n + "\n" for n in node)
+
+
+def _junit(*ket_qua: str) -> str:
+    """JUnit XML như pytest ghi; mỗi phần tử là 'pass' / 'fail' / 'error' / 'skip'."""
+    con = {"pass": "", "fail": '<failure message="gia"/>',
+           "error": '<error message="gia"/>', "skip": '<skipped message="gia"/>'}
+    than = "".join(
+        '<testcase classname="tests.unit.test_a" name="test_%d">%s</testcase>'
+        % (i, con[k]) for i, k in enumerate(ket_qua))
+    return ('<?xml version="1.0" encoding="utf-8"?><testsuites>'
+            '<testsuite name="pytest" tests="%d">%s</testsuite></testsuites>'
+            % (len(ket_qua), than))
+
+
+def _chay_buoc_chon_ca(wf: dict, id_buoc: str, tmp_path: pathlib.Path, *,
+                       ca=None, ca_txt=None, so_ca=None, stub_out: str = "",
+                       stub_rc: int = 0, stub_junit=None):
+    """Chạy thân `run:` của bước `id_buoc` như runner Linux (`bash -e`, mặc định
+    khi bước không khai `shell:`), cwd = `working-directory` GIẢ chứa `TEP_GIA`.
+
+    `ca=None` ⇒ biến `CA` VẮNG MẶT; `ca_txt` / `so_ca` dựng sẵn đầu ra của các
+    bước trước trong `$RUNNER_TEMP`. Trả (rc, stdout+stderr, các lời gọi
+    pytest theo thứ tự, thư mục `$RUNNER_TEMP`).
+    """
+    than = str(_buoc_theo_id(wf["jobs"][JOB_CHON_CA])[id_buoc]["run"])
+    bash = shutil.which("bash")
+    if bash is None:
+        assert not os.environ.get("CI"), "runner CI phải có bash — không đo được thân bước"
+        pytest.skip("không có bash để chạy thân bước")
+    be = tmp_path / "be"
+    for tep in TEP_GIA:
+        (be / tep).parent.mkdir(parents=True, exist_ok=True)
+        (be / tep).write_text("def test_gia():\n    pass\n", encoding="utf-8")
+    temp = tmp_path / "runner_temp"
+    temp.mkdir()
+    if ca_txt is not None:
+        (temp / "ca.txt").write_text("".join(m + "\n" for m in ca_txt), encoding="utf-8")
+    if so_ca is not None:
+        (temp / "so_ca.txt").write_text("%s\n" % so_ca, encoding="utf-8")
+    stub = tmp_path / "stub"
+    stub.mkdir()
+    for ten in ("python", "python3"):
+        (stub / ten).write_bytes(_STUB_PYTEST.encode("utf-8"))
+        (stub / ten).chmod(0o755)
+    ra_gia = tmp_path / "stub_out.txt"
+    ra_gia.write_text(stub_out, encoding="utf-8")
+    tep_than = tmp_path / "than.sh"
+    tep_than.write_bytes(than.encode("utf-8"))
+    nhat_ky = tmp_path / "goi.log"
+    env = dict(os.environ)
+    # `GITHUB_STEP_SUMMARY` có thật khi test chạy TRONG Actions — gỡ để thân
+    # bước giả không ghi vào tóm tắt của chính job đang chạy test.
+    for ten in ("BASH_ENV", "ENV", "CA", "STUB_JUNIT", "GITHUB_STEP_SUMMARY"):
+        env.pop(ten, None)
+    env.update({
+        "PATH": str(stub) + os.pathsep + env.get("PATH", ""),
+        "RUNNER_TEMP": str(temp),
+        "BO_QUA": str(wf["env"]["BO_QUA"]),
+        "STUB_LOG": str(nhat_ky),
+        "STUB_OUT": str(ra_gia),
+        "STUB_RC": str(stub_rc),
+        "REAL_PY": sys.executable,
+    })
+    if ca is not None:
+        env["CA"] = ca
+    if stub_junit is not None:
+        tep_junit = tmp_path / "junit_gia.xml"
+        tep_junit.write_text(stub_junit, encoding="utf-8")
+        env["STUB_JUNIT"] = str(tep_junit)
+    kq = subprocess.run(
+        [bash, "--noprofile", "--norc", "-e", str(tep_than)],
+        cwd=be, env=env, capture_output=True, timeout=60,
+    )
+    ra = (kq.stdout + kq.stderr).decode("utf-8", errors="replace")
+    goi = _doc_dong(nhat_ky) if nhat_ky.exists() else []
+    return kq.returncode, ra, goi, temp
+
+
+class TestWorkflowChayChonCa:
+    """`ci-chon-ca.yml` chạy RIÊNG vài ca mà không mở đường chèn lệnh, không xanh
+    giả, không thoả required check, không cầm thêm quyền."""
+
+    # --- A. trigger + input ------------------------------------------------------
+
+    def test_chi_workflow_dispatch(self, wf_chon_ca):
+        su_kien = sorted(str(k) for k in _khoi_on(wf_chon_ca))
+        assert su_kien == ["workflow_dispatch"], (
+            "ci-chon-ca.yml nhận sự kiện %r. Nó chạy mã của NHÁNH với input tự do: "
+            "`pull_request` / `pull_request_target` / `push` làm nó chạy ngoài ý "
+            "người gọi (`pull_request_target` còn trao token ghi + secret), "
+            "`workflow_call` cho workflow khác truyền input vào." % su_kien)
+
+    def test_input_duy_nhat_la_ca_kieu_chuoi_bat_buoc(self, wf_chon_ca):
+        """Một input. Thêm input (vd. chia lát) là quyết định riêng, kèm cổng
+        đối chiếu lát được chọn ↔ lát thật sự chạy."""
+        inputs = (_khoi_on(wf_chon_ca)["workflow_dispatch"] or {}).get("inputs")
+        assert isinstance(inputs, dict) and sorted(inputs) == ["ca"], (
+            "inputs phải ĐÚNG {ca}, thấy %r" % (inputs,))
+        assert inputs["ca"].get("type") == "string" and inputs["ca"].get("required") is True, (
+            "input `ca` phải `type: string`, `required: true`, thấy %r" % (inputs["ca"],))
+
+    # --- B. input không bao giờ thành lệnh ------------------------------------------
+
+    def test_khong_run_nao_chua_bieu_thuc(self, wf_chon_ca):
+        """`${{ … }}` trong `run:` được THAY CHUỖI trước khi shell đọc: với input
+        tự do đó là chèn lệnh (`ca="x;curl …|sh"`). Cấm MỌI biểu thức, không chỉ
+        `inputs`: `toJSON(github.event)` cũng mang nguyên input vào."""
+        buoc = _cac_buoc_run(wf_chon_ca)
+        assert buoc, "không thấy bước `run:` nào — phép quét vô nghĩa"
+        vi_pham = ["%s.steps[%d] %r" % (jid, i, b.get("name")) for jid, i, b in buoc
+                   if "${{" in str(b["run"])]
+        assert not vi_pham, (
+            "thân `run:` chứa biểu thức `${{ }}`: %s — đưa giá trị vào qua `env:`."
+            % vi_pham)
+
+    def test_input_chi_vao_env_cua_buoc_kiem(self, wf_chon_ca, job_chon_ca):
+        """Đúng MỘT chỗ chạm input: `env.CA` của bước `kiem`. Một `env:` mang input
+        ở bước khác không có `${{` trong `run:` nhưng BỎ QUA phép kiểm từng mục."""
+        idx = _chi_so_buoc(job_chon_ca, ID_KIEM)
+        ngoai_on = {k: v for k, v in wf_chon_ca.items() if k not in ("on", True)}
+        cham = [(duong, s) for duong, s in _moi_chuoi_kem_duong(ngoai_on)
+                if _MAU_THAM_CHIEU_INPUT.search(s)]
+        mong = [(("jobs", JOB_CHON_CA, "steps", idx, "env", "CA"), "${{ inputs.ca }}")]
+        assert cham == mong, (
+            "input chỉ được đi vào qua `env.CA` của bước %r; thấy %r" % (ID_KIEM, cham))
+
+    # --- C. không thoả required check --------------------------------------------
+
+    def test_ten_job_khong_chua_ten_required(self, wf_chon_ca):
+        """Required context khớp theo TÊN check trên SHA head của PR. Một lượt
+        chạy MỘT PHẦN mang tên `pytest` có thể thoả required của PR trùng SHA.
+        Tên phải TĨNH (biểu thức có thể ra `pytest`) và không CHỨA tên required."""
+        for jid, job in wf_chon_ca["jobs"].items():
+            ten = str(job.get("name", jid))
+            assert "${{" not in ten, "job %r: tên là biểu thức %r" % (jid, ten)
+            trung = sorted(r for r in REQUIRED_MOI_CONTEXT if r.lower() in ten.lower())
+            assert not trung, "job %r tên %r chứa required context %r" % (jid, ten, trung)
+
+    # --- D. quyền ------------------------------------------------------------------
+
+    def test_token_chi_doc_noi_dung(self, wf_chon_ca):
+        assert wf_chon_ca.get("permissions") == {"contents": "read"}, (
+            "`permissions` cấp workflow phải ĐÚNG `{contents: read}`, thấy %r"
+            % (wf_chon_ca.get("permissions"),))
+        co = sorted(jid for jid, job in wf_chon_ca["jobs"].items() if "permissions" in job)
+        assert not co, "job %r tự khai `permissions` — ghi đè mức cấp workflow" % co
+
+    def test_khong_environment_khong_goi_workflow_khac(self, wf_chon_ca):
+        vi_pham = sorted("%s.%s" % (jid, khoa) for jid, job in wf_chon_ca["jobs"].items()
+                         for khoa in ("environment", "uses", "secrets") if khoa in job)
+        assert not vi_pham, "ci-chon-ca.yml: %r" % vi_pham
+
+    def test_khong_tham_chieu_secret(self, wf_chon_ca):
+        chuoi = list(_moi_chuoi(wf_chon_ca))
+        assert chuoi, "không đọc được chuỗi nào — phép quét vô nghĩa"
+        trung = [c[:80] for c in chuoi if re.search(r"\bsecrets\b", c)]
+        assert not trung, (
+            "ci-chon-ca.yml tham chiếu `secrets`: %r — ai đẩy được nhánh là chạy "
+            "được mã tuỳ ý ở đây." % trung)
+
+    # --- E. fail-closed tĩnh ---------------------------------------------------------
+
+    def test_khong_continue_on_error_khong_if(self, job_chon_ca):
+        """`if:` làm bước / job bị skip — GitHub coi skipped là đạt;
+        `continue-on-error` biến đỏ thành xanh."""
+        assert "if" not in job_chon_ca and "continue-on-error" not in job_chon_ca, (
+            "job %r có `if` / `continue-on-error`" % JOB_CHON_CA)
+        vi_pham = [(i, b.get("name") or b.get("uses"), khoa)
+                   for i, b in enumerate(job_chon_ca["steps"])
+                   for khoa in ("if", "continue-on-error") if khoa in b]
+        assert not vi_pham, "bước có `if` / `continue-on-error`: %r" % vi_pham
+
+    def test_khong_nuot_ma_loi_trong_run(self, wf_chon_ca):
+        """Đọc thân THÔ (kể cả comment shell): một `|| true` không có lý do nằm
+        trong bước này."""
+        vi_pham = ["%s.steps[%d]: %r" % (jid, i, m.group(0))
+                   for jid, i, b in _cac_buoc_run(wf_chon_ca)
+                   for m in _MAU_NUOT_LOI.finditer(str(b["run"]))]
+        assert not vi_pham, "thân `run:` nuốt mã lỗi: %s" % vi_pham
+
+    def test_thu_tu_buoc(self, job_chon_ca):
+        """checkout → kiem → thu-thap → chay, và cài deps TRƯỚC thu-thap. Ba bước
+        tự viết chạy trong Backend_FastAPI: mục trong danh sách tính từ đó."""
+        cac = job_chon_ca["steps"]
+        i_checkout = next(i for i, b in enumerate(cac)
+                          if str(b.get("uses", "")).startswith("actions/checkout"))
+        i_cai = next(i for i, b in enumerate(cac)
+                     if "pip install -r requirements-dev.txt" in str(b.get("run", "")))
+        i_kiem, i_tt, i_chay = (_chi_so_buoc(job_chon_ca, x)
+                                for x in (ID_KIEM, ID_THU_THAP, ID_CHAY))
+        assert i_checkout < i_kiem < i_tt < i_chay and i_cai < i_tt, (
+            "thứ tự bước sai: checkout=%d kiem=%d cài=%d thu-thap=%d chay=%d"
+            % (i_checkout, i_kiem, i_cai, i_tt, i_chay))
+        for x in (ID_KIEM, ID_THU_THAP, ID_CHAY):
+            assert cac[_chi_so_buoc(job_chon_ca, x)].get("working-directory") == "Backend_FastAPI", (
+                "bước %r phải chạy trong Backend_FastAPI" % x)
+
+    # --- F. concurrency + trần thời gian ---------------------------------------------
+
+    def test_concurrency_rieng_tung_luot_khong_huy(self, wf_chon_ca):
+        """`run_id` duy nhất ⇒ mỗi lượt một nhóm; `cancel-in-progress: false`.
+        Bỏ `run_id` + bật huỷ thì lượt sau trên cùng nhánh giết lượt trước —
+        đúng lúc đang chạy biến thể kiểm ngược song song."""
+        assert wf_chon_ca.get("concurrency") == {
+            "group": NHOM_CHON_CA, "cancel-in-progress": False}, (
+            "concurrency phải ĐÚNG {group: %r, cancel-in-progress: false}, thấy %r"
+            % (NHOM_CHON_CA, wf_chon_ca.get("concurrency")))
+        co = sorted(jid for jid, job in wf_chon_ca["jobs"].items() if "concurrency" in job)
+        assert not co, "job %r tự khai concurrency" % co
+
+    def test_co_tran_thoi_gian(self, job_chon_ca):
+        """Thiếu trần ⇒ một lượt treo giữ runner tới trần mặc định 6 giờ."""
+        t = job_chon_ca.get("timeout-minutes")
+        assert isinstance(t, int) and not isinstance(t, bool) and 0 < t <= TRAN_PHUT_CHON_CA, (
+            "timeout-minutes phải là số nguyên trong (0, %d], thấy %r"
+            % (TRAN_PHUT_CHON_CA, t))
+
+    # --- G. môi trường soi gương lát nightly (CLAUDE.md §7: hai bản ⇒ khoá bằng nhau)
+
+    @pytest.mark.parametrize("khoa", ["runs-on", "env", "services"])
+    def test_moi_truong_giong_lat_nightly(self, job_chon_ca, lat_nightly, khoa):
+        assert lat_nightly.get(khoa), "lát nightly không có %r — phép so rỗng" % khoa
+        assert job_chon_ca.get(khoa) == lat_nightly.get(khoa), (
+            "`%s` của job %r lệch lát nightly — kết quả hai nơi không còn so được "
+            "với nhau. Sửa CẢ HAI cùng lượt." % (khoa, JOB_CHON_CA))
+
+    def test_cai_python_va_deps_giong_lat_nightly(self, job_chon_ca, lat_nightly):
+        def lay(job):
+            py = [b.get("with") for b in job["steps"]
+                  if str(b.get("uses", "")).startswith("actions/setup-python")]
+            cai = [(b.get("working-directory"), b.get("run")) for b in job["steps"]
+                   if "pip install" in str(b.get("run", ""))]
+            return py, cai
+        assert all(lay(lat_nightly)), "lát nightly không có bước setup-python / pip install"
+        assert lay(job_chon_ca) == lay(lat_nightly), (
+            "setup-python / cài deps lệch lát nightly: %r ≠ %r"
+            % (lay(job_chon_ca), lay(lat_nightly)))
+
+    def test_bo_qua_dong_bo_nightly(self, guard):
+        """Đọc bằng CHÍNH hàm mà cổng độ-nhìn-thấy dùng cho nightly."""
+        nightly = guard.cac_ignore_glob_nightly(
+            DUONG_WF_NIGHTLY_PYTEST.read_text(encoding="utf-8"))
+        chon_ca = guard.cac_ignore_glob_nightly(DUONG_WF_CHON_CA.read_text(encoding="utf-8"))
+        assert nightly, "nightly không còn `--ignore-glob` nào — phép so rỗng"
+        assert chon_ca == nightly, "BO_QUA lệch nightly: %r ≠ %r" % (chon_ca, nightly)
+
+    # --- H. bước `kiem`: chạy THẬT thân bước -------------------------------------------
+
+    @pytest.mark.parametrize("muc", [
+        "tests/unit/test_a.py",
+        "tests/test_goc.py",
+        "tests/unit/test_a.py::TestX",
+        "tests/unit/test_a.py::TestX::test_y",
+        "tests/api/test_b.py::test_z[p-1.5,x=y/z:w@v%u+t]",
+    ], ids=["tep", "tep-goc", "lop", "ham-trong-lop", "tham-so"])
+    def test_kiem_nhan_muc_hop_le(self, wf_chon_ca, muc, tmp_path):
+        rc, ra, _, temp = _chay_buoc_chon_ca(wf_chon_ca, ID_KIEM, tmp_path, ca=muc)
+        assert rc == 0, "mục hợp lệ %r bị từ chối (rc=%d):\n%s" % (muc, rc, ra)
+        assert _doc_dong(temp / "ca.txt") == [muc]
+
+    def test_kiem_tach_khoang_trang_xuong_dong_giu_thu_tu(self, wf_chon_ca, tmp_path):
+        ca = "  tests/unit/test_a.py\ttests/api/test_b.py::test_c\r\n\n tests/test_goc.py  \n"
+        rc, ra, _, temp = _chay_buoc_chon_ca(wf_chon_ca, ID_KIEM, tmp_path, ca=ca)
+        assert rc == 0, ra
+        assert _doc_dong(temp / "ca.txt") == [
+            "tests/unit/test_a.py", "tests/api/test_b.py::test_c", "tests/test_goc.py"]
+
+    @pytest.mark.parametrize("muc", [m for _, m in MUC_BI_TU_CHOI],
+                             ids=[i for i, _ in MUC_BI_TU_CHOI])
+    def test_kiem_tu_choi(self, wf_chon_ca, muc, tmp_path):
+        rc, ra, _, temp = _chay_buoc_chon_ca(wf_chon_ca, ID_KIEM, tmp_path, ca=muc)
+        assert rc != 0, "mục %r LỌT bước kiểm:\n%s" % (muc, ra)
+        assert "::error::" in ra, "từ chối mà không nói vì sao:\n%s" % ra
+        assert not (temp / "ca.txt").exists(), "đỏ mà vẫn ghi danh sách cho bước sau"
+        assert not list(tmp_path.rglob("PWNED*")), "tải chèn lệnh ĐÃ THỰC THI"
+
+    def test_kiem_mot_muc_xau_thi_khong_chay_gi(self, wf_chon_ca, tmp_path):
+        """Không chạy MỘT PHẦN danh sách: người gọi tưởng đã chạy đủ."""
+        ca = "tests/unit/test_a.py tests/unit/test_a.py;id tests/api/test_b.py"
+        rc, ra, _, temp = _chay_buoc_chon_ca(wf_chon_ca, ID_KIEM, tmp_path, ca=ca)
+        assert rc != 0, ra
+        assert not (temp / "ca.txt").exists()
+
+    @pytest.mark.parametrize("ca", [None, "", " \t\r\n "],
+                             ids=["vang-mat", "rong", "chi-khoang-trang"])
+    def test_kiem_tu_choi_input_rong(self, wf_chon_ca, ca, tmp_path):
+        rc, ra, _, temp = _chay_buoc_chon_ca(wf_chon_ca, ID_KIEM, tmp_path, ca=ca)
+        assert rc != 0, "input rỗng mà bước kiểm xanh:\n%s" % ra
+        assert not (temp / "ca.txt").exists()
+
+    def test_kiem_tu_choi_trung(self, wf_chon_ca, tmp_path):
+        rc, ra, _, temp = _chay_buoc_chon_ca(
+            wf_chon_ca, ID_KIEM, tmp_path, ca="tests/unit/test_a.py tests/unit/test_a.py")
+        assert rc != 0, ra
+        assert not (temp / "ca.txt").exists()
+
+    @pytest.mark.parametrize("hai_muc", [
+        ("tests/unit/test_a.py", "tests/unit/test_a.py::TestX"),
+        ("tests/unit/test_a.py::TestX::test_y", "tests/unit/test_a.py::TestX"),
+        ("tests/api/test_b.py::test_z", "tests/api/test_b.py::test_z[p1]"),
+    ], ids=["tep-roi-ca", "ca-roi-lop", "ham-roi-tham-so"])
+    def test_kiem_tu_choi_chong_lan(self, wf_chon_ca, hai_muc, tmp_path):
+        """Một ca thuộc hai mục: đếm theo mục sai, pytest chạy hai lần hoặc gộp."""
+        rc, ra, _, temp = _chay_buoc_chon_ca(
+            wf_chon_ca, ID_KIEM, tmp_path, ca=" ".join(hai_muc))
+        assert rc != 0, "hai mục chồng lấn %r lọt:\n%s" % (hai_muc, ra)
+        assert not (temp / "ca.txt").exists()
+
+    def test_kiem_tien_to_ten_khong_phai_chong_lan(self, wf_chon_ca, tmp_path):
+        """`TestX` và `TestXY` là hai lớp khác nhau — luật chồng lấn không được
+        so tiền tố CHUỖI trần."""
+        ca = "tests/unit/test_a.py::TestX tests/unit/test_a.py::TestXY"
+        rc, ra, _, temp = _chay_buoc_chon_ca(wf_chon_ca, ID_KIEM, tmp_path, ca=ca)
+        assert rc == 0, ra
+        assert _doc_dong(temp / "ca.txt") == ca.split()
+
+    def test_kiem_tu_choi_tep_khong_ton_tai(self, wf_chon_ca, tmp_path):
+        rc, ra, _, temp = _chay_buoc_chon_ca(
+            wf_chon_ca, ID_KIEM, tmp_path, ca="tests/unit/test_khong_co.py")
+        assert rc != 0, ra
+        assert not (temp / "ca.txt").exists()
+
+    # --- I. bước `thu-thap`: pytest giả ------------------------------------------------
+
+    def test_thu_thap_xanh_dem_dung_va_goi_dung_doi_so(self, wf_chon_ca, tmp_path):
+        ds = ["tests/unit/test_a.py", "tests/api/test_b.py::test_c"]
+        # Dòng tổng kết và một node id in LẠI ở phần cảnh báo: không được đếm.
+        ra_gia = _ra_collect(
+            "tests/unit/test_a.py::TestX::test_1",
+            "tests/unit/test_a.py::test_2",
+            "tests/api/test_b.py::test_c[p1]",
+            "tests/api/test_b.py::test_c[p2]",
+        ) + "\n4 tests collected in 0.10s\n" + _ra_collect("tests/unit/test_a.py::test_2")
+        rc, ra, goi, temp = _chay_buoc_chon_ca(
+            wf_chon_ca, ID_THU_THAP, tmp_path, ca_txt=ds, stub_out=ra_gia)
+        assert rc == 0, ra
+        assert _doc_dong(temp / "so_ca.txt") == ["4"]
+        # `-qq` là bắt buộc: `-q` + `addopts = -v` ⇒ in CÂY, 0 node id.
+        assert goi == ["python -m pytest %s --collect-only -qq %s"
+                       % (" ".join(ds), wf_chon_ca["env"]["BO_QUA"])], goi
+
+    def test_thu_thap_0_ca_thi_do(self, wf_chon_ca, tmp_path):
+        """Đúng hình dạng đã xảy ra ở nightly: pytest in CÂY (không node id) mà
+        vẫn thoát 0."""
+        rc, ra, _, temp = _chay_buoc_chon_ca(
+            wf_chon_ca, ID_THU_THAP, tmp_path, ca_txt=["tests/unit/test_a.py"],
+            stub_out="<Module tests/unit/test_a.py>\n  <Function test_1>\n")
+        assert rc != 0, "collect 0 ca mà bước xanh:\n%s" % ra
+        assert not (temp / "so_ca.txt").exists()
+
+    def test_thu_thap_mot_muc_0_ca_thi_do(self, wf_chon_ca, tmp_path):
+        """Tổng > 0 nhưng MỘT mục 0 ca (tệp skip cả module) ⇒ đỏ."""
+        rc, ra, _, temp = _chay_buoc_chon_ca(
+            wf_chon_ca, ID_THU_THAP, tmp_path,
+            ca_txt=["tests/unit/test_a.py", "tests/api/test_b.py"],
+            stub_out=_ra_collect("tests/unit/test_a.py::test_1"))
+        assert rc != 0, "một mục 0 ca bị các mục khác che:\n%s" % ra
+        assert not (temp / "so_ca.txt").exists()
+
+    def test_thu_thap_loi_collect_thi_do(self, wf_chon_ca, tmp_path):
+        """Dòng `ERROR` mà rc 0 — chỉ phép soi `ERROR` đứng giữa ca này và xanh."""
+        rc, ra, _, temp = _chay_buoc_chon_ca(
+            wf_chon_ca, ID_THU_THAP, tmp_path, ca_txt=["tests/unit/test_a.py"],
+            stub_out=_ra_collect("tests/unit/test_a.py::test_1")
+            + "ERROR tests/api/test_b.py - ImportError: gia\n")
+        assert rc != 0, ra
+        assert not (temp / "so_ca.txt").exists()
+
+    def test_thu_thap_rc_khac_0_thi_do(self, wf_chon_ca, tmp_path):
+        """Node id đủ, không dòng `ERROR`, chỉ rc ≠ 0 — cô lập phép xét rc."""
+        rc, ra, _, temp = _chay_buoc_chon_ca(
+            wf_chon_ca, ID_THU_THAP, tmp_path, ca_txt=["tests/unit/test_a.py"],
+            stub_out=_ra_collect("tests/unit/test_a.py::test_1"), stub_rc=4)
+        assert rc != 0, ra
+        assert not (temp / "so_ca.txt").exists()
+
+    def test_thu_thap_ca_ngoai_moi_muc_thi_do(self, wf_chon_ca, tmp_path):
+        """`TestXY` không thuộc mục `::TestX` (tiền tố chuỗi ≠ tiền tố node id):
+        mục vẫn có 1 ca, nhưng tổng theo mục 1 ≠ 2 node id."""
+        rc, ra, _, temp = _chay_buoc_chon_ca(
+            wf_chon_ca, ID_THU_THAP, tmp_path, ca_txt=["tests/unit/test_a.py::TestX"],
+            stub_out=_ra_collect("tests/unit/test_a.py::TestX::test_1",
+                                 "tests/unit/test_a.py::TestXY::test_2"))
+        assert rc != 0, ra
+        assert not (temp / "so_ca.txt").exists()
+
+    # --- J. bước `chay`: pytest giả + đếm JUnit THẬT --------------------------------------
+
+    def test_chay_xanh_khi_du_va_dat(self, wf_chon_ca, tmp_path):
+        ds = ["tests/unit/test_a.py", "tests/api/test_b.py::test_c"]
+        rc, ra, goi, temp = _chay_buoc_chon_ca(
+            wf_chon_ca, ID_CHAY, tmp_path, ca_txt=ds, so_ca=3,
+            stub_junit=_junit("pass", "pass", "pass"))
+        assert rc == 0, ra
+        assert "chạy 3 · passed 3 · failed 0 · errors 0 · skipped 0" in ra, ra
+        assert goi == ["python -m pytest %s -q --tb=short --timeout=60 %s --junit-xml=%s/junit.xml"
+                       % (" ".join(ds), wf_chon_ca["env"]["BO_QUA"], temp)], goi
+
+    def test_chay_doc_danh_sach_da_kiem_khong_doc_input(self, wf_chon_ca, tmp_path):
+        """`CA` có mặt và khác danh sách ⇒ pytest vẫn chỉ nhận danh sách ĐÃ KIỂM."""
+        rc, ra, goi, temp = _chay_buoc_chon_ca(
+            wf_chon_ca, ID_CHAY, tmp_path, ca="tests/api/test_b.py $(touch${IFS}PWNED)",
+            ca_txt=["tests/unit/test_a.py"], so_ca=1, stub_junit=_junit("pass"))
+        assert rc == 0, ra
+        assert goi == ["python -m pytest tests/unit/test_a.py -q --tb=short --timeout=60 "
+                       "%s --junit-xml=%s/junit.xml" % (wf_chon_ca["env"]["BO_QUA"], temp)], goi
+        assert not list(tmp_path.rglob("PWNED*")), "tải chèn lệnh ĐÃ THỰC THI"
+
+    def test_chay_rc_khac_0_thi_do(self, wf_chon_ca, tmp_path):
+        """JUnit sạch, chỉ rc ≠ 0 — cô lập phép xét rc (nuốt rc ⇒ ca này xanh)."""
+        rc, ra, _, _ = _chay_buoc_chon_ca(
+            wf_chon_ca, ID_CHAY, tmp_path, ca_txt=["tests/unit/test_a.py"], so_ca=2,
+            stub_junit=_junit("pass", "pass"), stub_rc=1)
+        assert rc != 0, "pytest rc=1 mà bước xanh:\n%s" % ra
+
+    def test_chay_khong_co_junit_thi_do(self, wf_chon_ca, tmp_path):
+        rc, ra, _, _ = _chay_buoc_chon_ca(
+            wf_chon_ca, ID_CHAY, tmp_path, ca_txt=["tests/unit/test_a.py"], so_ca=2)
+        assert rc != 0, "không có JUnit mà bước xanh:\n%s" % ra
+
+    def test_chay_0_ca_thi_do(self, wf_chon_ca, tmp_path):
+        """`so_ca` 0 khớp JUnit 0 — chỉ phép `chạy == 0` đứng giữa ca này và xanh."""
+        rc, ra, _, _ = _chay_buoc_chon_ca(
+            wf_chon_ca, ID_CHAY, tmp_path, ca_txt=["tests/unit/test_a.py"], so_ca=0,
+            stub_junit=_junit())
+        assert rc != 0, "chạy 0 ca mà bước xanh:\n%s" % ra
+
+    def test_chay_so_ca_lech_collect_thi_do(self, wf_chon_ca, tmp_path):
+        """Phiên dừng giữa chừng: collect 3, JUnit chỉ ghi 2 (đều đạt), rc 0."""
+        rc, ra, _, _ = _chay_buoc_chon_ca(
+            wf_chon_ca, ID_CHAY, tmp_path, ca_txt=["tests/unit/test_a.py"], so_ca=3,
+            stub_junit=_junit("pass", "pass"))
+        assert rc != 0, "collect 3, chạy 2 mà bước xanh:\n%s" % ra
+
+    @pytest.mark.parametrize("hong", ["fail", "error"])
+    def test_chay_junit_co_ca_do_ma_rc_0_thi_do(self, wf_chon_ca, hong, tmp_path):
+        rc, ra, _, _ = _chay_buoc_chon_ca(
+            wf_chon_ca, ID_CHAY, tmp_path, ca_txt=["tests/unit/test_a.py"], so_ca=2,
+            stub_junit=_junit("pass", hong))
+        assert rc != 0, "JUnit có ca %s mà bước xanh:\n%s" % (hong, ra)
+
+    def test_chay_skip_canh_bao_khong_do(self, wf_chon_ca, tmp_path):
+        """Skip không làm đỏ (nhiều tệp skip có điều kiện), nhưng phải NÓI RA."""
+        rc, ra, _, _ = _chay_buoc_chon_ca(
+            wf_chon_ca, ID_CHAY, tmp_path, ca_txt=["tests/unit/test_a.py"], so_ca=2,
+            stub_junit=_junit("pass", "skip"))
+        assert rc == 0, ra
+        assert "::warning::" in ra and "skipped 1" in ra, ra
+
+    @pytest.mark.parametrize("so_ca", [None, "", "abc"], ids=["vang-mat", "rong", "chu"])
+    def test_chay_so_ca_hong_thi_do(self, wf_chon_ca, so_ca, tmp_path):
+        rc, ra, _, _ = _chay_buoc_chon_ca(
+            wf_chon_ca, ID_CHAY, tmp_path, ca_txt=["tests/unit/test_a.py"], so_ca=so_ca,
+            stub_junit=_junit("pass"))
+        assert rc != 0, "số ca collect %r mà bước xanh:\n%s" % (so_ca, ra)
