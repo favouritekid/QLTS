@@ -34,6 +34,11 @@ from sqlalchemy.orm import selectinload
 from app import models
 from app.database import AsyncSessionLocal
 from app.repositories import AdmissionRepository
+from app.utils.exceptions import (
+    PROFILE_VERSION_CONFLICT_ACTION_DETAIL,
+    ConflictError,
+    ProfileVersionConflict,
+)
 
 from tests.integration.test_admission_state_transitions import (
     create_test_lead,
@@ -46,6 +51,23 @@ pytestmark = pytest.mark.asyncio
 
 CITIZEN_ID = "001202999999"  # last 4: 9999
 LAST_DIGITS = "9999"
+
+
+def _assert_loi_xung_dot_phien_ban(exc: BaseException, current_version: int) -> None:
+    """Owner 22-11 (``QUYET-DINH-OWNER-THCS-CAU-409``): lệch ``version`` ⇒ ĐÚNG lớp ``ProfileVersionConflict`` (lớp con
+    ``ConflictError``, 409, mã ``PROFILE_VERSION_CONFLICT``, câu thao tác chung) thay cho ``ConflictError`` câu tiếng Anh.
+
+    So KHÍT lớp (như phép so tên lớp cũ) — một lỗi trạng thái / lỗi 409 khác không lọt. ``current_version`` là số phiên bản
+    đọc SAU khoá + làm tươi: số cũ trong bộ nhớ (không làm tươi) sẽ không khớp."""
+    assert type(exc) is ProfileVersionConflict, (
+        f"Lệch version phải ra ProfileVersionConflict; nhận {type(exc).__name__}: {exc}"
+    )
+    assert isinstance(exc, ConflictError) and exc.status_code == 409
+    assert exc.error_code == "PROFILE_VERSION_CONFLICT"
+    assert exc.detail == PROFILE_VERSION_CONFLICT_ACTION_DETAIL
+    assert exc.current_version == current_version, (
+        f"current_version phải là số đọc sau khoá ({current_version}); nhận {exc.current_version}"
+    )
 
 
 async def _seed_approved_profile_with_token(unit_id: int) -> tuple[int, str, int]:
@@ -278,10 +300,13 @@ class TestConfirmVsOverride:
         assert ok[0][1] in {"confirmed", "overridden"}, (
             f"Winner must land on a target state; got {ok[0][1]}"
         )
-        # Loser surfaces BadRequest (state changed) or ConflictError
-        # (version stale, override reads new version after lock).
-        assert err[0][1] in {"BadRequest", "ConflictError"}, (
-            f"Loser must surface BadRequest/ConflictError; got {err[0][1]}"
+        # Loser surfaces BadRequest (state changed) or ProfileVersionConflict
+        # (version stale, override reads new version after lock). Owner 22-11
+        # (QUYET-DINH-OWNER-THCS-CAU-409): lệch version nay là lớp con
+        # ``ProfileVersionConflict`` (mã PROFILE_VERSION_CONFLICT) thay cho
+        # ``ConflictError`` trần — so khít tên lớp mới, không nới thành "mọi 409".
+        assert err[0][1] in {"BadRequest", "ProfileVersionConflict"}, (
+            f"Loser must surface BadRequest/ProfileVersionConflict; got {err[0][1]}"
         )
 
         final_status, final_version = await _final_state(profile_id)
@@ -357,7 +382,7 @@ class TestConfirmThenFinalize:
     """Confirm winner moves profile to ``confirmed``; a follow-up
     finalize must take the lock cleanly, see version+status updated,
     and either succeed (with the bumped version) or surface
-    ConflictError (with stale version) — never silently lose state.
+    ProfileVersionConflict (with stale version) — never silently lose state.
     """
 
     async def test_finalize_after_confirm_serialises_via_profile_lock(
@@ -386,8 +411,8 @@ class TestConfirmThenFinalize:
         assert confirmed_status == "confirmed"
         assert confirmed_version == version + 1
 
-        # Phase 2: finalize with stale version → ConflictError under
-        # profile lock.
+        # Phase 2: finalize with stale version → ProfileVersionConflict under
+        # profile lock (owner 22-11: lớp con ConflictError, mã riêng).
         async with AsyncSessionLocal() as session:
             stmt = (
                 select(models.AdmissionProfile)
@@ -403,7 +428,7 @@ class TestConfirmThenFinalize:
                     admin=admin,
                     data={"version": version},  # stale
                 )
-            assert type(exc_info.value).__name__ == "ConflictError"
+            _assert_loi_xung_dot_phien_ban(exc_info.value, confirmed_version)
             await session.rollback()
 
         # Phase 3: finalize with fresh version succeeds; profile-row
@@ -528,9 +553,11 @@ class TestStaleInstanceRefresh:
                         "bypass_rules": [],
                     },
                 )
+            # Owner 22-11: lệch version nay là ``ProfileVersionConflict``
+            # (lớp con ConflictError) — so khít tên lớp mới.
             assert type(exc_info.value).__name__ in {
                 "BadRequest",
-                "ConflictError",
+                "ProfileVersionConflict",
             }, (
                 f"Service must reject stale-instance override after "
                 f"lock+refresh; got {type(exc_info.value).__name__}"
@@ -555,7 +582,7 @@ class TestStaleInstanceRefresh:
         ``expire_on_commit=False``). Session B magic-link confirms +
         commits. Session A calls ``finalize_profile`` with the stale
         version — helper's lock+refresh must surface the version
-        drift as ConflictError, not silently mutate."""
+        drift as ProfileVersionConflict, not silently mutate."""
         from app.services import admission_service
 
         unit_id = seed_lead_dependencies["unit_id"]
@@ -593,7 +620,8 @@ class TestStaleInstanceRefresh:
             # Session A — finalize with stale version against an
             # already-confirmed profile. Helper repopulates → service
             # sees version+1 (stale claim of N fails) and raises
-            # ConflictError.
+            # ProfileVersionConflict carrying current_version = N+1 (the
+            # post-lock value — a stale in-memory N would not match).
             with pytest.raises(Exception) as exc_info:
                 await admission_service.finalize_profile(
                     db=session_a,
@@ -601,10 +629,7 @@ class TestStaleInstanceRefresh:
                     admin=admin,
                     data={"version": version},  # stale
                 )
-            assert type(exc_info.value).__name__ == "ConflictError", (
-                f"Stale finalize must surface ConflictError after "
-                f"lock+refresh; got {type(exc_info.value).__name__}"
-            )
+            _assert_loi_xung_dot_phien_ban(exc_info.value, version + 1)
             await session_a.rollback()
 
         final_status, final_version = await _final_state(profile_id)

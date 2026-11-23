@@ -1472,6 +1472,9 @@ jobs:
           # ⇒ cổng độ nhìn thấy đòi phân loại.
           # Owner 22-11 (câu 409): lỗi xung đột phiên bản hồ sơ dùng chung `PROFILE_VERSION_CONFLICT` — ca hợp đồng (AST) +
           # `tests/api/test_qa_wave7_notif_and_race.py` (tệp cũ, ngoài mọi tier: sửa phép khoá câu tiếng Anh ⇒ phải phân loại).
+          # CI 23-11 (N5): 3 tệp cũ khác ngoài mọi tier cũng khoá tên lớp `ConflictError` / chữ "version" của câu cũ
+          # (đỏ ở nightly, không lát PR nào chạy) — sửa sang hợp đồng mới ⇒ phân loại WHOLE vào đây. Hai tệp cùng đợt
+          # sửa đã có lát riêng: `test_admission_confirm_lock.py` (Tier 2a), `test_admission_state_transitions.py` (Tier 4s).
           - tier: Tier 5k — GĐ2 L3 danh mục THCS + công cụ ghép
             tests: >-
               tests/unit/test_vn_school_thcs_noi_bo_ddl.py
@@ -1485,6 +1488,9 @@ jobs:
               tests/integration/test_thcs_mapping_migration.py
               tests/unit/test_profile_version_conflict_contract.py
               tests/api/test_qa_wave7_notif_and_race.py
+              tests/integration/test_admission_version_lock_required.py
+              tests/integration/test_race_condition_probe.py
+              tests/unit/test_priority_override_service.py
 
     env:
       APP_ENV: test

@@ -216,9 +216,12 @@ class TestAdmissionServiceConcurrency:
             f"approve+reject; got {results}"
         )
         # The failing call must be a known, policy-correct rejection.
-        assert err[0][1] in {"BadRequest", "ConflictError"}, (
+        # Owner 22-11 (QUYET-DINH-OWNER-THCS-CAU-409): lệch version nay là
+        # ``ProfileVersionConflict`` (lớp con ConflictError, mã
+        # PROFILE_VERSION_CONFLICT) — so khít tên lớp mới như so tên cũ.
+        assert err[0][1] in {"BadRequest", "ProfileVersionConflict"}, (
             f"Failing call should surface BadRequest (state) or "
-            f"ConflictError (version); got {err[0][1]}"
+            f"ProfileVersionConflict (version); got {err[0][1]}"
         )
 
         final_version, final_status = await _snapshot_version_and_status(profile.id)
