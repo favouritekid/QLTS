@@ -15,6 +15,30 @@ tăng dần) TRƯỚC khi chạm dòng học vụ:
 Hệ quả: dấu chỉ tiêu (``admission_quota_table_service.quota_fingerprint_of``) đọc SAU khoá năm không thể bị một lệnh tạo / sửa /
 dời CHƯA commit làm sai — lệnh ấy hoặc đã commit xong trước (ta thấy giá trị mới), hoặc phải chờ ta commit (giá trị của họ nằm SAU).
 
+GĐ2-B — LẦN XÉT NHÁP (đặc tả GĐ2-B bản 4 §6.8; hợp đồng API bản 4 §2, §6) — ba nơi gọi THÊM, đều lấy khoá năm của lần xét khi giao
+dịch CHƯA giữ khoá dòng nào, rồi mới tới DÒNG LẦN XÉT (``admission_review_session`` ``FOR UPDATE``). E1 ĐỘC QUYỀN; E4 / E5 CHIA SẺ
+(quyết định owner 23-11 ``QUYET-DINH-OWNER-GD2B-KHOA-NAM-E4-E5-CHIA-SE``):
+
+* tạo lần xét (E1) — ``admission_review_service.create_session``: khoá năm ĐỘC QUYỀN → đọc ``seq_no`` lớn nhất → chèn (hai lệnh
+  tạo cùng năm nối tiếp, không vấp UNIQUE);
+* lưu điểm sàn (E4) — ``admission_review_service.replace_floors``: khoá năm CHIA SẺ (:func:`lock_review_years_shared`) → dòng lần
+  xét → đọc năm / cờ xoá của học vụ (không khoá dòng) → xoá / chèn sàn;
+* huỷ lần xét nháp (E5) — ``admission_review_service.cancel_session``: khoá năm CHIA SẺ → dòng lần xét → xoá mọi sàn →
+  ``cancelled``.
+
+E4 / E5 KHÔNG đổi tập học vụ của năm; chúng giữ khoá năm vì ``PATCH`` dời năm học vụ (``update_academic_info`` — năm cũ + mới,
+ĐỘC QUYỀN) ĐỌC bảng sàn (``admission_quota_table_service.check_academic_info_move_allowed``, 409 ``ACADEMIC_INFO_IN_REVIEW_FLOOR``)
+dưới CÙNG khoá: sàn trỏ học vụ bằng khoá ngoại ghép (học vụ, năm) ⇒ mọi sàn của học vụ thuộc năm CŨ mà ``PATCH`` đang giữ ⇒ lưu sàn
+và dời năm luôn nối tiếp nhau (chia sẻ ↔ độc quyền xung đột); bên đến sau nhận lỗi NGHIỆP VỤ (``review_floor_bad_member`` /
+``ACADEMIC_INFO_IN_REVIEW_FLOOR``), không bao giờ lỗi khoá ngoại (P3). Năm / cờ xoá học vụ mà E4 đọc đứng yên vì mọi đường đổi
+chúng lấy bản ĐỘC QUYỀN (đoạn đầu). Chế độ CHIA SẺ đủ cho cả hai việc ấy và KHÔNG chặn người đọc chia sẻ cùng năm (đoạn "NGƯỜI ĐỌC
+CHIA SẺ" bên dưới; F230: bản không chờ trả 409 "thử lại" suốt lúc có người GIỮ hoặc XẾP HÀNG chờ bản độc quyền — E4 / E5 độc quyền
+từng gây đúng điều ấy, và một E4 xếp hàng sau một lô dài làm mọi người đọc mới xếp hàng theo). Hai E4 / E5 CÙNG lần xét nối tiếp ở
+dòng lần xét ``FOR UPDATE`` (người sau thấy ``version`` mới ⇒ 409 ``REVIEW_SESSION_STALE``); hai lần xét KHÁC nhau cùng năm chạy
+song song (sàn là các dòng độc lập). E4 / E5 chỉ khoá MỘT năm và không bao giờ nâng lên độc quyền trong cùng giao dịch. Chạy kiểm
+hồ sơ (E6 — ``admission_review_run_service.run_evaluate``) KHÔNG lấy khoá năm: nó giữ dòng lần xét (bước ghi) mà không bao giờ chờ
+khoá năm / dòng học vụ / bảng sau đó ⇒ không vòng chờ với E4 / E5 (đường lấy dòng lần xét SAU khoá năm).
+
 Không đường nào được khoá dòng học vụ TRƯỚC rồi mới lấy khoá năm (sẽ tạo vòng chờ với đường tạo / sửa / PUT): các nơi gọi đều lấy
 khoá năm ngay sau kiểm quyền, khi giao dịch chưa giữ khoá dòng học vụ nào. (Trước luật C, xoá mềm không lấy khoá năm vì không đổi
 ``(id, chỉ tiêu)``; từ luật C cờ xoá mềm vào dấu và bị chặn khi bảng đã khoá ⇒ lấy khoá năm như sửa chỉ tiêu.)
@@ -23,7 +47,7 @@ THỨ TỰ KHOÁ TOÀN HỆ (Codex lượt 3 + lượt 4, owner chốt 20-11): k
 ở tạo loại hình, bật lại loại hình (ngừng → hoạt động) và xoá ngành, một dòng, ``organization_service._lock_major_program_row``)
 → khoá LOẠI HÌNH (dòng ``program_offering`` ``FOR NO KEY UPDATE`` — chỉ
 ở tạo / khôi phục học vụ (``organization_service._lock_offering_row``, một dòng) và dây chuyền xoá loại hình / xoá ngành (mọi dòng
-của tập, id TĂNG DẦN, MỘT câu)) → khoá NĂM (tăng dần) → dòng học vụ → dòng bảng chỉ tiêu. Không vòng chờ: (a) đường lấy khoá loại
+của tập, id TĂNG DẦN, MỘT câu)) → khoá NĂM (tăng dần) → [GĐ2-B] dòng LẦN XÉT → dòng học vụ → dòng bảng chỉ tiêu. Không vòng chờ: (a) đường lấy khoá loại
 hình lấy các dòng loại hình TRƯỚC mọi khoá năm, theo id tăng dần trong một câu — chờ dòng loại hình thì chỉ đang giữ dòng loại hình
 id NHỎ hơn (mọi đường khác lấy cùng chiều hoặc chỉ một dòng); (b) các đường
 chỉ lấy khoá năm (PUT / khoá / mở khoá bảng, sửa / dời / xoá mềm học vụ) không bao giờ chờ dòng loại hình ở chế độ xung đột — chèn /

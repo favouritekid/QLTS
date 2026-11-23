@@ -615,17 +615,24 @@ async def test_q5_nguyen_vong_hoc_vu_nam_khac_thi_dung_khong_sang_nv_sau(nen):
     assert dong.considered is None
 
 
+#: Mã GIẢ 9 chữ số (CMND — định dạng J1 dòng 28, ``ma_gia``) cho ca Q7. Cột ``admission_profile.citizen_id`` là ``varchar(12)`` (model
+#: + migration gốc ``a4b5c6d7e8f9`` — khớp nhau) ⇒ 12 chữ số chèn thêm khoảng trắng VƯỢT cột, CSDL từ chối trước khi tới phép so (CI
+#: 23-11: ``value too long for type character varying(12)``). 9 chữ số + 1–2 ký tự trắng (≤ 12 ký tự) là giá trị cột giữ được thật.
+_CMND_Q7 = (ma_gia(961, 9), ma_gia(962, 9))
+
+
 @pytest.mark.parametrize(
     "cccd_nay, cccd_truoc, co_a13",
     [
-        ("0999 9903 0001", "099999030001", True),
-        ("099999030002", "0999\t9903\u00a00002", True),
+        (_CMND_Q7[0][:5] + " " + _CMND_Q7[0][5:], _CMND_Q7[0], True),
+        (_CMND_Q7[1], _CMND_Q7[1][:5] + "\t" + _CMND_Q7[1][5:7] + "\u00a0" + _CMND_Q7[1][7:], True),
         ("   ", " \t ", False),
     ],
     ids=["khoang_trang_phia_nay", "tab_va_nbsp_phia_truoc", "rong_sau_khi_xoa_khong_so"],
 )
 async def test_q7_a13_so_cccd_sau_khi_xoa_moi_khoang_trang(nen, cccd_nay, cccd_truoc, co_a13):
     """Owner Q7 22-11 — khoá so CCCD của A13: xoá MỌI khoảng trắng ở CẢ HAI phía; rỗng sau khi xoá ⇒ không ghép."""
+    assert max(len(cccd_nay), len(cccd_truoc)) <= 12  # tiền đề dữ liệu kiểm: vừa cột varchar(12)
     d = nen
     async with csdl.engine.begin() as conn:
         pid = await _ho_so_kieu(conn, d, 960, "tc_khong_hl")
@@ -650,12 +657,18 @@ def test_k2_menh_de_chon_khoan_hk1_chep_nguyen_chu_ban_in():
     assert load_repo.SQL_HK1_TUITION_ORDER in SQL_PRINT_FIGURES.text
 
 
-@pytest.mark.parametrize("moi_huy", [True, False], ids=["khoan_moi_da_huy_chon_khoan_cu", "khoan_moi_chua_huy_chon_khoan_moi"])
+@pytest.mark.parametrize("moi_huy", [True, False], ids=["khoan_moi_da_huy_chon_khoan_cu", "khoan_cu_da_huy_chon_khoan_moi"])
 async def test_k2_chon_khoan_hk1_chua_huy_id_lon_nhat(nen, moi_huy):
+    """K2: khoản HK1 = khoản ``tuition`` HK1 CHƯA huỷ, ``id`` lớn nhất. Partial UNIQUE ``uq_fee_profile_type_semester_tuition`` (hồ sơ +
+    loại + HK, TRỪ khoản huỷ — model ``Fee`` + migration ``feecancel20260628001``) cho phép TỐI ĐA MỘT khoản HK1 chưa huỷ mỗi hồ sơ ⇒
+    ca "hai khoản HK1 cùng chưa huỷ" KHÔNG dựng được trên CSDL (CI 23-11: ``UniqueViolation``). Ca thứ hai vì thế HUỶ khoản cũ trước
+    rồi chèn khoản mới chưa huỷ: bản bỏ lọc huỷ + sắp ``id`` TĂNG chọn sai khoản cũ ⇒ đỏ."""
     d = nen
     async with csdl.engine.begin() as conn:
         pid = await _ho_so_kieu(conn, d, 900, "xep_nam_truoc")
         cu = (await _x(conn, "SELECT id FROM fee WHERE admission_profile_id = :p", p=pid)).scalar_one()
+        if not moi_huy:
+            await _x(conn, "UPDATE fee SET status = 'cancelled' WHERE id = :f", f=cu)
         moi = await chen(conn, "fee", admission_profile_id=pid, academic_year=NAM, base_amount="1000", final_amount="1000",
                          calculated_at=datetime(2026, 10, 1, tzinfo=timezone.utc),
                          created_at=datetime(2026, 10, 1, tzinfo=timezone.utc),

@@ -186,18 +186,72 @@ def test_snapshot_freeze_pattern_matches_bonus_rule_snapshot() -> None:
     )
 
 
+def _duong_da_dung(option) -> list:
+    """Mọi tầng của MỘT tuỳ chọn nạp ĐÃ DỰNG (``Load.context`` của SQLAlchemy — mỗi phần tử một tầng, mang đường ĐẦY ĐỦ từ gốc):
+    ``((lớp, tên quan hệ), …)`` kèm khoá chiến lược nạp. Đọc từ đối tượng thật, không từ văn bản nguồn — cách viết chuỗi đổi (bản
+    viết tay → dữ liệu ``t6_profile_load_paths``, GĐ2-B 22-11) không làm phép kiểm đỏ oan, còn gỡ / lọc / đổi chiến lược thì đỏ."""
+    return [
+        (tuple((lop, ten) for lop, ten in tang.path.serialize() if ten is not None), tang.strategy)
+        for tang in option.context
+    ]
+
+
 def test_publish_result_router_eager_loads_admission_round() -> None:
-    """Router publish-result nạp chuỗi T6 qua MỘT nguồn ``t6_profile_load_options()``, và chuỗi ấy có
-    ``AdmissionPath.admission_round`` — T6 so năm đợt với năm hồ sơ (lệch ⇒ ``PriorityYearMismatch``)."""
+    """Router publish-result nạp chuỗi T6 qua MỘT nguồn ``t6_profile_load_options()``, và chuỗi ấy NẠP SẴN (``selectinload``)
+    ``AdmissionProfile.choices → AdmissionProfileChoice.admission_path → AdmissionPath.admission_round`` — T6 so năm đợt với năm hồ
+    sơ (lệch ⇒ ``PriorityYearMismatch``); thiếu ⇒ nạp lười trong async ⇒ lỗi lúc công bố.
+
+    Bản cũ cắt văn bản nguồn từ ``def t6_profile_load_options()`` và tìm chữ ``AdmissionPath.admission_round``: GĐ2-B (``4f9061c9``)
+    chuyển chuỗi sang dữ liệu ``t6_profile_load_paths()`` (một nguồn với bộ nạp theo lô) viết ``path.admission_round`` ⇒ đỏ oan dù
+    chuỗi vẫn nạp. Nay soi TUỲ CHỌN THẬT mà hàm trả về (vế dữ liệu) + lời gọi THẬT trong route (vế AST — chữ trong chú thích không
+    tính)."""
+    import ast
+
+    from app import models
+    from app.services.admission_choice_engine_service import t6_profile_load_options
+
     router_src = (
         _ENGINE_SRC.parent.parent
         / "routers"
         / "admissions_v2.py"
     ).read_text(encoding="utf-8")
-    assert "choice_engine.t6_profile_load_options()" in router_src
-    src = _ENGINE_SRC.read_text(encoding="utf-8")
-    ham = src[src.index("def t6_profile_load_options()"):src.index("# PR-1 (2026-05-28) — Capacity check helper")]
-    assert "AdmissionPath.admission_round" in ham
+    cay = ast.parse(router_src)
+    assert any(
+        isinstance(n, ast.ImportFrom)
+        and n.module == "app.services"
+        and any(a.name == "admission_choice_engine_service" and a.asname == "choice_engine" for a in n.names)
+        for n in cay.body
+    ), "router không còn nạp engine dưới tên ``choice_engine``"
+    route = next(
+        n for n in ast.walk(cay)
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == "publish_admission_result"
+    )
+
+    def _la_loi_goi_t6(nut) -> bool:
+        return (
+            isinstance(nut, ast.Starred)
+            and isinstance(nut.value, ast.Call)
+            and isinstance(nut.value.func, ast.Attribute)
+            and nut.value.func.attr == "t6_profile_load_options"
+            and isinstance(nut.value.func.value, ast.Name)
+            and nut.value.func.value.id == "choice_engine"
+        )
+
+    assert any(
+        isinstance(n, ast.Call)
+        and isinstance(n.func, ast.Attribute)
+        and n.func.attr == "options"
+        and any(_la_loi_goi_t6(a) for a in n.args)
+        for n in ast.walk(route)
+    ), "route publish-result không nạp hồ sơ bằng ``.options(*choice_engine.t6_profile_load_options())``"
+
+    can = (
+        (models.AdmissionProfile, "choices"),
+        (models.AdmissionProfileChoice, "admission_path"),
+        (models.AdmissionPath, "admission_round"),
+    )
+    da_dung = [tang for option in t6_profile_load_options() for tang in _duong_da_dung(option)]
+    assert (can, (("lazy", "selectin"),)) in da_dung, da_dung
 
 
 def test_engine_nam_dot_lech_thi_dung() -> None:

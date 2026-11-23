@@ -1476,6 +1476,10 @@ jobs:
           # L3 (owner 22-11): `test_l3_truong_thcs_db.py` — Admin thêm trường THCS + KV qua `VnSchoolService` ⇒ hồ sơ trung cấp sau
           # THCS tính ra KV, hai đường (từng hồ sơ / lô của bộ nạp này) bằng nhau trên CSDL thật; cùng lát với tệp vn_school ở trên.
           # Ca đơn vị `test_l3_kv_cho_xac_minh.py` ở Tier 5 cạnh `test_priority_kv_lien_cap_g5.py`.
+          # Đợt 2 L3a + L4 (22-11): 9 API lần xét nháp (E1–E9) — hợp đồng không CSDL (ghim route / trường / quyền / điểm sàn / một
+          # cổng), API lần xét (E1–E5, quyền, đóng băng, PATCH dời năm có sàn), hai phiên khoá năm (lưu sàn ↔ dời năm cả hai thứ tự,
+          # huỷ ↔ dời năm, tạo ↔ tạo, lưu ↔ lưu), chạy kiểm qua API thật (E6–E9, BT45). Ngoài mọi tier ⇒ check vẫn xanh mà không
+          # chạy (CLAUDE.md §11). `gd2b_lan_xet_tro_giup.py` là trợ giúp (không `test_`), import từ `test_gd2b_bt35_toan_luot_db.py`.
           - tier: Tier 5k — GĐ2-B lần xét nháp (đợt 1 + đợt 2)
             tests: >-
               tests/unit/test_gd2b_ddl_lockin.py
@@ -1491,6 +1495,10 @@ jobs:
               tests/api/test_gd2b_kv_truong_chong_khoang_api.py
               tests/unit/test_vn_school_admin_service.py
               tests/integration/test_l3_truong_thcs_db.py
+              tests/unit/test_gd2b_lan_xet_hop_dong.py
+              tests/api/test_gd2b_lan_xet_api.py
+              tests/api/test_gd2b_lan_xet_hai_phien_api.py
+              tests/api/test_gd2b_chay_kiem_api.py
 
     env:
       APP_ENV: test

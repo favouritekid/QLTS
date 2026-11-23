@@ -191,6 +191,12 @@ ADMISSION_WRITE_ROUTES: Final[tuple[tuple[str, str], ...]] = (
     ("PUT", "/api/admission-config/quota-tables/{academic_year}"),
     ("POST", "/api/admission-config/quota-tables/{academic_year}/lock"),
     ("POST", "/api/admission-config/quota-tables/{academic_year}/unlock"),
+    # GĐ2-B (hợp đồng API bản 4 §1.7, đặc tả §9.3): 4 route ghi của lần xét nháp — tạo, lưu điểm sàn, huỷ, chạy kiểm hồ sơ. Rà tay
+    # 22-11 từ router ``admission_review`` (route đọc E2, E3, E7, E8, E9 không bị đóng băng).
+    ("POST", "/api/admission-config/review-sessions"),
+    ("PUT", "/api/admission-config/review-sessions/{session_id}/floors"),
+    ("POST", "/api/admission-config/review-sessions/{session_id}/cancel"),
+    ("POST", "/api/admission-config/review-sessions/{session_id}/runs"),
     ("POST", "/api/admission-config/criteria"),
     ("DELETE", "/api/admission-config/criteria/{criteria_id}"),
     ("PUT", "/api/admission-config/criteria/{criteria_id}"),

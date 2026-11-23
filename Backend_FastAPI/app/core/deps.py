@@ -4498,3 +4498,23 @@ async def require_quota_table_admin(
     if current_user.role != UserRole.ADMIN:
         raise PermissionDeniedError(detail="Chỉ Admin được xem / sửa / khoá bảng chỉ tiêu năm.")
     return current_user
+
+
+# =====================================================================================================================
+# GĐ2-B — lần xét nháp, điểm sàn, chạy kiểm hồ sơ, xem run / dòng (hợp đồng API GĐ2-B bản 4 §1.2; đặc tả bản 4 §8;
+# QĐB:26 — CHỈ Admin ở GĐ2-B). CHỈ THÊM. Tầng chủ sở hữu VAI = Casbin (Admin có dòng wildcard ``/*``; migration GĐ2-B KHÔNG
+# thêm dòng cho vai khác). Dependency dưới đây là LỚP PHỤ fail-closed (khuôn ``require_quota_table_admin``): vai khác lọt Casbin
+# (cấu hình sai) vẫn 403. Kiểm vai TRƯỚC khi đọc bất cứ gì của lần xét (biên bản K3 21-11: 404 "lần xét không có" ở dịch vụ, SAU
+# 422 / 400 trùng học vụ). GĐ2-C mở thêm Ban thư ký cho E3, E6–E9 — chỉ NỚI quyền ở đây; khi đó người có vai mà không có quyền
+# gán nhận 404 (khuôn ``require_cross_reviewer``).
+# =====================================================================================================================
+#: Câu 403 của lớp phụ — không dữ liệu cá nhân.
+REVIEW_ADMIN_ONLY_DETAIL = "Chỉ Admin được dùng lần xét tuyển (lần xét nháp, điểm sàn, kiểm hồ sơ) ở giai đoạn này."
+
+
+async def require_review_admin(
+    current_user: models.User = Depends(check_permission),
+) -> models.User:
+    if current_user.role != UserRole.ADMIN:
+        raise PermissionDeniedError(detail=REVIEW_ADMIN_ONLY_DETAIL)
+    return current_user
