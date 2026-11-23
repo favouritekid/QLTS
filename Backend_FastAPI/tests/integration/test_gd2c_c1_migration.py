@@ -142,11 +142,13 @@ async def csdl_truoc():
 async def _hai_nguoi(k):
     ra = []
     for ten, vai in (("gd2c_mig_u", "officer"), ("gd2c_mig_a", "admin")):
+        # Mỗi tham số MỘT chỗ dùng: ``$1`` vừa là ``username`` (varchar) vừa nằm trong ``$1 || '…'`` (text) ⇒ PostgreSQL
+        # suy hai kiểu cho cùng tham số ⇒ AmbiguousParameterError (CI 23-11 N4). Email tính sẵn bên Python.
         ra.append(
             await k.fetchval(
                 "INSERT INTO \"user\" (username, email, password_hash, role, total_lead_score) "
-                "VALUES ($1, $1 || '@example.com', 'x', $2, 0) RETURNING id",
-                ten, vai,
+                "VALUES ($1, $2, 'x', $3, 0) RETURNING id",
+                ten, ten + "@example.com", vai,
             )
         )
     return ra

@@ -66,3 +66,31 @@ export function isAuthStateUnavailable(
     AUTH_STATE_UNAVAILABLE_ERROR_CODE
   );
 }
+
+/**
+ * Một lần lưu tài khoản (Admin sửa người dùng) vừa ĐỔI email vừa khoá tài
+ * khoản / đổi vai làm mất quyền (duyệt chéo, hoặc — GĐ2-C C1 — Thư ký Hội
+ * đồng) ⇒ máy chủ từ chối 409 (owner 23-11, PR-B lượt 8 — "chặn gộp, làm 2
+ * bước"; owner 23-11 C1 "Giữ chặn mọi ca thu hồi"). `detail` của máy chủ nói
+ * phải làm gì; giao diện hiện NGUYÊN câu ấy, không tự viết lại. Câu hiện tại:
+ * quyết định owner 23-11
+ * `gd2/gd2c/c1/QUYET-DINH-OWNER-C1-CHAN-GOP-VA-CAU-409-2026-11-23.md` (khoá ở
+ * test API `test_gd2c_c1_thu_ky_chan_gop.py`); tiêu đề "Cần lưu làm hai lần"
+ * giữ nguyên (`useAdminUpdateUser`).
+ *
+ * Backend source: `CombinedKeyChangeAndRevokeError` in
+ * `Backend_FastAPI/app/utils/exceptions.py`.
+ */
+export const COMBINED_KEY_CHANGE_AND_REVOKE_ERROR_CODE = "COMBINED_KEY_CHANGE_AND_REVOKE";
+
+/** `detail` của 409 chặn lưu gộp, hoặc null cho mọi phản hồi khác. */
+export function combinedKeyChangeAndRevokeDetail(
+  response: { status?: number; data?: unknown } | undefined,
+): string | null {
+  if (response?.status !== 409) return null;
+  const data = response.data;
+  if (typeof data !== "object" || data === null) return null;
+  const { error_code: code, detail } = data as { error_code?: unknown; detail?: unknown };
+  if (code !== COMBINED_KEY_CHANGE_AND_REVOKE_ERROR_CODE) return null;
+  return typeof detail === "string" && detail ? detail : null;
+}

@@ -2,6 +2,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api/client";
 import { API_ENDPOINTS } from "@/lib/api/endpoints";
+import { combinedKeyChangeAndRevokeDetail } from "@/lib/api/error-codes";
 import { toast } from "sonner";
 import type {
   User,
@@ -205,6 +206,13 @@ export function useAdminUpdateUser(userId: number) {
       queryClient.invalidateQueries({ queryKey: ["admin", "statistics"], refetchType: "active" });
     },
     onError: (error) => {
+      // PR-B lượt 8 (owner 23-11): lưu gộp "đổi email + khoá / hạ vai" bị máy chủ chặn 409 — hiện NGUYÊN câu máy chủ.
+      const chanGop = combinedKeyChangeAndRevokeDetail(error.response);
+      if (chanGop) {
+        // Tiêu đề: owner duyệt nguyên văn 23-11; mô tả là câu của máy chủ.
+        toast.error("Cần lưu làm hai lần", { description: chanGop, duration: 10000 });
+        return;
+      }
       const message = error.response?.data?.detail || "Không thể cập nhật người dùng";
       toast.error(typeof message === "string" ? message : "Không thể cập nhật người dùng");
     },

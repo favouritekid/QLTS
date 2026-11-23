@@ -542,7 +542,22 @@ async def lock_user_key_share(db: AsyncSession, user_id: int) -> Optional[Any]:
     PR-B: duyệt chéo (lẻ / xem trước / §5.4) khoá người BẰNG khoá này, không ``FOR SHARE``: ``FOR KEY SHARE`` không xung
     đột ``UPDATE "user"`` (đổi vai / khoá Q4 giữ ``FOR NO KEY UPDATE`` rồi chờ dòng quyền; giao lead giữ lead ``FOR UPDATE``
     rồi ``UPDATE`` người được giao) ⇒ không vòng chờ. Đổi vai / khoá xếp hàng sau duyệt chéo ở DÒNG QUYỀN; vai đọc ở đây
-    được kiểm lại bằng vị từ chung (``cross_grant_authorizes``) trên dòng quyền đang giữ ``FOR SHARE``."""
+    được kiểm lại bằng vị từ chung (``cross_grant_authorizes``) trên dòng quyền đang giữ ``FOR SHARE``.
+
+    LUẬT (PR-B lượt 8, owner 23-11): KHÔNG đường nào được giữ dòng người ở mức khoá chặt (``FOR UPDATE`` — xung đột cả
+    khoá này) rồi đi chờ dòng quyền chéo. §5.4 giữ dòng quyền ``FOR SHARE`` rồi mới xin khoá này ⇒ đường vi phạm luật sẽ
+    vòng chờ với lô (``40P01``). Hiện trạng: Q4 giữ ``FOR NO KEY UPDATE`` (được); PUT ĐỔI cột khoá (email) giữ ``FOR
+    UPDATE`` (lượt 6) ⇒ nếu cùng lần lưu kéo theo thu hồi thì ``revoke_grants_on_account_change(target_locked_for_update=
+    True)`` trả 409 ``COMBINED_KEY_CHANGE_AND_REVOKE`` TRƯỚC khi khoá dòng quyền; K4 giữ ``FOR UPDATE`` nhưng không chạm
+    dòng quyền (quyền tham chiếu người bị xoá ⇒ 409 chỉ đọc). Đường mới giữ ``FOR UPDATE`` mà cần dòng quyền ⇒ phải khoá
+    dòng quyền TRƯỚC hoặc từ chối như trên.
+
+    GĐ2-C C1 (gộp PR-B ``5effed10``, 23-11) — luật áp cho CẢ dòng quyền Thư ký (``admission_review_secretary_grant``):
+    tự thu hồi Thư ký nằm TRONG ``revoke_grants_on_account_change``, SAU phép chặn 409 (lý do duyệt chéo HOẶC lý do Thư ký);
+    cổng Thư ký giữ người gọi ``FOR SHARE`` (không phải mức chặt) rồi quyền ``FOR SHARE``; Admin thu hồi tay giữ Admin bấm
+    ``FOR KEY SHARE`` rồi dòng quyền ``FOR UPDATE`` và không xin dòng người nào sau đó; Admin gán giữ người được gán ``FOR
+    NO KEY UPDATE`` + Admin bấm ``FOR KEY SHARE`` rồi chèn dòng quyền; ô tìm ứng viên không khoá. Không đường C1 nào giữ dòng
+    người ``FOR UPDATE`` rồi chờ dòng quyền."""
     return (
         await db.execute(
             select(models.User.id, models.User.status, models.User.role, models.User.unit_id)

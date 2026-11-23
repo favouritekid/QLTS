@@ -34,7 +34,7 @@ from app.services.document_bulk_verify_service import (
     grant_allows,
 )
 from app.services.document_transition import ACTOR_NOT_AUTHORIZED, DocumentTransitionConflict, RequestMeta
-from app.utils.exceptions import PermissionDeniedError, ResourceNotFoundError
+from app.utils.exceptions import CombinedKeyChangeAndRevokeError, PermissionDeniedError, ResourceNotFoundError
 
 log = structlog.get_logger(__name__)
 
@@ -245,6 +245,7 @@ async def revoke_grants_on_account_change(
     new_status: Optional[str] = None,
     actor_id: Optional[int],
     request_meta: Optional[RequestMeta] = None,
+    target_locked_for_update: bool = False,
 ) -> List[int]:
     """Q4 — TẦNG CHỦ SỞ HỮU của "đổi vai / khoá tài khoản ⇒ tự thu hồi". Mọi đường đổi vai / trạng thái tài khoản (PUT lẻ,
     hàng loạt, đồng bộ vai từ Casbin, gỡ vai) gọi hàm này TRONG giao dịch của chính việc đổi, TRƯỚC khi ghi vai / trạng
@@ -261,7 +262,15 @@ async def revoke_grants_on_account_change(
     GĐ2-C C1 (owner C1 22-11 "quyền hết khi tài khoản bị khoá / xoá theo luật thu hồi đã có ở GĐ1b"): CÙNG hàm này thu hồi
     luôn quyền "Thư ký Hội đồng" (``review_secretary_service``) — vị từ riêng (vai được giữ quyền là Quản lý / Cán bộ), cùng
     câu lý do, cùng giao dịch, cùng người thao tác. Thứ tự khoá: người → quyền duyệt chéo → quyền Thư ký (mọi người gọi đi
-    qua đây nên thứ tự giữa hai bảng quyền chỉ nằm ở MỘT chỗ)."""
+    qua đây nên thứ tự giữa hai bảng quyền chỉ nằm ở MỘT chỗ).
+
+    ``target_locked_for_update`` (PR-B lượt 8, owner 23-11 "chặn gộp, làm 2 bước"): người gọi đang giữ dòng người ``FOR
+    UPDATE`` (lần lưu ĐỔI cột khoá — email / tên đăng nhập, ``user_deletion_policy.USER_KEY_COLUMNS``). Khi ấy thay đổi mà
+    kéo theo thu hồi (lý do tính DƯỚI khoá bằng :func:`auto_revoke_reason` HOẶC — GĐ2-C C1 — vị từ Thư ký
+    ``review_secretary_service.auto_revoke_reason``) ⇒ ``CombinedKeyChangeAndRevokeError`` (409) TRƯỚC khi khoá BẤT KỲ dòng
+    quyền nào (duyệt chéo lẫn Thư ký) — luật "không giữ dòng người ``FOR UPDATE`` rồi đi chờ dòng quyền" (lô chéo §5.4 giữ
+    dòng quyền ``FOR SHARE`` rồi xin người bấm ``FOR KEY SHARE`` ⇒ vòng chờ;
+    ``repositories/document_bulk_repository.lock_user_key_share``). Không ghi gì: người gọi không commit."""
     from app.services import review_secretary_service as secretary
 
     if new_role is None and new_status is None:
@@ -276,6 +285,8 @@ async def revoke_grants_on_account_change(
     )
     if reason is None and secretary_reason is None:
         return []
+    if target_locked_for_update:
+        raise CombinedKeyChangeAndRevokeError()
     if actor_id is None:
         # Không có người thao tác thì không ghi được ``revoked_by_user_id`` đúng khuôn — fail-closed.
         raise RuntimeError("revoke_grants_on_account_change: thiếu người thao tác")

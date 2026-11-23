@@ -788,6 +788,9 @@ async def update_user(
             new_status=update_data.get("status"),
             actor_id=assigned_by_user_id,
             request_meta=request_meta,
+            # PR-B lượt 8 (owner 23-11): đang giữ người đích FOR UPDATE (đổi cột khoá) ⇒ nếu thay đổi kéo theo thu hồi thì
+            # 409 TRƯỚC khi khoá dòng quyền (không giữ dòng người FOR UPDATE rồi đi chờ dòng quyền).
+            target_locked_for_update=doi_cot_khoa,
         )
         # PR-B lượt 2 + 4: đọc lại vai / đơn vị / trạng thái HIỆN HÀNH (dòng đã khoá ở trên) — quyết "vai / đơn vị có đổi
         # không" bên dưới bằng cùng giá trị với quyết định thu hồi; bản nạp từ đầu yêu cầu có thể đã cũ.

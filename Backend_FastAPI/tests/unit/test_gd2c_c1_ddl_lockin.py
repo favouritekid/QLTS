@@ -8,9 +8,13 @@
 - Chuỗi Alembic một đầu; SQLSTATE mới chỉ dùng đúng tệp; cờ hạ cấp mang nghĩa CHO PHÉP.
 - Sổ K4 có đủ ba cột người dùng (``BLOCK_ACTOR``) — sổ khớp ``pg_constraint`` kiểm ở ``tests/api/test_gd1b_xoa_tai_khoan.py``.
 - Vị từ tự thu hồi (bảng chân trị) + cổng ``deps.require_review_secretary`` khai ĐÚNG hai dependency (xác thực + phiên chung).
+- Gộp PR-B ``5effed10`` (lượt 8, owner 23-11): hàm khoá dòng quyền ``FOR UPDATE`` của đường TỰ THU HỒI (cả hai bảng quyền)
+  chỉ được gọi từ đúng chỗ đã biết, và trong ``revoke_grants_on_account_change`` phép chặn 409 lưu gộp đứng TRƯỚC mọi lời gọi
+  ấy (hành vi + hai phiên: ``tests/api/test_gd2c_c1_thu_ky_chan_gop.py``).
 
 Mỗi ca kiểm MỘT bất biến.
 """
+import ast
 import importlib.util
 import inspect
 import re
@@ -252,3 +256,92 @@ def test_cong_thu_ky_khai_xac_thuc_casbin_va_phien_chung():
     tham_so = inspect.signature(deps.require_review_secretary).parameters
     assert tham_so["current_user"].default.dependency is deps.check_permission
     assert tham_so["db"].default.dependency is database.get_db
+
+
+# ── chặn lưu gộp PR-B lượt 8 đứng TRƯỚC mọi khoá dòng quyền của tự thu hồi (gộp PR-B 5effed10, 23-11) ─────────────────────
+APP = GOC / "app"
+HELPER_TU_THU_HOI = ("services/document_cross_review_service.py", "revoke_grants_on_account_change")
+#: Hàm khoá dòng quyền ``FOR UPDATE`` của đường TỰ THU HỒI → nơi DUY NHẤT được gọi. Hai repository cùng tên hàm
+#: (``document_bulk_repository`` cho quyền duyệt chéo, ``review_secretary_repository`` cho quyền Thư ký) — quét theo TÊN.
+#: Đường mới gọi thẳng (không qua ``HELPER_TU_THU_HOI``) thì không đi qua phép chặn 409 ⇒ ĐỎ ⇒ người viết phải quyết.
+GOI_KHOA_QUYEN_TU_THU_HOI = {
+    "lock_active_grants_of_user_for_update": {
+        HELPER_TU_THU_HOI,
+        ("services/review_secretary_service.py", "revoke_on_account_change"),
+    },
+    "revoke_on_account_change": {HELPER_TU_THU_HOI},
+}
+
+
+def _ten_goi(nut) -> str:
+    return nut.id if isinstance(nut, ast.Name) else nut.attr if isinstance(nut, ast.Attribute) else ""
+
+
+def _ham_trong_app():
+    for p in sorted(APP.rglob("*.py")):
+        rel = p.relative_to(APP).as_posix()
+        for f in ast.walk(ast.parse(p.read_text(encoding="utf-8"))):
+            if isinstance(f, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                yield (rel, f.name), f
+
+
+def test_ham_khoa_dong_quyen_cua_tu_thu_hoi_chi_duoc_goi_tu_cho_da_biet():
+    thay = {ten: set() for ten in GOI_KHOA_QUYEN_TU_THU_HOI}
+    for khoa, f in _ham_trong_app():
+        for n in ast.walk(f):
+            if isinstance(n, ast.Call) and _ten_goi(n.func) in thay:
+                thay[_ten_goi(n.func)].add(khoa)
+    assert thay == GOI_KHOA_QUYEN_TU_THU_HOI
+
+
+def test_chan_gop_409_dung_truoc_moi_khoa_dong_quyen_trong_helper_tu_thu_hoi():
+    """``if target_locked_for_update: raise CombinedKeyChangeAndRevokeError()`` ở THÂN NGOÀI CÙNG của helper (không lồng trong
+    nhánh của riêng một lý do) và đứng TRƯỚC (số dòng) mọi lời gọi khoá dòng quyền — duyệt chéo lẫn Thư ký. Ném SAU khoá (hoặc
+    giữa hai khoá) thì rollback vẫn xoá mọi ghi chép nên ca HTTP "409 không ghi gì" vẫn xanh; chỉ ca hai phiên và phép kiểm
+    này thấy được thứ tự. Giới hạn: không kiểm điều kiện "có lý do thu hồi" (đo bằng hành vi ở ca Quản lý của
+    ``test_gd2c_c1_thu_ky_chan_gop.py``)."""
+    f = dict(_ham_trong_app())[HELPER_TU_THU_HOI]
+    chan = [
+        n for n in f.body
+        if isinstance(n, ast.If) and isinstance(n.test, ast.Name) and n.test.id == "target_locked_for_update"
+        and any(
+            isinstance(s, ast.Raise) and isinstance(s.exc, ast.Call)
+            and _ten_goi(s.exc.func) == "CombinedKeyChangeAndRevokeError"
+            for s in n.body
+        )
+    ]
+    khoa = sorted(
+        n.lineno for n in ast.walk(f) if isinstance(n, ast.Call) and _ten_goi(n.func) in GOI_KHOA_QUYEN_TU_THU_HOI
+    )
+    assert len(chan) == 1 and len(khoa) == 2, (len(chan), khoa)
+    assert chan[0].lineno < khoa[0], (chan[0].lineno, khoa)
+
+
+#: Hàm giữ dòng ``user`` ở mức CHẶT (``FOR UPDATE``): gọi ``lock_user_for_update`` hoặc ``lock_users_in_id_order`` có
+#: ``key_update_ids=`` / ``delete_targets=``. Luật PR-B lượt 8 (``document_bulk_repository.lock_user_key_share``): không hàm nào
+#: ở đây gọi THẲNG hàm khoá dòng quyền (``lock_*grant*`` — duyệt chéo lẫn Thư ký); tự thu hồi chỉ qua ``HELPER_TU_THU_HOI`` với
+#: ``target_locked_for_update`` (sổ PR-B ``SO_GHI_COT_KHOA`` ở ``test_gd1b_cheo_duong_doi_vai.py``). Hàm mới giữ ``FOR UPDATE``
+#: ⇒ ĐỎ ⇒ người viết quyết. Giới hạn: không thấy ``with_for_update()`` viết tay trên ``User`` (vd đăng nhập) — đăng nhập không
+#: chạm dòng quyền.
+GIU_NGUOI_FOR_UPDATE = {
+    ("services/user_deletion_policy.py", "lock_users_in_id_order"),  # vòng khoá chung, id tăng
+    ("services/user_deletion_policy.py", "assert_user_deletable"),  # K4: chỉ ĐỌC quyền (409 BLOCK_ACTOR), không khoá
+    ("services/user_service.py", "update_user"),  # PUT đổi email: chặn gộp nằm trong HELPER_TU_THU_HOI
+}
+
+
+def test_ham_giu_nguoi_for_update_khong_goi_thang_ham_khoa_dong_quyen():
+    giu, sai = set(), []
+    for khoa, f in _ham_trong_app():
+        goi = [n for n in ast.walk(f) if isinstance(n, ast.Call)]
+        if any(
+            _ten_goi(n.func) == "lock_user_for_update"
+            or (
+                _ten_goi(n.func) == "lock_users_in_id_order"
+                and any(k.arg in ("key_update_ids", "delete_targets") for k in n.keywords)
+            )
+            for n in goi
+        ):
+            giu.add(khoa)
+            sai += [(khoa, _ten_goi(n.func)) for n in goi if re.fullmatch(r"lock_\w*grant\w*", _ten_goi(n.func))]
+    assert (giu, sai) == (GIU_NGUOI_FOR_UPDATE, [])
