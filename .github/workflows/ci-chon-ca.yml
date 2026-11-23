@@ -29,11 +29,14 @@ name: Chạy chọn ca backend (thủ công)
 #      input. Một mục sai ⇒ không chạy gì (không chạy một phần danh sách).
 #   3. Collect ra 0 ca ⇒ ĐỎ; MỘT mục collect ra 0 ca ⇒ ĐỎ (tệp skip cả module
 #      là kiểu xanh giả kinh điển); lỗi collect ⇒ ĐỎ.
-#   4. TẬP ca chạy (JUnit) phải ĐÚNG tập node id collect — không chỉ cùng số
-#      lượng; pytest rc khác 0 ⇒ ĐỎ; có ca failed / errors ⇒ ĐỎ.
-#      0 ca PASSED (vd. marker / fixture skip TOÀN BỘ sau collect, pytest vẫn
-#      thoát 0) ⇒ ĐỎ; MỘT mục mà mọi ca đều skip ⇒ ĐỎ. Skip một phần ⇒ cảnh
-#      báo, và kết luận in rõ số ca SKIP (không được kiểm).
+#   4. Kết quả lấy từ plugin `.github/scripts/plugin_chon_ca/` (ghi NGUYÊN
+#      `report.nodeid` + pha + outcome), KHÔNG từ JUnit (ánh xạ JUnit có va
+#      chạm). TẬP node id chạy phải ĐÚNG tập node id collect; pytest rc khác 0
+#      ⇒ ĐỎ; ca failed / errors / chạy dở ⇒ ĐỎ (PASSED chỉ khi setup + call
+#      passed và teardown không lỗi). 0 ca PASSED (vd. marker / fixture skip
+#      TOÀN BỘ sau collect, pytest vẫn thoát 0) ⇒ ĐỎ; MỘT mục mà mọi ca đều
+#      skip / xfail ⇒ ĐỎ. Skip một phần ⇒ cảnh báo, và kết luận in rõ số ca
+#      SKIP (không được kiểm).
 #      Không nuốt mã lỗi, không `continue-on-error`, không `if:`.
 #   5. Tên job không chứa tên required check nào (`pytest`, `Build`, …): một
 #      lượt chạy MỘT PHẦN không bao giờ được thoả required check của PR.
@@ -303,116 +306,131 @@ jobs:
         run: |
           set -euo pipefail
           mapfile -t DANH_SACH < "$RUNNER_TEMP/ca.txt"
-          JUNIT="$RUNNER_TEMP/junit.xml"
-          rm -f "$JUNIT"
 
-          # Cùng cờ với lát nightly: `--timeout=60` cắt một ca treo.
+          # Plugin ghi NGUYÊN `report.nodeid` + pha + kết quả của từng ca
+          # (`.github/scripts/plugin_chon_ca/`). Thư mục RIÊNG, chỉ một module:
+          # thêm vào PYTHONPATH không che module nào của bộ test.
+          THU_MUC_PLUGIN="$(cd .. && pwd)/.github/scripts/plugin_chon_ca"
+          if [ ! -f "$THU_MUC_PLUGIN/ci_chon_ca_ghi_ket_qua.py" ]; then
+            echo "::error::Thiếu plugin $THU_MUC_PLUGIN/ci_chon_ca_ghi_ket_qua.py — không phán quyết được theo node id."
+            exit 1
+          fi
+          KET_QUA="$RUNNER_TEMP/ket_qua.jsonl"
+          rm -f "$KET_QUA"
+
+          # Cùng cờ với lát nightly (`--timeout=60` cắt một ca treo), cộng plugin.
           rc=0
-          python -m pytest "${DANH_SACH[@]}" -q --tb=short --timeout=60 "$BO_QUA" --junit-xml="$JUNIT" || rc=$?
+          PYTHONPATH="$THU_MUC_PLUGIN${PYTHONPATH:+:$PYTHONPATH}" CI_CHON_CA_KET_QUA="$KET_QUA" python -m pytest "${DANH_SACH[@]}" -q --tb=short --timeout=60 "$BO_QUA" -p ci_chon_ca_ghi_ket_qua || rc=$?
           echo "pytest rc=$rc"
 
           # MỌI phán quyết của bước này nằm ở MỘT chỗ — đoạn dưới: rc, danh tính
           # ca, ca đỏ, skip. Nó tích luỹ lỗi rồi thoát theo TỔNG (thoát theo lệnh
           # cuối là cách một bộ kiểm in "SAI" mà vẫn trả 0); `set -e` đưa mã
           # thoát ra thành kết quả bước.
-          python - "$JUNIT" "$RUNNER_TEMP/muc_nodeid.tsv" "$rc" <<'PY'
+          python - "$KET_QUA" "$RUNNER_TEMP/muc_nodeid.tsv" "$rc" <<'PY'
+          import json
           import os
-          import re
           import sys
-          import xml.etree.ElementTree as ET
 
-          duong_junit, duong_bang, rc = sys.argv[1], sys.argv[2], int(sys.argv[3])
+          duong_kq, duong_bang, rc = sys.argv[1], sys.argv[2], int(sys.argv[3])
 
-
-          def khoa_junit(node):
-              """Node id → (classname, name) ĐÚNG như junitxml của pytest ghi
-              (`_pytest.junitxml.mangle_test_address`; test khoá hai bản bằng
-              nhau). Ánh xạ XUÔI, không dựng ngược từ JUnit: `classname` có
-              dấu chấm vừa của thư mục vừa của lớp lồng, dựng ngược không tin
-              được."""
-              duong, mo, tham = node.partition("[")
-              ten = duong.split("::")
-              ten[0] = re.sub(r"\.py$", "", ten[0].replace("/", "."))
-              ten[-1] += mo + tham
-              return ".".join(ten[:-1]), ten[-1]
-
-
-          # Mục → node id, do bước `thu-thap` ghi: tập ca PHẢI chạy.
+          # Mục → node id, do bước `thu-thap` ghi: tập ca PHẢI chạy, node id GỐC.
           muc_cua = {}
           with open(duong_bang, encoding="utf-8") as fh:
               for dong_bang in fh:
                   muc, node = dong_bang.rstrip("\n").split("\t", 1)
                   muc_cua.setdefault(muc, []).append(node)
-          mong = {khoa_junit(n): n for cac in muc_cua.values() for n in cac}
+          tap_mong = {n for cac in muc_cua.values() for n in cac}
 
           loi = []
           if rc != 0:
               loi.append("pytest rc=%d (1 = có ca đỏ, 2 = bị ngắt, 3 = lỗi nội bộ, "
                          "4 = dùng sai hoặc node id chết, 5 = không collect được ca nào)." % rc)
 
-          # Trạng thái theo CA. Một ca đỏ ở call rồi lỗi ở teardown có HAI
-          # <testcase> cùng tên — giữ trạng thái nặng nhất.
-          NANG = ("passed", "skipped", "failed", "errors")
-          trang_thai = {}
-          if os.path.isfile(duong_junit):
-              for tc in ET.parse(duong_junit).getroot().iter("testcase"):
-                  if tc.find("error") is not None:
-                      moi = "errors"
-                  elif tc.find("failure") is not None:
-                      moi = "failed"
-                  elif tc.find("skipped") is not None:
-                      moi = "skipped"
-                  else:
-                      moi = "passed"
-                  k = (tc.get("classname") or "", tc.get("name") or "")
-                  cu = trang_thai.get(k)
-                  if cu is None or NANG.index(moi) > NANG.index(cu):
-                      trang_thai[k] = moi
+          # Báo cáo từng pha, theo `report.nodeid` GỐC: node id → {pha: (outcome, xfail?)}.
+          pha = {}
+          trung = []
+          if os.path.isfile(duong_kq):
+              with open(duong_kq, encoding="utf-8") as fh:
+                  for dong_kq in fh:
+                      bg = json.loads(dong_kq)
+                      cua_node = pha.setdefault(bg["nodeid"], {})
+                      if bg["when"] in cua_node:
+                          trung.append("%s (%s)" % (bg["nodeid"], bg["when"]))
+                      cua_node[bg["when"]] = (bg["outcome"], "wasxfail" in bg)
           else:
-              loi.append("Không có JUnit XML — phiên pytest không chạy tới cuối.")
+              loi.append("Không có tệp kết quả của plugin — phiên pytest không chạy tới "
+                         "cuối, hoặc plugin không được nạp.")
+          if trung:
+              loi.append("%d pha bị báo HAI lần (ca chạy lặp): %s"
+                         % (len(trung), ", ".join(trung[:10])))
 
-          dem = {t: sum(1 for v in trang_thai.values() if v == t) for t in NANG}
-          dong = ("collect %d · chạy %d · passed %d · failed %d · errors %d · skipped %d"
-                  % (len(mong), len(trang_thai), dem["passed"], dem["failed"],
-                     dem["errors"], dem["skipped"]))
+
+          def phan_loai(cac_pha):
+              """PASSED ⇔ setup passed + call passed + teardown có mặt và KHÔNG failed.
+              Setup / teardown failed ⇒ errors; call failed (kể cả xpass strict) ⇒
+              failed. Skip ở setup / call (kể cả xfail) ⇒ skipped. xpass không
+              strict ⇒ call passed ⇒ passed. Thiếu pha ⇒ chạy dở."""
+              ket = {w: o for w, (o, _) in cac_pha.items()}
+              if "failed" in (ket.get("setup"), ket.get("teardown")):
+                  return "errors"
+              if ket.get("call") == "failed":
+                  return "failed"
+              if "teardown" not in ket:
+                  return "chay-do"
+              if "skipped" in (ket.get("setup"), ket.get("call")):
+                  return "skipped"
+              if ket.get("setup") == "passed" and ket.get("call") == "passed":
+                  return "passed"
+              return "chay-do"
+
+
+          trang_thai = {n: phan_loai(p) for n, p in pha.items()}
+          LOAI = ("passed", "failed", "errors", "skipped", "chay-do")
+          dem = {t: sum(1 for v in trang_thai.values() if v == t) for t in LOAI}
+          dong = ("collect %d · chạy %d · passed %d · failed %d · errors %d · skipped %d · chạy dở %d"
+                  % (len(tap_mong), len(trang_thai), dem["passed"], dem["failed"],
+                     dem["errors"], dem["skipped"], dem["chay-do"]))
           print(dong)
 
-          # (1) DANH TÍNH: tập ca chạy phải ĐÚNG tập ca collect, không chỉ cùng số lượng.
-          thieu = sorted(n for k, n in mong.items() if k not in trang_thai)
-          thua = sorted("%s::%s" % k for k in trang_thai if k not in mong)
+          # (1) DANH TÍNH: so TẬP chuỗi node id GỐC, không qua khoá trung gian.
+          thieu = sorted(tap_mong - set(trang_thai))
+          thua = sorted(set(trang_thai) - tap_mong)
           if thieu or thua:
               loi.append("Tập ca chạy KHÁC tập ca collect: thiếu %d, thừa %d."
                          % (len(thieu), len(thua)))
               for n in thieu[:30]:
                   print("  THIẾU %s" % n)
-              for k in thua[:30]:
-                  print("  THỪA  %s" % k)
-          # (2) Có ca đỏ.
-          if dem["failed"] or dem["errors"]:
-              loi.append("%d ca failed, %d ca errors." % (dem["failed"], dem["errors"]))
+              for n in thua[:30]:
+                  print("  THỪA  %s" % n)
+          # (2) Có ca đỏ, hoặc chạy dở.
+          if dem["failed"] or dem["errors"] or dem["chay-do"]:
+              loi.append("%d ca failed, %d ca errors, %d ca chạy dở."
+                         % (dem["failed"], dem["errors"], dem["chay-do"]))
           # (3) 0 ca PASSED — vd. marker / fixture skip TOÀN BỘ sau collect, rc vẫn 0.
           if dem["passed"] == 0:
               loi.append("0 ca PASSED (chạy %d, skip %d) — không ca nào thật sự được kiểm."
                          % (len(trang_thai), dem["skipped"]))
           # (4) MỘT mục mà mọi ca đều skip: các mục khác không được che nó.
           for muc, cac in muc_cua.items():
-              tt = [trang_thai.get(khoa_junit(n)) for n in cac]
+              tt = [trang_thai.get(n) for n in cac]
               if tt and all(t == "skipped" for t in tt):
-                  loi.append("Mục %s: toàn bộ %d ca bị SKIP." % (muc, len(tt)))
+                  loi.append("Mục %s: toàn bộ %d ca bị SKIP / XFAIL." % (muc, len(tt)))
 
           if dem["skipped"]:
-              print("::warning::%d ca bị SKIP — đã chạy nhưng KHÔNG được kiểm. Đọc lý do "
-                    "trước khi coi lượt này là bằng chứng." % dem["skipped"])
-              for k in sorted(k for k, v in trang_thai.items() if v == "skipped")[:30]:
-                  print("  SKIP %s::%s" % k)
+              print("::warning::%d ca bị SKIP / XFAIL — đã chạy nhưng KHÔNG được kiểm. Đọc "
+                    "lý do trước khi coi lượt này là bằng chứng." % dem["skipped"])
+              for n in sorted(n for n, v in trang_thai.items() if v == "skipped")[:30]:
+                  xfail = any(x for _, x in pha[n].values())
+                  print("  %s %s" % ("XFAIL" if xfail else "SKIP ", n))
 
           if loi:
               ket_luan = "ĐỎ — %d lỗi." % len(loi)
           elif dem["skipped"]:
-              ket_luan = ("%d/%d ca PASSED, %d ca SKIP (KHÔNG được kiểm)."
-                          % (dem["passed"], len(mong), dem["skipped"]))
+              ket_luan = ("%d/%d ca PASSED, %d ca SKIP / XFAIL (KHÔNG được kiểm)."
+                          % (dem["passed"], len(tap_mong), dem["skipped"]))
           else:
-              ket_luan = "%d/%d ca PASSED, không ca nào skip." % (dem["passed"], len(mong))
+              ket_luan = "%d/%d ca PASSED, không ca nào skip." % (dem["passed"], len(tap_mong))
           for dong_loi in loi:
               print("::error::" + dong_loi)
           print("KẾT LUẬN: " + ket_luan)

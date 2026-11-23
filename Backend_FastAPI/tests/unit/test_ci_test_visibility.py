@@ -3797,27 +3797,39 @@ MUC_BI_TU_CHOI = [
     ("tham-so-giua-chung", "tests/unit/test_a.py::test_x[p]::y"),
 ]
 
-#: pytest GIẢ: `python -m pytest …` ⇒ ghi lời gọi, in `$STUB_OUT`, chép
-#: `$STUB_JUNIT` vào đường `--junit-xml=`, trả `$STUB_RC`. Mọi lời gọi khác
-#: (`python - <<'PY'` đếm JUnit) chuyển sang trình thông dịch THẬT.
+#: pytest GIẢ: `python -m pytest …` ⇒ ghi lời gọi, ghi `PYTHONPATH` / đích kết
+#: quả mà nó nhận được vào `$STUB_ENV_LOG`, chép `$STUB_KET_QUA` (JSON-lines giả
+#: của plugin) vào `$CI_CHON_CA_KET_QUA`, in `$STUB_OUT`, trả `$STUB_RC`. Mọi
+#: lời gọi khác (`python - <<'PY'` phán quyết) chuyển sang trình thông dịch THẬT.
 #: `$STUB_THAT` đặt ⇒ MỌI lời gọi đi sang trình thông dịch thật (pytest THẬT).
 _STUB_PYTEST = (
     "#!/bin/sh\n"
     'if [ -n "${STUB_THAT:-}" ]; then exec "$REAL_PY" "$@"; fi\n'
     'if [ "$1" = "-m" ] && [ "$2" = "pytest" ]; then\n'
     '  printf \'%s %s\\n\' "${0##*/}" "$*" >> "$STUB_LOG"\n'
-    '  for a in "$@"; do\n'
-    '    case "$a" in\n'
-    '      --junit-xml=*)\n'
-    '        if [ -n "${STUB_JUNIT:-}" ]; then cp "$STUB_JUNIT" "${a#--junit-xml=}"; fi\n'
-    '        ;;\n'
-    '    esac\n'
-    '  done\n'
+    '  printf \'PYTHONPATH=%s\\nKET_QUA=%s\\n\' "${PYTHONPATH:-}" "${CI_CHON_CA_KET_QUA:-}" '
+    '>> "$STUB_ENV_LOG"\n'
+    '  if [ -n "${STUB_KET_QUA:-}" ] && [ -n "${CI_CHON_CA_KET_QUA:-}" ]; then\n'
+    '    cp "$STUB_KET_QUA" "$CI_CHON_CA_KET_QUA"\n'
+    '  fi\n'
     '  if [ -n "${STUB_OUT:-}" ]; then cat "$STUB_OUT"; fi\n'
     '  exit "${STUB_RC:-0}"\n'
     'fi\n'
     'exec "$REAL_PY" "$@"\n'
 )
+
+#: Plugin THẬT của workflow, và chỗ bước `chay` tìm nó (tính từ thư mục cha của
+#: `working-directory`, tức gốc repo).
+DUONG_PLUGIN_TUONG_DOI = pathlib.Path(".github/scripts/plugin_chon_ca/ci_chon_ca_ghi_ket_qua.py")
+DUONG_PLUGIN = GOC / DUONG_PLUGIN_TUONG_DOI
+
+
+def _chep_plugin(goc_tam: pathlib.Path) -> pathlib.Path:
+    """Đặt plugin THẬT vào `<goc_tam>/.github/scripts/plugin_chon_ca/`."""
+    dich = goc_tam / DUONG_PLUGIN_TUONG_DOI
+    dich.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(DUONG_PLUGIN, dich)
+    return dich
 
 
 @pytest.fixture(scope="module")
@@ -3867,31 +3879,41 @@ def _ra_collect(*node: str) -> str:
     return "".join(n + "\n" for n in node)
 
 
-def _junit(*cap) -> str:
-    """JUnit XML như pytest ghi, từ các cặp (node id, 'pass' / 'fail' / 'error' /
-    'skip'). `classname` / `name` dựng bằng hàm THẬT của pytest
-    (`_pytest.junitxml.mangle_test_address`) — nên bản chép của nó trong bước
-    `chay` phải khớp pytest thì các ca xanh mới xanh (khoá hai bản bằng nhau,
-    CLAUDE.md §7)."""
-    from xml.sax.saxutils import quoteattr
-
-    from _pytest.junitxml import mangle_test_address
-
-    con = {"pass": "", "fail": '<failure message="gia"/>',
-           "error": '<error message="gia"/>', "skip": '<skipped message="gia"/>'}
-    than = ""
-    for node, kq in cap:
-        ten = mangle_test_address(node)
-        than += "<testcase classname=%s name=%s>%s</testcase>" % (
-            quoteattr(".".join(ten[:-1])), quoteattr(ten[-1]), con[kq])
-    return ('<?xml version="1.0" encoding="utf-8"?><testsuites>'
-            '<testsuite name="pytest" tests="%d">%s</testsuite></testsuites>'
-            % (len(cap), than))
+#: Các pha mà plugin ghi cho mỗi KIỂU ca, đúng như pytest báo (`outcome`,
+#: `wasxfail?`): xfail ⇒ call skipped + wasxfail; xpass không strict ⇒ call
+#: passed + wasxfail; xpass strict ⇒ call failed. "chay-do" = chỉ có setup.
+_PHA_THEO_KIEU = {
+    "pass": [("setup", "passed", False), ("call", "passed", False), ("teardown", "passed", False)],
+    "fail": [("setup", "passed", False), ("call", "failed", False), ("teardown", "passed", False)],
+    "loi-setup": [("setup", "failed", False), ("teardown", "passed", False)],
+    "loi-teardown": [("setup", "passed", False), ("call", "passed", False),
+                     ("teardown", "failed", False)],
+    "skip-setup": [("setup", "skipped", False), ("teardown", "passed", False)],
+    "skip-call": [("setup", "passed", False), ("call", "skipped", False),
+                  ("teardown", "passed", False)],
+    "xfail": [("setup", "passed", False), ("call", "skipped", True), ("teardown", "passed", False)],
+    "xpass": [("setup", "passed", False), ("call", "passed", True), ("teardown", "passed", False)],
+    "xpass-strict": [("setup", "passed", False), ("call", "failed", False),
+                     ("teardown", "passed", False)],
+    "chay-do": [("setup", "passed", False)],
+}
 
 
-#: Hai mục + bốn node id dùng chung cho các ca của bước `chay`. Cố ý có lớp
-#: LỒNG, tham số chứa `::` / `.` / `/`, và tệp ở gốc `tests/` — đúng những chỗ
-#: một bản chép sai của ánh xạ node id → JUnit sẽ lệch.
+def _ket_qua(*cap) -> str:
+    """JSON-lines như plugin `ci_chon_ca_ghi_ket_qua` ghi, từ các cặp
+    (node id, kiểu ca trong `_PHA_THEO_KIEU`)."""
+    dong = []
+    for node, kieu in cap:
+        for when, outcome, xfail in _PHA_THEO_KIEU[kieu]:
+            ban_ghi = {"nodeid": node, "when": when, "outcome": outcome}
+            if xfail:
+                ban_ghi["wasxfail"] = "gia"
+            dong.append(json.dumps(ban_ghi, ensure_ascii=False) + "\n")
+    return "".join(dong)
+
+
+#: Ba mục + năm node id dùng chung cho các ca của bước `chay`: lớp LỒNG, tham
+#: số chứa `::` / `.` / `/`, tệp ở gốc `tests/`.
 MUC_A, MUC_B, MUC_C = "tests/unit/test_a.py", "tests/api/test_b.py::test_c", "tests/test_goc.py"
 NODE_A = ("tests/unit/test_a.py::TestX::TestTrong::test_1",
           "tests/unit/test_a.py::test_2[p-1.5/x::y]")
@@ -3899,11 +3921,22 @@ NODE_B = ("tests/api/test_b.py::test_c[p1]", "tests/api/test_b.py::test_c[p2]")
 NODE_C = ("tests/test_goc.py::test_goc",)
 BANG_ABC = ([(MUC_A, n) for n in NODE_A] + [(MUC_B, n) for n in NODE_B]
             + [(MUC_C, n) for n in NODE_C])
+#: Hai node id KHÁC nhau mà ánh xạ JUnit cũ ra CÙNG `("tests.test_a.test_b",
+#: "test_x")` (Codex 23-11, KD1).
+NODE_VA_CHAM = ("tests/test_a/test_b.py::test_x", "tests/test_a.py::test_b::test_x")
+#: Lời gọi pytest mà bước `chay` PHẢI phát ra (như stub ghi lại): cờ của lát
+#: nightly + plugin; KHÔNG `--junit-xml`.
+_LOI_GOI_CHAY = "python -m pytest %s -q --tb=short --timeout=60 %s -p ci_chon_ca_ghi_ket_qua"
+
+
+def _doc_env_con(tmp_path: pathlib.Path) -> dict:
+    """`PYTHONPATH` / đích kết quả mà pytest giả đã nhận (lần gọi cuối)."""
+    return dict(dong.split("=", 1) for dong in _doc_dong(tmp_path / "goi_env.log"))
 
 
 def _chay_buoc_chon_ca(wf: dict, id_buoc: str, tmp_path: pathlib.Path, *,
                        ca=None, ca_txt=None, bang=None, stub_out: str = "",
-                       stub_rc: int = 0, stub_junit=None):
+                       stub_rc: int = 0, stub_ket_qua=None, co_plugin: bool = False):
     """Chạy thân `run:` của bước `id_buoc` như runner Linux (`bash -e`, mặc định
     khi bước không khai `shell:`), cwd = `working-directory` GIẢ chứa `TEP_GIA`.
 
@@ -3936,29 +3969,34 @@ def _chay_buoc_chon_ca(wf: dict, id_buoc: str, tmp_path: pathlib.Path, *,
         (stub / ten).chmod(0o755)
     ra_gia = tmp_path / "stub_out.txt"
     ra_gia.write_text(stub_out, encoding="utf-8")
+    if co_plugin:
+        _chep_plugin(tmp_path)
     tep_than = tmp_path / "than.sh"
     tep_than.write_bytes(than.encode("utf-8"))
     nhat_ky = tmp_path / "goi.log"
+    nhat_ky_env = tmp_path / "goi_env.log"
     env = dict(os.environ)
     # `GITHUB_STEP_SUMMARY` có thật khi test chạy TRONG Actions — gỡ để thân
     # bước giả không ghi vào tóm tắt của chính job đang chạy test.
-    for ten in ("BASH_ENV", "ENV", "CA", "STUB_JUNIT", "STUB_THAT", "GITHUB_STEP_SUMMARY"):
+    for ten in ("BASH_ENV", "ENV", "CA", "STUB_KET_QUA", "STUB_THAT", "GITHUB_STEP_SUMMARY",
+                "CI_CHON_CA_KET_QUA"):
         env.pop(ten, None)
     env.update({
         "PATH": str(stub) + os.pathsep + env.get("PATH", ""),
         "RUNNER_TEMP": str(temp),
         "BO_QUA": str(wf["env"]["BO_QUA"]),
         "STUB_LOG": str(nhat_ky),
+        "STUB_ENV_LOG": str(nhat_ky_env),
         "STUB_OUT": str(ra_gia),
         "STUB_RC": str(stub_rc),
         "REAL_PY": sys.executable,
     })
     if ca is not None:
         env["CA"] = ca
-    if stub_junit is not None:
-        tep_junit = tmp_path / "junit_gia.xml"
-        tep_junit.write_text(stub_junit, encoding="utf-8")
-        env["STUB_JUNIT"] = str(tep_junit)
+    if stub_ket_qua is not None:
+        tep_kq = tmp_path / "ket_qua_gia.jsonl"
+        tep_kq.write_text(stub_ket_qua, encoding="utf-8")
+        env["STUB_KET_QUA"] = str(tep_kq)
     kq = subprocess.run(
         [bash, "--noprofile", "--norc", "-e", str(tep_than)],
         cwd=be, env=env, capture_output=True, timeout=60,
@@ -3968,18 +4006,19 @@ def _chay_buoc_chon_ca(wf: dict, id_buoc: str, tmp_path: pathlib.Path, *,
     return kq.returncode, ra, goi, temp
 
 
-def _tat_ca(ket_qua: str) -> list:
-    """Mọi node id của `BANG_ABC` (đúng thứ tự) cùng MỘT kết quả."""
-    return [(node, ket_qua) for _, node in BANG_ABC]
+def _tat_ca(kieu: str) -> list:
+    """Mọi node id của `BANG_ABC` (đúng thứ tự) cùng MỘT kiểu ca."""
+    return [(node, kieu) for _, node in BANG_ABC]
 
 
 def _chay_c(wf: dict, tmp_path: pathlib.Path, ket_qua, *, bang=BANG_ABC, ca=None,
-            stub_rc: int = 0):
-    """Bước `chay` với danh sách mục MUC_A / MUC_B / MUC_C. `ket_qua=None` ⇒
-    pytest giả KHÔNG ghi JUnit."""
+            stub_rc: int = 0, co_plugin: bool = True):
+    """Bước `chay` với danh sách mục MUC_A / MUC_B / MUC_C. `ket_qua` là các cặp
+    (node id, kiểu ca); `None` ⇒ pytest giả KHÔNG ghi tệp kết quả."""
     return _chay_buoc_chon_ca(
         wf, ID_CHAY, tmp_path, ca=ca, ca_txt=[MUC_A, MUC_B, MUC_C], bang=bang,
-        stub_rc=stub_rc, stub_junit=None if ket_qua is None else _junit(*ket_qua))
+        stub_rc=stub_rc, co_plugin=co_plugin,
+        stub_ket_qua=None if ket_qua is None else _ket_qua(*ket_qua))
 
 
 #: Cây test cho các ca pytest THẬT. Lớp LỒNG + tham số có `.` và `/` + tệp ở gốc.
@@ -4030,20 +4069,78 @@ TEP_THAT_DOI_ID = {
         "    pass\n"
     ),
 }
+#: VA CHẠM khoá JUnit (Codex 23-11, KD1): `tests/test_a/test_b.py::test_x` và
+#: `tests/test_a.py::test_b::test_x` (lớp `unittest.TestCase` tên `test_b` —
+#: pytest thu mọi lớp con TestCase, bất kể tên) cùng ra
+#: `("tests.test_a.test_b", "test_x")`. Lớp chỉ tồn tại ở lượt collect ⇒ collect
+#: 2 ca, chạy 1.
+TEP_THAT_VA_CHAM = {
+    "tests/test_a/test_b.py": "def test_x():\n    pass\n",
+    "tests/test_a.py": (
+        "import sys\n"
+        "import unittest\n\n"
+        'if "--collect-only" in sys.argv:\n'
+        "    class test_b(unittest.TestCase):\n"
+        "        def test_x(self):\n"
+        "            pass\n"
+    ),
+}
+#: Collect 2 ca, lúc chạy chỉ còn 1 (tham số rơi mất sau collect).
+TEP_THAT_THIEU_MOT_CA = {
+    "tests/unit/test_a.py": (
+        "import sys\n\n"
+        "import pytest\n\n"
+        'IDS = ["a", "b"] if "--collect-only" in sys.argv else ["a"]\n\n\n'
+        '@pytest.mark.parametrize("p", IDS)\n'
+        "def test_x(p):\n"
+        "    pass\n"
+    ),
+}
+#: `test_1`: call đạt, TEARDOWN lỗi (fixture `yield` rồi ném).
+TEP_THAT_LOI_TEARDOWN = {
+    "tests/unit/test_a.py": (
+        "import pytest\n\n\n"
+        "@pytest.fixture\n"
+        "def hong_sau():\n"
+        "    yield\n"
+        '    raise RuntimeError("teardown hong")\n\n\n'
+        "def test_1(hong_sau):\n    pass\n\n\n"
+        "def test_2():\n    pass\n"
+    ),
+}
+#: Mọi ca của MỘT mục là xfail (không strict); mục còn lại đạt.
+TEP_THAT_XFAIL_MOT_MUC = {
+    "tests/unit/test_a.py": (
+        "import pytest\n\n\n"
+        '@pytest.mark.xfail(reason="gia", strict=False)\n'
+        "def test_1():\n    assert False\n\n\n"
+        '@pytest.mark.xfail(reason="gia", strict=False)\n'
+        "def test_2():\n    assert False\n"
+    ),
+    "tests/test_goc.py": "def test_goc():\n    pass\n",
+}
 
 
-def _chay_that(wf: dict, tmp_path: pathlib.Path, ca: str, tep: dict) -> list:
+def _chay_that(wf: dict, tmp_path: pathlib.Path, ca: str, tep: dict,
+               them_addopts: tuple = ()) -> list:
     """Chạy LẦN LƯỢT `kiem` → `thu-thap` → `chay` với pytest THẬT (đúng trình
-    thông dịch đang chạy test này), trên cây Backend_FastAPI tạm có `pytest.ini`
-    THẬT của repo — để `addopts = -v` gặp `-qq` đúng như trên runner — cùng các
-    tệp `tep`. Dừng ở bước đỏ đầu tiên. Trả [(id bước, rc, đầu ra)]."""
+    thông dịch đang chạy test này), trên cây tạm: `be/` = Backend_FastAPI có
+    `pytest.ini` THẬT của repo (để `addopts = -v` gặp `-qq` đúng như trên runner)
+    cùng các tệp `tep`; `.github/scripts/plugin_chon_ca/` = plugin THẬT. Có thể
+    thêm dòng vào `addopts`. Dừng ở bước đỏ đầu tiên. Trả [(id bước, rc, đầu ra)]."""
     bash = shutil.which("bash")
     if bash is None:
         assert not os.environ.get("CI"), "runner CI phải có bash — không đo được thân bước"
         pytest.skip("không có bash để chạy thân bước")
     be = tmp_path / "be"
     be.mkdir()
-    shutil.copyfile(GOC_BE / "pytest.ini", be / "pytest.ini")
+    ini = (GOC_BE / "pytest.ini").read_text(encoding="utf-8")
+    for co in them_addopts:
+        assert ini.count("--strict-markers") == 1, "pytest.ini đổi dạng — không chèn được addopts"
+        ini = ini.replace("--strict-markers", "--strict-markers\n    " + co, 1)
+        assert ("    " + co) in ini, "chèn addopts %r KHÔNG xảy ra" % co
+    (be / "pytest.ini").write_text(ini, encoding="utf-8")
+    _chep_plugin(tmp_path)
     for duong, noi_dung in tep.items():
         (be / duong).parent.mkdir(parents=True, exist_ok=True)
         (be / duong).write_text(noi_dung, encoding="utf-8")
@@ -4055,8 +4152,8 @@ def _chay_that(wf: dict, tmp_path: pathlib.Path, ca: str, tep: dict) -> list:
         (stub / ten).write_bytes(_STUB_PYTEST.encode("utf-8"))
         (stub / ten).chmod(0o755)
     env = dict(os.environ)
-    for ten in ("BASH_ENV", "ENV", "STUB_JUNIT", "GITHUB_STEP_SUMMARY",
-                "PYTEST_ADDOPTS", "PYTEST_CURRENT_TEST"):
+    for ten in ("BASH_ENV", "ENV", "STUB_KET_QUA", "GITHUB_STEP_SUMMARY",
+                "PYTEST_ADDOPTS", "PYTEST_CURRENT_TEST", "CI_CHON_CA_KET_QUA"):
         env.pop(ten, None)
     env.update({
         "PATH": str(stub) + os.pathsep + env.get("PATH", ""),
@@ -4398,92 +4495,144 @@ class TestWorkflowChayChonCa:
         assert rc != 0, ra
         assert not (temp / "muc_nodeid.tsv").exists()
 
-    # --- J. bước `chay`: pytest giả, phán quyết bằng Python THẬT -------------------------
+    # --- J. bước `chay`: pytest giả (đóng vai plugin), phán quyết bằng Python THẬT -----
     #
-    # `ket_qua` của `_chay_c` là (node id, 'pass' / 'fail' / 'error' / 'skip').
-    # Mặc định: ba mục MUC_A / MUC_B / MUC_C, bảng `BANG_ABC`, năm node id.
+    # `ket_qua` của `_chay_c` là các cặp (node id, kiểu ca ở `_PHA_THEO_KIEU`) —
+    # JSON-lines đúng như plugin ghi. Mặc định: ba mục MUC_A / MUC_B / MUC_C,
+    # bảng `BANG_ABC`, năm node id. Mỗi ca "…_thi_do" dựng sao cho CHỈ MỘT luật
+    # đứng giữa nó và xanh (rc 0, danh tính khớp, trừ đúng điều đang đo).
 
-    def test_chay_xanh_khi_dat_het_va_khoa_junit_khop_pytest(self, wf_chon_ca, tmp_path):
-        """JUnit dựng bằng `mangle_test_address` THẬT; năm node id có lớp lồng,
-        tham số chứa `::` / `.` / `/`, tệp ở gốc. Bản chép trong bước lệch pytest
-        ở bất kỳ chỗ nào ⇒ "thiếu / thừa" ⇒ ca này đỏ."""
+    def test_chay_xanh_khi_dat_het_va_goi_dung_plugin(self, wf_chon_ca, tmp_path):
         rc, ra, goi, temp = _chay_c(wf_chon_ca, tmp_path, _tat_ca("pass"))
         assert rc == 0, ra
-        assert "collect 5 · chạy 5 · passed 5 · failed 0 · errors 0 · skipped 0" in ra, ra
+        assert ("collect 5 · chạy 5 · passed 5 · failed 0 · errors 0 · skipped 0 · chạy dở 0"
+                in ra), ra
         assert "KẾT LUẬN: 5/5 ca PASSED, không ca nào skip." in ra, ra
-        assert goi == ["python -m pytest %s -q --tb=short --timeout=60 %s --junit-xml=%s/junit.xml"
-                       % (" ".join((MUC_A, MUC_B, MUC_C)), wf_chon_ca["env"]["BO_QUA"], temp)], goi
+        assert goi == [_LOI_GOI_CHAY % (" ".join((MUC_A, MUC_B, MUC_C)),
+                                        wf_chon_ca["env"]["BO_QUA"])], goi
+        env_con = _doc_env_con(tmp_path)
+        # Thư mục plugin đứng ĐẦU PYTHONPATH, đúng thư mục riêng (không phải `.github/scripts`).
+        assert (os.path.realpath(env_con["PYTHONPATH"].split(os.pathsep)[0])
+                == os.path.realpath(tmp_path / DUONG_PLUGIN_TUONG_DOI.parent)), env_con
+        assert env_con["KET_QUA"] == "%s/ket_qua.jsonl" % temp, env_con
 
     def test_chay_doc_danh_sach_da_kiem_khong_doc_input(self, wf_chon_ca, tmp_path):
         """`CA` có mặt và khác danh sách ⇒ pytest vẫn chỉ nhận danh sách ĐÃ KIỂM."""
-        rc, ra, goi, temp = _chay_c(wf_chon_ca, tmp_path, _tat_ca("pass"),
-                                    ca="tests/api/test_khac.py $(touch${IFS}PWNED)")
+        rc, ra, goi, _ = _chay_c(wf_chon_ca, tmp_path, _tat_ca("pass"),
+                                 ca="tests/api/test_khac.py $(touch${IFS}PWNED)")
         assert rc == 0, ra
-        assert goi == ["python -m pytest %s -q --tb=short --timeout=60 %s --junit-xml=%s/junit.xml"
-                       % (" ".join((MUC_A, MUC_B, MUC_C)), wf_chon_ca["env"]["BO_QUA"], temp)], goi
+        assert goi == [_LOI_GOI_CHAY % (" ".join((MUC_A, MUC_B, MUC_C)),
+                                        wf_chon_ca["env"]["BO_QUA"])], goi
         assert not list(tmp_path.rglob("PWNED*")), "tải chèn lệnh ĐÃ THỰC THI"
 
     def test_chay_rc_khac_0_thi_do(self, wf_chon_ca, tmp_path):
-        """JUnit sạch, đủ, đúng danh tính, chỉ rc ≠ 0 — cô lập phép xét rc."""
+        """Kết quả đủ, đạt, đúng danh tính, chỉ rc ≠ 0 — cô lập phép xét rc."""
         rc, ra, _, _ = _chay_c(wf_chon_ca, tmp_path, _tat_ca("pass"), stub_rc=1)
         assert rc != 0, "pytest rc=1 mà bước xanh:\n%s" % ra
 
-    def test_chay_khong_co_junit_thi_do(self, wf_chon_ca, tmp_path):
+    def test_chay_khong_co_tep_ket_qua_thi_do(self, wf_chon_ca, tmp_path):
         rc, ra, _, _ = _chay_c(wf_chon_ca, tmp_path, None)
-        assert rc != 0, "không có JUnit mà bước xanh:\n%s" % ra
+        assert rc != 0, "không có tệp kết quả mà bước xanh:\n%s" % ra
+
+    def test_chay_thieu_plugin_thi_do_va_khong_goi_pytest(self, wf_chon_ca, tmp_path):
+        rc, ra, goi, _ = _chay_c(wf_chon_ca, tmp_path, _tat_ca("pass"), co_plugin=False)
+        assert rc != 0, "thiếu plugin mà bước xanh:\n%s" % ra
+        assert goi == [], "thiếu plugin mà vẫn gọi pytest: %r" % goi
 
     def test_chay_0_ca_thi_do(self, wf_chon_ca, tmp_path):
-        """Bảng rỗng khớp JUnit rỗng (danh tính bằng nhau, không mục nào) — chỉ
+        """Bảng rỗng khớp kết quả rỗng (danh tính bằng nhau, không mục nào) — chỉ
         phép "0 ca PASSED" đứng giữa ca này và xanh."""
         rc, ra, _, _ = _chay_c(wf_chon_ca, tmp_path, [], bang=[])
         assert rc != 0, "chạy 0 ca mà bước xanh:\n%s" % ra
 
     def test_chay_thieu_ca_thi_do(self, wf_chon_ca, tmp_path):
-        """Phiên dừng giữa chừng: JUnit thiếu một ca (các ca còn lại đều đạt), rc 0."""
+        """Phiên dừng giữa chừng: thiếu một ca (các ca còn lại đều đạt), rc 0."""
         ket_qua = [(n, "pass") for n in NODE_A + NODE_B[:1] + NODE_C]
         rc, ra, _, _ = _chay_c(wf_chon_ca, tmp_path, ket_qua)
         assert rc != 0, "thiếu một ca mà bước xanh:\n%s" % ra
         assert "THIẾU %s" % NODE_B[1] in ra, ra
 
     def test_chay_cung_so_luong_khac_node_id_thi_do(self, wf_chon_ca, tmp_path):
-        """CÙNG số lượng (5), đều đạt, rc 0 — nhưng một ca KHÁC ca đã collect.
-        Chỉ phép so TẬP node id đứng giữa ca này và xanh; so số lượng thì lọt."""
+        """CÙNG số lượng (5), đều đạt, rc 0 — nhưng một ca KHÁC ca đã collect."""
         ket_qua = [(n, "pass") for n in NODE_A + NODE_B[:1] + NODE_C]
         ket_qua.append(("tests/api/test_b.py::test_c[p3]", "pass"))
         rc, ra, _, _ = _chay_c(wf_chon_ca, tmp_path, ket_qua)
         assert rc != 0, "cùng số lượng, khác node id mà bước xanh:\n%s" % ra
-        assert "THIẾU %s" % NODE_B[1] in ra and "THỪA  tests.api.test_b::test_c[p3]" in ra, ra
+        assert ("THIẾU %s" % NODE_B[1] in ra
+                and "THỪA  tests/api/test_b.py::test_c[p3]" in ra), ra
 
-    @pytest.mark.parametrize("hong", ["fail", "error"])
-    def test_chay_junit_co_ca_do_ma_rc_0_thi_do(self, wf_chon_ca, hong, tmp_path):
+    def test_chay_va_cham_khoa_junit_thi_do(self, wf_chon_ca, tmp_path):
+        """KD1 (Codex 23-11): hai node id khác nhau, CÙNG khoá JUnit
+        `("tests.test_a.test_b", "test_x")`. Collect cả hai, chạy MỘT ⇒ đỏ. So
+        qua khoá (classname, name) thì hai ca nhập làm một và lượt này XANH."""
+        bang = [(n.split("::")[0], n) for n in NODE_VA_CHAM]
+        rc, ra, _, _ = _chay_c(wf_chon_ca, tmp_path, [(NODE_VA_CHAM[0], "pass")], bang=bang)
+        assert rc != 0, "va chạm khoá JUnit che mất một ca:\n%s" % ra
+        assert "THIẾU %s" % NODE_VA_CHAM[1] in ra, ra
+
+    @pytest.mark.parametrize("kieu", ["fail", "loi-setup", "xpass-strict"])
+    def test_chay_co_ca_do_ma_rc_0_thi_do(self, wf_chon_ca, kieu, tmp_path):
         ket_qua = _tat_ca("pass")
-        ket_qua[0] = (ket_qua[0][0], hong)
+        ket_qua[0] = (ket_qua[0][0], kieu)
         rc, ra, _, _ = _chay_c(wf_chon_ca, tmp_path, ket_qua)
-        assert rc != 0, "JUnit có ca %s mà bước xanh:\n%s" % (hong, ra)
+        assert rc != 0, "có ca %s mà bước xanh:\n%s" % (kieu, ra)
+
+    def test_chay_loi_teardown_khong_tinh_passed_thi_do(self, wf_chon_ca, tmp_path):
+        """call ĐẠT, teardown LỖI, rc 0 (cô lập): ca ấy KHÔNG được tính PASSED."""
+        ket_qua = _tat_ca("pass")
+        ket_qua[0] = (ket_qua[0][0], "loi-teardown")
+        rc, ra, _, _ = _chay_c(wf_chon_ca, tmp_path, ket_qua)
+        assert rc != 0, "teardown lỗi mà ca được tính PASSED:\n%s" % ra
+        assert "passed 4 · failed 0 · errors 1" in ra, ra
+
+    def test_chay_ca_chay_do_thi_do(self, wf_chon_ca, tmp_path):
+        """Chỉ có pha setup (phiên chết giữa ca), rc 0 (cô lập) ⇒ đỏ."""
+        ket_qua = _tat_ca("pass")
+        ket_qua[0] = (ket_qua[0][0], "chay-do")
+        rc, ra, _, _ = _chay_c(wf_chon_ca, tmp_path, ket_qua)
+        assert rc != 0, "ca chạy dở mà bước xanh:\n%s" % ra
+        assert "chạy dở 1" in ra, ra
+
+    def test_chay_pha_bao_hai_lan_thi_do(self, wf_chon_ca, tmp_path):
+        """Một ca được báo HAI lượt (chạy lặp) — tập vẫn khớp, mọi ca đạt."""
+        rc, ra, _, _ = _chay_buoc_chon_ca(
+            wf_chon_ca, ID_CHAY, tmp_path, ca_txt=[MUC_A, MUC_B, MUC_C], bang=BANG_ABC,
+            co_plugin=True,
+            stub_ket_qua=_ket_qua(*_tat_ca("pass")) + _ket_qua((NODE_C[0], "pass")))
+        assert rc != 0, "ca chạy lặp mà bước xanh:\n%s" % ra
+        assert "HAI lần" in ra, ra
 
     def test_chay_toan_bo_skip_thi_do(self, wf_chon_ca, tmp_path):
-        """KC2 (Codex 23-11): collect N, marker / fixture skip CẢ N lúc chạy,
-        pytest rc 0, JUnit đủ N và đúng danh tính ⇒ trước đây XANH với passed = 0."""
-        rc, ra, _, _ = _chay_c(wf_chon_ca, tmp_path, _tat_ca("skip"))
+        """KC2: collect N, skip CẢ N lúc chạy, rc 0, danh tính khớp ⇒ đỏ."""
+        rc, ra, _, _ = _chay_c(wf_chon_ca, tmp_path, _tat_ca("skip-setup"))
         assert rc != 0, "toàn bộ ca bị skip mà bước xanh:\n%s" % ra
         assert "0 ca PASSED" in ra, ra
 
-    def test_chay_mot_muc_toan_skip_thi_do(self, wf_chon_ca, tmp_path):
-        """Các mục khác đạt (passed 3 > 0), nhưng MỌI ca của MUC_B bị skip ⇒ đỏ —
-        như "mục 0 ca" ở bước thu-thap: mục khác không được che nó."""
-        ket_qua = [(n, "skip" if n in NODE_B else "pass") for n, _ in _tat_ca("pass")]
+    @pytest.mark.parametrize("kieu", ["skip-setup", "skip-call", "xfail"])
+    def test_chay_mot_muc_toan_skip_thi_do(self, wf_chon_ca, kieu, tmp_path):
+        """Các mục khác đạt (passed 3 > 0), nhưng MỌI ca của MUC_B bị skip / xfail
+        ⇒ đỏ — mục khác đạt KHÔNG cứu được mục toàn skip."""
+        ket_qua = [(n, kieu if n in NODE_B else "pass") for n, _ in _tat_ca("pass")]
         rc, ra, _, _ = _chay_c(wf_chon_ca, tmp_path, ket_qua)
-        assert rc != 0, "một mục toàn skip bị các mục khác che:\n%s" % ra
+        assert rc != 0, "một mục toàn %s bị các mục khác che:\n%s" % (kieu, ra)
         assert "Mục %s" % MUC_B in ra, ra
 
-    def test_chay_skip_mot_phan_xanh_va_noi_ro(self, wf_chon_ca, tmp_path):
-        """Skip một phần (mục nào cũng còn ca đạt) ⇒ xanh, nhưng cảnh báo và kết
-        luận in RÕ số ca skip; không câu nào nói "đủ"."""
-        ket_qua = [(n, "skip" if n == NODE_A[1] else "pass") for n, _ in _tat_ca("pass")]
+    def test_chay_xpass_khong_strict_tinh_passed(self, wf_chon_ca, tmp_path):
+        ket_qua = _tat_ca("pass")
+        ket_qua[-1] = (ket_qua[-1][0], "xpass")
         rc, ra, _, _ = _chay_c(wf_chon_ca, tmp_path, ket_qua)
         assert rc == 0, ra
-        assert "::warning::1 ca bị SKIP" in ra and "skipped 1" in ra, ra
-        assert "KẾT LUẬN: 4/5 ca PASSED, 1 ca SKIP (KHÔNG được kiểm)." in ra, ra
+        assert "passed 5" in ra, ra
+
+    def test_chay_skip_mot_phan_xanh_va_noi_ro(self, wf_chon_ca, tmp_path):
+        """Skip / xfail một phần (mục nào cũng còn ca đạt) ⇒ xanh, nhưng cảnh báo và
+        kết luận in RÕ số ca skip; không câu nào nói "đủ"."""
+        ket_qua = [(n, "xfail" if n == NODE_A[1] else "pass") for n, _ in _tat_ca("pass")]
+        rc, ra, _, _ = _chay_c(wf_chon_ca, tmp_path, ket_qua)
+        assert rc == 0, ra
+        assert "::warning::1 ca bị SKIP / XFAIL" in ra and "skipped 1" in ra, ra
+        assert "XFAIL %s" % NODE_A[1] in ra, ra
+        assert "KẾT LUẬN: 4/5 ca PASSED, 1 ca SKIP / XFAIL (KHÔNG được kiểm)." in ra, ra
         assert "đủ" not in ra, "skip một phần mà vẫn có câu nói 'đủ':\n%s" % ra
 
     @pytest.mark.parametrize("bang", [None, "tests/unit/test_a.py khong-co-tab\n"],
@@ -4492,36 +4641,106 @@ class TestWorkflowChayChonCa:
         rc, ra, _, _ = _chay_c(wf_chon_ca, tmp_path, _tat_ca("pass"), bang=bang)
         assert rc != 0, "bảng mục → node id %r mà bước xanh:\n%s" % (bang, ra)
 
-    # --- K. ba bước với pytest THẬT (không stub) -------------------------------------------
+    # --- K. ba bước + plugin với pytest THẬT (không stub) -----------------------------------
     #
-    # Đo những giả định mà stub không đo được: `--collect-only -qq` dưới
-    # `addopts = -v` (pytest.ini THẬT của repo) in node id; JUnit thật ghi lớp
-    # lồng / tham số đúng như ánh xạ của bước `chay`; skip sau collect.
+    # Đo thứ stub không đo được: `--collect-only -qq` dưới `addopts = -v`
+    # (pytest.ini THẬT) in node id; plugin THẬT ghi đúng `report.nodeid` / pha /
+    # outcome / wasxfail; skip, xfail, lỗi teardown, va chạm khoá, ca rơi sau collect.
 
     def test_that_xanh_dem_dung_lop_long_va_tham_so(self, wf_chon_ca, tmp_path):
         ket_qua = _chay_that(wf_chon_ca, tmp_path,
                              "tests/unit/test_a.py tests/test_goc.py::test_goc", TEP_THAT_XANH)
         assert [rc for _, rc, _ in ket_qua] == [0, 0, 0], ket_qua
         ra = ket_qua[-1][2]
-        assert "collect 5 · chạy 5 · passed 5 · failed 0 · errors 0 · skipped 0" in ra, ra
+        assert ("collect 5 · chạy 5 · passed 5 · failed 0 · errors 0 · skipped 0 · chạy dở 0"
+                in ra), ra
         assert "KẾT LUẬN: 5/5 ca PASSED" in ra, ra
 
     @pytest.mark.parametrize("tep", [TEP_THAT_SKIP_MARKER, TEP_THAT_SKIP_FIXTURE],
                              ids=["marker", "fixture"])
     def test_that_skip_toan_bo_sau_collect_thi_do(self, wf_chon_ca, tep, tmp_path):
-        """KC2 với pytest THẬT: collect ra 2 ca (bước thu-thap xanh), lúc chạy cả
-        2 bị skip, pytest rc 0 ⇒ bước `chay` PHẢI đỏ."""
+        """KC2: collect ra 2 ca (thu-thap xanh), lúc chạy cả 2 bị skip, rc 0 ⇒ đỏ."""
         ket_qua = _chay_that(wf_chon_ca, tmp_path, "tests/unit/test_a.py", tep)
         assert [rc for _, rc, _ in ket_qua][:2] == [0, 0], ket_qua
         assert len(ket_qua) == 3 and ket_qua[2][1] != 0, ket_qua
         assert "pytest rc=0" in ket_qua[2][2] and "0 ca PASSED" in ket_qua[2][2], ket_qua[2][2]
 
     def test_that_cung_so_luong_khac_node_id_thi_do(self, wf_chon_ca, tmp_path):
-        """Tham số đổi giữa lượt collect và lượt chạy: cùng 2 ca, khác node id, đều
-        đạt, pytest rc 0 ⇒ bước `chay` PHẢI đỏ và chỉ ra phần chênh."""
+        """Tham số đổi giữa lượt collect và lượt chạy: cùng 2 ca, khác node id."""
         ket_qua = _chay_that(wf_chon_ca, tmp_path, "tests/unit/test_a.py", TEP_THAT_DOI_ID)
         assert [rc for _, rc, _ in ket_qua][:2] == [0, 0], ket_qua
         assert len(ket_qua) == 3 and ket_qua[2][1] != 0, ket_qua
         ra = ket_qua[2][2]
         assert "THIẾU tests/unit/test_a.py::test_x[a]" in ra, ra
-        assert "THỪA  tests.unit.test_a::test_x[c]" in ra, ra
+        assert "THỪA  tests/unit/test_a.py::test_x[c]" in ra, ra
+
+    def test_that_va_cham_khoa_junit_thi_do(self, wf_chon_ca, tmp_path):
+        """KD1 đúng ví dụ của Codex, với pytest THẬT: collect cả hai node id va
+        chạm khoá JUnit, lúc chạy chỉ còn một (rc 0, 1 passed) ⇒ đỏ."""
+        ket_qua = _chay_that(wf_chon_ca, tmp_path, "tests/test_a/test_b.py tests/test_a.py",
+                             TEP_THAT_VA_CHAM)
+        assert [rc for _, rc, _ in ket_qua][:2] == [0, 0], ket_qua
+        assert "Collect: 2 ca từ 2 mục." in ket_qua[1][2], ket_qua[1][2]
+        assert len(ket_qua) == 3 and ket_qua[2][1] != 0, ket_qua
+        assert "pytest rc=0" in ket_qua[2][2], ket_qua[2][2]
+        assert "THIẾU %s" % NODE_VA_CHAM[1] in ket_qua[2][2], ket_qua[2][2]
+
+    def test_that_thieu_mot_ca_sau_collect_thi_do(self, wf_chon_ca, tmp_path):
+        ket_qua = _chay_that(wf_chon_ca, tmp_path, "tests/unit/test_a.py", TEP_THAT_THIEU_MOT_CA)
+        assert [rc for _, rc, _ in ket_qua][:2] == [0, 0], ket_qua
+        assert len(ket_qua) == 3 and ket_qua[2][1] != 0, ket_qua
+        assert "THIẾU tests/unit/test_a.py::test_x[b]" in ket_qua[2][2], ket_qua[2][2]
+
+    def test_that_loi_teardown_thi_do(self, wf_chon_ca, tmp_path):
+        ket_qua = _chay_that(wf_chon_ca, tmp_path, "tests/unit/test_a.py", TEP_THAT_LOI_TEARDOWN)
+        assert [rc for _, rc, _ in ket_qua][:2] == [0, 0], ket_qua
+        assert len(ket_qua) == 3 and ket_qua[2][1] != 0, ket_qua
+        assert "passed 1 · failed 0 · errors 1" in ket_qua[2][2], ket_qua[2][2]
+
+    def test_that_xfail_toan_bo_mot_muc_thi_do(self, wf_chon_ca, tmp_path):
+        """Mọi ca của `tests/unit/test_a.py` là xfail, `tests/test_goc.py` đạt, rc 0
+        ⇒ đỏ theo luật "mục toàn skip"."""
+        ket_qua = _chay_that(wf_chon_ca, tmp_path, "tests/unit/test_a.py tests/test_goc.py",
+                             TEP_THAT_XFAIL_MOT_MUC)
+        assert [rc for _, rc, _ in ket_qua][:2] == [0, 0], ket_qua
+        assert len(ket_qua) == 3 and ket_qua[2][1] != 0, ket_qua
+        ra = ket_qua[2][2]
+        assert "pytest rc=0" in ra and "passed 1" in ra, ra
+        assert "Mục tests/unit/test_a.py: toàn bộ 2 ca bị SKIP / XFAIL." in ra, ra
+
+    def test_that_junit_prefix_trong_addopts_khong_anh_huong(self, wf_chon_ca, tmp_path):
+        """KD1: trước đây `--junit-prefix` trong addopts làm mọi lượt "thiếu / thừa".
+        Phán quyết theo node id gốc thì nó không còn liên quan."""
+        ket_qua = _chay_that(wf_chon_ca, tmp_path,
+                             "tests/unit/test_a.py tests/test_goc.py::test_goc", TEP_THAT_XANH,
+                             them_addopts=("--junit-prefix=tien_to",))
+        assert [rc for _, rc, _ in ket_qua] == [0, 0, 0], ket_qua
+        assert "KẾT LUẬN: 5/5 ca PASSED" in ket_qua[-1][2], ket_qua[-1][2]
+
+    def test_thu_muc_plugin_chi_co_mot_module(self):
+        """Bước `chay` đặt thư mục plugin ĐẦU `PYTHONPATH` của lượt chạy test. Có
+        thêm module nào ở đó (vd. chép nhầm `tests/`, `conftest.py`, `app.py`) là
+        nó CHE module cùng tên của bộ test — kết quả không còn tương đương nightly."""
+        co = sorted(p.name for p in DUONG_PLUGIN.parent.iterdir()
+                    if p.name != "__pycache__" and not p.name.endswith(".pyc"))
+        assert co == [DUONG_PLUGIN.name], (
+            "%s phải chỉ có %s, thấy %r" % (DUONG_PLUGIN.parent, DUONG_PLUGIN.name, co))
+
+    def test_that_plugin_thieu_bien_dich_thi_pytest_do(self, tmp_path):
+        """Fail-closed: nạp plugin mà KHÔNG có biến đích ⇒ pytest thoát ≠ 0."""
+        be = tmp_path / "be"
+        (be / "tests").mkdir(parents=True)
+        (be / "tests" / "test_a.py").write_text("def test_1():\n    pass\n", encoding="utf-8")
+        plugin = _chep_plugin(tmp_path)
+        env = dict(os.environ)
+        for ten in ("CI_CHON_CA_KET_QUA", "PYTEST_ADDOPTS", "PYTEST_CURRENT_TEST"):
+            env.pop(ten, None)
+        env["PYTHONPATH"] = str(plugin.parent) + os.pathsep + env.get("PYTHONPATH", "")
+        kq = subprocess.run(
+            [sys.executable, "-m", "pytest", "tests/test_a.py", "-q", "-p", "no:cacheprovider",
+             "-p", "ci_chon_ca_ghi_ket_qua"],
+            cwd=be, env=env, capture_output=True, timeout=120,
+        )
+        ra = (kq.stdout + kq.stderr).decode("utf-8", errors="replace")
+        assert kq.returncode != 0, "plugin thiếu biến đích mà pytest thoát 0:\n%s" % ra
+        assert "CI_CHON_CA_KET_QUA" in ra, ra
