@@ -356,50 +356,134 @@ def test_dong_bang_co_route_ghi_va_module():
 
 
 # ── luật thuần ────────────────────────────────────────────────────────────────────────────────────────────────────────
+KHONG_AP = "selection_kind_not_applicable"
+VUOT, NV_KE, CHO_BS, KHONG_DT = "admit_over_major_quota", "consider_next_choice", "defer_supplement", "admit_without_ethnic_bonus"
+BON_GOI_Y = (VUOT, NV_KE, CHO_BS, KHONG_DT)
+
+
 @pytest.mark.parametrize(
-    "loai, nv, co, mong_doi",
+    "loai, nv, co, goi_y, mong_doi",
     [
-        # Dòng có NV được xếp, không cờ: mọi loại trừ "Vẫn giữ" áp được.
-        ("admit_over_major_quota", 11, (), None),
-        ("consider_next_choice", 11, (), None),
-        ("defer_supplement", 11, (), None),
-        ("admit_without_ethnic_bonus", 11, (), None),
-        ("exclude_this_session", 11, (), None),
-        ("keep_despite_inactive", 11, (), "selection_kind_not_applicable"),
-        # Có cờ đang ngừng: "Vẫn giữ" áp được (một trong hai cờ là đủ).
-        ("keep_despite_inactive", 11, ("offering_inactive",), None),
-        ("keep_despite_inactive", 11, ("major_inactive", "quota_closed"), None),
-        ("keep_despite_inactive", 11, ("quota_closed",), "selection_kind_not_applicable"),
-        # Dòng KHÔNG có NV được xếp (``not_passed`` / ``ineligible``): chỉ "Chờ bổ sung" / "Loại khỏi lần này".
-        ("admit_over_major_quota", None, (), "selection_kind_not_applicable"),
-        ("consider_next_choice", None, (), "selection_kind_not_applicable"),
-        ("admit_without_ethnic_bonus", None, ("ethnic_priority_undetermined",), "selection_kind_not_applicable"),
-        ("keep_despite_inactive", None, ("offering_inactive",), "selection_kind_not_applicable"),
-        ("defer_supplement", None, ("ethnic_priority_undetermined",), None),
-        ("exclude_this_session", None, (), None),
-        ("loai_la", 11, (), "selection_kind_not_applicable"),
+        # Bốn loại theo GỢI Ý của GĐ2-B: áp được KHI VÀ CHỈ KHI dòng mang đúng gợi ý ấy (rà hợp nhất 23-11 H5.2, CLAUDE.md §7).
+        (VUOT, 11, (), (VUOT,), None),
+        (VUOT, 11, (), (), KHONG_AP),  # dòng ``auto`` (trong số chỗ) — máy xét không gợi ý trúng vượt
+        (VUOT, 11, (), (NV_KE,), KHONG_AP),
+        (NV_KE, 11, (), (VUOT, NV_KE), None),
+        (NV_KE, 11, (), (VUOT,), KHONG_AP),  # không còn NV sau xét được (vd chỉ còn học vụ chỉ tiêu 0)
+        (CHO_BS, 11, (), (KHONG_DT, CHO_BS), None),
+        (CHO_BS, 11, (), (), KHONG_AP),
+        (CHO_BS, None, ("ethnic_priority_undetermined",), (), KHONG_AP),  # ``not_passed`` + cờ dân tộc: máy xét không gợi ý
+        (KHONG_DT, 11, (), (KHONG_DT, CHO_BS), None),
+        (KHONG_DT, 11, (), (), KHONG_AP),
+        # Ràng buộc định nghĩa: loại nói về NV được xếp mà dòng không có NV được xếp (dòng lạ) ⇒ không áp, kể cả khi có gợi ý.
+        (VUOT, None, (), (VUOT,), KHONG_AP),
+        (KHONG_DT, None, (), (KHONG_DT,), KHONG_AP),
+        # "Vẫn giữ" (owner C5): có NV được xếp + cờ đang ngừng (một trong hai cờ là đủ); gợi ý không liên quan.
+        ("keep_despite_inactive", 11, ("offering_inactive",), (), None),
+        ("keep_despite_inactive", 11, ("major_inactive", "quota_closed"), (), None),
+        ("keep_despite_inactive", 11, ("quota_closed",), (), KHONG_AP),
+        ("keep_despite_inactive", 11, (), BON_GOI_Y, KHONG_AP),
+        ("keep_despite_inactive", None, ("offering_inactive",), (), KHONG_AP),
+        # "Loại khỏi lần này": mọi dòng.
+        ("exclude_this_session", 11, (), (), None),
+        ("exclude_this_session", None, (), (), None),
+        # Mã lạ — kể cả khi chính mã ấy nằm trong gợi ý — không mở được loại lạ.
+        ("loai_la", 11, (), (), KHONG_AP),
+        ("loai_la", 11, (), ("loai_la",), KHONG_AP),
     ],
 )
-def test_loai_ap_duoc_cho_dong(loai, nv, co, mong_doi):
+def test_loai_ap_duoc_cho_dong(loai, nv, co, goi_y, mong_doi):
     from app.services.admission_review_selection_service import kind_applicability_error
 
-    assert kind_applicability_error(loai, considered_choice_id=nv, flags=co) == mong_doi
+    assert kind_applicability_error(loai, considered_choice_id=nv, flags=co, decision_hints=goi_y) == mong_doi
 
 
 @pytest.mark.parametrize(
-    "nv, co, mong_doi",
+    "nv, co, goi_y, mong_doi",
     [
-        (11, (), ["admit_over_major_quota", "consider_next_choice", "defer_supplement", "admit_without_ethnic_bonus",
-                  "exclude_this_session"]),
-        (11, ("major_inactive",), list(SAU_LOAI)),
-        (None, (), ["defer_supplement", "exclude_this_session"]),
+        (11, (), (), ["exclude_this_session"]),
+        (11, (), (VUOT, NV_KE), [VUOT, NV_KE, "exclude_this_session"]),
+        (11, ("major_inactive",), (KHONG_DT, CHO_BS), [CHO_BS, KHONG_DT, "exclude_this_session", "keep_despite_inactive"]),
+        (11, ("major_inactive",), BON_GOI_Y, list(SAU_LOAI)),
+        (None, (), (), ["exclude_this_session"]),
     ],
 )
-def test_danh_sach_loai_chon_duoc_cung_vi_tu_voi_cong_ghi(nv, co, mong_doi):
+def test_danh_sach_loai_chon_duoc_cung_vi_tu_voi_cong_ghi(nv, co, goi_y, mong_doi):
     """Danh sách cho giao diện (L4 đưa vào bản xem dòng) = ĐÚNG các loại cổng ghi nhận — MỘT vị từ."""
     from app.services.admission_review_selection_service import applicable_selection_kinds
 
-    assert applicable_selection_kinds(considered_choice_id=nv, flags=co) == mong_doi
+    assert applicable_selection_kinds(considered_choice_id=nv, flags=co, decision_hints=goi_y) == mong_doi
+
+
+def test_bon_loai_lua_chon_trung_bon_ma_goi_y_cua_gd2b():
+    """CLAUDE.md §7: mã loại "theo gợi ý" = ĐÚNG mọi hằng ``HINT_*`` của luật GĐ2-B (GĐ2-B thêm / đổi gợi ý ⇒ đỏ — phải quyết loại
+    lựa chọn tương ứng, không lặng lẽ lệch); hai loại còn lại là của riêng C2 (owner C5)."""
+    from app.services import admission_review_rules as R
+    from app.services import admission_review_selection_service as svc
+
+    goi_y = {v for k, v in vars(R).items() if k.startswith("HINT_")}
+    assert svc.KINDS_FROM_DECISION_HINTS == goi_y == set(BON_GOI_Y)
+    assert set(m.SELECTION_KINDS) - goi_y == {m.SELECTION_EXCLUDE_THIS_SESSION, m.SELECTION_KEEP_DESPITE_INACTIVE}
+
+
+def _dong_that_cua_may_xet_gd2b():
+    """Dòng THẬT do máy xét GĐ2-B dựng (``admission_review_rules.evaluate_run`` trên dữ kiện SẠCH của ``test_gd2b_luat_thuan``) —
+    phủ đủ bốn gợi ý, ``needs_decision`` có / không gợi ý, cờ "đang ngừng", cả bốn tab."""
+    from decimal import Decimal as D
+
+    from app.services import admission_review_rules as R
+    from tests.unit import test_gd2b_luat_thuan as B
+
+    hv_1_cho = {B.HV1: B._hv(B.HV1, annual_quota=1), B.HV2: B._hv(B.HV2), B.HV3: B._hv(B.HV3)}
+    a = B._ho_so(1001, nvs=[B._nv(511, 1, B.HV1, subject_total=D("18"))])
+    b_hai_nv = B._ho_so(1002, nvs=[B._nv(521, 1, B.HV1, subject_total=D("17")), B._nv(522, 2, B.HV2)])
+    b_mot_nv = B._ho_so(1002, nvs=[B._nv(521, 1, B.HV1, subject_total=D("17"))])
+    nhom_het = (R.GroupFacts(B.NHOM, "N1", "Nhóm 1", ceiling=1),)
+    cu_tru_tu_choi = {B.HOC_BA: B._giay(), B.KHAI_SINH: B._giay(2), B.CU_TRU: B._giay(3, status="rejected")}
+    ngung = {B.HV1: B._hv(B.HV1, offering_inactive=True, major_inactive=True), B.HV2: B._hv(B.HV2), B.HV3: B._hv(B.HV3)}
+    luot = (
+        B._chay(a, b_hai_nv, run=B._run(hv=hv_1_cho)),  # BT20: ``auto`` + vượt chỉ tiêu (trúng vượt + NV kế)
+        B._chay(a, b_mot_nv, run=B._run(hv=hv_1_cho, groups=nhom_het)),  # nhóm hết chỗ, không NV sau: cần quyết, KHÔNG gợi ý
+        B._chay(B._dtts(docs=cu_tru_tu_choi)),  # BT14: ưu tiên dân tộc chưa xác định, đạt sàn (không cộng dân tộc + chờ bổ sung)
+        B._chay(B._dtts(docs=cu_tru_tu_choi, nvs=[B._nv(501, 1, B.HV1, subject_total=D("13.00"))])),  # ``not_passed`` + cờ dân tộc
+        B._chay(B._ho_so(), run=B._run(hv=ngung)),  # BT41: ``auto`` + cờ đang ngừng
+        B._run_hon_hop(),  # ``auto`` / ``needs_decision`` / ``not_passed`` / ``ineligible`` (nhiều mã)
+    )
+    return [r for l in luot for r in l.rows]
+
+
+def _loai_cho_dong(svc, r):
+    return svc.applicable_selection_kinds(
+        considered_choice_id=r.considered.choice_id if r.considered is not None else None,
+        flags=r.flags,
+        decision_hints=r.decision_hints,
+    )
+
+
+def test_loai_theo_goi_y_khop_dung_decision_hints_tren_dong_that_cua_may_xet_gd2b():
+    """CLAUDE.md §7 — test KHOÁ HAI BÊN BẰNG NHAU (rà hợp nhất 23-11 H5.2): trên dòng THẬT của máy xét GĐ2-B, tập loại "theo gợi ý"
+    mà C2 cho chọn == ĐÚNG ``decision_hints`` của dòng. Ca tự kiểm độ phủ của bộ dữ kiện (đủ bốn gợi ý, có dòng cần quyết KHÔNG gợi ý,
+    đủ bốn tab) — dữ kiện trôi thì đỏ ở đây, không xanh rỗng."""
+    from app.services import admission_review_rules as R
+    from app.services import admission_review_selection_service as svc
+
+    dong = _dong_that_cua_may_xet_gd2b()
+    assert set().union(*(r.decision_hints for r in dong)) == set(BON_GOI_Y)
+    assert {r.tab for r in dong} == {R.TAB_AUTO, R.TAB_NEEDS_DECISION, R.TAB_NOT_PASSED, R.TAB_INELIGIBLE}
+    assert any(r.tab == R.TAB_NEEDS_DECISION and not r.decision_hints for r in dong)
+    for r in dong:
+        theo_goi_y = {k for k in _loai_cho_dong(svc, r) if k in svc.KINDS_FROM_DECISION_HINTS}
+        assert theo_goi_y == set(r.decision_hints), (r.profile_id, r.tab, r.decision_hints)
+
+
+def test_van_giu_ap_duoc_dung_khi_dong_that_mang_co_dang_ngung():
+    from app.services import admission_review_selection_service as svc
+
+    dong = _dong_that_cua_may_xet_gd2b()
+    assert any(set(r.flags) & set(svc.INACTIVE_FLAGS) for r in dong)
+    for r in dong:
+        co_ngung = bool(set(r.flags) & set(svc.INACTIVE_FLAGS))
+        assert (m.SELECTION_KEEP_DESPITE_INACTIVE in _loai_cho_dong(svc, r)) == co_ngung, (r.profile_id, r.flags)
 
 
 @pytest.mark.parametrize(

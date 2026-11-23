@@ -59,10 +59,11 @@ async def latest_done_evaluate_run_id(db: AsyncSession, session_id: int) -> Opti
 
 
 async def get_row(db: AsyncSession, run_id: int, profile_id: int) -> Optional[Row]:
-    """Dòng kết quả (lượt, hồ sơ) — cột cần cho lựa chọn: ``row_hash``, ``considered_choice_id``, ``tab``, ``flags``."""
+    """Dòng kết quả (lượt, hồ sơ) — cột cần cho lựa chọn: ``row_hash``, ``considered_choice_id``, ``tab``, ``flags``,
+    ``decision_hints`` (gợi ý của máy xét GĐ2-B — nguồn của "loại áp được", CLAUDE.md §7)."""
     return (
         await db.execute(
-            select(W.row_hash, W.considered_choice_id, W.tab, W.flags).where(
+            select(W.row_hash, W.considered_choice_id, W.tab, W.flags, W.decision_hints).where(
                 W.run_id == run_id, W.profile_id == profile_id
             )
         )

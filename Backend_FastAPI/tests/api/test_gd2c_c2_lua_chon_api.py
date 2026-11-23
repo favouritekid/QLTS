@@ -53,7 +53,7 @@ NAM = 2026
 P = "/api/admission-config/review-sessions"
 Q = "/api/admission-config/quota-tables"
 KHONG_TON_TAI = 2_147_480_000
-H = {k: c * 64 for k, c in (("A1", "1"), ("B1", "2"), ("C1", "3"), ("B2", "4"), ("A2", "5"))}
+H = {k: c * 64 for k, c in (("A1", "1"), ("B1", "2"), ("C1", "3"), ("B2", "4"), ("A2", "5"), ("D1", "6"))}
 
 
 # ── dữ liệu giả ──────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -225,7 +225,8 @@ async def test_hai_nguoi_bam_cung_ho_so_nguoi_sau_409(client, nen, thu_ky, admin
     """Hai Thư ký cùng thấy "chưa có lựa chọn": người sau KHÔNG đè im lặng — 409 ``SELECTION_CHANGED`` + id lựa chọn hiện tại."""
     sid, b = nen["sid"], nen["hs"]["B"]
     x = (await _put(client, await dn(client, thu_ky), sid, b, based_on_row_hash=H["B1"])).json()["id"]
-    r = await _put(client, await dn(client, admin_user_in_db), sid, b, kind="consider_next_choice", based_on_row_hash=H["B1"])
+    # Loại người sau chọn ÁP ĐƯỢC cho dòng B (cờ đang ngừng) ⇒ ca chỉ kiểm MỘT bất biến: so ``supersedes_id``.
+    r = await _put(client, await dn(client, admin_user_in_db), sid, b, kind="keep_despite_inactive", based_on_row_hash=H["B1"])
     assert r.status_code == 409 and r.json()["error_code"] == "SELECTION_CHANGED", r.text
     assert r.json()["current_selection_id"] == x and await _dem(sid, b) == 1
 
@@ -243,22 +244,46 @@ async def test_ly_do_bat_buoc_400_khong_ghi(client, nen, thu_ky, loai, ly_do):
 
 
 @pytest.mark.parametrize(
-    "ho_so_k, loai, bam", [("C", "admit_over_major_quota", "C1"), ("A", "keep_despite_inactive", "A1")],
-    ids=["dong_khong_nv_ma_chon_vuot_chi_tieu", "dong_khong_co_ngung_ma_chon_van_giu"],
+    "ho_so_k, loai, bam",
+    [
+        ("C", "admit_over_major_quota", "C1"),
+        ("A", "keep_despite_inactive", "A1"),
+        ("A", "admit_over_major_quota", "A1"),
+        ("B", "consider_next_choice", "B1"),
+        ("C", "defer_supplement", "C1"),
+    ],
+    ids=[
+        "dong_khong_nv_ma_chon_vuot_chi_tieu",
+        "dong_khong_co_ngung_ma_chon_van_giu",
+        "dong_auto_khong_goi_y_ma_chon_vuot_chi_tieu",
+        "dong_can_quyet_khong_goi_y_nv_ke_ma_chon_nv_ke",
+        "dong_chua_dat_khong_goi_y_ma_chon_cho_bo_sung",
+    ],
 )
 async def test_loai_khong_ap_duoc_cho_dong_400(client, nen, thu_ky, ho_so_k, loai, bam):
+    """Loại áp được = gợi ý ``decision_hints`` của GĐ2-B ĐỌC từ dòng trong CSDL (rà hợp nhất 23-11 H5.2, CLAUDE.md §7) + cờ đang ngừng
+    + ràng buộc định nghĩa. Dòng A ``auto`` và C ``not_passed`` không có gợi ý nào; dòng B chỉ gợi ý "Trúng vượt". Có lý do ⇒ ca không
+    vấp kiểm lý do bắt buộc (kiểm TRƯỚC) mà đỏ đúng ở loại."""
     h = await dn(client, thu_ky)
-    r = await _put(client, h, nen["sid"], nen["hs"][ho_so_k], kind=loai, based_on_row_hash=H[bam])
+    r = await _put(client, h, nen["sid"], nen["hs"][ho_so_k], kind=loai, based_on_row_hash=H[bam], note="Lý do giả")
     assert r.status_code == 400 and r.json()["reason_code"] == "selection_kind_not_applicable", r.text
     assert await _dem(nen["sid"]) == 0
 
 
-async def test_dong_khong_nv_cho_bo_sung_duoc(client, nen, thu_ky):
-    """Đối chứng: dòng ``not_passed`` (không NV được xếp) nhận "Chờ bổ sung" có lý do; ``choice_id`` trống."""
+async def test_cho_bo_sung_ap_duoc_khi_may_xet_goi_y(client, nen, thu_ky):
+    """Đối chứng: lượt mới, dòng của hồ sơ D ``needs_decision`` vì ưu tiên dân tộc chưa xác định — máy xét GĐ2-B gợi ý "Chờ bổ sung"
+    + "Xét không cộng điểm dân tộc" ⇒ "Chờ bổ sung" (có lý do) ghi được, ``choice_id`` = NV được xếp. Biến thể: dịch vụ truyền gợi ý
+    RỖNG thay vì cột ``decision_hints`` của dòng ⇒ 400 ⇒ ca này đỏ (bảng chân trị thuần vẫn xanh — chỉ ca này thấy chỗ nối)."""
+    d, nv = nen["hs"]["D"], 104
+    dong = _dong_auto(
+        d, nv, H["D1"], tab="needs_decision", reason_codes=["ethnic_priority_undetermined"],
+        ethnic_priority_state="undetermined", decision_hints=["admit_without_ethnic_bonus", "defer_supplement"],
+    )
+    rid2 = await _luot_xong(nen["sid"], nen["admin"], [dong])
     h = await dn(client, thu_ky)
-    r = await _put(client, h, nen["sid"], nen["hs"]["C"], kind="defer_supplement", based_on_row_hash=H["C1"],
-                   note="Chờ giấy khai sinh")
-    assert r.status_code == 200 and r.json()["choice_id"] is None, r.text
+    r = await _put(client, h, nen["sid"], d, kind="defer_supplement", based_on_row_hash=H["D1"], note="Chờ giấy cư trú")
+    assert r.status_code == 200, r.text
+    assert (r.json()["choice_id"], r.json()["based_on_run_id"]) == (nv, rid2)
 
 
 @pytest.mark.parametrize("ho_so_k", ["D", None], ids=["ho_so_ngoai_luot", "ho_so_khong_ton_tai"])
