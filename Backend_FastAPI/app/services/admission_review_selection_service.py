@@ -29,8 +29,8 @@ Luật (dịch vụ là lớp kiểm trước, trả lỗi rõ; bất biến CSD
   - ``keep_despite_inactive`` (owner C5) cần dòng có NV được xếp VÀ mang cờ "đang ngừng" (cờ của GĐ2-B);
   - ``exclude_this_session`` áp cho mọi dòng.
 
-  [ĐX — thu hẹp so với bản 22-11 (trước đây bốn loại áp cho mọi dòng có NV được xếp, "Chờ bổ sung" cho mọi dòng); xem bàn giao
-  ``BAN-GIAO-C2-DUNG-LAI-2026-11-23.md``.]
+  Owner đồng ý thu hẹp (O1 23-11, ``gd2\\gd2c\\c2\\QUYET-DINH-OWNER-C2-O1-O2-CAU-404-2026-11-23.md``) — trước đây bốn loại áp cho mọi
+  dòng có NV được xếp, "Chờ bổ sung" cho mọi dòng.
 * Lần xét không có ⇒ 404 ``review_session_not_found``; không ``draft`` ⇒ 409 ``REVIEW_SESSION_NOT_DRAFT`` (cùng mã GĐ2-B, câu
   riêng cho lựa chọn); hồ sơ không có trong lượt ``evaluate`` xong mới nhất (hoặc chưa có lượt xong, hoặc hồ sơ không còn) ⇒ 404
   ``selection_row_not_found``.
