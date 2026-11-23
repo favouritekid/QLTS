@@ -7,27 +7,38 @@ Create Date: 2026-11-22
 Căn cứ: ``logs-P5/cong-bo-ket-qua/gd2/l3/QUYET-DINH-OWNER-DE-XUAT-THCS-4-CAU-2026-11-22.md`` (mặc định điều phối chọn,
 owner không phản đối: mã nội bộ ``NB`` + 6 số; bộ nạp danh mục Bộ bỏ qua mã ``NB``).
 
-MỘT câu ``DO`` mỗi chiều (``env.py`` chạy ``AUTOCOMMIT`` ⇒ chỉ một câu mới là một giao dịch): hỏng ở bất kỳ bước nào ⇒
-không còn gì dở dang, phiên bản Alembic chưa đổi, chạy lại được. Nâng cấp:
+MỘT câu ``DO`` mỗi chiều (``env.py`` chạy ``AUTOCOMMIT`` ⇒ chỉ một câu mới là một giao dịch). Ba đối tượng:
 
-1. sequence ``vn_school_internal_code_seq`` (1..999999, ``NO CYCLE`` — hết số ⇒ lỗi, không quay vòng);
-2. nếu đã có trường ``NB…`` (ca hạ cấp rồi nâng lại) ⇒ ``setval`` tới số lớn nhất đã cấp, để mã mới không trùng;
-3. CHECK ``ck_vn_school_internal_code_format`` (mã ``NB…`` đúng khuôn + có mã xã) — chuỗi chép NGUYÊN từ model;
-4. chỉ mục duy nhất ``uq_vn_school_internal_code`` trên các mã ``NB…`` (toàn bảng, kể cả trường đã ngừng).
+* sequence ``vn_school_internal_code_seq`` (1..999999, ``NO CYCLE`` — hết số ⇒ lỗi, không quay vòng);
+* CHECK ``ck_vn_school_internal_code_format`` (mã ``NB…`` đúng khuôn + có mã xã) — chuỗi chép NGUYÊN từ model;
+* chỉ mục duy nhất ``uq_vn_school_internal_code`` trên các mã ``NB…`` (toàn bảng, kể cả trường đã ngừng).
 
 Mỗi đối tượng chỉ tạo khi CHƯA có (``to_regclass`` / ``pg_constraint``): CSDL test dựng bằng ``create_all`` của model
 HEAD đã có sẵn chúng, và các test migration cũ (vd ``test_gd2a_migration``) nâng tới ``head`` trên CSDL ấy. Câu tạo vẫn
 chép NGUYÊN từ model; ``test_thcs_danh_muc_migration.py`` gỡ chúng rồi nâng để đo đúng đường tạo.
 
-Đối tượng ĐÃ có thì SO ĐỊNH NGHĨA (rà 23-11 F3 — trước đây chỉ dò theo TÊN): sequence theo ``pg_sequence`` (kiểu, start,
-increment, min, max, cycle); CHECK + chỉ mục so với MẪU dựng trên bảng tạm ``(LIKE vn_school)``. Lệch ⇒ RAISE ``QLT02`` /
-``QLT03`` / ``QLT04`` (``ExistingObjectMismatch``), câu ``DO`` rollback trọn, không ghi head. Khớp ⇒ NOTICE "da co, khop".
+Nâng cấp chạy theo BA PHA, đúng thứ tự (rà Codex 23-11 F'1 — bản trước gọi ``setval`` GIỮA các phép kiểm, mà ``setval``
+KHÔNG hoàn tác theo giao dịch ⇒ kiểm lệch rồi RAISE thì sequence đã có vẫn bị đổi giá trị, không quay lại):
 
-Dòng cũ vi phạm CHECK (mã bắt đầu bằng ``NB`` sẵn có) ⇒ câu ``ALTER TABLE`` lỗi ⇒ cả câu ``DO`` rollback. Trước khi
-nâng cấp production, đo (chỉ đọc): ``SELECT count(*) FROM vn_school WHERE upper(btrim(moet_school_code)) LIKE 'NB%'``
-phải = 0.
+1. KIỂM — chỉ đọc catalog + bảng mẫu TẠM (lùi cùng câu ``DO``). Đối tượng ĐÃ có thì SO ĐỊNH NGHĨA: sequence theo
+   ``pg_sequence`` (kiểu, start, increment, min, max, cache, cycle) + KHÔNG thuộc cột nào (``OWNED BY``, như model);
+   CHECK + chỉ mục so với MẪU dựng trên bảng tạm ``(LIKE vn_school)``. Lệch ⇒ RAISE ``QLT02`` / ``QLT03`` / ``QLT04``
+   (``ExistingObjectMismatch``) — lúc ấy CHƯA có thao tác ghi nào ⇒ không đối tượng nào, kể cả giá trị sequence, bị đổi;
+   phiên bản Alembic không đổi.
+2. TẠO đối tượng còn thiếu (DDL — thuộc giao dịch). Hỏng (vd dòng cũ vi phạm CHECK) ⇒ cả câu ``DO`` lùi, kể cả sequence
+   vừa tạo; sequence ĐÃ có chưa bị chạm vì ``setval`` chưa chạy.
+3. ``setval`` — câu GHI CUỐI CÙNG (sau nó chỉ còn ``RAISE NOTICE``), và CHỈ TIẾN: đã có trường ``NB…`` (ca hạ cấp rồi
+   nâng lại) mà số kế tiếp của sequence ≤ số lớn nhất đã cấp ⇒ ``setval`` tới số ấy để mã mới không trùng; sequence đã
+   đi TRƯỚC thì giữ nguyên (lùi lại sẽ cấp lại số có thể đã phát ra). Áp cho cả sequence vừa tạo lẫn sequence đã có
+   khớp: đã qua pha 1 + 2 thì đã chắc không còn RAISE nào. Khe còn lại, nói thật: mất kết nối đúng giữa ``setval`` và
+   ``COMMIT`` ⇒ DDL lùi nhưng sequence ĐÃ có có thể đã tiến tới số lớn nhất đã cấp — chỉ tạo khoảng trống số, không bao
+   giờ cấp trùng (sequence vừa tạo thì lùi mất cùng giao dịch).
 
-Hạ cấp: gỡ chỉ mục, CHECK, sequence. KHÔNG xoá dòng nào — trường ``NB…`` đã tạo vẫn còn; nâng lại thì bước 2 nối tiếp
+Khớp ⇒ NOTICE "da co, khop". Trước khi nâng cấp production, đo (chỉ đọc):
+``SELECT count(*) FROM vn_school WHERE upper(btrim(moet_school_code)) LIKE 'NB%'`` phải = 0 (khác 0 ⇒ pha 2 đổ ở
+``ALTER TABLE``).
+
+Hạ cấp: gỡ chỉ mục, CHECK, sequence. KHÔNG xoá dòng nào — trường ``NB…`` đã tạo vẫn còn; nâng lại thì pha 3 nối tiếp
 số thứ tự. Không đổi dữ liệu ở cả hai chiều ⇒ không cần cờ cho phép.
 """
 from typing import Sequence, Union
@@ -63,81 +74,108 @@ SQLSTATE_SEQUENCE_MISMATCH = "QLT02"
 SQLSTATE_CHECK_MISMATCH = "QLT03"
 SQLSTATE_INDEX_MISMATCH = "QLT04"
 
-# Đối tượng đã có (CSDL dựng bằng ``create_all``, hoặc lượt trước dở dang) thì SO ĐỊNH NGHĨA, lệch ⇒ RAISE (rà 23-11 F3:
-# trước đây chỉ dò theo TÊN ⇒ bảng / ràng buộc cũ lệch vẫn qua, Alembic vẫn ghi head, lỗi chỉ lộ khi ứng dụng chạy).
+# Đối tượng đã có (CSDL dựng bằng ``create_all``) thì SO ĐỊNH NGHĨA, lệch ⇒ RAISE (rà 23-11 F3: trước đây chỉ dò theo
+# TÊN ⇒ bảng / ràng buộc cũ lệch vẫn qua, Alembic vẫn ghi head, lỗi chỉ lộ khi ứng dụng chạy).
 # CHECK + chỉ mục: dựng MẪU đúng câu trên một bảng tạm ``(LIKE vn_school)`` (cùng kiểu cột) để PostgreSQL tự chuẩn hoá
 # biểu thức, rồi so NGUYÊN chuỗi ``pg_get_constraintdef`` / phần sau ``USING`` của ``pg_get_indexdef`` — không chép tay
 # chuỗi deparse (đổi theo phiên bản PostgreSQL). Bảng tạm ``ON COMMIT DROP`` + DROP tường minh.
+# Trình tự KIỂM → TẠO → ``setval`` (câu ghi cuối, chỉ tiến): xem docstring đầu tệp (rà Codex 23-11 F'1).
 UPGRADE_SQL = f"""
 DO $thcsnb$
 DECLARE
+    v_seq regclass;
+    v_co_ck boolean;
+    v_cm regclass;
     v_max integer;
+    v_cuoi bigint;
+    v_da_goi boolean;
     v_ghi text := '';
     v_mau text;
 BEGIN
     PERFORM set_config('lock_timeout', '{LOCK_TIMEOUT}', true);
     LOCK TABLE vn_school IN SHARE ROW EXCLUSIVE MODE;
+
+    -- PHA 1 - KIEM. Chi doc catalog + bang mau TAM (lui cung cau DO). Lech => RAISE khi CHUA ghi gi.
+    v_seq := to_regclass('vn_school_internal_code_seq');
+    v_co_ck := EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'ck_vn_school_internal_code_format' AND conrelid = 'vn_school'::regclass
+    );
+    v_cm := to_regclass('uq_vn_school_internal_code');
     CREATE TEMP TABLE thcsnb_mau (LIKE vn_school) ON COMMIT DROP;
     ALTER TABLE thcsnb_mau ADD CONSTRAINT thcsnb_mau_ck CHECK ({SQL_CK_INTERNAL_CODE});
     CREATE UNIQUE INDEX thcsnb_mau_uq ON thcsnb_mau (moet_school_code) WHERE {SQL_UQ_INTERNAL_CODE_WHERE};
 
-    IF to_regclass('vn_school_internal_code_seq') IS NULL THEN
-        {SQL_CREATE_SEQUENCE};
-        v_ghi := v_ghi || ' sequence: da tao;';
-    ELSIF EXISTS (
+    IF v_seq IS NOT NULL AND NOT EXISTS (
         SELECT 1 FROM pg_class c JOIN pg_sequence s ON s.seqrelid = c.oid
-        WHERE c.oid = to_regclass('vn_school_internal_code_seq') AND c.relkind = 'S'
+        WHERE c.oid = v_seq AND c.relkind = 'S'
           AND s.seqtypid = 'bigint'::regtype AND s.seqstart = 1 AND s.seqincrement = 1
-          AND s.seqmin = 1 AND s.seqmax = 999999 AND NOT s.seqcycle
+          AND s.seqmin = 1 AND s.seqmax = 999999 AND s.seqcache = 1 AND NOT s.seqcycle
+          AND NOT EXISTS (
+              SELECT 1 FROM pg_depend o
+              WHERE o.classid = 'pg_class'::regclass AND o.objid = c.oid AND o.deptype IN ('a', 'i')
+          )
     ) THEN
-        v_ghi := v_ghi || ' sequence: da co, khop;';
-    ELSE
         RAISE EXCEPTION 'thcsnb20261122: vn_school_internal_code_seq da co nhung LECH dinh nghia'
             USING ERRCODE = '{SQLSTATE_SEQUENCE_MISMATCH}';
-    END IF;
-    SELECT max(substring(moet_school_code FROM 3)::integer) INTO v_max
-      FROM vn_school WHERE moet_school_code ~ '^NB[0-9]{{6}}$';
-    IF v_max IS NOT NULL THEN
-        PERFORM setval('vn_school_internal_code_seq', v_max, true);
     END IF;
 
     SELECT pg_get_constraintdef(oid) INTO v_mau FROM pg_constraint
      WHERE conrelid = 'thcsnb_mau'::regclass AND conname = 'thcsnb_mau_ck';
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint
-        WHERE conname = 'ck_vn_school_internal_code_format' AND conrelid = 'vn_school'::regclass
-    ) THEN
-        ALTER TABLE vn_school ADD CONSTRAINT ck_vn_school_internal_code_format CHECK ({SQL_CK_INTERNAL_CODE});
-        v_ghi := v_ghi || ' check: da tao;';
-    ELSIF v_mau IS NOT NULL AND EXISTS (
+    IF v_co_ck AND NOT (v_mau IS NOT NULL AND EXISTS (
         SELECT 1 FROM pg_constraint
         WHERE conname = 'ck_vn_school_internal_code_format' AND conrelid = 'vn_school'::regclass
           AND contype = 'c' AND convalidated AND pg_get_constraintdef(oid) = v_mau
-    ) THEN
-        v_ghi := v_ghi || ' check: da co, khop;';
-    ELSE
+    )) THEN
         RAISE EXCEPTION 'thcsnb20261122: ck_vn_school_internal_code_format da co nhung LECH dinh nghia'
             USING ERRCODE = '{SQLSTATE_CHECK_MISMATCH}';
     END IF;
 
     SELECT regexp_replace(pg_get_indexdef(indexrelid), '^.*? USING ', '') INTO v_mau FROM pg_index
      WHERE indexrelid = 'thcsnb_mau_uq'::regclass;
-    IF to_regclass('uq_vn_school_internal_code') IS NULL THEN
-        CREATE UNIQUE INDEX uq_vn_school_internal_code ON vn_school (moet_school_code) WHERE {SQL_UQ_INTERNAL_CODE_WHERE};
-        v_ghi := v_ghi || ' chi muc: da tao;';
-    ELSIF v_mau IS NOT NULL AND EXISTS (
+    IF v_cm IS NOT NULL AND NOT (v_mau IS NOT NULL AND EXISTS (
         SELECT 1 FROM pg_index
-        WHERE indexrelid = to_regclass('uq_vn_school_internal_code') AND indrelid = 'vn_school'::regclass
+        WHERE indexrelid = v_cm AND indrelid = 'vn_school'::regclass
           AND indisunique AND indisvalid
           AND regexp_replace(pg_get_indexdef(indexrelid), '^.*? USING ', '') = v_mau
-    ) THEN
-        v_ghi := v_ghi || ' chi muc: da co, khop;';
-    ELSE
+    )) THEN
         RAISE EXCEPTION 'thcsnb20261122: uq_vn_school_internal_code da co nhung LECH dinh nghia'
             USING ERRCODE = '{SQLSTATE_INDEX_MISMATCH}';
     END IF;
-
     DROP TABLE thcsnb_mau;
+
+    -- PHA 2 - TAO doi tuong con thieu (DDL thuoc giao dich: hong => lui tron, ke ca sequence vua tao).
+    IF v_seq IS NULL THEN
+        {SQL_CREATE_SEQUENCE};
+        v_ghi := v_ghi || ' sequence: da tao;';
+    ELSE
+        v_ghi := v_ghi || ' sequence: da co, khop;';
+    END IF;
+    IF NOT v_co_ck THEN
+        ALTER TABLE vn_school ADD CONSTRAINT ck_vn_school_internal_code_format CHECK ({SQL_CK_INTERNAL_CODE});
+        v_ghi := v_ghi || ' check: da tao;';
+    ELSE
+        v_ghi := v_ghi || ' check: da co, khop;';
+    END IF;
+    IF v_cm IS NULL THEN
+        CREATE UNIQUE INDEX uq_vn_school_internal_code ON vn_school (moet_school_code) WHERE {SQL_UQ_INTERNAL_CODE_WHERE};
+        v_ghi := v_ghi || ' chi muc: da tao;';
+    ELSE
+        v_ghi := v_ghi || ' chi muc: da co, khop;';
+    END IF;
+
+    -- PHA 3 - setval: cau GHI CUOI (sequence KHONG lui theo giao dich), CHI TIEN.
+    SELECT max(substring(moet_school_code FROM 3)::integer) INTO v_max
+      FROM vn_school WHERE moet_school_code ~ '^NB[0-9]{{6}}$';
+    IF v_max IS NOT NULL THEN
+        SELECT last_value, is_called INTO v_cuoi, v_da_goi FROM vn_school_internal_code_seq;
+        IF (CASE WHEN v_da_goi THEN v_cuoi + 1 ELSE v_cuoi END) <= v_max THEN
+            PERFORM setval('vn_school_internal_code_seq', v_max, true);
+            v_ghi := v_ghi || ' sequence: tien toi so lon nhat da cap;';
+        ELSE
+            v_ghi := v_ghi || ' sequence: da di truoc so lon nhat da cap, giu nguyen;';
+        END IF;
+    END IF;
     RAISE NOTICE 'thcsnb20261122: ma noi bo NB:% (so lon nhat da cap: %)', v_ghi, coalesce(v_max, 0);
 END
 $thcsnb$
@@ -165,12 +203,14 @@ $thcsnb_down$
 
 
 class UpgradeLockTimeout(RuntimeError):
-    """Chờ khoá quá ``LOCK_TIMEOUT``. Câu ``DO`` rollback trọn ⇒ không còn gì dở dang; chạy lại khi bảng rảnh."""
+    """Chờ khoá quá ``LOCK_TIMEOUT`` (khoá đầu câu, hoặc nâng khoá ở ``ALTER TABLE`` pha 2 — đều TRƯỚC ``setval``). Câu
+    ``DO`` rollback trọn ⇒ không còn gì dở dang; chạy lại khi bảng rảnh."""
 
 
 class ExistingObjectMismatch(RuntimeError):
-    """Đối tượng cùng tên đã có nhưng LỆCH định nghĩa. Câu ``DO`` rollback trọn, phiên bản Alembic không đổi —
-    người vận hành so tay rồi gỡ / sửa đối tượng ấy trước khi nâng lại."""
+    """Đối tượng cùng tên đã có nhưng LỆCH định nghĩa. Phát hiện ở pha KIỂM, khi CHƯA có thao tác ghi nào ⇒ không
+    đối tượng nào (kể cả giá trị sequence) bị đổi, phiên bản Alembic không đổi — người vận hành so tay rồi gỡ / sửa
+    đối tượng ấy trước khi nâng lại."""
 
 
 def _sqlstate(e: DBAPIError) -> str:
@@ -197,8 +237,9 @@ def _chay(sql: str, chieu: str) -> None:
             ) from None
         if ma in _DOI_TUONG_LECH:
             raise ExistingObjectMismatch(
-                "%s thcsnb20261122 dừng (SQLSTATE %s): %s đã có nhưng LỆCH định nghĩa của model. Câu DO đã rollback "
-                "trọn, phiên bản Alembic không đổi. So tay rồi gỡ / sửa đối tượng ấy trước khi nâng lại."
+                "%s thcsnb20261122 dừng (SQLSTATE %s): %s đã có nhưng LỆCH định nghĩa của model. Dừng ở pha kiểm, "
+                "chưa ghi gì (kể cả sequence), phiên bản Alembic không đổi. So tay rồi gỡ / sửa đối tượng ấy trước khi "
+                "nâng lại."
                 % (chieu, ma, _DOI_TUONG_LECH[ma])
             ) from None
         raise

@@ -214,10 +214,20 @@ async def test_doi_tuong_da_co_dung_dinh_nghia_thi_nang_cap_qua(csdl_truoc_nb):
     [
         # Mỗi biến thể lệch ĐÚNG MỘT đối tượng, kiểu tinh vi nhất (cùng tên, gần như cùng câu).
         ("seq", "MAXVALUE 999999", "MAXVALUE 9999999", "QLT02"),
+        # Rà Codex 23-11 F'1 (cùng lớp "gộp mất thông tin"): CACHE > 1 ⇒ mỗi phiên giữ trước 20 số; OWNED BY ⇒ xoá cột
+        # kéo theo xoá sequence. Model khai sequence ĐỘC LẬP, cache 1.
+        ("seq", "START WITH 1 NO CYCLE", "START WITH 1 CACHE 20 NO CYCLE", "QLT02"),
+        ("seq", " NO CYCLE", " NO CYCLE OWNED BY vn_school.moet_school_code", "QLT02"),
         ("ck", " AND commune_code IS NOT NULL", "", "QLT03"),  # NB… không còn bắt buộc mã xã
         ("cm", "CREATE UNIQUE INDEX", "CREATE INDEX", "QLT04"),  # mất tính duy nhất
     ],
-    ids=["sequence_maxvalue", "check_bo_dieu_kien_ma_xa", "chi_muc_khong_duy_nhat"],
+    ids=[
+        "sequence_maxvalue",
+        "sequence_cache",
+        "sequence_thuoc_cot",
+        "check_bo_dieu_kien_ma_xa",
+        "chi_muc_khong_duy_nhat",
+    ],
 )
 async def test_doi_tuong_da_co_lech_dinh_nghia_thi_dung_khong_ghi_head(csdl_truoc_nb, phan, thay_tu, thay_bang, ma):
     ten = csdl_truoc_nb
@@ -232,5 +242,91 @@ async def test_doi_tuong_da_co_lech_dinh_nghia_thi_dung_khong_ghi_head(csdl_truo
         assert rc != 0
         assert "ExistingObjectMismatch" in out and ma in out, out[-3000:]  # đỏ ĐÚNG lý do, đúng đối tượng
         assert await _phien_ban(k) == TRUOC
+    finally:
+        await k.close()
+
+
+# ---------- ``setval`` không hoàn tác theo giao dịch: phải là câu ghi CUỐI, chỉ tiến (rà Codex 23-11 F'1) ----------
+
+_DOC_SEQ = "SELECT last_value, is_called FROM vn_school_internal_code_seq"
+
+
+@pytest.mark.parametrize(
+    "lam_hong,dau_hieu",
+    [
+        ("lech_check", "QLT03"),  # đối tượng ĐÃ có lệch ⇒ RAISE ở pha kiểm
+        ("lech_chi_muc", "QLT04"),  # cùng thế, đối tượng kiểm SAU CÙNG
+        # CHECK chưa có + dòng cũ sai khuôn ⇒ ``ALTER TABLE … ADD CONSTRAINT`` đổ ở pha TẠO (sau mọi phép kiểm).
+        ("tao_check_do", "sqlstate=23514"),
+    ],
+    ids=["lech_check", "lech_chi_muc", "tao_check_do"],
+)
+async def test_cau_do_do_thi_sequence_da_co_giu_nguyen_gia_tri(csdl_truoc_nb, lam_hong, dau_hieu):
+    """Sequence ĐÃ có (đúng định nghĩa) + có trường ``NB000041`` ⇒ migration CẦN đưa sequence tới 41. Một đối tượng
+    khác lệch, hoặc một câu tạo đổ ⇒ câu ``DO`` lùi; ``setval`` thì KHÔNG lùi theo giao dịch ⇒ sequence phải giữ
+    NGUYÊN (``last_value``, ``is_called``). Bản trước gọi ``setval`` ngay sau phép kiểm sequence, TRƯỚC phép kiểm
+    CHECK / chỉ mục ⇒ cả ba ca đỏ; bản gọi ``setval`` sau pha kiểm nhưng TRƯỚC pha tạo ⇒ ca ``tao_check_do`` đỏ."""
+    ten = csdl_truoc_nb
+    cau = _ba_doi_tuong_dung()
+    k = await asyncpg.connect(_url(ten, "postgresql"))
+    try:
+        await k.execute(cau["seq"])
+        await _chen_nb(k, "NB000041")
+        if lam_hong == "lech_check":
+            sai = cau["ck"].replace(" AND commune_code IS NOT NULL", "", 1)
+            assert sai != cau["ck"]
+            await k.execute(sai)
+        elif lam_hong == "lech_chi_muc":
+            sai = cau["cm"].replace("CREATE UNIQUE INDEX", "CREATE INDEX", 1)
+            assert sai != cau["cm"]
+            await k.execute(sai)
+        else:
+            await k.execute(
+                "INSERT INTO vn_school (moet_school_code, moet_province_code, name, province, level) "
+                "VALUES ('NB1', '048', 'Cũ', 'P', 'THPT')"
+            )
+        truoc = tuple(await k.fetchrow(_DOC_SEQ))
+        # Tiền đề: số kế tiếp (1) ≤ số lớn nhất đã cấp (41) ⇒ một ``setval`` chạy sớm chắc chắn ĐỔI giá trị.
+        assert truoc == (1, False)
+        rc, out = await _alembic(ten, "upgrade", NB)
+        assert rc != 0
+        assert dau_hieu in out, out[-3000:]  # đổ ĐÚNG chỗ
+        if dau_hieu.startswith("QLT"):
+            assert "ExistingObjectMismatch" in out, out[-3000:]
+        assert await _phien_ban(k) == TRUOC
+        assert tuple(await k.fetchrow(_DOC_SEQ)) == truoc
+        # Không đối tượng nào được tạo (chỉ còn đúng thứ đã dựng tay trước khi nâng).
+        assert await k.fetchval(
+            "SELECT count(*) FROM pg_constraint WHERE conname = 'ck_vn_school_internal_code_format'"
+        ) == (1 if lam_hong == "lech_check" else 0)
+        co_chi_muc = await k.fetchval("SELECT to_regclass('uq_vn_school_internal_code')") is not None
+        assert co_chi_muc == (lam_hong == "lech_chi_muc")
+    finally:
+        await k.close()
+
+
+@pytest.mark.parametrize(
+    "dat_truoc,so_ke_tiep",
+    [
+        (None, 42),  # sequence (1, chưa gọi) đi SAU số lớn nhất 41 ⇒ tiến tới 41
+        (100, 101),  # sequence đã ở 100 (đi TRƯỚC) ⇒ giữ nguyên, KHÔNG lùi về 41 (lùi ⇒ cấp lại 42..100)
+    ],
+    ids=["di_sau_thi_tien_toi_so_lon_nhat", "di_truoc_thi_giu_nguyen"],
+)
+async def test_sequence_da_co_khop_chi_tien_khong_lui(csdl_truoc_nb, dat_truoc, so_ke_tiep):
+    """Đối chứng đường XANH của pha 3: sequence ĐÃ có, khớp định nghĩa; mọi kiểm qua ⇒ ``setval`` chỉ khi số kế tiếp
+    ≤ số lớn nhất đã cấp. Bản "chỉ ``setval`` khi tự tạo sequence" ⇒ ca đầu đỏ (kế tiếp = 1); bản ``setval`` vô điều
+    kiện (cho lùi, như bản trước) ⇒ ca sau đỏ (kế tiếp = 42)."""
+    ten = csdl_truoc_nb
+    k = await asyncpg.connect(_url(ten, "postgresql"))
+    try:
+        await k.execute(_ba_doi_tuong_dung()["seq"])
+        if dat_truoc is not None:
+            await k.execute("SELECT setval('vn_school_internal_code_seq', $1, true)", dat_truoc)
+        await _chen_nb(k, "NB000041")
+        rc, out = await _alembic(ten, "upgrade", NB)
+        assert rc == 0, out[-3000:]
+        assert await _phien_ban(k) == NB
+        assert await k.fetchval("SELECT nextval('vn_school_internal_code_seq')") == so_ke_tiep
     finally:
         await k.close()
