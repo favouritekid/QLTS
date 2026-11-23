@@ -209,10 +209,19 @@ async def test_ung_vien_tim_theo_ho_ten_bo_dau_ten_dang_nhap_email(client, admin
     assert ids == {ung_vien[khoa]}, (q, ids)
 
 
-@pytest.mark.parametrize("q", ["%", "_", "\\"])
+@pytest.mark.parametrize(
+    "q", ["%", "nguyen van th_", "\\"], ids=["phan_tram", "gach_duoi_sau_ho_ten", "gach_cheo"]
+)
 async def test_ung_vien_ky_tu_mau_like_la_chu_khong_phai_mau(client, admin_user_in_db, ung_vien, q):
-    """``%`` / ``_`` / ``\\`` người gõ là CHỮ (thoát bằng ``escape_like_pattern``): không ai có các ký tự ấy trong họ tên / tên
-    đăng nhập / email ⇒ rỗng. Bỏ bước thoát ⇒ ``%`` khớp TẤT CẢ ⇒ đỏ."""
+    """``%`` / ``_`` / ``\\`` người gõ là CHỮ (thoát bằng ``escape_like_pattern``) ⇒ rỗng.
+
+    * ``%``: không ai có ``%`` ⇒ rỗng; bỏ thoát ⇒ khớp TẤT CẢ ⇒ đỏ.
+    * ``_``: KHÔNG dùng ``q="_"`` trần — tên đăng nhập / email dữ liệu thử (``gd2c_uv_*``) có dấu ``_`` THẬT, nên ``_`` đã thoát
+      đúng vẫn khớp chữ ``_`` ⇒ ca ấy đỏ trên mã ĐÚNG và cũng đỏ khi bỏ thoát (không phân biệt được gì — CI 23-11 N4, rà 23-11
+      G5). ``"nguyen van th_"``: thoát đúng ⇒ cần chữ ``_`` sau "nguyen van th" ⇒ không ai ⇒ rỗng; bỏ thoát ⇒ ``_`` khớp một
+      ký tự ⇒ khớp "Nguyễn Văn Thư" (bỏ dấu) ⇒ đỏ.
+    * ``\\``: không ai có ``\\`` ⇒ rỗng, không 500. Ca này KHÔNG phân biệt được biến thể "không nhân đôi ``\\``" (dữ liệu thử
+      không có ``\\`` nào để khớp) — chỉ canh "không khớp tất cả / không lỗi"."""
     ids = {x["id"] for x in await _tim(client, admin_user_in_db, q=q)} & set(ung_vien.values())
     assert ids == set(), (q, ids)
 
@@ -288,23 +297,23 @@ async def _kiem_tu_thu_hoi(g: int, admin_id: int, ly_do: str):
         ("manager", {"status": "banned"}, LY_DO_KHOA),
     ],
 )
-async def test_sua_tai_khoan_le_tu_thu_hoi(client, admin_token_headers, admin_user_in_db, seed_lead_dependencies,
-                                           vai_dau, thay_doi, ly_do):
+async def test_sua_tai_khoan_le_tu_thu_hoi(client, admin_user_in_db, seed_lead_dependencies, vai_dau, thay_doi, ly_do):
     nguoi = await tao_nguoi("gd2c_c1_le_%s" % vai_dau, vai_dau, seed_lead_dependencies["unit_id"])
     g = (await gan(client, admin_user_in_db, nguoi["id"]))["id"]
-    client.cookies.clear()
-    r = await client.put(AdminURLs.USER_DETAIL(nguoi["id"]), headers=admin_token_headers, data=thay_doi)
+    # Token MỚI sau ``gan``: ``gan`` đăng nhập lại Admin trên CÙNG thiết bị ⇒ phiên cũ (của fixture
+    # ``admin_token_headers``) bị thu hồi (``session_service._revoke_previous_sessions_on_device``) ⇒ 401 INVALID_TOKEN.
+    h = await dn(client, admin_user_in_db)
+    r = await client.put(AdminURLs.USER_DETAIL(nguoi["id"]), headers=h, data=thay_doi)
     assert r.status_code == 200, r.text
     await _kiem_tu_thu_hoi(g, admin_user_in_db["id"], ly_do)
 
 
 @pytest.mark.parametrize("vai_dau, vai_moi", [("manager", "officer"), ("officer", "manager")])
-async def test_quan_ly_can_bo_doi_qua_lai_giu_quyen(client, admin_token_headers, admin_user_in_db, seed_lead_dependencies,
-                                                    vai_dau, vai_moi):
+async def test_quan_ly_can_bo_doi_qua_lai_giu_quyen(client, admin_user_in_db, seed_lead_dependencies, vai_dau, vai_moi):
     nguoi = await tao_nguoi("gd2c_c1_giu_%s" % vai_dau, vai_dau, seed_lead_dependencies["unit_id"])
     g = (await gan(client, admin_user_in_db, nguoi["id"]))["id"]
-    client.cookies.clear()
-    r = await client.put(AdminURLs.USER_DETAIL(nguoi["id"]), headers=admin_token_headers, data={"role": vai_moi})
+    h = await dn(client, admin_user_in_db)  # token mới sau ``gan`` (xem ``test_sua_tai_khoan_le_tu_thu_hoi``)
+    r = await client.put(AdminURLs.USER_DETAIL(nguoi["id"]), headers=h, data={"role": vai_moi})
     assert r.status_code == 200, r.text
     assert await mot("SELECT role FROM \"user\" WHERE id = :u", u=nguoi["id"]) == vai_moi
     assert (await dong_quyen(g))["revoked_at"] is None
@@ -334,11 +343,11 @@ async def test_go_vai_can_bo_tu_thu_hoi(client, admin_user_in_db, can_bo):
     await _kiem_tu_thu_hoi(g, admin_user_in_db["id"], "Tự thu hồi: tài khoản đổi vai từ Cán bộ sang Người dùng")
 
 
-async def test_mo_khoa_khong_khoi_phuc_quyen(client, admin_token_headers, admin_user_in_db, can_bo):
+async def test_mo_khoa_khong_khoi_phuc_quyen(client, admin_user_in_db, can_bo):
     g = (await gan(client, admin_user_in_db, can_bo["id"]))["id"]
+    h = await dn(client, admin_user_in_db)  # token mới sau ``gan`` (xem ``test_sua_tai_khoan_le_tu_thu_hoi``)
     for trang_thai in ("inactive", "active"):
-        client.cookies.clear()
-        r = await client.put(AdminURLs.USER_DETAIL(can_bo["id"]), headers=admin_token_headers, data={"status": trang_thai})
+        r = await client.put(AdminURLs.USER_DETAIL(can_bo["id"]), headers=h, data={"status": trang_thai})
         assert r.status_code == 200, r.text
     await _kiem_tu_thu_hoi(g, admin_user_in_db["id"], LY_DO_KHOA)
     assert await mot(
@@ -409,10 +418,10 @@ async def test_k4_chan_xoa_nguoi_chi_con_dong_quyen_thu_ky(client, admin_token_h
     assert await mot("SELECT count(*) FROM \"user\" WHERE id = :u", u=x) == 1
 
 
-async def test_k4_chan_xoa_nguoi_da_bi_thu_hoi_quyen(client, admin_token_headers, admin_user_in_db, can_bo):
+async def test_k4_chan_xoa_nguoi_da_bi_thu_hoi_quyen(client, admin_user_in_db, can_bo):
     """Lịch sử "đã từng là Thư ký" vẫn chặn xoá sau khi thu hồi (người đề xuất ≠ người khoá đọc lại lịch sử này)."""
     g = (await gan(client, admin_user_in_db, can_bo["id"]))["id"]
     await thu_hoi(client, admin_user_in_db, g)
-    client.cookies.clear()
-    r = await client.delete(AdminURLs.USER_DETAIL(can_bo["id"]), headers=admin_token_headers)
+    h = await dn(client, admin_user_in_db)  # token mới sau ``gan`` / ``thu_hoi`` (xem ``test_sua_tai_khoan_le_tu_thu_hoi``)
+    r = await client.delete(AdminURLs.USER_DETAIL(can_bo["id"]), headers=h)
     assert r.status_code == 409 and r.json()["error_code"] == "USER_HAS_ACTIVITY", r.text

@@ -33,6 +33,22 @@ except ImportError:
 log = logging.getLogger(__name__)
 
 
+@pytest_asyncio.fixture(autouse=True)
+async def _don_cache_pipeline(test_redis_client):
+    """Xoá hai khoá cache pipeline TRƯỚC và SAU mỗi ca của tệp này.
+
+    Redis của bộ test là MỘT ``FakeRedis`` (``_fake_server``) dùng chung cho cả tiến trình pytest của một lát; CSDL bị
+    truncate đầu mỗi ca nhưng cache thì KHÔNG. Ca cache-hit mồi ``Fake Stage CACHED`` (không TTL), ca cache-miss để lại
+    stage của chính nó ⇒ tệp test chạy SAU trong cùng lát đọc board / ``/pipeline/all`` ra dữ liệu cũ: ca đối chứng
+    ``test_az_phan_quyen.py::TestAZ3PipelineBoard::test_doi_chung_board_manager_thay_lead_don_vi_minh`` đỏ ("Fake Stage
+    CACHED", CI 23-11 N4), còn các ca "không lộ lead đơn vị khác" của AZ3 thì xanh GIẢ. Dọn ở đây (tệp gây rò), không nới
+    phép kiểm bên AZ3."""
+    khoa = (PIPELINE_STAGES_CACHE_KEY, PIPELINE_STATUSES_CACHE_KEY)
+    await test_redis_client.delete(*khoa)
+    yield
+    await test_redis_client.delete(*khoa)
+
+
 # === Fixture để tạo dữ liệu pipeline mẫu ===
 @pytest_asyncio.fixture(scope="function")
 async def seed_pipeline_data(setup_test_database):
