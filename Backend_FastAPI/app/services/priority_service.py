@@ -540,6 +540,37 @@ def kv_last_school_year(entry: dict) -> Any:
     return y_to - 1 if _history_int(y_to) else y_to
 
 
+def kv_graduation_year_group(entries: list) -> list[tuple[int, dict]]:
+    """Nhóm ứng viên trường tốt nghiệp ở bước hoà: ``(chỉ số trong entries, mục)`` của các mục có ``year_to`` LỚN NHẤT.
+
+    Trường tốt nghiệp luôn thuộc nhóm này vì khoá xếp đầu tiên của bước hoà là ``year_to``. Bước hoà chỉ xếp TRONG nhóm (rà hợp nhất
+    23-11 mục B-H1): xếp cả các nhóm thấp hơn không đổi kết quả, nhưng bắt hai mục cùng ``year_to`` ở nhóm thấp so lớp với nhau ⇒
+    ``TypeError`` khi một mục có lớp ``null`` / chuỗi. Chỉ gọi khi MỌI ``year_to`` là số nguyên (:func:`_history_int`) — vế đầu
+    của :func:`kv_graduation_candidates_unclear`."""
+    latest = max(e["year_to"] for e in entries)
+    return [(i, e) for i, e in enumerate(entries) if e["year_to"] == latest]
+
+
+def kv_graduation_candidates_unclear(entries: list) -> Optional[list]:
+    """Bước hoà (M1) của luật học nhiều trường: các mục CÓ THỂ là trường tốt nghiệp mà KHÔNG so được ⇒ trả danh sách mục ấy (hoà
+    không phân định ⇒ cần xét tay); ``None`` = so được, đi tiếp phép xếp trong nhóm :func:`kv_graduation_year_group`.
+
+    * Một mục bất kỳ thiếu / sai kiểu ``year_to`` ⇒ không biết mục nào học sau cùng ⇒ MỌI mục.
+    * ``year_to`` đều hợp lệ: nhóm có ``year_to`` lớn nhất có từ 2 mục trở lên mà một mục thiếu / sai kiểu ``grade_to`` ⇒ nhóm ấy.
+    * Nhóm ``year_to`` lớn nhất chỉ có MỘT mục ⇒ so được (lớp không cần) — như cũ. Lớp lạ ở nhóm THẤP hơn không cản: nhóm ấy không
+      được xếp.
+
+    "Hợp lệ" = :func:`_history_int` (số nguyên thật: không ``bool``, chuỗi, số thực, ``None``). Vì sao: khoá sắp xếp cũ
+    ``(.get("year_to", 0), .get("grade_to", 0), -index)`` chỉ thay khi THIẾU khoá; JSON ``null`` (hay chuỗi) ⇒ so ``None`` với
+    ``int`` ⇒ ``TypeError`` (owner GO 22-11 "sửa ngay, PR nhỏ riêng" — phát hiện ở bàn giao L3-a)."""
+    if any(not _history_int(e.get("year_to")) for e in entries):
+        return list(entries)
+    candidates = [e for _, e in kv_graduation_year_group(entries)]
+    if len(candidates) >= 2 and any(not _history_int(e.get("grade_to")) for e in candidates):
+        return candidates
+    return None
+
+
 def _has_thpt_history(academic_history: Optional[list]) -> bool:
     """True khi profile có ít nhất 1 academic_history entry mức THPT/GDTX hợp lệ.
 
@@ -1547,8 +1578,26 @@ def _kv_resolution_steps(
 
     # Tiebreak: graduation school (highest year_to + grade_to, stable index).
     # M1: detect ambiguous (2+ entries cùng year_to + grade_to) → require manual.
+    # Owner GO 22-11: mục có thể là trường tốt nghiệp mà thiếu / sai kiểu year_to / grade_to ⇒ KHÔNG so (tránh TypeError của khoá
+    # sắp xếp) ⇒ cùng đường M1 (hoà không phân định ⇒ cần xét tay), cùng mã lý do.
+    unclear = kv_graduation_candidates_unclear(basis_entries)
+    if unclear is not None:
+        return None, _meta_base(
+            rule_applied="ambiguous_requires_manual",
+            pathway=pathway,
+            requires_manual_override=True,
+            reason="tied_graduation_year_and_grade",
+            breakdown={
+                **breakdown_base,
+                "tied_kv": winners,
+                "tied_entries": [e["school_id"] for e in unclear],
+            },
+        )
+    # Chỉ xếp NHÓM year_to lớn nhất (rà hợp nhất 23-11 B-H1): trường tốt nghiệp luôn ở nhóm ấy; nhóm thấp hơn có thể có hai mục cùng
+    # năm, một lớp null / chuỗi, một lớp số ⇒ xếp chung buộc so hai lớp ấy ⇒ TypeError. Dữ liệu đúng kiểu: kết quả không đổi (hai phần
+    # tử đầu khi xếp toàn bộ đều thuộc nhóm này, trừ khi nhóm chỉ một mục — khi ấy mục thứ hai khác year_to nên không vào M1).
     sorted_entries = sorted(
-        enumerate(basis_entries),
+        kv_graduation_year_group(basis_entries),
         key=lambda pair: (
             pair[1].get("year_to", 0),
             pair[1].get("grade_to", 0),
