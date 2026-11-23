@@ -51,6 +51,11 @@ Dò ô theo CẶP (loại hình, năm) — ô ngành của Phê duyệt cũ — 
 Codex PR-1 lượt 2). Bốn thao tác Quyết định lấy KHOÁ NĂM CHIA SẺ của mọi năm có thể chạm Ở ĐẦU thao tác
 (:func:`lock_years_of_change`, trước mọi khoá dòng — bất biến + thứ tự ở ``app.core.review_year_lock``) ⇒ tập học vụ đúng tới
 lúc ghi; :func:`lock_quota_for_change` kiểm lại năm thật (dưới khoá hồ sơ) nằm trong tập đã khoá, không thì 409 "thử lại".
+
+F230 (Codex 22-11 A-P4): mọi đường đổi số chỗ NGOÀI văn bản Hội đồng (Phê duyệt đơn / lô, công bố, chuyển chờ, rút, trả về Nháp,
+chốt rút sau hoàn tiền) khoá CÙNG thứ tự — khoá năm chia sẻ (:func:`lock_years_of_profiles` / :func:`try_lock_years_of_profiles`)
+→ dòng hồ sơ → MỘT lần khoá mọi ô em có thể chiếm (:func:`lock_quota_for_profiles`); chốt fail-closed ở
+``admission_state_service.transition`` (:func:`check_quota_locked_for_transition`). Chỉ khoá — luật chặn / cảnh báo giữ nguyên.
 """
 from typing import Any, Dict, FrozenSet, Iterable, List, Optional, Sequence, Set, Tuple
 
@@ -58,15 +63,17 @@ import structlog
 from sqlalchemy import Integer, String, cast, distinct, func, or_, select, text, tuple_, union_all
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sqlalchemy.orm import Session
+
 from app import models
-from app.core.review_year_lock import lock_review_years_shared
+from app.core.review_year_lock import lock_review_years_shared, try_lock_review_years_shared
 from app.models.council_document import (
     EFFECTIVE_ROW_CONDITION,
     CouncilDecision,
     CouncilDecisionRow,
     CouncilDocumentSetRow,
 )
-from app.utils.exceptions import ConflictError
+from app.utils.exceptions import ConflictError, ServiceError
 
 log = structlog.get_logger(__name__)
 
@@ -251,7 +258,11 @@ def _part_a_legacy(path_condition, exclude_profile_id: Optional[int]):
 
 
 async def part_a_cells_of_profiles(
-    db: AsyncSession, profile_ids: Iterable[Optional[int]], *, counted_now: bool = False
+    db: AsyncSession,
+    profile_ids: Iterable[Optional[int]],
+    *,
+    counted_now: bool = False,
+    assume_occupying: bool = False,
 ) -> Tuple[Set[int], Set[int]]:
     """C2 (owner 21-11): (id ``offering_academic_info``, id ``admission_path``) mà các hồ sơ ``profile_ids`` sẽ được đếm ở
     **Phần A** nếu KHÔNG còn dòng Quyết định hiệu lực — "ô HIỆN TẠI" của em bị bỏ tên / văn bản bị huỷ / bị huỷ ghi nhận.
@@ -267,6 +278,9 @@ async def part_a_cells_of_profiles(
     ``counted_now`` = True (C2-1 — ô MẤT chỗ khi em được THÊM dòng hiệu lực, A → B): chỉ em ĐANG được đếm ở Phần A (thêm đúng
     ``no_effective_row`` của các hàm đếm) — em đã có dòng hiệu lực thì không chiếm ô Phần A nào để mất.
 
+    ``assume_occupying`` = True (F230 — :func:`profile_quota_cells`): BỎ điều kiện trạng thái — ô em SẼ / ĐÃ chiếm khi ở trạng
+    thái chiếm chỗ, dùng cho đường làm em VÀO hoặc RA khỏi trạng thái chiếm chỗ (Phê duyệt, công bố, rút, trả về Nháp…).
+
     Gọi SAU khi đã khoá hồ sơ (trạng thái / nguyện vọng / dòng hiệu lực không đổi dưới tay) và SAU khoá năm của các hồ sơ
     (:func:`lock_years_of_change` — câu dò học vụ theo ngành + năm dưới đây đọc tập học vụ của năm, P2). Hai chiều mới của #733
     (nhóm ngành) CHƯA có ở đây."""
@@ -275,7 +289,11 @@ async def part_a_cells_of_profiles(
         return set(), set()
     ap, lead = models.AdmissionProfile, models.Lead
     oai, path, c = models.OfferingAcademicInfo, models.AdmissionPath, models.AdmissionProfileChoice
-    occupying = (ap.id.in_(ids), ap.status.in_(OCCUPYING_STATUSES)) + ((no_effective_row(ap.id),) if counted_now else ())
+    occupying = (
+        (ap.id.in_(ids),)
+        + (() if assume_occupying else (ap.status.in_(OCCUPYING_STATUSES),))
+        + ((no_effective_row(ap.id),) if counted_now else ())
+    )
     ai_ids = set(
         (
             await db.execute(
@@ -513,6 +531,35 @@ def is_offering_closed(quota: Optional[int]) -> bool:
     return quota is not None and quota <= 0
 
 
+# ═══════════════════════════════ F230 — sổ khoá của giao dịch (chốt ở transition()) ═════════════
+#: Khoá ``Session.info``: những gì giao dịch HIỆN TẠI đã khoá qua module này — id học vụ (``ai``), id đường xét (``path``), năm
+#: (``years`` — khoá năm chia sẻ). Gắn với giao dịch GỐC (``Session.get_transaction()``): giao dịch mới ⇒ sổ mới. Chỉ để chốt ở
+#: :func:`check_quota_locked_for_transition` đọc — KHÔNG phải nguồn của khoá (khoá thật là khoá của PostgreSQL). Giới hạn đã biết:
+#: khoá lấy trong một SAVEPOINT đã lùi thì PostgreSQL đã nhả mà sổ vẫn ghi — các đường F230 khoá NGOÀI savepoint của từng mục.
+_LOCK_BOOK_KEY = "qos_so_khoa_giao_dich"
+
+
+def _lock_book(db: AsyncSession) -> Optional[Dict[str, Any]]:
+    """Sổ khoá của giao dịch gốc hiện tại; ``None`` khi phiên không phải ``Session`` thật (test giả lập)."""
+    s = getattr(db, "sync_session", None)
+    if not isinstance(s, Session):
+        return None
+    tx = s.get_transaction()
+    book = s.info.get(_LOCK_BOOK_KEY)
+    if book is None or book["tx"] is not tx:
+        book = {"tx": tx, "ai": set(), "path": set(), "years": set()}
+        s.info[_LOCK_BOOK_KEY] = book
+    return book
+
+
+def _record_locks(db: AsyncSession, *, ai: Iterable[int] = (), path: Iterable[int] = (), years: Iterable[int] = ()) -> None:
+    book = _lock_book(db)
+    if book is not None:
+        book["ai"].update(int(x) for x in ai)
+        book["path"].update(int(x) for x in path)
+        book["years"].update(int(x) for x in years)
+
+
 # ═══════════════════════════════ THỨ TỰ KHOÁ CHUẨN của dòng chỉ tiêu (F259) ═════════════════
 async def lock_quota_cells(
     db: AsyncSession, oai_ids: Iterable[Optional[int]], path_ids: Iterable[Optional[int]]
@@ -530,6 +577,7 @@ async def lock_quota_cells(
     if paths:
         t = models.AdmissionPath
         await db.execute(select(t.id).where(t.id.in_(paths)).order_by(t.id).with_for_update())
+    _record_locks(db, ai=oai, path=paths)  # F230: sổ khoá cho chốt ở transition()
 
 
 async def quota_cells_of_set_rows(
@@ -614,6 +662,7 @@ async def lock_years_of_change(
         pairs += (await db.execute(select(b.id, b.profile_id).where(b.set_id.in_(sets)))).all()
     years = await _years_of(db, _ids(p[0] for p in pairs), _ids(p[1] for p in pairs))
     await lock_review_years_shared(db, years)
+    _record_locks(db, years=years)
     return frozenset(years)
 
 
@@ -690,6 +739,149 @@ async def lock_quota_for_change(
         current_path,
         await _main_used(db, current_ai, current_path),
     )
+
+
+# ═══════════════════════════════ F230 — đường đổi số chỗ NGOÀI văn bản Hội đồng ═══════════════════════
+# Codex 22-11 A-P4; thiết kế ``phat-hanh-gd1/pr-f230/THIET-KE-PHA1-2026-11-22.md``; owner Q1–Q5 (``QUYET-DINH-OWNER-F230-…``).
+# Phê duyệt đơn / lô, công bố, chuyển chờ (TĂNG); rút, trả về Nháp, chốt rút sau hoàn tiền (GIẢM) đổi số của ô mà một văn bản
+# Hội đồng đang so "trước / sau" (C2) ⇒ khoá ĐỦ ô theo CÙNG thứ tự của PR-1: khoá năm chia sẻ → dòng (hồ sơ …) → MỘT lần
+# :func:`lock_quota_cells`. CHỈ khoá — luật chặn / cảnh báo của từng đường GIỮ NGUYÊN (owner Q1, Q2, Q4).
+OCCUPANCY_TRANSITION_UNLOCKED_MESSAGE = (
+    "Lỗi hệ thống: chuyển trạng thái làm đổi số chỗ chỉ tiêu mà chưa khoá ô chỉ tiêu — đã ghi log, không chuyển."
+)
+
+
+async def _effective_set_rows_of_profiles(db: AsyncSession, profile_ids: Sequence[int]) -> List[int]:
+    """Id dòng bộ nguồn của các dòng Quyết định HIỆU LỰC của các hồ sơ (Phần B — ô chụp)."""
+    if not profile_ids:
+        return []
+    r = CouncilDecisionRow
+    return _ids(
+        (
+            await db.execute(
+                select(r.set_row_id).where(r.profile_id.in_(list(profile_ids)), text(EFFECTIVE_ROW_CONDITION))
+            )
+        ).scalars()
+    )
+
+
+async def _years_of_profiles(db: AsyncSession, profile_ids: Sequence[int]) -> Set[int]:
+    """Năm mà bước dò ô của :func:`profile_quota_cells` đọc: năm hồ sơ + năm chụp của dòng bộ của dòng hiệu lực."""
+    return await _years_of(db, await _effective_set_rows_of_profiles(db, profile_ids), profile_ids)
+
+
+async def profile_quota_cells(
+    db: AsyncSession,
+    profile_ids: Iterable[Optional[int]],
+    *,
+    effective_set_rows: Optional[Sequence[int]] = None,
+) -> Tuple[Set[int], Set[int]]:
+    """MỘT nguồn (F230): (id học vụ, id đường xét) mà các hồ sơ CÓ THỂ chiếm — mọi ô Phần A, BẤT KỂ trạng thái hiện tại
+    (:func:`part_a_cells_of_profiles` ``assume_occupying``: ngành theo lead + năm, nguyện vọng trúng, đường xét kiểu cũ) ∪ ô chụp
+    của dòng Quyết định hiệu lực (Phần B, :func:`quota_cells_of_set_rows`). Một tập cho cả đường VÀO lẫn RA khỏi trạng thái chiếm
+    chỗ (rộng hơn cần — chủ ý: không phân nhánh theo cạnh). Gọi SAU khoá năm + khoá hồ sơ. ``effective_set_rows``: dòng bộ của
+    dòng hiệu lực ĐÃ đọc (nơi gọi đọc một lần cho cả năm lẫn ô — :func:`check_quota_locked_for_transition`); ``None`` ⇒ tự đọc."""
+    ids = _ids(profile_ids)
+    if effective_set_rows is None:
+        effective_set_rows = await _effective_set_rows_of_profiles(db, ids)
+    a_ai, a_path = await part_a_cells_of_profiles(db, ids, assume_occupying=True)
+    b_ai, b_path = await quota_cells_of_set_rows(db, effective_set_rows)
+    return a_ai | b_ai, a_path | b_path
+
+
+async def lock_years_of_profiles(db: AsyncSession, profile_ids: Iterable[Optional[int]]) -> FrozenSet[int]:
+    """F230: khoá năm CHIA SẺ, CÓ CHỜ, của các hồ sơ (năm hồ sơ + năm chụp của dòng hiệu lực) — gọi TRƯỚC khi khoá dòng hồ sơ
+    (đọc phạm vi khi CHƯA khoá; :func:`lock_quota_for_profiles` kiểm lại dưới khoá hồ sơ). Thứ tự + lý do không vòng chờ:
+    ``app.core.review_year_lock`` (đoạn F230)."""
+    years = await _years_of_profiles(db, _ids(profile_ids))
+    await lock_review_years_shared(db, years)
+    _record_locks(db, years=years)
+    return frozenset(years)
+
+
+async def try_lock_years_of_profiles(
+    db: AsyncSession, profile_ids: Iterable[Optional[int]], *, busy_message: str = CONFLICT_MESSAGE
+) -> FrozenSet[int]:
+    """F230: bản KHÔNG CHỜ (hồ sơ ĐÃ bị khoá ở ``deps.py`` — Công bố, Chuyển chờ, Trả về Nháp; đường dẫn thư). Một giao dịch đang
+    giữ / chờ khoá năm ĐỘC QUYỀN (cấu hình cùng năm) ⇒ 409 (owner Q3) — không chờ khi đang giữ dòng hồ sơ ⇒ không khép vòng.
+    ``busy_message``: câu của 409 — mặc định câu "thử lại" chung; đường ứng viên tự rút qua thư dùng câu owner riêng
+    (``magic_link_service.WITHDRAW_CONFIG_BUSY_MESSAGE``)."""
+    years = await _years_of_profiles(db, _ids(profile_ids))
+    if not await try_lock_review_years_shared(db, years):
+        log.info("quota_khoa_nam_ban_thu_khong_lay_duoc", years=sorted(years))
+        raise ConflictError(busy_message)
+    _record_locks(db, years=years)
+    return frozenset(years)
+
+
+async def lock_quota_for_profiles(
+    db: AsyncSession,
+    *,
+    locked_years: Iterable[int],
+    profile_ids: Iterable[Optional[int]],
+    extra_ai_ids: Iterable[Optional[int]] = (),
+    extra_path_ids: Iterable[Optional[int]] = (),
+) -> Tuple[Set[int], Set[int]]:
+    """F230: khoá MỘT lần (:func:`lock_quota_cells`, F259) mọi ô các hồ sơ có thể chiếm (:func:`profile_quota_cells`) ∪ ô thêm
+    của nơi gọi (học vụ cổng chỉ tiêu của Phê duyệt cũ, ô nguyện vọng của công bố…) — THAY lần khoá ô sẵn có của đường ấy (các câu
+    ``FOR UPDATE`` theo id về sau chỉ khoá lại dòng đã giữ). Gọi SAU khi khoá hồ sơ, TRƯỚC mọi câu ghi / cổng chỉ tiêu.
+
+    ``locked_years`` bắt buộc (= kết quả :func:`lock_years_of_profiles` / :func:`try_lock_years_of_profiles`): năm THẬT dưới khoá
+    hồ sơ ngoài tập đã khoá (hồ sơ vừa đổi năm ở nơi khác) ⇒ 409 "thử lại" — khoá thêm năm sau khi giữ dòng là phá thứ tự."""
+    ids = _ids(profile_ids)
+    # Dòng hiệu lực đọc MỘT lần (dưới khoá hồ sơ) cho cả phép kiểm năm lẫn tập ô — năm và ô cùng một ảnh chụp.
+    set_rows = await _effective_set_rows_of_profiles(db, ids)
+    missing = await _years_of(db, set_rows, ids) - set(locked_years)
+    if missing:
+        log.warning("quota_nam_ngoai_khoa_nam", years=sorted(missing), where="lock_quota_for_profiles")
+        raise ConflictError(CONFLICT_MESSAGE)
+    ai, path = await profile_quota_cells(db, ids, effective_set_rows=set_rows)
+    ai |= {int(x) for x in extra_ai_ids if x is not None}
+    path |= {int(x) for x in extra_path_ids if x is not None}
+    await lock_quota_cells(db, ai, path)
+    return ai, path
+
+
+async def check_quota_locked_for_transition(db: AsyncSession, profile: Any, old_status: Optional[str], new_status: str) -> None:
+    """F230 — CHỐT ở tầng chủ sở hữu trạng thái (``admission_state_service.transition``; owner Q5): chuyển trạng thái làm đổi số
+    chỗ — VÀO / RA khỏi :data:`OCCUPYING_STATUSES`, hoặc sang :data:`RELEASED_STATUSES` khi em còn dòng Quyết định hiệu lực (Phần
+    B) — mà giao dịch CHƯA khoá năm + ĐỦ ô (:func:`profile_quota_cells`) qua module này ⇒ ``ServiceError`` (500) + log lỗi. Đường
+    mới quên khoá bị chặn ngay ở test thay vì lặng lẽ làm mất cảnh báo của văn bản Hội đồng."""
+    book = _lock_book(db)
+    if book is None:
+        # Phiên không phải ``Session`` thật (test đơn vị giả lập ``AsyncSession`` bằng MagicMock — không có CSDL để đọc ô) ⇒ không
+        # kiểm được. Mọi phiên của ứng dụng là ``AsyncSession`` thật nên đường chạy thật luôn qua chốt.
+        return
+    crosses = (old_status in OCCUPYING_STATUSES) != (new_status in OCCUPYING_STATUSES)
+    may_release_b = new_status == RELEASED_STATUSES and old_status != RELEASED_STATUSES
+    if not (crosses or may_release_b):
+        return
+    # Phiên ``autoflush=False`` (``app.database``) ⇒ đẩy thay đổi đang chờ (vd ``decision`` nguyện vọng vừa đặt) xuống TRƯỚC MỌI
+    # câu đọc của chốt (kể cả câu hỏi dòng hiệu lực ngay dưới) — đường mới quên flush không làm chốt mù (Codex F230 P5 mục 6).
+    await db.flush()
+    # Sang "đã rút" mà KHÔNG vượt ranh giới chiếm chỗ (vd ``withdrawal_pending``): chỉ đổi số khi em còn dòng hiệu lực (trả chỗ
+    # Phần B).
+    if not crosses and not await has_effective_row(db, profile.id):
+        return
+    # Dòng hiệu lực đọc MỘT lần cho cả năm lẫn ô.
+    ids = [profile.id]
+    set_rows = await _effective_set_rows_of_profiles(db, ids)
+    years = await _years_of(db, set_rows, ids)
+    ai, path = await profile_quota_cells(db, ids, effective_set_rows=set_rows)
+    missing = {
+        "years": sorted(years - book["years"]),
+        "ai": sorted(ai - book["ai"]),
+        "path": sorted(path - book["path"]),
+    }
+    if any(missing.values()):
+        log.error(
+            "quota_chuyen_trang_thai_chua_khoa_o",
+            profile_id=profile.id,
+            from_status=old_status,
+            to_status=new_status,
+            missing=missing,
+        )
+        raise ServiceError(OCCUPANCY_TRANSITION_UNLOCKED_MESSAGE)
 
 
 # ═══════════════════════════════ Q-J1 — khoá đếm của dòng bộ (owner 10-11) ════════════════════

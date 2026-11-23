@@ -39,6 +39,7 @@ from ..utils.exceptions import (
     ResourceNotFoundError,
 )
 from . import admission_service
+from . import quota_occupancy_service as _qos
 from .magic_link_rate_limit import (
     ATTEMPTS_CAP_PER_WINDOW,
     consume_attempt,
@@ -46,6 +47,13 @@ from .magic_link_rate_limit import (
 from ..repositories import AdmissionRepository
 
 log = structlog.get_logger(__name__)
+
+#: F230 — owner 22-11 (``phat-hanh-gd1/pr-f230/QUYET-DINH-OWNER-F230-RUT-QUA-THU-2026-11-22.md``), NGUYÊN VĂN: câu ứng viên thấy
+#: khi tự rút qua liên kết trong thư mà khoá năm đang bận (một thao tác cấu hình tuyển sinh cùng năm đang chạy) — 409 ngay, hồ sơ
+#: và liên kết giữ nguyên, không ghi nhận rút, không gửi thông báo.
+WITHDRAW_CONFIG_BUSY_MESSAGE = (
+    "Hệ thống đang cập nhật cấu hình tuyển sinh. Hồ sơ của bạn chưa được rút. Vui lòng thử lại sau."
+)
 
 
 PostCommitCallback = Optional[Callable[[], Awaitable[None]]]
@@ -335,7 +343,14 @@ async def _handle_withdraw(
     row lock — passing it here from the pre-lock snapshot would be racy.
     The service treats a version match against its own re-read as the
     optimistic-locking gate.
+
+    F230 (owner 22-11, ngoại lệ CHỈ cho đường này): hồ sơ đã bị khoá ở ``get_token_for_confirm`` ⇒ khoá năm chia sẻ bản KHÔNG CHỜ,
+    lấy TRƯỚC khi đánh dấu liên kết đã dùng. Bận ⇒ ``ConflictError`` (409) câu :data:`WITHDRAW_CONFIG_BUSY_MESSAGE` ngay — KHÔNG phải
+    ``BadRequest`` nên router không commit ⇒ giao dịch lùi, nhả khoá hồ sơ; liên kết chưa bị đánh dấu (``confirmed_at`` /
+    ``attempt_count`` / ``lock_until`` / ``expires_at`` giữ nguyên), chưa rút, chưa dựng thông báo. ``withdraw_profile`` lấy lại cùng
+    khoá (khoá năm của chính phiên — lấy lại được ngay).
     """
+    await _qos.try_lock_years_of_profiles(db, [profile.id], busy_message=WITHDRAW_CONFIG_BUSY_MESSAGE)
     token_obj.confirmed_at = datetime.now(timezone.utc)
     await db.flush()
 
@@ -347,5 +362,7 @@ async def _handle_withdraw(
             "reason": "Ứng viên tự rút hồ sơ qua magic-link",
             "version": profile.version,
         },
+        # F230: ``get_token_for_confirm`` đã khoá hồ sơ ⇒ khoá năm bản không chờ (409 "thử lại" khi cấu hình cùng năm đang chạy).
+        profile_locked_by_caller=True,
     )
     return result_profile, callback

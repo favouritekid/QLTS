@@ -908,7 +908,19 @@ async def evaluate_cascade(
         for c in sorted_choices
         if getattr(c, "admission_path", None) is not None
     ]
-    await _qos.lock_quota_cells(db, [k[0] for k in to_lock], [k[1] for k in to_lock])
+    # F230 (Codex 22-11 A-P4; owner Q2, Q3): hồ sơ ĐÃ khoá ở ``deps.py`` ⇒ khoá năm chia sẻ bản KHÔNG CHỜ (cấu hình cùng năm đang
+    # chạy ⇒ 409 "thử lại"); rồi MỘT lần khoá ô — ô của MỌI nguyện vọng (học vụ + đường xét, kể cả ô chưa đặt chỉ tiêu: gợi ý
+    # "có chỉ tiêu" ở trên đọc từ quan hệ đã nạp TRƯỚC khoá năm) ∪ mọi ô Phần A của em (ngành theo lead + năm — cách đếm Phê duyệt
+    # cũ). Chỉ khoá: luật xét chỗ của ``check_choice_admit_capacity`` không đổi.
+    quota_years = await _qos.try_lock_years_of_profiles(db, [profile.id])
+    every_path = [c.admission_path for c in sorted_choices if getattr(c, "admission_path", None) is not None]
+    await _qos.lock_quota_for_profiles(
+        db,
+        locked_years=quota_years,
+        profile_ids=[profile.id],
+        extra_ai_ids=[k[0] for k in to_lock] + [getattr(p, "academic_info_id", None) for p in every_path],
+        extra_path_ids=[k[1] for k in to_lock] + [p.id for p in every_path],
+    )
 
     admitted_found = False
     for choice in sorted_choices:
@@ -1391,6 +1403,16 @@ async def promote_waitlisted_choice(
     # Raise BusinessRuleViolation (NOT waitlist again) — admin must
     # see the error, evaluate seat-freeing options (reject another
     # admit, or wait for cancellation), then retry explicitly.
+    # F230 (Codex 22-11 A-P4; owner Q2, Q3): hồ sơ ĐÃ khoá ở ``deps.py`` ⇒ khoá năm chia sẻ bản KHÔNG CHỜ; rồi MỘT lần khoá ô — ô
+    # của nguyện vọng được chuyển ∪ mọi ô Phần A của em (ngành theo lead + năm). Chỉ khoá: phép xét chỗ dưới đây không đổi.
+    quota_years = await _qos.try_lock_years_of_profiles(db, [profile.id])
+    await _qos.lock_quota_for_profiles(
+        db,
+        locked_years=quota_years,
+        profile_ids=[profile.id],
+        extra_ai_ids=[getattr(choice.admission_path, "academic_info_id", None)],
+        extra_path_ids=[choice.admission_path.id],
+    )
     capacity = await check_choice_admit_capacity(
         db,
         path=choice.admission_path,
@@ -1636,6 +1658,11 @@ async def admin_rollback_profile(
             reason=f"Hủy quy trình rút (admin rollback) hồ sơ #{profile.id}",
             rejector_id=_rej_id,
         )
+
+    # F230 (Codex 22-11 A-P4; owner Q3, Q4): trả về Nháp em đang chiếm chỗ TRẢ chỗ ⇒ khoá ô của em (chỉ khoá, không cảnh báo).
+    # Hồ sơ ĐÃ khoá ở ``deps.py`` ⇒ khoá năm chia sẻ bản KHÔNG CHỜ (cấu hình cùng năm đang chạy ⇒ 409 "thử lại").
+    quota_years = await _qos.try_lock_years_of_profiles(db, [profile.id])
+    await _qos.lock_quota_for_profiles(db, locked_years=quota_years, profile_ids=[profile.id])
 
     # Đổi ngành: mở chu kỳ TRƯỚC transition (đọc status GỐC = rolled_back_from để
     # kiểm pre-decision). Set major_change_requested nếu đủ điều kiện; raise nếu
