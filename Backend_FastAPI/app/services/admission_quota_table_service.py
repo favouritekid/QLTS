@@ -303,8 +303,9 @@ async def check_academic_info_move_allowed(
       ``admission_review_errors.AcademicInfoInReviewFloor`` (409 ``ACADEMIC_INFO_IN_REVIEW_FLOOR``; nhiều lần xét nháp ⇒ nêu lần
       ``seq_no`` NHỎ NHẤT — phụ lục K1–K4 điểm 5). Khoá ngoại ghép (học vụ, năm) của sàn không có ``ON UPDATE`` ⇒ không kiểm ở đây
       thì lệnh dời năm vấp lỗi khoá ngoại (500). Đọc sàn ở đây ỔN ĐỊNH vì MỌI đường ghi / xoá sàn (E4 lưu sàn, E5 huỷ —
-      ``admission_review_service``) giữ CÙNG khoá năm của lần xét trước khi chạm dòng sàn, và năm của sàn = năm của học vụ (khoá
-      ngoại ghép) = năm cũ mà ta đang giữ khoá ⇒ E4 / E5 đang dở thì ta đã chờ nó commit; ta đang giữ thì nó chờ ta.
+      ``admission_review_service``) giữ CÙNG khoá năm của lần xét trước khi chạm dòng sàn (chế độ CHIA SẺ — xung đột với bản ĐỘC
+      QUYỀN mà ``PATCH`` giữ, quyết định owner 23-11), và năm của sàn = năm của học vụ (khoá ngoại ghép) = năm cũ mà ta
+      đang giữ khoá ⇒ E4 / E5 đang dở thì ta đã chờ nó commit; ta đang giữ thì nó chờ ta.
     * R3 — học vụ có chỉ tiêu (cũ HOẶC mới khác NULL) chuyển VÀO hoặc RA năm có bảng đã khoá ⇒ :class:`QuotaTableLockedWrite`
       (kể cả khi con số không đổi). Tầng chủ sở hữu R3: trigger (theo dõi thêm ``academic_year``); đây là lớp kiểm trước."""
     from app.repositories import admission_review_repository as review_repo

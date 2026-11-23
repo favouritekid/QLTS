@@ -10,12 +10,14 @@ THỨ TỰ KHOÁ (đặc tả §6.8; thứ tự toàn hệ ở ``app.core.review
 
 * E1 tạo: khoá năm (độc quyền) → đọc đợt + bảng chỉ tiêu → ``seq_no`` lớn nhất + 1 → chèn. Hai lệnh tạo cùng năm nối tiếp nhau;
   UNIQUE(năm, ``seq_no``) là lớp cuối.
-* E4 lưu sàn: đọc năm của lần xét (KHÔNG khoá — năm không bao giờ đổi, trigger) → khoá năm → dòng lần xét ``FOR UPDATE`` → kiểm
-  ``draft`` + ``version`` → đọc năm / cờ xoá của học vụ (DƯỚI khoá năm, không khoá dòng) → xoá + chèn sàn → ``version`` + 1. Cùng
-  khoá năm mà ``PATCH`` dời năm học vụ lấy (năm cũ + mới, tăng dần — ``organization_service.update_academic_info``) ⇒ hai việc nối
-  tiếp: bên đến sau nhận lỗi NGHIỆP VỤ (``review_floor_bad_member`` / ``ACADEMIC_INFO_IN_REVIEW_FLOOR``), không bao giờ lỗi CSDL (P3).
-* E5 huỷ: khoá năm → dòng lần xét ``FOR UPDATE`` → kiểm → XOÁ MỌI SÀN (lần xét còn ``draft`` — trigger cho phép) → chuyển
-  ``cancelled`` — MỘT giao dịch (P4). Phải chạy ``read committed`` (mặc định của ứng dụng; trigger ``QLC04`` chặn mức khác).
+* E4 lưu sàn: đọc năm của lần xét (KHÔNG khoá — năm không bao giờ đổi, trigger) → khoá năm (CHIA SẺ — quyết định owner 23-11) →
+  dòng lần xét ``FOR UPDATE`` → kiểm ``draft`` + ``version`` → đọc năm / cờ xoá của học vụ (DƯỚI khoá năm, không khoá dòng) → xoá +
+  chèn sàn → ``version`` + 1. Cùng khoá năm mà ``PATCH`` dời năm học vụ lấy ĐỘC QUYỀN (năm cũ + mới, tăng dần —
+  ``organization_service.update_academic_info``) ⇒ hai việc nối tiếp: bên đến sau nhận lỗi NGHIỆP VỤ (``review_floor_bad_member`` /
+  ``ACADEMIC_INFO_IN_REVIEW_FLOOR``), không bao giờ lỗi CSDL (P3). Hai E4 cùng lần xét nối tiếp ở dòng lần xét (409 STALE).
+* E5 huỷ: khoá năm (CHIA SẺ) → dòng lần xét ``FOR UPDATE`` → kiểm → XOÁ MỌI SÀN (lần xét còn ``draft`` — trigger cho phép) →
+  chuyển ``cancelled`` — MỘT giao dịch (P4). Phải chạy ``read committed`` (mặc định của ứng dụng; trigger ``QLC04`` chặn mức khác).
+  E4 / E5 chia sẻ ⇒ không chặn người đọc chia sẻ cùng năm (ghi nhận Quyết định, F230); E1 giữ độc quyền (cấp ``seq_no``).
 
 Không khoá bảng tiền / hồ sơ khi giữ khoá năm. Dịch vụ thuần: không import FastAPI; ném lỗi miền (``admission_review_errors``); chỉ
 ``flush`` — router commit. Hàm ghi trả ``(kết quả, callback sau commit)`` (không có việc sau commit ⇒ ``None``). Log chỉ id + số đếm
@@ -32,7 +34,7 @@ from sqlalchemy import func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
-from app.core.review_year_lock import lock_review_year
+from app.core.review_year_lock import lock_review_year, lock_review_years_shared
 from app.models.admission_review import REVIEW_RUN_DONE, REVIEW_SESSION_CANCELLED, REVIEW_SESSION_DRAFT, REVIEW_TABS
 from app.repositories import admission_review_repository as review_repo
 from app.services import admission_review_errors as errors
@@ -246,12 +248,19 @@ async def _session_or_404(db: AsyncSession, session_id: int) -> models.Admission
 
 
 async def _locked_session(db: AsyncSession, session_id: int) -> Tuple[int, models.AdmissionReviewSession]:
-    """Thứ tự khoá E4 / E5 (đặc tả §6.8): năm của lần xét đọc KHÔNG khoá (không có ⇒ 404) → KHOÁ NĂM → dòng lần xét ``FOR UPDATE``.
-    Mỗi bước là một hàm của ``review_repo`` / ``review_year_lock`` gọi qua tên module (test hai phiên bọc được)."""
+    """Thứ tự khoá E4 / E5 (đặc tả §6.8): năm của lần xét đọc KHÔNG khoá (không có ⇒ 404) → KHOÁ NĂM chế độ CHIA SẺ → dòng lần xét
+    ``FOR UPDATE``. MỘT chỗ khoá cho cả E4 lẫn E5.
+
+    CHIA SẺ, không độc quyền (quyết định owner 23-11 ``QUYET-DINH-OWNER-GD2B-KHOA-NAM-E4-E5-CHIA-SE``): E4 / E5 KHÔNG đổi tập học vụ
+    của năm; chúng cần (1) nối tiếp với ``PATCH`` dời năm học vụ — ``PATCH`` lấy bản ĐỘC QUYỀN năm cũ + mới, xung đột với chia sẻ ⇒
+    vẫn nối tiếp (P3, P4); (2) năm / cờ xoá học vụ đứng yên khi E4 đọc — mọi đường đổi chúng đều lấy bản ĐỘC QUYỀN. Hai E4 / E5
+    cùng lần xét nối tiếp ở KHOÁ DÒNG lần xét (người sau thấy ``version`` mới ⇒ 409 STALE). Bản độc quyền từng chặn mọi người đọc
+    chia sẻ cùng năm (ghi nhận Quyết định; F230: Phê duyệt / Rút chờ, Công bố / Chuyển chờ / Trả về Nháp nhận 409 "thử lại") suốt lúc
+    E4 / E5 giữ HOẶC xếp hàng chờ khoá. Không bao giờ nâng lên độc quyền trong cùng giao dịch (``app.core.review_year_lock``)."""
     year = await review_repo.read_session_year(db, session_id)
     if year is None:
         raise errors.review_session_not_found()
-    await lock_review_year(db, int(year))
+    await lock_review_years_shared(db, [int(year)])
     session = await review_repo.lock_session(db, session_id)
     if session is None:  # không xảy ra (trigger cấm xoá lần xét) — giữ fail-closed
         raise errors.review_session_not_found()

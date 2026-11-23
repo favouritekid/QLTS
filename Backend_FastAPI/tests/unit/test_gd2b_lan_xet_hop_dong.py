@@ -9,8 +9,9 @@
 * §1.4 — điểm sàn nhận số / chuỗi, ≤ 2 chữ số thập phân, 0–999,99; ``bool`` / mũ / dấu âm ⇒ lỗi.
 * §3.1 / §4.2 — ``available_actions`` và cổng ghi E4 / E5 / E6 đi qua MỘT hàm (``session_actions``); AST: dịch vụ chạy kiểm và bộ nạp
   không còn so trạng thái riêng.
-* §6.8 — thứ tự khoá của E4 / E5 (đọc năm → khoá năm → dòng lần xét) và phép đọc sàn ở ``check_academic_info_move_allowed`` (AST —
-  lớp thứ hai; hành vi đo bằng hai phiên ở ``tests/api/test_gd2b_lan_xet_hai_phien_api.py``).
+* §6.8 — thứ tự khoá của E4 / E5 (đọc năm → khoá năm CHIA SẺ → dòng lần xét; E1 ĐỘC QUYỀN — quyết định owner 23-11) và phép đọc
+  sàn ở ``check_academic_info_move_allowed`` (AST — lớp thứ hai; hành vi + chế độ khoá đo bằng hai phiên ở
+  ``tests/api/test_gd2b_lan_xet_hai_phien_api.py``).
 """
 from __future__ import annotations
 
@@ -266,17 +267,19 @@ def test_ast_chay_kiem_va_bo_nap_dung_chung_cong_require_session_action():
 
 
 def test_ast_thu_tu_khoa_e4_e5_doc_nam_khoa_nam_roi_dong_lan_xet():
+    """§6.8 + quyết định owner 23-11 (E4 / E5 khoá năm CHIA SẺ, E1 ĐỘC QUYỀN) — lớp AST; chế độ khoá đo ở CSDL (``pg_locks.mode``) bằng
+    ca hai phiên (e), (f) của ``tests/api/test_gd2b_lan_xet_hai_phien_api.py``."""
     from app.services import admission_review_service as svc
 
+    khoa = ("read_session_year", "lock_review_year", "lock_review_years", "lock_review_years_shared", "lock_session")
     goi = _ten_goi(_ast_ham(svc, "_locked_session"))
-    assert [g for g in goi if g in ("read_session_year", "lock_review_year", "lock_session")] == [
-        "read_session_year", "lock_review_year", "lock_session",
-    ]
+    assert [g for g in goi if g in khoa] == ["read_session_year", "lock_review_years_shared", "lock_session"]
     for ham in ("replace_floors", "cancel_session"):
         goi = _ten_goi(_ast_ham(svc, ham))
         assert goi.index("_locked_session") < goi.index("delete_floors"), ham
-        assert "lock_session" not in goi and "lock_review_year" not in goi, ham  # chỉ qua MỘT chỗ khoá
+        assert not [g for g in goi if g in khoa], ham  # chỉ qua MỘT chỗ khoá — không tự lấy thêm / nâng khoá năm
     goi = _ten_goi(_ast_ham(svc, "create_session"))
+    assert [g for g in goi if g in khoa] == ["lock_review_year"]  # E1 ĐỘC QUYỀN (cấp seq_no)
     assert goi.index("lock_review_year") < goi.index("max_seq_no") < goi.index("insert_session")
 
 

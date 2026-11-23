@@ -155,6 +155,27 @@ async def pid_cua(s) -> int:
     return (await s.execute(text("SELECT pg_backend_pid()"))).scalar_one()
 
 
+async def che_do_khoa_nam(pid: int, nam: int) -> list:
+    """Chế độ (``pg_locks.mode``: ``ShareLock`` = chia sẻ, ``ExclusiveLock`` = độc quyền) của khoá năm ``(REVIEW_YEAR_NS, nam)``
+    mà backend ``pid`` ĐANG GIỮ — hỏi CSDL từ phiên riêng (không hỏi spy). Khoá hai số nguyên ⇒ ``classid`` = vùng, ``objid`` = năm,
+    ``objsubid`` = 2 (khuôn ``tests/api/gd1b_lo_tro_giup.py:khoa_vung_lo``)."""
+    from app.core.advisory_lock_keys import REVIEW_YEAR_NS
+
+    return sorted(
+        r[0]
+        for r in (
+            await sql(
+                "SELECT mode FROM pg_locks WHERE locktype = 'advisory' AND granted AND pid = :p"
+                " AND database = (SELECT oid FROM pg_database WHERE datname = current_database())"
+                " AND classid::bigint = :ns AND objid::bigint = :k AND objsubid = 2",
+                p=int(pid),
+                ns=REVIEW_YEAR_NS,
+                k=int(nam),
+            )
+        ).all()
+    )
+
+
 async def bi_chan_boi(pid_giu: int, viec, *, lan: int = 100) -> Optional[str]:
     """Hỏi CSDL từ phiên THỨ BA (``pg_blocking_pids`` — không hỏi spy): có backend nào đang CHỜ khoá do phiên ``pid_giu`` giữ, trong
     khi ``viec`` (request / lệnh của phía chờ) chưa xong. Trả ``locktype`` của khoá đang chờ (vd ``advisory`` = khoá năm), hoặc
