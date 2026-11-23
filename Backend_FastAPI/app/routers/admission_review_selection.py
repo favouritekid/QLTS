@@ -29,6 +29,7 @@ from ..schemas.admission_review_selection import (
     SelectionView,
 )
 from ..services import admission_review_selection_service as selection_service
+from .admission_review import response_checked_before_commit
 
 #: Tiền tố (dưới ``/api``) — dùng chung tiền tố đã đóng băng của cấu hình tuyển sinh.
 ROUTER_PREFIX = "/admission-config"
@@ -94,5 +95,8 @@ async def put_review_selection(
         note=payload.note,
         actor_id=current_user.id,
     )
+    # Rà hợp nhất 23-11 I1 (L4 vá 4 route ghi E1 / E4 / E5 / E6 — đây là route ghi thứ năm cùng tiền tố, CLAUDE.md §6): kiểm thân
+    # phản hồi theo ``SelectionView`` TRƯỚC ``commit`` — lệch schema ⇒ nổ khi giao dịch chưa commit ⇒ không ghi gì (MỘT helper của L4).
+    response_checked_before_commit(SelectionView, out)
     await db.commit()
     return out

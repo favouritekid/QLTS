@@ -41,6 +41,7 @@ from app.config import settings
 from app.database import AsyncSessionLocal
 from tests.api.gd1b_cheo_tro_giup import THAN_404, mot, tao_nguoi
 from tests.api.gd1b_lo_tro_giup import dn, sql
+from tests.api.gd2b_lan_xet_tro_giup import client_500
 from tests.api.gd2c_thu_ky_tro_giup import gan, thu_hoi
 from tests.fixtures.constants import AdminURLs
 from tests.fixtures.hoi_dong_seed import ho_so, ma_gia
@@ -315,6 +316,25 @@ async def test_than_khong_dung_hop_dong_422_khong_ghi(client, nen, thu_ky, than)
     h = await dn(client, thu_ky)
     r = await client.put(f"{P}/{nen['sid']}/selections/{nen['hs']['A']}", headers=h, json=than)
     assert r.status_code == 422, r.text
+    assert await _dem(nen["sid"]) == 0
+
+
+async def test_i1_phan_hoi_lech_schema_500_khong_ghi_gi(client, nen, thu_ky, monkeypatch):
+    """Rà hợp nhất 23-11 I1 (CLAUDE.md §6 — L4 vá 4 route ghi, đây là route ghi thứ năm cùng tiền tố): thân phản hồi lệch
+    ``SelectionView`` ⇒ người gọi nhận 500 và KHÔNG có dòng lựa chọn nào (router kiểm phản hồi TRƯỚC ``commit``). Thiếu phép kiểm ⇒
+    cùng 500 nhưng dòng ĐÃ ghi — mã 500 một mình không phân biệt hai bản, nên ca ĐẾM CSDL. Lệch giả lập ở ĐÚNG chỗ dịch vụ dựng phản
+    hồi (``_view``), SAU câu chèn."""
+    from app.services import admission_review_selection_service as svc
+
+    h = await dn(client, thu_ky)
+    monkeypatch.setattr(svc, "_view", lambda *a, **k: {"id": "khong-phai-so"})
+    async with client_500() as c:
+        r = await c.put(
+            f"{P}/{nen['sid']}/selections/{nen['hs']['B']}",
+            headers=h,
+            json={"kind": "admit_over_major_quota", "based_on_row_hash": H["B1"], "supersedes_id": None},
+        )
+    assert r.status_code == 500, r.text
     assert await _dem(nen["sid"]) == 0
 
 
