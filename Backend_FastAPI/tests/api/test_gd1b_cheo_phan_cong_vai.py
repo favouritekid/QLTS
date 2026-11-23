@@ -476,6 +476,25 @@ async def test_doi_email_rieng_van_luu_duoc_quyen_cheo_con(
     )
 
 
+async def test_doi_email_kem_trang_thai_va_vai_khong_doi_van_luu_duoc(
+    client, admin_user_in_db, can_bo_cheo, lo_config, lo_routers  # noqa: F811
+):
+    """Biểu mẫu sửa người dùng gửi kèm trạng thái + vai HIỆN TẠI (``useAdminUpdateUser``) — đổi email mà trạng thái / vai
+    giữ nguyên thì KHÔNG kéo theo thu hồi ⇒ không bị chặn. Chặn mà không xét lý do thu hồi ⇒ ca này ĐỎ."""
+    gid = await cap(client, admin_user_in_db, can_bo_cheo["id"], lo_config["unit_id"], verify=True)
+    h = await dn(client, admin_user_in_db)
+    r = await client.put(
+        f"/api/admin/users/{can_bo_cheo['id']}",
+        headers=h,
+        data={"email": "prb_l8_kem@example.com", "status": "active", "role": "officer"},
+    )
+    assert r.status_code == 200, r.text
+    assert ((await _email_trang_thai_vai(can_bo_cheo["id"]))[0], await _con_hieu_luc(gid)) == (
+        "prb_l8_kem@example.com",
+        True,
+    )
+
+
 async def test_khoa_rieng_van_luu_duoc_va_tu_thu_hoi(
     client, admin_user_in_db, can_bo_cheo, lo_config, lo_routers  # noqa: F811
 ):
