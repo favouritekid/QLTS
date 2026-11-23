@@ -3760,6 +3760,11 @@ TEP_GIA = ("tests/unit/test_a.py", "tests/api/test_b.py", "tests/test_goc.py")
 _MAU_NUOT_LOI = re.compile(r"\|\|\s*(?:true\b|:(?=\s|$))|\bset\s+\+e\b")
 #: Mọi đường dẫn tới input: `inputs.*` lẫn `github.event.inputs.*` / `toJSON(github.event)`.
 _MAU_THAM_CHIEU_INPUT = re.compile(r"\binputs\b|\bgithub\.event\b")
+#: Biến dính liền `[` (`$` + tên + `[`). Bash hiểu là giá trị biến nối `[` thường,
+#: nhưng shellcheck SC1087 (mức error) đọc thành phần tử mảng thiếu ngoặc nhọn ⇒
+#: actionlint của job `classifier-contract` đỏ (PR #742, 23-11-2026). Đứng sau
+#: `\` hoặc `$` (`\$`, `$$`) thì không phải biến ⇒ bỏ qua.
+_MAU_BIEN_DINH_NGOAC_VUONG = re.compile(r"(?<![\\$])\$[A-Za-z_][A-Za-z0-9_]*\[")
 
 #: Mục PHẢI bị từ chối: (id, mục). `${IFS}` thay khoảng trắng — đúng mẹo của tải
 #: chèn lệnh thật khi đầu vào bị tách theo khoảng trắng.
@@ -4281,6 +4286,23 @@ class TestWorkflowChayChonCa:
                    for m in _MAU_NUOT_LOI.finditer(str(b["run"]))]
         assert not vi_pham, "thân `run:` nuốt mã lỗi: %s" % vi_pham
 
+    def test_khong_bien_dinh_lien_ngoac_vuong_trong_run(self, wf_chon_ca):
+        """Mẫu `case` dạng `"$cu["*` chạy đúng trong bash, nhưng shellcheck SC1087
+        đọc là phần tử mảng thiếu `{}` ⇒ actionlint ở cổng PR đỏ — và chỉ lộ SAU
+        khi đẩy. Ca này kéo lỗi ấy về pytest; actionlint vẫn là cổng chủ sở hữu.
+        Quét thân THÔ, kể cả comment shell: chặt hơn shellcheck, có chủ ý — cắt
+        comment theo `#` sẽ cắt luôn phần sau `${#mang[@]}`. Số dòng in ra tính
+        như actionlint (dòng 1 = dòng đầu sau `run: |`)."""
+        buoc = _cac_buoc_run(wf_chon_ca)
+        assert buoc, "không thấy bước `run:` nào — phép quét vô nghĩa"
+        vi_pham = ["%s.steps[%d] %r dòng %d: %s" % (jid, i, b.get("name"), so, dong.strip())
+                   for jid, i, b in buoc
+                   for so, dong in enumerate(str(b["run"]).splitlines(), 1)
+                   if _MAU_BIEN_DINH_NGOAC_VUONG.search(dong)]
+        assert not vi_pham, (
+            "thân `run:` có biến dính liền `[`: %s — viết `${ten}[` (shellcheck SC1087)."
+            % vi_pham)
+
     def test_thu_tu_buoc(self, job_chon_ca):
         """checkout → kiem → thu-thap → chay, và cài deps TRƯỚC thu-thap. Ba bước
         tự viết chạy trong Backend_FastAPI: mục trong danh sách tính từ đó."""
@@ -4401,9 +4423,13 @@ class TestWorkflowChayChonCa:
         ("tests/unit/test_a.py", "tests/unit/test_a.py::TestX"),
         ("tests/unit/test_a.py::TestX::test_y", "tests/unit/test_a.py::TestX"),
         ("tests/api/test_b.py::test_z", "tests/api/test_b.py::test_z[p1]"),
-    ], ids=["tep-roi-ca", "ca-roi-lop", "ham-roi-tham-so"])
+        ("tests/api/test_b.py::test_z[p1]", "tests/api/test_b.py::test_z"),
+    ], ids=["tep-roi-ca", "ca-roi-lop", "ham-roi-tham-so", "tham-so-roi-ham"])
     def test_kiem_tu_choi_chong_lan(self, wf_chon_ca, hai_muc, tmp_path):
-        """Một ca thuộc hai mục: đếm theo mục sai, pytest chạy hai lần hoặc gộp."""
+        """Một ca thuộc hai mục: đếm theo mục sai, pytest chạy hai lần hoặc gộp.
+        Bốn tham số ↔ bốn nhánh mẫu `case` của bước `kiem` (mục mới nằm trong
+        mục cũ theo `::` / theo `[`; mục mới chứa mục cũ theo `::` / theo `[`):
+        mỗi nhánh có đúng một ca mà CHỈ nhánh ấy chặn."""
         rc, ra, _, temp = _chay_buoc_chon_ca(
             wf_chon_ca, ID_KIEM, tmp_path, ca=" ".join(hai_muc))
         assert rc != 0, "hai mục chồng lấn %r lọt:\n%s" % (hai_muc, ra)

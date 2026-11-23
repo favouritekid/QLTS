@@ -146,7 +146,11 @@ jobs:
           RE_MUC="^${RE_TEP}(${RE_TEN})*(${RE_TEN}${RE_THAM})?\$"
 
           # Tách theo khoảng trắng / tab / xuống dòng (cả CR của CRLF).
-          mapfile -t THO < <(printf '%s\n' "${CA:-}" | tr ' \t\r' '\n\n\n')
+          # `tr` đổi TỪNG ký tự của tập đầu thành ký tự cùng vị trí ở tập sau;
+          # `[\n*]` là `\n` lặp cho đủ độ dài tập đầu (cú pháp POSIX). Viết ba
+          # lần `\n` cũng đúng nghĩa ấy, nhưng shellcheck SC2020 thấy chữ `n`
+          # lặp lại và tưởng là thay CẢ TỪ — actionlint đỏ.
+          mapfile -t THO < <(printf '%s\n' "${CA:-}" | tr ' \t\r' '[\n*]')
 
           HOP_LE=()
           LOI=0
@@ -176,6 +180,9 @@ jobs:
 
             # Trùng / chồng lấn: một ca thuộc hai mục thì đếm theo mục sai,
             # và pytest có thể chạy nó hai lần hoặc gộp lặng lẽ.
+            # Tên biến luôn trong ngoặc nhọn khi ngay sau là `[`: `[` là ký tự
+            # THƯỜNG nối sau giá trị (bash vốn hiểu thế). Bỏ ngoặc nhọn thì
+            # shellcheck SC1087 đọc thành phần tử mảng — actionlint đỏ.
             for cu in "${HOP_LE[@]}"; do
               case "$muc" in
                 "$cu")
@@ -183,14 +190,14 @@ jobs:
                   LOI=$((LOI + 1))
                   continue 2
                   ;;
-                "$cu::"*|"$cu["*)
+                "${cu}::"*|"${cu}["*)
                   printf '::error::Mục bị từ chối: %s — nằm trong mục đã có %s (chồng lấn)\n' "$muc" "$cu"
                   LOI=$((LOI + 1))
                   continue 2
                   ;;
               esac
               case "$cu" in
-                "$muc::"*|"$muc["*)
+                "${muc}::"*|"${muc}["*)
                   printf '::error::Mục bị từ chối: %s — chứa mục đã có %s (chồng lấn)\n' "$muc" "$cu"
                   LOI=$((LOI + 1))
                   continue 2
