@@ -2,9 +2,30 @@
  * GĐ2-F1 — câu tiếng Việt cho lỗi của bảng chỉ tiêu năm. Chỉ ÁNH XẠ mã máy chủ → câu (trình bày); nhãn ngành lấy từ dữ
  * liệu đang có trên màn hình (id → nhãn). Mã lạ ⇒ câu chung, không lộ chuỗi nội bộ. Không `console.*`.
  */
-import { readApiError } from "@/lib/error-handler"
+import { readApiError, type ApiErrorView } from "@/lib/error-handler"
 
 import type { DraftGroup } from "./draft"
+
+/** Mã RIÊNG của máy chủ cho "năm chưa có bảng" (`admission_quota_table_service._not_found`). */
+export const QUOTA_TABLE_NOT_FOUND = "quota_table_not_found"
+
+/**
+ * Rà hợp nhất 23-11 H4: GET bảng chỉ tiêu nay đi qua cổng Thư ký Hội đồng — người chưa được gán nhận 404 thân CHUNG
+ * (`{detail, error_code: "RESOURCE_NOT_FOUND"}`, không `reason_code`). "Năm chưa có bảng" CHỈ khi 404 mang đúng mã riêng — không
+ * suy từ mã HTTP. MỘT vị từ cho trang (khối "chưa có bảng" + nút tạo) và cho câu lỗi bên dưới.
+ */
+export function isQuotaTableNotFound(e: ApiErrorView | null | undefined): boolean {
+  return e?.status === 404 && e.data?.reason_code === QUOTA_TABLE_NOT_FOUND
+}
+
+/** Cờ thao tác của máy chủ (`available_actions` — thân 200 hoặc thân 404 "năm chưa có bảng") có `action` không. */
+export function serverAllows(actions: unknown, action: string): boolean {
+  return Array.isArray(actions) && actions.includes(action)
+}
+
+/** [ĐX — câu mới, chờ owner duyệt] 404 của cổng: không thấy bảng, hoặc người xem chưa được gán quyền Thư ký Hội đồng. */
+export const QUOTA_TABLE_NO_ACCESS_MESSAGE =
+  "Không xem được bảng chỉ tiêu — không tìm thấy, hoặc bạn chưa được gán quyền Thư ký Hội đồng."
 
 export interface QuotaErrorContext {
   year: number
@@ -120,7 +141,7 @@ export function describeQuotaTableError(error: unknown, ctx: QuotaErrorContext):
     return duyNhat.length ? `Chưa lưu được: ${duyNhat.join(" ")}` : "Thông tin chưa hợp lệ — kiểm tra lại các ô."
   }
   if (e.status === 403) return "Chỉ Admin được xem / sửa / khoá bảng chỉ tiêu năm."
-  if (e.status === 404) return `Năm ${ctx.year} chưa có bảng chỉ tiêu.`
+  if (e.status === 404) return isQuotaTableNotFound(e) ? `Năm ${ctx.year} chưa có bảng chỉ tiêu.` : QUOTA_TABLE_NO_ACCESS_MESSAGE
   if (e.status === 429) return "Thao tác quá nhanh — thử lại sau ít phút."
   return "Máy chủ gặp lỗi — thử lại sau."
 }

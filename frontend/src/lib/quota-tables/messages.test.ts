@@ -5,8 +5,10 @@
 import { describe, expect, it } from "vitest"
 import { AxiosError, AxiosHeaders } from "axios"
 
+import { readApiError } from "@/lib/error-handler"
+
 import type { DraftGroup } from "./draft"
-import { describeQuotaTableError } from "./messages"
+import { describeQuotaTableError, isQuotaTableNotFound, QUOTA_TABLE_NO_ACCESS_MESSAGE, serverAllows } from "./messages"
 
 function loi(status: number, data: Record<string, unknown>): AxiosError {
   const config = { headers: new AxiosHeaders() }
@@ -147,5 +149,33 @@ describe("describeQuotaTableError — 400 / 422 / quyền", () => {
 
   it("403 ⇒ chỉ Admin", () => {
     expect(describeQuotaTableError(loi(403, { detail: "x" }), ctx())).toMatch(/Chỉ Admin/)
+  })
+
+  it("404 mã riêng quota_table_not_found ⇒ năm chưa có bảng", () => {
+    expect(describeQuotaTableError(loi(404, { reason_code: "quota_table_not_found", detail: "x" }), ctx())).toBe(
+      "Năm 2026 chưa có bảng chỉ tiêu.",
+    )
+  })
+
+  it("H4: 404 của cổng Thư ký (thân chung, không reason_code) ⇒ KHÔNG nói 'chưa có bảng'", () => {
+    const cau = describeQuotaTableError(loi(404, { detail: "Không tìm thấy", error_code: "RESOURCE_NOT_FOUND" }), ctx())
+    expect(cau).toBe(QUOTA_TABLE_NO_ACCESS_MESSAGE)
+    expect(cau).not.toMatch(/chưa có bảng/)
+  })
+})
+
+describe("isQuotaTableNotFound / serverAllows", () => {
+  it("chỉ 404 + đúng mã riêng là 'năm chưa có bảng'", () => {
+    expect(isQuotaTableNotFound(readApiError(loi(404, { reason_code: "quota_table_not_found" })))).toBe(true)
+    expect(isQuotaTableNotFound(readApiError(loi(404, { error_code: "RESOURCE_NOT_FOUND" })))).toBe(false)
+    expect(isQuotaTableNotFound(readApiError(loi(409, { reason_code: "quota_table_not_found" })))).toBe(false)
+    expect(isQuotaTableNotFound(null)).toBe(false)
+  })
+
+  it("cờ thao tác: chỉ mảng chứa đúng mã", () => {
+    expect(serverAllows(["create"], "create")).toBe(true)
+    expect(serverAllows([], "create")).toBe(false)
+    expect(serverAllows(undefined, "create")).toBe(false)
+    expect(serverAllows("create", "create")).toBe(false)
   })
 })

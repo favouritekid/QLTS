@@ -16,7 +16,8 @@ export function useQuotaTable(year: number) {
   return useQuery<QuotaTableOut>({
     queryKey: quotaTableKeys.detail(year),
     queryFn: () => quotaTablesApi.get(year),
-    // 404 = năm chưa có bảng (trạng thái hợp lệ), 403 = không phải Admin: không thử lại.
+    // 404 = năm chưa có bảng (mã riêng `quota_table_not_found`, trạng thái hợp lệ) HOẶC cổng Thư ký (chưa được gán — thân chung),
+    // 403 = vai bị Casbin chặn: không thử lại.
     retry: false,
   })
 }

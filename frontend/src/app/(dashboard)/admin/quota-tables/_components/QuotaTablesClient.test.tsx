@@ -1,6 +1,9 @@
 /**
- * GĐ2-F1 — trang bảng chỉ tiêu năm: năm chưa có bảng (404) ⇒ cho tạo với `version` 0; máy chủ 403 ⇒ câu "Chỉ Admin" (không
- * kiểm vai ở giao diện).
+ * GĐ2-F1 — trang bảng chỉ tiêu năm: năm chưa có bảng (404 mã riêng `quota_table_not_found` + cờ `create`) ⇒ cho tạo với
+ * `version` 0; máy chủ 403 ⇒ câu "Chỉ Admin" (không kiểm vai ở giao diện).
+ *
+ * Rà hợp nhất 23-11 H4 (GĐ2-C C2 mở GET cho Ban thư ký): 404 của cổng Thư ký (thân chung, KHÔNG `reason_code`) không được hiện
+ * thành "năm chưa có bảng" + nút tạo; Thư ký xem năm chưa có bảng (cờ rỗng) ⇒ không nút tạo.
  *
  * Codex lượt 3 (rà độc lập, điểm chặn giao diện): danh sách "thêm ngành" + chỉ tiêu ĐIỀN SẴN lấy từ `academic_infos` máy chủ trả
  * KÈM dấu chỉ tiêu (GET bảng; năm chưa có bảng: thân 404) — cùng một lần đọc với dấu. Các ca dưới cố ý cho danh mục học vụ cũ
@@ -83,6 +86,7 @@ describe("QuotaTablesClient", () => {
           {
             detail: "Năm 2026 chưa có bảng chỉ tiêu.",
             reason_code: "quota_table_not_found",
+            available_actions: ["create"],
             quota_fingerprint: "c".repeat(64),
             academic_infos: [hocVu(21, null)],
           },
@@ -119,6 +123,7 @@ describe("QuotaTablesClient", () => {
           {
             detail: "Năm 2026 chưa có bảng chỉ tiêu.",
             reason_code: "quota_table_not_found",
+            available_actions: ["create"],
             quota_fingerprint: "c".repeat(64),
             academic_infos: [hocVu(21, 7), hocVu(23, 9, true)],
           },
@@ -183,6 +188,50 @@ describe("QuotaTablesClient", () => {
     await waitFor(() => expect(than).toHaveLength(2))
     expect(than[1].quota_fingerprint).toBe(FP_2)
     expect(than[1].groups[0].members).toEqual([{ offering_academic_info_id: 21, annual_admission_quota: 60 }])
+  })
+
+  it.each([
+    ["cờ rỗng", { available_actions: [] }],
+    ["không có cờ", {}],
+  ])(
+    "H4: năm chưa có bảng (404 mã riêng) mà máy chủ KHÔNG cho tạo (%s — Thư ký) ⇒ câu 'chưa có bảng', KHÔNG nút tạo",
+    async (_ten, co) => {
+      batDanhMucCu(null)
+      server.use(
+        http.get(P, () =>
+          HttpResponse.json(
+            {
+              detail: "Năm 2026 chưa có bảng chỉ tiêu.",
+              error_code: "RESOURCE_NOT_FOUND",
+              reason_code: "quota_table_not_found",
+              quota_fingerprint: "c".repeat(64),
+              academic_infos: [hocVu(21, null)],
+              ...co,
+            },
+            { status: 404 },
+          ),
+        ),
+      )
+      renderWithClient(<QuotaTablesClient initialYear={2026} />)
+      expect(await screen.findByTestId("chua-co-bang")).toHaveTextContent("Năm 2026 chưa có bảng chỉ tiêu.")
+      expect(screen.queryByTestId("nut-tao-bang")).toBeNull()
+      expect(screen.queryByTestId("loi-tai-bang")).toBeNull()
+    },
+  )
+
+  it("H4: 404 của cổng Thư ký (thân chung, không reason_code) ⇒ KHÔNG báo 'chưa có bảng', KHÔNG nút tạo; báo không xem được", async () => {
+    batDanhMucCu(null)
+    server.use(
+      http.get(P, () =>
+        HttpResponse.json({ detail: "Không tìm thấy", error_code: "RESOURCE_NOT_FOUND" }, { status: 404 }),
+      ),
+    )
+    renderWithClient(<QuotaTablesClient initialYear={2026} />)
+    const loi = await screen.findByTestId("loi-tai-bang")
+    expect(loi).toHaveTextContent(/chưa được gán quyền Thư ký Hội đồng/)
+    expect(loi).not.toHaveTextContent(/chưa có bảng/)
+    expect(screen.queryByTestId("chua-co-bang")).toBeNull()
+    expect(screen.queryByTestId("nut-tao-bang")).toBeNull()
   })
 
   it("máy chủ 403 ⇒ câu 'Chỉ Admin', không nút tạo / sửa", async () => {

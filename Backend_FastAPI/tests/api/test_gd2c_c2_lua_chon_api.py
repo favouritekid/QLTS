@@ -402,6 +402,17 @@ async def test_thu_ky_va_admin_xem_bang_chi_tieu(client, nen, thu_ky, admin_user
         assert r.json()["available_actions"] == thao_tac, r.text
 
 
+async def test_nam_chua_co_bang_404_ma_rieng_va_co_tao_theo_quyen_ghi(client, nen, thu_ky, admin_user_in_db):
+    """Rà hợp nhất 23-11 H4: GET bảng chỉ tiêu nay mở cho Ban thư ký ⇒ giao diện phải phân biệt 404 "năm chưa có bảng" (mã RIÊNG
+    ``reason_code`` ``quota_table_not_found``) với 404 của cổng (thân chung, không ``reason_code`` — ca
+    ``test_khong_phai_thu_ky_thi_404_khong_ghi``), và chỉ hiện nút "Tạo bảng" theo cờ ``available_actions`` của máy chủ: Admin
+    ``["create"]``, Thư ký ``[]``. Biến thể: nhánh 404 bỏ ``can_write`` (luôn ``["create"]``) ⇒ ca đỏ ở Thư ký."""
+    for nguoi, thao_tac in ((thu_ky, []), (admin_user_in_db, ["create"])):
+        r = await client.get(f"{Q}/{NAM + 1}", headers=await dn(client, nguoi))
+        assert r.status_code == 404, r.text
+        assert (r.json()["reason_code"], r.json()["available_actions"]) == ("quota_table_not_found", thao_tac), r.text
+
+
 async def test_thu_ky_khong_ghi_duoc_bang_chi_tieu(client, nen, thu_ky):
     """Mở quyền XEM không mở quyền GHI: route ghi bảng chỉ tiêu vẫn chỉ Admin (Casbin không có dòng cán bộ ⇒ 403)."""
     h = await dn(client, thu_ky)
