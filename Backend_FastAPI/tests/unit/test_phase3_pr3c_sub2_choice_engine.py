@@ -165,6 +165,13 @@ def _make_profile(*, status="reviewing", gpa=None, choices=None):
 def db_session():
     s = MagicMock(name="AsyncSession")
     s.flush = AsyncMock()
+    # F230 (Codex 22-11 A-P4): ``evaluate_cascade`` nay khoá năm + ô qua ``quota_occupancy_service`` (``await db.execute``) —
+    # MagicMock trần không ``await`` được ⇒ trả kết quả RỖNG (không năm, không ô, không dòng hiệu lực): các ca điều phối ở đây
+    # không dựng CSDL. Đường khoá thật canh ở ``tests/api/test_f230_tra_cho_ngoai_van_ban_api.py``.
+    rong = MagicMock()
+    rong.scalars.return_value = []
+    rong.all.return_value = []
+    s.execute = AsyncMock(return_value=rong)
     return s
 
 

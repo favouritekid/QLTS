@@ -335,7 +335,13 @@ async def test_chot_rut_khi_hoan_xong_van_cho_em_co_qd(client, hs, ad):
     # submitted → withdrawn bị chặn.
     pid = await _co_qd(client, ad, hs, SACH[0], trang_thai="withdrawal_pending")
     async with AsyncSessionLocal() as db:
+        # F230 (Codex 22-11 A-P4; owner Q5): cạnh này TRẢ chỗ Phần B (em còn dòng Quyết định hiệu lực) ⇒ ``transition`` đòi
+        # khoá năm + ô của em trước — đúng thứ tự đường thật (``payment_service`` → ``_finalize_withdrawn``).
+        from app.services import quota_occupancy_service as qos
+
+        nam = await qos.lock_years_of_profiles(db, [pid])
         p = await db.get(models.AdmissionProfile, pid)
+        await qos.lock_quota_for_profiles(db, locked_years=nam, profile_ids=[pid])
         await state_service.transition(db, p, "withdrawn", skip_dispatch=True)
         assert p.status == "withdrawn"
         await db.rollback()
