@@ -24,17 +24,20 @@ from sqlalchemy import text
 import app.database as csdl
 from app.config import settings
 from app.database import AsyncSessionLocal
+from app.services import admission_review_service as review_service
 from tests.api.gd2b_lan_xet_tro_giup import (
     NAM,
     NAM_KHAC,
     P,
     PATCH_HOC_VU,
+    client_500,
     ho_so_xet,
     khong_du_lieu_ca_nhan,
     lan_xet,
     nam_hoc_vu,
     nen_lan_xet,
     so_run,
+    so_vet,
     sql,
 )
 
@@ -420,6 +423,25 @@ async def test_e6_sai_dang_422_khong_co_run(client: AsyncClient, admin_token_hea
     sid = await _lan_xet_co_san(client, admin_token_headers, nen)
     _loi(await client.post(f"{P}/{sid}/runs", headers=admin_token_headers, json=than), 422, "VALIDATION_ERROR")
     assert await so_run(sid) == 0
+
+
+async def test_i1_e6_phan_hoi_lech_schema_500_khong_co_run(client: AsyncClient, admin_token_headers, nen, monkeypatch):
+    """Rà hợp nhất 23-11 I1: thân phản hồi lệch ``RunOut`` ⇒ 500 và KHÔNG có run / dòng / vết (router kiểm phản hồi TRƯỚC ``commit``;
+    trước bản vá FastAPI kiểm SAU ``commit`` ⇒ cùng 500 nhưng run ``done`` đã ghi). Lệch giả lập ở ``run_out_for`` — router gọi nó
+    SAU ``run_evaluate`` (mọi câu ghi đã chạy, chưa commit)."""
+    h = admin_token_headers
+    sid = await _lan_xet_co_san(client, h, nen)
+
+    async def _lech(db, session_id, run):
+        return {"id": "khong-phai-so"}
+
+    monkeypatch.setattr(review_service, "run_out_for", _lech)
+    async with client_500() as c:
+        r = await c.post(f"{P}/{sid}/runs", headers=h, json={"kind": "evaluate", "session_version": 2})
+    assert r.status_code == 500, r.text
+    assert await so_run(sid) == 0
+    assert (await sql("SELECT count(*) FROM admission_review_row")).scalar_one() == 0
+    assert await so_vet("admission_review_run") == 0
 
 
 # ══════════════════════════════════════════ BT45 — ca nghiệm thu ══════════════════════════════════════════

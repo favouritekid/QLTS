@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from contextlib import asynccontextmanager
 from datetime import date
 from typing import Optional
 
@@ -131,6 +132,23 @@ async def so_run(session_id: Optional[int] = None) -> int:
     if session_id is None:
         return (await sql("SELECT count(*) FROM admission_review_run")).scalar_one()
     return (await sql("SELECT count(*) FROM admission_review_run WHERE session_id = :s", s=session_id)).scalar_one()
+
+
+async def so_vet(entity_type: str) -> int:
+    return (await sql("SELECT count(*) FROM entity_audit_log WHERE entity_type = :e", e=entity_type)).scalar_one()
+
+
+@asynccontextmanager
+async def client_500():
+    """Client KHÔNG ném lại ngoại lệ của ứng dụng (``raise_app_exceptions=False``) — đo đúng mã 500 mà người gọi nhận (``client`` của
+    conftest ném lại ngoại lệ thay vì trả phản hồi). Cùng ``fastapi_app`` mà ``client`` của conftest đã chạy lifespan (Casbin…) ⇒ ca
+    dùng helper này PHẢI xin cả fixture ``client``."""
+    from httpx import ASGITransport, AsyncClient
+
+    from app.main import fastapi_app
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app, raise_app_exceptions=False), base_url="http://test") as c:
+        yield c
 
 
 async def pid_cua(s) -> int:

@@ -21,17 +21,20 @@ from sqlalchemy import text
 
 import app.database as csdl
 from app.config import settings
+from app.services import admission_review_service as review_service
 from tests.api.gd2b_lan_xet_tro_giup import (
     NAM,
     NAM_KHAC,
     P,
     PATCH_HOC_VU,
+    client_500,
     khong_du_lieu_ca_nhan,
     lan_xet,
     nam_hoc_vu,
     nen_lan_xet,
     san,
     so_san,
+    so_vet,
     sql,
 )
 from tests.api.test_admission_doc_mutations_response_parity import _login
@@ -47,6 +50,32 @@ HANH_DONG_NHAP = ["edit_floors", "run_evaluate", "cancel"]
 async def nen(setup_test_database):
     async with csdl.engine.begin() as conn:
         return await nen_lan_xet(conn)
+
+
+async def _tai_khoan_vai(d: dict, vai: str, ten: str, mat_khau: str) -> dict:
+    """Tài khoản vai khác Admin gắn đơn vị GIẢ của ``nen`` (``d["u1"]``, id do chuỗi tự tăng cấp).
+
+    KHÔNG dùng ``manager_user_in_db`` / ``officer_user_in_db`` của conftest: hai fixture ấy kéo ``seed_lead_dependencies``, chèn
+    ``organization_unit`` / ``major_program`` với id CỨNG 1 (``TestOrgData``) mà không đẩy chuỗi tự tăng; ``danh_muc`` của ``nen``
+    chèn hai bảng ấy theo chuỗi (về 1 sau ``TRUNCATE … RESTART IDENTITY`` đầu mỗi ca) ⇒ ``organization_unit_pkey`` trùng
+    ``(id)=(1)`` ở MỌI lượt (CI 23-11, lát 09 — không phải rò dữ liệu giữa các ca). Dọn: ``TRUNCATE`` đầu ca kế."""
+    from tests.conftest import _create_user_and_role
+
+    return await _create_user_and_role(
+        {"username": ten, "email": ten + "@example.com", "password": mat_khau, "role": vai, "status": "active"},
+        "role:" + vai,
+        unit_id=d["u1"],
+    )
+
+
+@pytest_asyncio.fixture
+async def quan_ly_lx(nen) -> dict:
+    return await _tai_khoan_vai(nen, "manager", "gd2b_lx_quan_ly", "QuanLyLanXet!2468")
+
+
+@pytest_asyncio.fixture
+async def can_bo_lx(nen) -> dict:
+    return await _tai_khoan_vai(nen, "officer", "gd2b_lx_can_bo", "CanBoLanXet!2468")
 
 
 async def _tao(client: AsyncClient, h, d, *, nam: int = NAM, dot=None) -> dict:
@@ -353,6 +382,8 @@ async def test_e5_huy_giai_phong_moi_san_cung_giao_dich_trang_thai_cuoi_va_vet(
     assert await so_san(a["id"]) == 0  # đo CSDL, không tin phản hồi
     vet = [v for v in await _vet(a["id"]) if v.action == "cancelled"]
     assert len(vet) == 1 and vet[0].reason == "Lý do giả: nhập nhầm đợt"
+    # Trạng thái / phiên bản TRƯỚC khi huỷ (vết từng chụp sau câu UPDATE ORM ⇒ ghi ``cancelled`` / 3 — cùng lỗi E4, CI 23-11).
+    assert vet[0].old_value == {"version": 2, "status": "draft"}, vet[0].old_value
     assert vet[0].new_value["released_floors"] == sorted(
         [{"offering_academic_info_id": oto, "floor_score": "12.50"}, {"offering_academic_info_id": lt, "floor_score": "3.00"}],
         key=lambda x: x["offering_academic_info_id"],
@@ -396,6 +427,36 @@ async def test_e5_ly_do_dung_1000_ky_tu_sau_khi_cat_duoc_nhan(client: AsyncClien
     assert out["cancel_reason"] == "y" * 1000
 
 
+# ══════════════════════════════════════════ phản hồi kiểm TRƯỚC commit (rà hợp nhất 23-11, I1) ══════════════════════════════
+@pytest.mark.parametrize("route", ["E1", "E4", "E5"])
+async def test_i1_phan_hoi_lech_schema_500_khong_ghi_gi(client: AsyncClient, admin_token_headers, nen, monkeypatch, route):
+    """Thân phản hồi lệch ``SessionOut`` ⇒ người gọi nhận 500 và CSDL KHÔNG đổi (router kiểm phản hồi TRƯỚC ``commit``). Trước bản
+    vá FastAPI kiểm ``response_model`` SAU ``commit`` ⇒ cùng 500 nhưng lần xét / sàn / trạng thái huỷ ĐÃ ghi — mã 500 một mình không
+    phân biệt hai bản, nên ca đo CSDL. Lệch giả lập ở ĐÚNG chỗ dịch vụ dựng phản hồi (``build_session_out``), sau mọi câu ghi."""
+    h, d = admin_token_headers, nen
+    sid = None if route == "E1" else (await _tao(client, h, d))["id"]
+    vet_truoc = await so_vet("admission_review_session")
+
+    async def _lech(db, session):
+        return {"id": "khong-phai-so"}
+
+    monkeypatch.setattr(review_service, "build_session_out", _lech)
+    async with client_500() as c:
+        if route == "E1":
+            r = await c.post(P, headers=h, json={"academic_year": NAM, "admission_round_id": d["vong"]})
+        elif route == "E4":
+            r = await c.put(f"{P}/{sid}/floors", headers=h,
+                            json={"version": 1, "floors": [{"offering_academic_info_id": d["ai"]["oto_cd"], "floor_score": 1}]})
+        else:
+            r = await c.post(f"{P}/{sid}/cancel", headers=h, json={"version": 1, "reason": "Lý do giả"})
+    assert r.status_code == 500, r.text
+    if route == "E1":
+        assert (await sql("SELECT count(*) FROM admission_review_session")).scalar_one() == 0
+    else:
+        assert (await lan_xet(sid))[:2] == ("draft", 1) and await so_san(sid) == 0
+    assert await so_vet("admission_review_session") == vet_truoc
+
+
 # ══════════════════════════════════════════ quyền (BT33, HĐ9) ══════════════════════════════════════════
 def _chin_route(sid: int, rid: int, ai: int):
     """9 route (hợp đồng §0) kèm thân HỢP LỆ (vai khác phải nhận 403 dù thân đúng) — sid / rid có thể không tồn tại."""
@@ -414,12 +475,12 @@ def _chin_route(sid: int, rid: int, ai: int):
 
 @pytest.mark.parametrize("vai", ["quan_ly", "can_bo"])
 async def test_vai_khac_admin_403_ca_9_route_truoc_khi_doc(
-    client: AsyncClient, admin_token_headers, manager_user_in_db, officer_user_in_db, nen, vai
+    client: AsyncClient, admin_token_headers, quan_ly_lx, can_bo_lx, nen, vai
 ):
     """Vai khác Admin ⇒ 403 ở CẢ 9 route — kể cả khi lần xét / run KHÔNG có (403, không 404: kiểm vai trước khi đọc) và khi thân
     SAI dạng (403, không 422). Không ghi gì."""
     a = await _tao(client, admin_token_headers, nen)
-    u = manager_user_in_db if vai == "quan_ly" else officer_user_in_db
+    u = quan_ly_lx if vai == "quan_ly" else can_bo_lx
     h = await _login(client, u["username"], u["password"])
     client.cookies.clear()  # cookie đăng nhập đè tiêu đề — request đi đúng vai của ``h``
     for sid in (a["id"], 987654):
@@ -433,14 +494,14 @@ async def test_vai_khac_admin_403_ca_9_route_truoc_khi_doc(
 
 
 async def test_lop_phu_chi_admin_chan_khi_casbin_gia_mo(
-    client: AsyncClient, admin_token_headers, officer_user_in_db, nen, monkeypatch
+    client: AsyncClient, admin_token_headers, can_bo_lx, nen, monkeypatch
 ):
     """HĐ9 — lớp phụ ``deps.require_review_admin``: Casbin (tầng chủ sở hữu vai) bị GIẢ MỞ cho mọi vai ⇒ cán bộ VẪN 403 ở cả 9 route,
     với câu của lớp phụ (đo qua request thật — kiểm cả dây nối route ↔ dependency)."""
     from app.core import deps
 
     a = await _tao(client, admin_token_headers, nen)
-    h = await _login(client, officer_user_in_db["username"], officer_user_in_db["password"])
+    h = await _login(client, can_bo_lx["username"], can_bo_lx["password"])
     client.cookies.clear()
     monkeypatch.setattr(deps, "casbin_allows", lambda *a, **k: True)
     for m, duong, than in _chin_route(a["id"], 987654, nen["ai"]["oto_cd"]):

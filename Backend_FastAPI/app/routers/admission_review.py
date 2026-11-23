@@ -162,6 +162,16 @@ def run_location(session_id: int, run_id: int) -> str:
     return "/api%s%s/%d/runs/%d" % (ROUTER_PREFIX, REVIEW_SESSIONS_PATH, int(session_id), int(run_id))
 
 
+def response_checked_before_commit(model, out):
+    """Kiểm thân phản hồi theo ``response_model`` của route TRƯỚC ``commit`` (rà hợp nhất 23-11, mục I1) — MỘT chỗ cho 4 route ghi
+    (E1, E4, E5, E6). FastAPI tự kiểm ``response_model`` SAU khi route trả về, tức SAU ``commit`` ⇒ thân lệch schema cho người gọi
+    500 trong khi lần xét / sàn / run ĐÃ ghi. Kiểm ở đây: lệch ⇒ ``ValidationError`` nổ khi giao dịch CHƯA commit ⇒ phiên của
+    ``database.get_db`` đóng = rollback, không ghi gì. Phép kiểm = phép FastAPI làm (``validate_python(…, from_attributes=True)``);
+    trả NGUYÊN ``out`` ⇒ đường thành công không đổi (FastAPI vẫn kiểm + tuần tự hoá như trước)."""
+    model.model_validate(out, from_attributes=True)
+    return out
+
+
 @router.post(
     REVIEW_SESSIONS_PATH,
     response_model=SessionOut,
@@ -183,6 +193,7 @@ async def create_review_session(
         admission_round_id=payload.admission_round_id,
         actor_user_id=current_user.id,
     )
+    out = response_checked_before_commit(SessionOut, out)
     await db.commit()
     if after_commit is not None:
         await after_commit()
@@ -253,6 +264,7 @@ async def put_review_floors(
         floors=[(f.offering_academic_info_id, f.floor_score) for f in payload.floors],
         actor_user_id=current_user.id,
     )
+    out = response_checked_before_commit(SessionOut, out)
     await db.commit()
     if after_commit is not None:
         await after_commit()
@@ -277,6 +289,7 @@ async def cancel_review_session(
     out, after_commit = await review_service.cancel_session(
         db, session_id, version=payload.version, reason=payload.reason, actor_user_id=current_user.id
     )
+    out = response_checked_before_commit(SessionOut, out)
     await db.commit()
     if after_commit is not None:
         await after_commit()
@@ -307,7 +320,7 @@ async def create_review_run(
         session_version=payload.session_version,
         actor_user_id=current_user.id,
     )
-    out = await review_service.run_out_for(db, session_id, run)
+    out = response_checked_before_commit(RunOut, await review_service.run_out_for(db, session_id, run))
     await db.commit()
     if after_commit is not None:
         await after_commit()

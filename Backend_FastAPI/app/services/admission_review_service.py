@@ -368,14 +368,18 @@ async def replace_floors(
     await review_repo.insert_floors(
         db, session_id=session_id, academic_year=year, floors=moi, updated_by_user_id=actor_user_id
     )
-    phien_ban = int(session.version) + 1
+    # Giá trị CŨ chụp TRƯỚC ``update_session``: câu ``UPDATE`` ORM (``synchronize_session`` mặc định) GHI giá trị mới vào chính đối
+    # tượng ``session`` trong identity map ⇒ đọc ``session.version`` SAU câu ấy là số MỚI — vết từng ghi ``old_value.version`` =
+    # ``new_value.version`` (CI 23-11, ``test_e4_thay_toan_bo_san…``: 3 ≠ 2). Số trong CSDL vẫn đúng + 1 một lần.
+    phien_ban_cu = int(session.version)
+    phien_ban = phien_ban_cu + 1
     await review_repo.update_session(db, session_id, {"version": phien_ban})
     await _audit(
         db,
         session_id,
         AUDIT_ACTION_FLOORS_REPLACED,
         actor_user_id,
-        old_value={"version": int(session.version), "floors": _floors_json(cu)},
+        old_value={"version": phien_ban_cu, "floors": _floors_json(cu)},
         new_value={"version": phien_ban, "floors": _floors_json(moi)},
     )
     await db.refresh(session)
@@ -397,7 +401,10 @@ async def cancel_session(
     if int(session.version) != int(version):
         raise errors.review_session_stale(int(session.version))
     da_giai_phong = await review_repo.delete_floors(db, session_id)
-    phien_ban = int(session.version) + 1
+    # Chụp TRƯỚC ``update_session`` (cùng lý do E4 ở trên): sau câu ``UPDATE`` ORM, ``session.version`` / ``session.status`` đã là
+    # giá trị MỚI (``cancelled``) ⇒ vết sẽ ghi trạng thái cũ = ``cancelled``.
+    cu = {"version": int(session.version), "status": session.status}
+    phien_ban = cu["version"] + 1
     await review_repo.update_session(
         db,
         session_id,
@@ -414,7 +421,7 @@ async def cancel_session(
         session_id,
         AUDIT_ACTION_CANCELLED,
         actor_user_id,
-        old_value={"version": int(session.version), "status": session.status},
+        old_value=cu,
         new_value={"version": phien_ban, "status": REVIEW_SESSION_CANCELLED, "released_floors": _floors_json(da_giai_phong)},
         reason=reason,
     )

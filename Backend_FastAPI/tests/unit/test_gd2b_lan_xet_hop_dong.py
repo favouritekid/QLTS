@@ -280,6 +280,33 @@ def test_ast_thu_tu_khoa_e4_e5_doc_nam_khoa_nam_roi_dong_lan_xet():
     assert goi.index("lock_review_year") < goi.index("max_seq_no") < goi.index("insert_session")
 
 
+def test_i1_route_ghi_kiem_phan_hoi_dung_response_model_truoc_commit():
+    """Rà hợp nhất 23-11 I1 (lớp AST; hành vi đo bằng request thật ở ``test_i1_*`` của hai tệp API): route nào trong 9 có
+    ``db.commit()`` thì gọi ``response_checked_before_commit(<response_model CỦA CHÍNH route>, …)`` ĐÚNG một lần và TRƯỚC commit.
+    Tập route ghi gõ TAY (E1, E4, E5, E6) — route mới có commit mà quên kiểm ⇒ đỏ."""
+    import app.routers.admission_review as mod
+
+    cay = ast.parse(inspect.getsource(mod))
+    ham = {n.name: n for n in ast.walk(cay) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    co_commit = set()
+    for k, r in _route_lan_xet().items():
+        nut = ham[r.endpoint.__name__]
+        commit = [n for n in ast.walk(nut) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                  and n.func.attr == "commit"]
+        kiem = [n for n in ast.walk(nut) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                and n.func.id == "response_checked_before_commit"]
+        if not commit:
+            assert not kiem, k
+            continue
+        co_commit.add(k)
+        assert len(commit) == 1 and len(kiem) == 1, k
+        assert (kiem[0].lineno, kiem[0].col_offset) < (commit[0].lineno, commit[0].col_offset), k
+        assert isinstance(kiem[0].args[0], ast.Name) and kiem[0].args[0].id == r.response_model.__name__, k
+    assert co_commit == {
+        ("POST", P), ("PUT", P + "/{session_id}/floors"), ("POST", P + "/{session_id}/cancel"), ("POST", P + "/{session_id}/runs"),
+    }
+
+
 def test_ast_doi_nam_hoc_vu_doc_san_lan_xet_nhap():
     from app.services import admission_quota_table_service as q
 
