@@ -9,6 +9,8 @@
 - Chuỗi Alembic một đầu; SQLSTATE mới chỉ ở đúng tệp; cờ hạ cấp mang nghĩa CHO PHÉP; Casbin template == migration; Casbin trỏ
   đúng route thật và route ấy đi qua ``deps.require_review_secretary``; sổ K4; kiểm kê đóng băng.
 - Luật thuần: bảng chân trị "loại áp được cho dòng", "dòng cờ đang ngừng đã xử lý chưa"; thứ tự khoá của đường ghi (đọc mã).
+- Câu đọc của repository lựa chọn BIÊN DỊCH được trên phương ngữ PostgreSQL (phiên giả, không CSDL) — CI 45192218468 23-11: hai
+  câu GET nổ ``Can't determine which FROM clause to join from`` lúc biên dịch; hình dạng JOIN + tương quan "hiệu lực" giữ nghĩa.
 
 Mỗi ca kiểm MỘT bất biến.
 """
@@ -19,6 +21,7 @@ from pathlib import Path
 
 import pytest
 from sqlalchemy import CheckConstraint, ForeignKeyConstraint, Index, UniqueConstraint
+from sqlalchemy.dialects import postgresql
 
 from app.models import admission_review_selection as m
 from app.models import admission_review_selection_ddl as ddl
@@ -563,3 +566,98 @@ def test_route_ghi_kiem_phan_hoi_truoc_commit_bang_helper_cua_l4():
     assert (kiem[0].lineno, kiem[0].col_offset) < (commit[0].lineno, commit[0].col_offset)
     route = next(x for x in fastapi_app.routes if isinstance(x, APIRoute) and x.endpoint is r.put_review_selection)
     assert isinstance(kiem[0].args[0], ast.Name) and kiem[0].args[0].id == route.response_model.__name__
+
+
+# ── câu đọc của repository biên dịch được (phiên giả, không CSDL) ──────────────────────────────────────────────────────
+# CI 45192218468 (23-11): ba ca GET lựa chọn ở ``tests/api/test_gd2c_c2_lua_chon_api.py`` đỏ ``InvalidRequestError: Can't
+# determine which FROM clause to join from`` tại ``list_effective_selections`` / ``selection_history`` — ORM không chọn được vế trái
+# của ``outerjoin`` (hai ứng viên: bảng lựa chọn và ``user``; ON chứa câu con "lượt mới nhất"). Lỗi nổ lúc BIÊN DỊCH câu, chưa chạm
+# CSDL ⇒ một phiên giả chỉ biên dịch là đủ thấy, ở lát unit. Biến thể kiểm ngược: bỏ ``.select_from(Sel)`` ở
+# ``_selections_with_people_and_current_row`` ⇒ ``test_cau_doc_cua_repository_lua_chon_bien_dich_duoc[list_effective_selections]``
+# và ``[selection_history]`` đỏ với ĐÚNG ``InvalidRequestError`` ấy.
+class _KetQuaRong:
+    """Đủ ba cách đọc kết quả mà repository lựa chọn dùng; luôn rỗng."""
+
+    def all(self):
+        return []
+
+    def one_or_none(self):
+        return None
+
+    def scalar_one_or_none(self):
+        return None
+
+
+class _PhienChiBienDich:
+    """``AsyncSession`` giả: BIÊN DỊCH câu nhận được bằng phương ngữ PostgreSQL (đúng bước ORM ném lỗi ở CI) rồi trả kết quả rỗng.
+    Không CSDL, không thực thi."""
+
+    def __init__(self):
+        self.sql = []
+
+    async def execute(self, cau, tham_so=None):
+        self.sql.append(_chuan_hoa(str(cau.compile(dialect=postgresql.dialect()))))
+        return _KetQuaRong()
+
+
+#: Mọi hàm ĐỌC của repository lựa chọn → đối số giả (sau ``db``).
+_HAM_DOC = {
+    "lock_profile": (7,),
+    "latest_done_evaluate_run_id": (1,),
+    "get_row": (3, 7),
+    "effective_selection": (1, 7),
+    "list_effective_selections": (1,),
+    "selection_history": (1, 7),
+    "user_summary": (5,),
+    "rows_with_flags_and_effective_selection": (1, ("offering_inactive",)),
+    "session_exists": (1,),
+}
+#: Hàm GHI qua ORM (``add`` + ``flush``) — không đi qua ``execute``.
+_HAM_GHI_ORM = {"insert_selection"}
+
+
+async def _sql_cua(ten: str) -> str:
+    from app.repositories import admission_review_selection_repository as repo
+
+    db = _PhienChiBienDich()
+    await getattr(repo, ten)(db, *_HAM_DOC[ten])
+    assert len(db.sql) == 1, db.sql
+    return db.sql[0]
+
+
+def test_moi_ham_cua_repository_lua_chon_co_ca_bien_dich():
+    """CLAUDE.md §6: hàm MỚI của repository (vd C4 thêm câu đọc) phải vào ``_HAM_DOC`` (hay ``_HAM_GHI_ORM``) — không thì câu của
+    nó không được biên dịch ở đây và lỗi kiểu CI 45192218468 chỉ lộ ở ca API."""
+    from app.repositories import admission_review_selection_repository as repo
+
+    ham = {ten for ten, f in inspect.getmembers(repo, inspect.iscoroutinefunction) if f.__module__ == repo.__name__}
+    assert ham == set(_HAM_DOC) | _HAM_GHI_ORM
+
+
+@pytest.mark.parametrize("ten", sorted(_HAM_DOC))
+async def test_cau_doc_cua_repository_lua_chon_bien_dich_duoc(ten):
+    """Câu của hàm đọc biên dịch được (ORM xác định được vế trái của mọi JOIN) — không cần CSDL."""
+    assert (await _sql_cua(ten)).startswith("SELECT ")
+
+
+@pytest.mark.parametrize("ten", ["list_effective_selections", "selection_history"])
+async def test_cau_doc_lua_chon_noi_tu_bang_lua_chon_dong_hien_tai_noi_ngoai_nguoi_ghi_noi_trong(ten):
+    """Đặt vế trái tường minh KHÔNG đổi nghĩa: FROM bắt đầu ở bảng lựa chọn; dòng hiện tại nối NGOÀI theo (lượt ``evaluate`` xong
+    mới nhất, hồ sơ) — hồ sơ rời lượt mới nhất vẫn còn lựa chọn, ``row_hash`` NULL ⇒ ``is_stale``; người ghi nối TRONG."""
+    sql = await _sql_cua(ten)
+    assert (
+        "FROM admission_review_selection LEFT OUTER JOIN admission_review_row ON admission_review_row.run_id = "
+        "(SELECT max(admission_review_run.id)" in sql
+        and " AND admission_review_row.profile_id = admission_review_selection.profile_id "
+        'JOIN "user" ON "user".id = admission_review_selection.decided_by_user_id' in sql
+    ), sql
+
+
+async def test_danh_sach_hieu_luc_tuong_quan_voi_dong_lua_chon_ngoai():
+    """Vị từ "chưa bị thay" (``_is_effective``) TƯƠNG QUAN với dòng lựa chọn của câu ngoài: câu con chỉ có bí danh ``later``. Không
+    tương quan (``FROM … AS …_1, admission_review_selection``) thì chỉ cần MỘT lần đổi ý ở bất kỳ hồ sơ nào là danh sách rỗng."""
+    sql = await _sql_cua("list_effective_selections")
+    assert (
+        "FROM admission_review_selection AS admission_review_selection_1 "
+        "WHERE admission_review_selection_1.supersedes_id = admission_review_selection.id" in sql
+    ), sql
