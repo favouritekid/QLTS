@@ -29,7 +29,11 @@ name: Chạy chọn ca backend (thủ công)
 #      input. Một mục sai ⇒ không chạy gì (không chạy một phần danh sách).
 #   3. Collect ra 0 ca ⇒ ĐỎ; MỘT mục collect ra 0 ca ⇒ ĐỎ (tệp skip cả module
 #      là kiểu xanh giả kinh điển); lỗi collect ⇒ ĐỎ.
-#   4. Số ca chạy (JUnit) phải BẰNG số ca collect; pytest rc khác 0 ⇒ ĐỎ.
+#   4. TẬP ca chạy (JUnit) phải ĐÚNG tập node id collect — không chỉ cùng số
+#      lượng; pytest rc khác 0 ⇒ ĐỎ; có ca failed / errors ⇒ ĐỎ.
+#      0 ca PASSED (vd. marker / fixture skip TOÀN BỘ sau collect, pytest vẫn
+#      thoát 0) ⇒ ĐỎ; MỘT mục mà mọi ca đều skip ⇒ ĐỎ. Skip một phần ⇒ cảnh
+#      báo, và kết luận in rõ số ca SKIP (không được kiểm).
 #      Không nuốt mã lỗi, không `continue-on-error`, không `if:`.
 #   5. Tên job không chứa tên required check nào (`pytest`, `Build`, …): một
 #      lượt chạy MỘT PHẦN không bao giờ được thoả required check của PR.
@@ -260,15 +264,20 @@ jobs:
             exit 1
           fi
 
+          # Bảng mục → node id (TAB giữa hai cột): nguồn DUY NHẤT cho bước `chay`
+          # về tập ca phải chạy và ca nào thuộc mục nào. Ghi ra tệp tạm, chỉ
+          # đổi tên thành tệp thật khi bước này đạt.
           echo "Số ca collect theo từng mục:"
+          TAM="$RUNNER_TEMP/muc_nodeid.tmp"
+          : > "$TAM"
           TONG=0
           LOI=0
           for muc in "${DANH_SACH[@]}"; do
-            n=$(MUC="$muc" awk '
-              BEGIN { p = ENVIRON["MUC"]; d = length(p) }
+            n=$(MUC="$muc" RA="$TAM" awk '
+              BEGIN { p = ENVIRON["MUC"]; d = length(p); ra = ENVIRON["RA"] }
               index($0, p) == 1 {
                 sau = substr($0, d + 1, 1)
-                if (length($0) == d || sau == ":" || sau == "[") c++
+                if (length($0) == d || sau == ":" || sau == "[") { c++; print p "\t" $0 >> ra }
               }
               END { print c + 0 }' "$NODE")
             printf '  %6s  %s\n' "$n" "$muc"
@@ -285,7 +294,7 @@ jobs:
           if [ "$LOI" -ne 0 ]; then
             exit 1
           fi
-          printf '%s\n' "$SO_CA" > "$RUNNER_TEMP/so_ca.txt"
+          mv "$TAM" "$RUNNER_TEMP/muc_nodeid.tsv"
           echo "Collect: $SO_CA ca từ ${#DANH_SACH[@]} mục."
 
       - name: Chạy pytest trên các ca đã chọn
@@ -294,13 +303,6 @@ jobs:
         run: |
           set -euo pipefail
           mapfile -t DANH_SACH < "$RUNNER_TEMP/ca.txt"
-          SO_CA=$(< "$RUNNER_TEMP/so_ca.txt")
-          case "$SO_CA" in
-            ''|*[!0-9]*)
-              echo "::error::Số ca collect không hợp lệ: '$SO_CA'"
-              exit 1
-              ;;
-          esac
           JUNIT="$RUNNER_TEMP/junit.xml"
           rm -f "$JUNIT"
 
@@ -309,65 +311,114 @@ jobs:
           python -m pytest "${DANH_SACH[@]}" -q --tb=short --timeout=60 "$BO_QUA" --junit-xml="$JUNIT" || rc=$?
           echo "pytest rc=$rc"
 
-          # Đếm từ JUnit, không từ dòng tóm tắt của pytest. Tích luỹ rồi thoát
-          # theo TỔNG — thoát theo lệnh cuối là cách một bộ kiểm in "SAI" mà
-          # vẫn trả 0.
-          kq=0
-          python - "$JUNIT" "$SO_CA" <<'PY' || kq=$?
+          # MỌI phán quyết của bước này nằm ở MỘT chỗ — đoạn dưới: rc, danh tính
+          # ca, ca đỏ, skip. Nó tích luỹ lỗi rồi thoát theo TỔNG (thoát theo lệnh
+          # cuối là cách một bộ kiểm in "SAI" mà vẫn trả 0); `set -e` đưa mã
+          # thoát ra thành kết quả bước.
+          python - "$JUNIT" "$RUNNER_TEMP/muc_nodeid.tsv" "$rc" <<'PY'
           import os
+          import re
           import sys
           import xml.etree.ElementTree as ET
 
-          duong, so_collect = sys.argv[1], int(sys.argv[2])
-          if not os.path.isfile(duong):
-              print("::error::Không có JUnit XML — phiên pytest không chạy tới cuối.")
-              sys.exit(1)
-          ca = list(ET.parse(duong).getroot().iter("testcase"))
+          duong_junit, duong_bang, rc = sys.argv[1], sys.argv[2], int(sys.argv[3])
 
 
-          def co(tc, the):
-              return tc.find(the) is not None
+          def khoa_junit(node):
+              """Node id → (classname, name) ĐÚNG như junitxml của pytest ghi
+              (`_pytest.junitxml.mangle_test_address`; test khoá hai bản bằng
+              nhau). Ánh xạ XUÔI, không dựng ngược từ JUnit: `classname` có
+              dấu chấm vừa của thư mục vừa của lớp lồng, dựng ngược không tin
+              được."""
+              duong, mo, tham = node.partition("[")
+              ten = duong.split("::")
+              ten[0] = re.sub(r"\.py$", "", ten[0].replace("/", "."))
+              ten[-1] += mo + tham
+              return ".".join(ten[:-1]), ten[-1]
 
 
-          failed = sum(1 for tc in ca if co(tc, "failure"))
-          errors = sum(1 for tc in ca if co(tc, "error"))
-          skipped = [tc for tc in ca if co(tc, "skipped")]
-          passed = sum(1 for tc in ca
-                       if not (co(tc, "failure") or co(tc, "error") or co(tc, "skipped")))
-          # Một ca đỏ ở call rồi lỗi ở teardown được ghi HAI <testcase> cùng tên.
-          chay = len({(tc.get("classname"), tc.get("name")) for tc in ca})
+          # Mục → node id, do bước `thu-thap` ghi: tập ca PHẢI chạy.
+          muc_cua = {}
+          with open(duong_bang, encoding="utf-8") as fh:
+              for dong_bang in fh:
+                  muc, node = dong_bang.rstrip("\n").split("\t", 1)
+                  muc_cua.setdefault(muc, []).append(node)
+          mong = {khoa_junit(n): n for cac in muc_cua.values() for n in cac}
 
+          loi = []
+          if rc != 0:
+              loi.append("pytest rc=%d (1 = có ca đỏ, 2 = bị ngắt, 3 = lỗi nội bộ, "
+                         "4 = dùng sai hoặc node id chết, 5 = không collect được ca nào)." % rc)
+
+          # Trạng thái theo CA. Một ca đỏ ở call rồi lỗi ở teardown có HAI
+          # <testcase> cùng tên — giữ trạng thái nặng nhất.
+          NANG = ("passed", "skipped", "failed", "errors")
+          trang_thai = {}
+          if os.path.isfile(duong_junit):
+              for tc in ET.parse(duong_junit).getroot().iter("testcase"):
+                  if tc.find("error") is not None:
+                      moi = "errors"
+                  elif tc.find("failure") is not None:
+                      moi = "failed"
+                  elif tc.find("skipped") is not None:
+                      moi = "skipped"
+                  else:
+                      moi = "passed"
+                  k = (tc.get("classname") or "", tc.get("name") or "")
+                  cu = trang_thai.get(k)
+                  if cu is None or NANG.index(moi) > NANG.index(cu):
+                      trang_thai[k] = moi
+          else:
+              loi.append("Không có JUnit XML — phiên pytest không chạy tới cuối.")
+
+          dem = {t: sum(1 for v in trang_thai.values() if v == t) for t in NANG}
           dong = ("collect %d · chạy %d · passed %d · failed %d · errors %d · skipped %d"
-                  % (so_collect, chay, passed, failed, errors, len(skipped)))
+                  % (len(mong), len(trang_thai), dem["passed"], dem["failed"],
+                     dem["errors"], dem["skipped"]))
           print(dong)
+
+          # (1) DANH TÍNH: tập ca chạy phải ĐÚNG tập ca collect, không chỉ cùng số lượng.
+          thieu = sorted(n for k, n in mong.items() if k not in trang_thai)
+          thua = sorted("%s::%s" % k for k in trang_thai if k not in mong)
+          if thieu or thua:
+              loi.append("Tập ca chạy KHÁC tập ca collect: thiếu %d, thừa %d."
+                         % (len(thieu), len(thua)))
+              for n in thieu[:30]:
+                  print("  THIẾU %s" % n)
+              for k in thua[:30]:
+                  print("  THỪA  %s" % k)
+          # (2) Có ca đỏ.
+          if dem["failed"] or dem["errors"]:
+              loi.append("%d ca failed, %d ca errors." % (dem["failed"], dem["errors"]))
+          # (3) 0 ca PASSED — vd. marker / fixture skip TOÀN BỘ sau collect, rc vẫn 0.
+          if dem["passed"] == 0:
+              loi.append("0 ca PASSED (chạy %d, skip %d) — không ca nào thật sự được kiểm."
+                         % (len(trang_thai), dem["skipped"]))
+          # (4) MỘT mục mà mọi ca đều skip: các mục khác không được che nó.
+          for muc, cac in muc_cua.items():
+              tt = [trang_thai.get(khoa_junit(n)) for n in cac]
+              if tt and all(t == "skipped" for t in tt):
+                  loi.append("Mục %s: toàn bộ %d ca bị SKIP." % (muc, len(tt)))
+
+          if dem["skipped"]:
+              print("::warning::%d ca bị SKIP — đã chạy nhưng KHÔNG được kiểm. Đọc lý do "
+                    "trước khi coi lượt này là bằng chứng." % dem["skipped"])
+              for k in sorted(k for k, v in trang_thai.items() if v == "skipped")[:30]:
+                  print("  SKIP %s::%s" % k)
+
+          if loi:
+              ket_luan = "ĐỎ — %d lỗi." % len(loi)
+          elif dem["skipped"]:
+              ket_luan = ("%d/%d ca PASSED, %d ca SKIP (KHÔNG được kiểm)."
+                          % (dem["passed"], len(mong), dem["skipped"]))
+          else:
+              ket_luan = "%d/%d ca PASSED, không ca nào skip." % (dem["passed"], len(mong))
+          for dong_loi in loi:
+              print("::error::" + dong_loi)
+          print("KẾT LUẬN: " + ket_luan)
           tom_tat = os.environ.get("GITHUB_STEP_SUMMARY")
           if tom_tat:
               with open(tom_tat, "a", encoding="utf-8") as fh:
-                  fh.write("### Chạy chọn ca\n\n" + dong + "\n")
-
-          if skipped:
-              print("::warning::%d ca bị SKIP — được đếm là đã chạy nhưng KHÔNG được "
-                    "kiểm. Đọc lý do trước khi coi lượt này là bằng chứng." % len(skipped))
-              for tc in skipped[:30]:
-                  print("  SKIP %s::%s" % (tc.get("classname"), tc.get("name")))
-
-          loi = []
-          if chay == 0:
-              loi.append("JUnit ghi 0 ca — không có gì được chạy.")
-          if chay != so_collect:
-              loi.append("Số ca chạy (%d) khác số ca collect (%d) — phiên dừng giữa "
-                         "chừng hoặc có ca không được thực thi." % (chay, so_collect))
-          if failed or errors:
-              loi.append("%d ca failed, %d ca errors." % (failed, errors))
-          for dong_loi in loi:
-              print("::error::" + dong_loi)
+                  fh.write("### Chạy chọn ca\n\n%s\n\nKẾT LUẬN: %s\n" % (dong, ket_luan))
           sys.exit(1 if loi else 0)
           PY
-
-          if [ "$rc" -ne 0 ]; then
-            echo "::error::pytest rc=$rc (1 = có ca đỏ, 2 = bị ngắt, 3 = lỗi nội bộ, 4 = dùng sai hoặc node id chết, 5 = không collect được ca nào)."
-          fi
-          if [ "$rc" -ne 0 ] || [ "$kq" -ne 0 ]; then
-            exit 1
-          fi
-          echo "Xong: ${#DANH_SACH[@]} mục, $SO_CA ca — đã chạy đủ, không ca nào đỏ."
