@@ -1,5 +1,6 @@
 "use client"
 
+import { useState } from "react"
 import { Loader2 } from "lucide-react"
 import { toast } from "sonner"
 
@@ -67,7 +68,8 @@ function cancelErrorText(error: unknown): string {
  * Lý do đã gõ sống qua mọi nhánh trên (kể cả khi E3 tải lại lỗi làm màn tạm tháo hộp) vì bản soạn ở màn cha; chỉ xoá khi huỷ THÀNH CÔNG.
  */
 export function CancelReviewSessionDialog(props: Props) {
-  const { open, onOpenChange, sessionId, version, seqNo, academicYear, busy, reason, onReasonChange } = props
+  const { open, onOpenChange, sessionId, version, seqNo, academicYear, busy } = props
+  const [reason, onReasonChange] = useState(props.reason)
   const cancel = useCancelReviewSession(sessionId)
   const length = codePointLength(reason.trim())
   const reasonOk = length >= 1 && length <= CANCEL_REASON_MAX_LENGTH
