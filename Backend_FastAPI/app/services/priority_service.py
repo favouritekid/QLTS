@@ -431,13 +431,20 @@ KV_HISTORY_INCONSISTENT_REASON = "history_entries_inconsistent"
 
 def _history_grade(value: Any) -> Optional[int]:
     """``grade_to`` hợp lệ (số nguyên 1..12 — khớp ``AcademicRecordSchema``) hoặc ``None`` (thiếu / lạ)."""
-    if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= _THPT_LAST_GRADE:
-        return value
-    return None
+    return _history_grade_in(value, 1, _THPT_LAST_GRADE)
 
 
 def _history_int(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _history_grade_in(value: Any, first: int, last: int) -> Optional[int]:
+    """MỘT định nghĩa "lớp hợp lệ trong dải" (CLAUDE.md §7): số nguyên thật (:func:`_history_int` — không ``bool`` / chuỗi / số thực /
+    ``None``) trong ``first..last`` ⇒ chính nó; khác ⇒ ``None``. Dải của schema (:func:`_history_grade`, 1..12) và dải lớp cuối ở bước
+    hoà — THPT / GDTX 10..12 (:func:`kv_entry_last_grade`), phần THCS 6..9 (:func:`kv_entry_thcs_last_grade`)."""
+    if _history_int(value) and first <= value <= last:
+        return value
+    return None
 
 
 def kv_lien_cap_without_thpt(entry: Any) -> bool:
@@ -484,12 +491,21 @@ def kv_entry_problem(entry: dict) -> Optional[str]:
 def kv_lien_cap_split_year(entry: dict) -> int:
     """MỘT chỗ CẮT mục liên cấp (``THCS_THPT``) thành phần THCS và phần THPT — khoá năm bắt đầu của năm học lớp 10 đầu tiên trong mục:
     lớp kết thúc ``g`` hợp lệ ⇒ ``min(year_to, max(year_from, year_to − (g − 9)))`` (``g`` ≤ 9 ⇒ ``year_to``: cả mục là THCS). Phần THPT
-    = ``split .. year_to − 1`` (:func:`kv_entry_school_years`, G5); phần THCS = ``year_from .. split − 1``
-    (:func:`kv_entry_thcs_school_years`, L3 — owner 22-11 ``QUYET-DINH-OWNER-L3A-5-CAU`` câu 3: "cắt như G5 cắt phần THPT"). Chỉ gọi
-    khi năm là số nguyên và lớp kết thúc hợp lệ."""
+    = ``split .. year_to − 1`` (:func:`kv_entry_school_years`, G5); phần THCS = ``năm học lớp 6 .. split − 1``
+    (:func:`kv_entry_thcs_school_years`, L3 — owner 22-11 ``QUYET-DINH-OWNER-L3A-5-CAU`` câu 3: "cắt như G5 cắt phần THPT"; owner 24-11
+    chỉ đếm năm lớp 6–9). Chỉ gọi khi năm là số nguyên và lớp kết thúc hợp lệ. CÙNG phép đếm ngược với chỗ cắt lớp 6
+    (:func:`kv_lien_cap_grade_start_year`)."""
+    return kv_lien_cap_grade_start_year(entry, _THPT_FIRST_GRADE)
+
+
+def kv_lien_cap_grade_start_year(entry: dict, grade: int) -> int:
+    """Khoá năm bắt đầu của năm học lớp ``grade`` trong mục liên cấp — MỘT phép đếm ngược cho cả hai chỗ cắt (lớp 10:
+    :func:`kv_lien_cap_split_year`; lớp 6: :func:`kv_entry_thcs_school_years`). Một năm một lớp, năm học cuối ``year_to − 1`` là lớp
+    kết thúc ``g`` ⇒ năm học lớp ``grade`` = ``year_to − (g − grade + 1)``, kẹp trong ``year_from .. year_to`` (``grade`` > ``g`` ⇒
+    ``year_to``: mục không tới lớp ấy). Chỉ gọi khi năm là số nguyên và lớp kết thúc hợp lệ."""
     y_from, y_to = entry["year_from"], entry["year_to"]
-    grade = _history_grade(entry.get("grade_to"))
-    return min(y_to, max(y_from, y_to - (grade - (_THPT_FIRST_GRADE - 1))))
+    last = _history_grade(entry.get("grade_to"))
+    return min(y_to, max(y_from, y_to - (last - (grade - 1))))
 
 
 def kv_entry_school_years(entry: dict) -> range:
@@ -517,9 +533,19 @@ def kv_entry_thcs_end_year(entry: dict) -> int:
 
 
 def kv_entry_thcs_school_years(entry: dict) -> range:
-    """L3: khoá năm học (năm bắt đầu) của phần THCS — ``year_from .. kv_entry_thcs_end_year − 1``. CÙNG quy ước khoá với G5 (owner L3
-    câu 4: "đếm năm học như G5"); liên cấp lớp 6 → 10 ``2017→2022`` ⇒ 2017, 2018, 2019, 2020 (năm 2021 là lớp 10, thuộc phần THPT)."""
-    return range(entry["year_from"], kv_entry_thcs_end_year(entry))
+    """L3: khoá năm học (năm bắt đầu) của phần THCS — CHỈ các năm học lớp 6–9 (owner 24-11 ``QUYET-DINH-OWNER-L3-CHI-DEM-NAM-THCS-VA-
+    THU-TU-3B`` mục 1; Codex đoàn 3a A1 NỢ-2): ``năm học đầu .. kv_entry_thcs_end_year − 1``. CÙNG quy ước khoá với G5 (owner L3 câu 4:
+    "đếm năm học như G5").
+
+    * dòng THCS (trường cấp THCS): năm học đầu = ``year_from`` — mọi năm ở trường cấp THCS là năm THCS;
+    * liên cấp: năm học đầu = năm học lớp 6 (:func:`kv_lien_cap_grade_start_year`, CÙNG phép đếm ngược với chỗ cắt lớp 10), không sớm
+      hơn ``year_from`` ⇒ bỏ năm tiểu học ở đầu mục. Vd lớp 6 → 10 ``2017→2022`` ⇒ 2017–2020 (2021 là lớp 10, phần THPT); lớp 1 → 9
+      ``2012→2021`` ⇒ 2017–2020; lớp 1 → 12 ``2010→2022`` ⇒ 2015–2018; kết thúc lớp ≤ 5 ⇒ rỗng (mục ấy KHÔNG là dòng THCS —
+      :func:`kv_thcs_entry_case`)."""
+    first = entry["year_from"]
+    if entry.get("level") == KV_LIEN_CAP_LEVEL:
+        first = kv_lien_cap_grade_start_year(entry, _THCS_FIRST_GRADE)
+    return range(first, kv_entry_thcs_end_year(entry))
 
 
 def kv_entry_thcs_last_school_year(entry: dict) -> int:
@@ -535,14 +561,14 @@ def kv_entry_thcs_last_grade(entry: dict) -> Optional[int]:
     * owner 23-11 ``QUYET-DINH-OWNER-O-LOP-TRONG-CAN-XET-TAY`` (a): lớp trống / null / sai kiểu ở nhóm tốt nghiệp ⇒ cần xét tay, KHÔNG
       coi là 0 (khoá cũ ``_history_grade(...) or 0`` — luật (b) — đã bỏ);
     * owner 24-11 ``QUYET-DINH-OWNER-L3-DONG-THCS-LOP-NGOAI-6-9``: dòng THCS ghi lớp ngoài 6–9 (schema cho 1..12) là dữ liệu lớp không
-      hợp lệ ⇒ cùng đường ấy — trước đây "lớp 12" so như số nên thắng liên cấp đã cắt về 9 lặng lẽ (rà đoàn 3 D'2 NỢ-1). Phần mở
-      rộng kỹ thuật (điều phối 24-11, một định nghĩa): liên cấp kết thúc ở lớp 1–5 (lớp cuối phần THCS < 6) cũng không hợp lệ."""
+      hợp lệ ⇒ cùng đường ấy — trước đây "lớp 12" so như số nên thắng liên cấp đã cắt về 9 lặng lẽ (rà đoàn 3 D'2 NỢ-1). Dải 6..9 là
+      :func:`_history_grade_in` — MỘT định nghĩa với dải 10..12 của nhánh THPT (:func:`kv_entry_last_grade`).
+    Liên cấp kết thúc ở lớp 1–5 (phần mở rộng kỹ thuật điều phối 24-11) nay KHÔNG tới được bước hoà: không có năm lớp 6–9 ⇒ không là
+    dòng THCS (owner 24-11 chỉ đếm năm THCS — :func:`kv_thcs_entry_case`)."""
     grade = entry.get("grade_to")
     if entry.get("level") == KV_LIEN_CAP_LEVEL and _history_int(grade):
         grade = min(grade, _THPT_FIRST_GRADE - 1)
-    if _history_int(grade) and _THCS_FIRST_GRADE <= grade <= _THPT_FIRST_GRADE - 1:
-        return grade
-    return None
+    return _history_grade_in(grade, _THCS_FIRST_GRADE, _THPT_FIRST_GRADE - 1)
 
 
 def kv_last_school_year(entry: dict) -> Any:
@@ -564,10 +590,18 @@ def kv_entry_end_year(entry: dict) -> Any:
     return entry.get("year_to")
 
 
-def kv_entry_last_grade(entry: dict) -> Any:
-    """Nhánh THPT: lớp cuối của mục ở bước hoà — ``grade_to`` NGUYÊN giá trị (thiếu khoá ⇒ ``None``: owner 23-11 — "thiếu hẳn khoá"
-    và "null" xử lý NHƯ NHAU)."""
-    return entry.get("grade_to")
+def kv_entry_last_grade(entry: dict) -> Optional[int]:
+    """Nhánh THPT: lớp cuối của mục ở bước hoà — ``grade_to`` khi là số nguyên 10..12, khác ⇒ ``None`` (dữ liệu lớp không hợp lệ ⇒ như
+    ô lớp trống: chốt :func:`kv_graduation_candidates_unclear`, MỘT phép kiểm "so được" :func:`_history_int` chung với nhánh THCS):
+
+    * owner 23-11 ``QUYET-DINH-OWNER-O-LOP-TRONG-CAN-XET-TAY`` (a): thiếu khoá / null / sai kiểu ⇒ cần xét tay ("thiếu hẳn khoá" và
+      "null" NHƯ NHAU);
+    * owner 24-11 ``QUYET-DINH-OWNER-L3-THPT-LOP-NGOAI-10-12``: dòng THPT / GDTX ghi lớp cuối NGOÀI 10–12 (0, 9, 13, âm…) ⇒ cùng
+      đường ấy — trước đây so như số nên "lớp 13" thắng, "lớp 9" thua lặng lẽ. Cùng luật với dòng THCS ngoài 6–9
+      (:func:`kv_entry_thcs_last_grade`; dải chung :func:`_history_grade_in`).
+    Liên cấp ở nhánh này luôn có lớp kết thúc 10..12 (lớp ≤ 9 bị :func:`kv_lien_cap_without_thpt` loại; thiếu / sai ⇒ dừng ở
+    :func:`kv_entry_problem`) ⇒ không đổi."""
+    return _history_grade_in(entry.get("grade_to"), _THPT_FIRST_GRADE, _THPT_LAST_GRADE)
 
 
 def kv_graduation_year_group(
@@ -683,9 +717,13 @@ def kv_thcs_entry_case(entry: Any) -> tuple[bool, Optional[str]]:
     * cấp ``THCS`` (chọn trường THCS từ danh mục): dòng THCS; ``graduation_type`` khác THCS (và không trống) ⇒ lệch cấp ⇒ dừng;
     * ``level`` trống: ``graduation_type = 'THCS'`` ⇒ dòng THCS (dòng gõ tay — dạng phổ biến nhất ở production); trống cả hai ⇒
       KHÔNG biết dòng thuộc cấp nào ⇒ dừng (không lặng lẽ bỏ — có thể là trường THCS gõ tay); trình độ khác ⇒ không phải dòng THCS;
-    * liên cấp (``THCS_THPT``): lớp kết thúc ≤ 9 ⇒ dòng THCS (cả mục); THIẾU / sai lớp kết thúc ⇒ dừng (như G5); lớp kết thúc ≥ 10 mà
-      mục CÒN năm học THCS (trước chỗ cắt :func:`kv_lien_cap_split_year`) ⇒ dòng THCS, chỉ đếm phần lớp 6–9 (owner 22-11
-      ``QUYET-DINH-OWNER-L3A-5-CAU`` câu 3); mục chỉ có năm THPT ⇒ không phải dòng THCS;
+    * liên cấp (``THCS_THPT``): THIẾU / sai lớp kết thúc ⇒ dừng (như G5); còn lại là dòng THCS khi mục CÓ năm học lớp 6–9
+      (:func:`kv_entry_thcs_school_years` khác rỗng — MỘT vị từ với phép đếm) và chỉ đếm phần ấy (owner 22-11
+      ``QUYET-DINH-OWNER-L3A-5-CAU`` câu 3 cắt phần lớp 10+; owner 24-11 ``QUYET-DINH-OWNER-L3-CHI-DEM-NAM-THCS-VA-THU-TU-3B`` bỏ năm
+      tiểu học). Mục chỉ có năm THPT, hoặc kết thúc ở lớp ≤ 5 (chỉ có năm tiểu học) ⇒ KHÔNG phải dòng THCS — không đếm, không tra cờ
+      DTNT, không là ứng viên trường tốt nghiệp (như :func:`kv_lien_cap_without_thpt` ở nhánh THPT); hai ca ấy mà năm thiếu / ngược ⇒
+      dừng :data:`KV_THCS_ENTRY_YEARS_INVALID` (không biết mục có năm THCS hay không). Lớp kết thúc 6..9 ⇒ luôn có năm lớp 6–9, đi tiếp
+      phép kiểm năm chung bên dưới;
     * cấp khác (THPT, trung học nghề, khác…): ``graduation_type = 'THCS'`` ⇒ lệch cấp ⇒ dừng (điều phối 22-11: 8 dòng production
       chọn trường cấp THPT mà ghi trình độ THCS — KHÔNG tự tính); còn lại không phải dòng THCS.
 
@@ -700,12 +738,12 @@ def kv_thcs_entry_case(entry: Any) -> tuple[bool, Optional[str]]:
         grade = _history_grade(entry.get("grade_to"))
         if grade is None:
             return True, KV_ENTRY_LIEN_CAP_MISSING_GRADE
-        if grade >= _THPT_FIRST_GRADE:
+        if not _THCS_FIRST_GRADE <= grade < _THPT_FIRST_GRADE:
             y_from, y_to = entry.get("year_from"), entry.get("year_to")
             if not (_history_int(y_from) and _history_int(y_to) and y_to >= y_from):
                 return True, KV_THCS_ENTRY_YEARS_INVALID
-            if kv_lien_cap_split_year(entry) <= y_from:
-                return False, None  # chỉ có năm THPT
+            if not kv_entry_thcs_school_years(entry):
+                return False, None  # không có năm học lớp 6–9: chỉ năm THPT, hoặc chỉ năm tiểu học (lớp ≤ 5)
     elif level == KV_THCS_LEVEL:
         if gtype is not None and gtype != KV_THCS_GRADUATION_TYPE:
             return True, KV_THCS_ENTRY_LEVEL_MISMATCH
@@ -1296,9 +1334,9 @@ def _kv_thcs_history_steps(
     academic_history: list,
     meta_base: Callable[..., dict[str, Any]],
 ) -> Generator[KvLookup, Optional[str], tuple[Optional[str], dict[str, Any]]]:
-    """Nhánh ``LICH_SU_THCS`` (L3): KV theo các dòng THCS có trường trong danh mục — khu vực học lâu nhất (cùng vòng đếm với THPT),
-    hoà ⇒ KV trường tốt nghiệp lớp 9 (MỘT luật hoà với THPT — :func:`kv_graduation_pick`) tra ở năm học lớp 9
-    (:func:`kv_entry_thcs_last_school_year`). MỌI ca không tính được ⇒ "KV chờ xác minh" (:data:`KV_PENDING_VERIFICATION_RULE`,
+    """Nhánh ``LICH_SU_THCS`` (L3): KV theo các dòng THCS có trường trong danh mục — khu vực học lâu nhất (cùng vòng đếm với THPT; CHỈ
+    năm học lớp 6–9 — :func:`kv_entry_thcs_school_years`, owner 24-11), hoà ⇒ KV trường tốt nghiệp lớp 9 (MỘT luật hoà với THPT —
+    :func:`kv_graduation_pick`) tra ở năm học lớp 9 (:func:`kv_entry_thcs_last_school_year`). MỌI ca không tính được ⇒ "KV chờ xác minh" (:data:`KV_PENDING_VERIFICATION_RULE`,
     ``requires_manual_override``), ``reason`` nói đúng việc cán bộ cần làm — kể cả lớp trống / sai kiểu (owner 23-11 (a)) hoặc lớp cuối
     phần THCS ngoài 6–9 (owner 24-11) ở nhóm tốt nghiệp khi hoà."""
     pathway = KV_PATHWAY_THCS_HISTORY
