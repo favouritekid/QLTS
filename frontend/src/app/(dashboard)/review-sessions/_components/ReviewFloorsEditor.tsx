@@ -238,7 +238,7 @@ export function ReviewFloorsEditor({ sessionId, busy, draft, onDraftChange, onCl
           }
           const ids =
             v.reasonCode === "review_floor_bad_member"
-              ? idListFrom(v.data?.offering_academic_info_ids)
+              ? idListFrom(v.data?.duplicate_offering_academic_info_ids)
               : v.reasonCode === "review_floor_duplicate"
                 ? idListFrom(v.data?.duplicate_offering_academic_info_ids)
                 : v.kind === "invalid"
