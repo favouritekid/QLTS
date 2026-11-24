@@ -193,8 +193,8 @@ export function useUpdateOfferingAcademicInfo() {
       toast.success("Academic info updated successfully");
       queryClient.invalidateQueries({ queryKey: ["academic-infos"] });
     },
-    onError: (error: ApiError) => {
-      toast.error(error.response?.data?.detail || "Failed to update academic info");
+    onError: () => {
+      toast.error("Failed to update academic info");
     },
   });
 }
