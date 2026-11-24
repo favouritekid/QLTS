@@ -332,7 +332,8 @@ describe("F4 — bộ lọc, URL, phân trang", () => {
 
 describe("F4 — lỗi / lượt chưa xong / bản cũ", () => {
   it("đính chính 2 §1: E9 lật trang bị 429 ⇒ hiện LỖI, KHÔNG vẽ dòng cũ", async () => {
-    // Biến thể phá: đọc `data` trước `isError` ⇒ dòng chỗ tạm của trang 1 còn ⇒ ĐỎ.
+    // Biến thể phá: nhánh lỗi của E9 không bao giờ hiện ⇒ không có `kq-loi` ⇒ ĐỎ. (Ghi chú: sau lỗi, React Query v5 KHÔNG giữ
+    // chỗ tạm — `data` của khoá mới là undefined — nên ca này không phân biệt được "đọc data trước isError".)
     nen()
     mayChuE9((sp) =>
       sp.get("page") === "1"
@@ -402,8 +403,17 @@ describe("F4 — lỗi / lượt chưa xong / bản cũ", () => {
 
 describe("F4 — ngăn chi tiết một em (M6)", () => {
   it("bấm 'Xem' ⇒ ngăn hiện ĐÚNG dòng E9: điểm thành phần NGUYÊN chuỗi (không cộng), NV theo thứ tự máy chủ, nhãn ngành ghép theo id", async () => {
+    // Dữ liệu cố ý: ưu tiên sau trần (2.50) ≠ KV + đối tượng (2.75) — biến thể "tự cộng" ⇒ ĐỎ; `per_choice` máy chủ trả NV2 TRƯỚC NV1 —
+    // biến thể "sắp lại theo số NV" ⇒ ĐỎ.
+    const g = E9_BANG_DIEM_CHO_CUOI as { per_choice: Obj[] }
+    const dong: Obj = {
+      ...E9_BANG_DIEM_CHO_CUOI,
+      review_total: "19.50",
+      score_parts: { subject_total: "17.00", area: "0.75", object: "2.00", priority_total: "2.50" },
+      per_choice: [g.per_choice[1], g.per_choice[0]],
+    }
     nen()
-    mayChuE9(() => HttpResponse.json(trangDong([E9_BANG_DIEM_CHO_CUOI])))
+    mayChuE9(() => HttpResponse.json(trangDong([dong])))
     await moKetQua({ tab: "needs_decision" })
     fireEvent.click(await screen.findByTestId("dong-1001-xem"))
     const ngan = await screen.findByTestId("ngan-chi-tiet")
@@ -412,11 +422,11 @@ describe("F4 — ngăn chi tiết một em (M6)", () => {
     expect(within(ngan).getByTestId("ngan-dau")).toHaveTextContent("Đơn vị #4")
     expect(within(ngan).getByTestId("ngan-dau")).toHaveTextContent("Cần Ban thư ký quyết")
     expect(within(ngan).getByTestId("ngan-mo-ho-so")).toHaveAttribute("href", "/admissions/1001")
-    expect(within(ngan).getByTestId("ngan-tong")).toHaveTextContent(/^18,50$/)
+    expect(within(ngan).getByTestId("ngan-tong")).toHaveTextContent(/^19,50$/)
     expect(within(ngan).getByTestId("ngan-tong-mon")).toHaveTextContent(/^17,00$/)
-    expect(within(ngan).getByTestId("ngan-kv")).toHaveTextContent(/^0,50$/)
-    expect(within(ngan).getByTestId("ngan-doi-tuong")).toHaveTextContent(/^1,00$/)
-    expect(within(ngan).getByTestId("ngan-uu-tien")).toHaveTextContent(/^1,50$/)
+    expect(within(ngan).getByTestId("ngan-kv")).toHaveTextContent(/^0,75$/)
+    expect(within(ngan).getByTestId("ngan-doi-tuong")).toHaveTextContent(/^2,00$/)
+    expect(within(ngan).getByTestId("ngan-uu-tien")).toHaveTextContent(/^2,50$/)
     expect(within(ngan).getByTestId("ngan-san")).toHaveTextContent(/^15,00$/)
     expect(within(ngan).getByTestId("ngan-hang")).toHaveTextContent(/^40$/)
     expect(within(ngan).getByTestId("ngan-so-cho")).toHaveTextContent("Ngoài số chỗ")
@@ -426,7 +436,7 @@ describe("F4 — ngăn chi tiết một em (M6)", () => {
     const nv = within(within(ngan).getByTestId("ngan-nv"))
       .getAllByTestId(/^ngan-nv-\d+$/)
       .map((r) => r.getAttribute("data-testid"))
-    expect(nv).toEqual(["ngan-nv-5001", "ngan-nv-5002"])
+    expect(nv).toEqual(["ngan-nv-5002", "ngan-nv-5001"])
     expect(within(ngan).getByTestId("ngan-nv-5001")).toHaveTextContent("<mã> — <tên ngành>")
     expect(within(ngan).getByTestId("ngan-nv-5001")).toHaveTextContent("Đạt sàn (nguyện vọng được xếp)")
     expect(within(ngan).getByTestId("ngan-nv-5002")).toHaveTextContent("Học vụ #57")
