@@ -157,8 +157,10 @@ describe("AcademicHistoryTab — thêm nhanh 3 năm THPT từ năm bắt đầu 
     ])
     expect(screen.getByTestId("academic-quick-add-thpt-start")).toHaveValue(null)
     expect(screen.queryByTestId("academic-quick-add-thpt-preview")).not.toBeInTheDocument()
-    // Dòng liền mạch: không nhắc 0 năm / trùng / hở.
-    expect(screen.queryByTestId("academic-notices")).not.toBeInTheDocument()
+    // Dòng liền mạch: không nhắc 0 năm / trùng / hở (mọi câu nhắc chất lượng dữ liệu `academic-notice-<i>`).
+    // Khung `academic-notices` VẪN hiện vì câu gợi ý KV (#384): 3 dòng mới chưa chọn trường THPT từ danh mục.
+    expect(screen.queryAllByTestId(/^academic-notice-\d+$/)).toHaveLength(0)
+    expect(screen.getByTestId("academic-kv-hint")).toBeInTheDocument()
   })
 
   it("CẶP với backend: gõ 2022, chọn trường từ danh mục cho cả 3 dòng ⇒ đúng dữ liệu CAP_FE_NUT_THEM_NHANH_2022", () => {
