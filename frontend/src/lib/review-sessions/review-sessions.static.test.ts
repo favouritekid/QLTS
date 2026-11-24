@@ -82,6 +82,10 @@ describe("màn lần xét — không kiểm vai, không đường /admin/quota-t
       `${TRANG}/_components/ReviewRunsSection.tsx`,
       `${TRANG}/_components/ReviewRunDetailClient.tsx`,
       `${TRANG}/_components/ReviewRunReference.tsx`,
+      // F4
+      "lib/review-sessions/row-labels.ts",
+      `${TRANG}/_components/ReviewRunResults.tsx`,
+      `${TRANG}/_components/ReviewRowDrawer.tsx`,
     ]) {
       expect(TEP, `thiếu trong danh sách quét: ${bat_buoc}`).toContain(bat_buoc)
     }

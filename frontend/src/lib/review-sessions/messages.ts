@@ -336,6 +336,17 @@ export function runOtherDone(runId: number, status: string): string {
   return `Lượt kiểm #${runId} đang chạy trước đó đã kết thúc — ${runStatusLabel(status)}. Bấm "Kiểm hồ sơ" nếu vẫn muốn chạy lượt mới.`
 }
 
+/**
+ * [ĐX] F4 (Codex F3-2 NỢ-1) — sau "chưa rõ", lượt mới hơn mốc KHÔNG do người đang đăng nhập yêu cầu (hoặc không biết người đăng
+ * nhập): báo, KHÔNG tự mở M5.
+ */
+export function runForeign(runId: number, status: string, userKnown: boolean): string {
+  const lead = userKnown
+    ? `Lượt kiểm mới nhất #${runId} (${runStatusLabel(status)}) do người khác chạy — lần bấm của bạn có thể chưa tới máy chủ.`
+    : `Có lượt kiểm mới #${runId} (${runStatusLabel(status)}) nhưng không xác định được có phải lần bấm của bạn — không tự mở.`
+  return `${lead} Xem lượt ấy, hoặc bấm lại "Kiểm hồ sơ".`
+}
+
 /** Câu lỗi E6: 409 STALE ⇒ câu thiết kế §3.5 bước 5 (giao diện ĐÃ tự tải lại); còn lại ⇒ câu `describeReviewSessionError`. */
 export function runSubmitErrorMessage(error: ReviewErrorView): string {
   return error.errorCode === "REVIEW_SESSION_STALE" ? RUN_STALE : error.message
@@ -366,8 +377,19 @@ export const RUN_CONFIG_CHANGED_BANNER =
 export const RUN_NOT_DONE_NOTE = "Lượt kiểm chưa xong — chưa có kết quả. Bấm \"Tải lại\" để xem trạng thái mới."
 /** [ĐX] — `summary` / `quota_view` = `null` (HĐ4 §3.3: `null` khi chưa `done`). */
 export const RUN_NO_SUMMARY = "Chưa có (lượt chưa xong)."
-/** [ĐX] — thẻ "Kết quả" (bốn tab) thuộc đợt F4. */
-export const RUN_RESULTS_NEXT_PHASE = "Danh sách từng hồ sơ theo bốn nhóm có ở đợt giao diện sau."
+const VN_TIME = new Intl.DateTimeFormat("vi-VN", {
+  timeZone: "Asia/Ho_Chi_Minh",
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+})
+/**
+ * [ĐX] F4 — đính chính 2 §1 NỢ: thay vì tự tải lại khi quay lại cửa sổ (đốt `ADMIN_READ` — R6), M5 hiện thời điểm dữ liệu lượt kiểm về
+ * ("Tải lúc HH:MM", giờ Việt Nam). `ms` = `dataUpdatedAt` của query E8 (đồng hồ máy người xem — chỉ trình bày).
+ */
+export function loadedAtLabel(ms: number): string {
+  return `Tải lúc ${VN_TIME.format(new Date(ms))}`
+}
 /** [ĐX] */
 export const RUN_FLOORS_USED_EMPTY = "Lượt kiểm này không dùng điểm sàn nào."
 /** [ĐX] — học vụ của `inputs.floors` không có trong `quota_view.majors` của cùng lượt. */

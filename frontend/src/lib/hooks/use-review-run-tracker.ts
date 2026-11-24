@@ -22,6 +22,7 @@ import { useEffect, useRef, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 
 import { getReviewRun, listReviewRuns, reviewRunLocationPath } from "@/lib/api/review-sessions"
+import { useAuthStore } from "@/lib/stores/auth.store"
 import { describeReviewSessionError } from "@/lib/review-sessions/messages"
 import {
   IDLE_PHASE,
@@ -52,6 +53,8 @@ export interface ReviewRunTracker {
 export function useReviewRunTracker(sessionId: number, onDone: (runId: number) => void): ReviewRunTracker {
   const queryClient = useQueryClient()
   const create = useCreateReviewRun(sessionId)
+  // F4 (Codex F3-2 NỢ-1): id người đăng nhập — CHỈ để chọn câu báo khi "chưa rõ" mà E7 có lượt mới (không kiểm quyền / vai).
+  const currentUserId = useAuthStore((s) => s.user?.id ?? null)
   const [phase, setPhase] = useState<RunTrackPhase>(IDLE_PHASE)
   const onDoneRef = useRef(onDone)
   useEffect(() => {
@@ -72,7 +75,7 @@ export function useReviewRunTracker(sessionId: number, onDone: (runId: number) =
             next = phaseAfterRunPoll(current, await getReviewRun(sessionId, runId, controller.signal), RUN_POLL_PLAN)
           } else {
             const page = await listReviewRuns(sessionId, { page: 1, page_size: LIST_PAGE_SIZE_DEFAULT }, controller.signal)
-            next = phaseAfterListPoll(current, page, RUN_POLL_PLAN)
+            next = phaseAfterListPoll(current, page, RUN_POLL_PLAN, currentUserId)
           }
         } catch (error) {
           if (controller.signal.aborted) return
@@ -89,7 +92,7 @@ export function useReviewRunTracker(sessionId: number, onDone: (runId: number) =
       clearTimeout(timer)
       controller.abort()
     }
-  }, [phase, queryClient, sessionId])
+  }, [phase, queryClient, sessionId, currentUserId])
 
   const start = (sessionVersion: number, baselineRunId: number | null) => {
     setPhase({ kind: "submitting" })

@@ -23,10 +23,16 @@ import { delay, http, HttpResponse } from "msw"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { api } from "@/lib/api/client"
-import { REVIEW_RUN_TIMEOUT_MS, createReviewRun, reviewRunLocationPath } from "@/lib/api/review-sessions"
+import {
+  REVIEW_RUN_TIMEOUT_MS,
+  createReviewRun,
+  reviewRunLocationPath,
+  type ReviewRowParams,
+} from "@/lib/api/review-sessions"
 import { server } from "@/test/mocks/server"
 import { appLikeQueryClient } from "@/test/review-sessions-render"
 import {
+  E9_BANG_DIEM_CHO_CUOI,
   RS,
   floorCandidateGia,
   floorCandidatesGia,
@@ -41,12 +47,15 @@ import {
 import { usePutReviewSelection } from "./use-review-selections"
 
 import {
+  isSameRowsQueryOtherPage,
+  reviewSessionKeys,
   useCancelReviewSession,
   useCreateReviewRun,
   useCreateReviewSession,
   usePutReviewFloors,
   useReviewFloorCandidates,
   useReviewRun,
+  useReviewRunRows,
   useReviewRuns,
   useReviewSession,
   useReviewSessionList,
@@ -364,6 +373,52 @@ describe("làm mới E2 / E3 / E7 / E8 / E10 khi thao tác ghi KẾT THÚC, bấ
         expect({ e3: dem.e3, e7: dem.e7, e8: dem.e8, e10: dem.e10 }).toEqual({ e3: 2, e7: 2, e8: 2, e10: 2 }),
       )
     }
+    unmount()
+  })
+})
+
+// ═══════════════════════ F4 — E9: chỗ tạm CHỈ khi lật trang ═══════════════════════
+describe("F4 — E9 giữ trang cũ làm chỗ tạm CHỈ khi lật trang (đổi tab / bộ lọc ⇒ đang tải)", () => {
+  it("so khoá: cùng lần xét / lượt / tab / bộ lọc / cỡ, khác trang ⇒ true; khác tab / lọc / cỡ / lượt / không có ⇒ false", () => {
+    const p = { tab: "auto", reason_code: "tie_at_last_seat", page: 2, page_size: 50 }
+    const k = (params: ReviewRowParams, runId = 11) => reviewSessionKeys.rows(3, runId, params)
+    expect(isSameRowsQueryOtherPage(k({ ...p, page: 1 }), 3, 11, p)).toBe(true)
+    expect(isSameRowsQueryOtherPage(k({ ...p, page: 1, tab: "ineligible" }), 3, 11, p)).toBe(false)
+    expect(isSameRowsQueryOtherPage(k({ ...p, page: 1, reason_code: undefined }), 3, 11, p)).toBe(false)
+    expect(isSameRowsQueryOtherPage(k({ ...p, page: 1, page_size: 100 }), 3, 11, p)).toBe(false)
+    expect(isSameRowsQueryOtherPage(k({ ...p, page: 1 }, 12), 3, 11, p)).toBe(false)
+    expect(isSameRowsQueryOtherPage(undefined, 3, 11, p)).toBe(false)
+  })
+
+  it("lật trang khi trang mới treo ⇒ vẫn hiện trang cũ (chỗ tạm); đổi tab khi treo ⇒ KHÔNG mượn dòng tab cũ", async () => {
+    // Biến thể phá: `placeholderData: keepPreviousData` cho mọi đổi khoá ⇒ đổi tab vẫn vẽ dòng tab cũ ⇒ ĐỎ.
+    server.use(
+      http.get(`${RS}/3/runs/11/rows`, async ({ request }) => {
+        const sp = new URL(request.url).searchParams
+        if (sp.get("page") !== "1") await delay("infinite")
+        if (sp.get("tab") !== "auto") await delay("infinite")
+        return HttpResponse.json({
+          items: [E9_BANG_DIEM_CHO_CUOI],
+          total: 60,
+          page: 1,
+          page_size: 50,
+          total_pages: 2,
+          tab_counts: { auto: 60 },
+        })
+      }),
+    )
+    const qc = appLikeClient()
+    const { result, rerender, unmount } = renderHook(
+      ({ tab, page }: { tab: string; page: number }) => useReviewRunRows(3, 11, { tab, page, page_size: 50 }),
+      { wrapper: wrapperFor(qc), initialProps: { tab: "auto", page: 1 } },
+    )
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    rerender({ tab: "auto", page: 2 })
+    await waitFor(() => expect(result.current.isPlaceholderData).toBe(true))
+    expect(result.current.data?.items[0].profile_id).toBe(1001)
+    rerender({ tab: "ineligible", page: 1 })
+    await waitFor(() => expect(result.current.isPending).toBe(true))
+    expect(result.current.data).toBeUndefined()
     unmount()
   })
 })

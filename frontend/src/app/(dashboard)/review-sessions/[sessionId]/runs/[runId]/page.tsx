@@ -7,7 +7,8 @@
 import { Suspense } from "react"
 import { notFound } from "next/navigation"
 
-import { REVIEW_ID_PARAM_PATTERN } from "@/lib/review-sessions/url"
+import { REVIEW_ID_PARAM_PATTERN, readReviewRunRowFilters } from "@/lib/review-sessions/url"
+import type { PageSearchParams } from "@/lib/utils/search-params"
 
 import { ReviewRunDetailClient } from "../../../_components/ReviewRunDetailClient"
 
@@ -16,8 +17,13 @@ export function generateStaticParams() {
   return [{ sessionId: "__placeholder__", runId: "__placeholder__" }]
 }
 
+/**
+ * F4: bốn tab + bộ lọc + trang nằm trên URL (`?tab=&nganh=&ly-do=&co=&trang=&co-trang=`) — đọc Ở ĐÂY, chỉ nhận đúng dạng
+ * (`readReviewRunRowFilters`); chờ BÊN TRONG `<Suspense>` (cacheComponents). Vắng `searchParams` ⇒ mặc định.
+ */
 interface PageProps {
   params: Promise<{ sessionId: string; runId: string }>
+  searchParams?: Promise<PageSearchParams>
 }
 
 export default function ReviewRunDetailPage(props: PageProps) {
@@ -28,11 +34,19 @@ export default function ReviewRunDetailPage(props: PageProps) {
   )
 }
 
-async function RunDetail({ params }: PageProps) {
+async function RunDetail({ params, searchParams }: PageProps) {
   const { sessionId, runId } = await params
   if (!REVIEW_ID_PARAM_PATTERN.test(sessionId) || !REVIEW_ID_PARAM_PATTERN.test(runId)) {
     notFound()
   }
-  // `key` = cặp id: đổi sang lượt khác ⇒ dựng mới (thẻ con đang mở không mang sang).
-  return <ReviewRunDetailClient key={`${sessionId}/${runId}`} sessionId={Number(sessionId)} runId={Number(runId)} />
+  const filters = readReviewRunRowFilters(searchParams ? await searchParams : {})
+  // `key` = cặp id: đổi sang lượt khác ⇒ dựng mới (thẻ con đang mở không mang sang). Đổi bộ lọc (cùng lượt) ⇒ GIỮ thành phần.
+  return (
+    <ReviewRunDetailClient
+      key={`${sessionId}/${runId}`}
+      sessionId={Number(sessionId)}
+      runId={Number(runId)}
+      filters={filters}
+    />
+  )
 }

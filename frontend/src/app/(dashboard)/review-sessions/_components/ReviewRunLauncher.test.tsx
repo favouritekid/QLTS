@@ -35,9 +35,11 @@ import {
   runDoneMessage,
   runFailedMessage,
   runOtherDone,
+  runForeign,
   runTrackingLabel,
 } from "@/lib/review-sessions/messages"
 import { pollsUntilCeiling, type RunPollPlan } from "@/lib/review-sessions/run-tracking"
+import { useAuthStore } from "@/lib/stores/auth.store"
 import { server } from "@/test/mocks/server"
 import { RS, pageGia, runGia, runSummaryGia, sessionDaHuyGia, sessionGia } from "@/test/mocks/review-sessions-data"
 import { renderApp } from "@/test/review-sessions-render"
@@ -68,6 +70,8 @@ const KE_HOACH_THU: RunPollPlan = { firstDelayMs: 50, factor: 1.5, maxDelayMs: 8
 
 beforeEach(() => {
   Object.assign(keHoach, KE_HOACH_THU)
+  // F4 (Codex F3-2 NỢ-1): người đăng nhập = người dùng #1 (= `requested_by_user_id` mặc định của dữ liệu giả) — chỉ để chọn câu báo.
+  useAuthStore.setState({ user: { id: 1 } as never })
 })
 
 type Tra = () => Response | Promise<Response>
@@ -364,6 +368,37 @@ describe("M4 — mất kết nối / 502 / 504 ở E6 ⇒ tra E7, không bấm l
     fireEvent.click(screen.getByTestId("kiem-kiem-tra-lai"))
     await waitFor(() => expect(push).toHaveBeenCalledWith(M5_12))
     expect({ e7: e7.lan, e8: e8.lan }).toEqual({ e7: 2, e8: 2 })
+  })
+
+  it("F4 (Codex F3-2 NỢ-1): lượt mới hơn mốc do NGƯỜI KHÁC chạy ⇒ 'do người khác chạy' + liên kết; KHÔNG theo dõi E8, KHÔNG tự mở M5", async () => {
+    // Biến thể phá: bỏ so `requested_by_user_id` với người đăng nhập ⇒ lượt người khác bị theo dõi và tự mở M5 ⇒ ĐỎ.
+    mayChuE3([json(sessionGia())])
+    const than = mayChuE6([() => HttpResponse.error()])
+    mayChuE7([json(pageGia([runSummaryGia({ id: 12, status: "done", requested_by_user_id: 2 }), runSummaryGia({ id: 11 })]))])
+    const e8 = mayChuE8(12, [json(runGia({ id: 12, requested_by_user_id: 2 }))])
+    await moChiTiet()
+    await bamKiem()
+    expect(await screen.findByTestId("kiem-luot-nguoi-khac")).toHaveTextContent(runForeign(12, "done", true))
+    expect(screen.getByTestId("kiem-xem-ket-qua")).toHaveAttribute("href", M5_12)
+    await waitFor(() => expect(screen.getByTestId("nut-run_evaluate")).toBeEnabled())
+    await choLau()
+    expect(e8.lan).toBe(0)
+    expect(push).not.toHaveBeenCalled()
+    expect(than).toHaveLength(1)
+  })
+
+  it("F4: không đọc được người đăng nhập ⇒ câu 'không xác định được có phải lần bấm của bạn', KHÔNG tự mở M5", async () => {
+    useAuthStore.setState({ user: null })
+    mayChuE3([json(sessionGia())])
+    mayChuE6([json({ detail: "Gateway Timeout" }, 504)])
+    mayChuE7([json(pageGia([runSummaryGia({ id: 12, status: "done" })]))])
+    const e8 = mayChuE8(12, [json(runGia({ id: 12 }))])
+    await moChiTiet()
+    await bamKiem()
+    expect(await screen.findByTestId("kiem-luot-nguoi-khac")).toHaveTextContent(runForeign(12, "done", false))
+    await choLau()
+    expect(e8.lan).toBe(0)
+    expect(push).not.toHaveBeenCalled()
   })
 })
 

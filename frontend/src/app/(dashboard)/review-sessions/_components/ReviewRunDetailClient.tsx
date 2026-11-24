@@ -15,23 +15,26 @@ import {
   RUN_CONFIG_CHANGED_BANNER,
   RUN_NOT_DONE_NOTE,
   RUN_NO_SUMMARY,
-  RUN_RESULTS_NEXT_PHASE,
   RUN_VIEW_TABS,
   describeReviewSessionError,
   durationLabel,
   feeGateModeLabel,
+  loadedAtLabel,
   runFailedMessage,
   runStatusLabel,
   runWarningLabel,
-  tabCountEntries,
   userRef,
   type RunViewTab,
 } from "@/lib/review-sessions/messages"
 import { classifyRunStatus } from "@/lib/review-sessions/run-tracking"
-import { reviewSessionHref } from "@/lib/review-sessions/url"
+import { reviewSessionHref, type ReviewRunRowFilters } from "@/lib/review-sessions/url"
 
 import { ReviewErrorAlert } from "./ReviewErrorAlert"
 import { RunFloorsUsed, RunQuotaView } from "./ReviewRunReference"
+import { ReviewRunResults } from "./ReviewRunResults"
+
+/** Mặc định khi trang không truyền bộ lọc (khuôn `readReviewRunRowFilters({})`). */
+const NO_ROW_FILTERS: ReviewRunRowFilters = { page: 1, pageSize: 50 }
 
 /**
  * M5 — một lượt kiểm (thiết kế §3.6; đợt F3 làm ĐẦU TRANG + hai thẻ "Chỉ tiêu tham khảo", "Điểm sàn đã dùng"; thẻ "Kết quả" bốn tab
@@ -42,8 +45,20 @@ import { RunFloorsUsed, RunQuotaView } from "./ReviewRunReference"
  * Băng cảnh báo hiện NGUYÊN cờ máy chủ: "lượt cũ" = lượt đã `done` mà `id` khác `latest_done_run_id` của E3 (so hai id máy chủ
  * trả; lượt chưa xong / hỏng có băng trạng thái riêng); `config_changed_since_run`; `summary.warnings` (nhãn Phụ lục A, lạ ⇒ câu
  * chung có mã; `quota_closed_present` nhấn mạnh — cổng N4). Số ở các thẻ là NGUYÊN số máy chủ — không tự tính / cộng.
+ *
+ * F4: thẻ "Kết quả" = bốn tab + bộ lọc + phân trang (E9, `ReviewRunResults`; trạng thái trên URL do trang đọc) — chỉ khi lượt `done`.
+ * Đính chính 2 §1 NỢ (quyết ở F4) [ĐX]: KHÔNG tự tải lại khi quay lại cửa sổ (R6); thay bằng dòng "Tải lúc HH:MM" (thời điểm E8 về) để
+ * người xem biết số liệu cũ tới đâu và tự bấm "Tải lại".
  */
-export function ReviewRunDetailClient({ sessionId, runId }: { sessionId: number; runId: number }) {
+export function ReviewRunDetailClient({
+  sessionId,
+  runId,
+  filters = NO_ROW_FILTERS,
+}: {
+  sessionId: number
+  runId: number
+  filters?: ReviewRunRowFilters
+}) {
   const sq = useReviewSession(sessionId)
   const rq = useReviewRun(sessionId, runId)
   const [view, setView] = useState<RunViewTab>("ket-qua")
@@ -85,7 +100,6 @@ export function ReviewRunDetailClient({ sessionId, runId }: { sessionId: number;
   const s = sq.data
   const progress = classifyRunStatus(run.status)
   const warnings = run.summary?.warnings ?? []
-  const counts = tabCountEntries(run.summary?.tab_counts)
 
   return (
     <div className="space-y-4">
@@ -105,6 +119,7 @@ export function ReviewRunDetailClient({ sessionId, runId }: { sessionId: number;
           <span data-testid="luot-bo-luat">Bộ luật {run.rule_version}</span>
           <span data-testid="luot-cong-hoc-phi">Cổng học phí lúc chạy: {feeGateModeLabel(run.inputs.fee_gate_mode)}</span>
           <span data-testid="luot-anh-chup">Ảnh chụp lúc {formatDateTimeVN(run.inputs.snapshot_at)}</span>
+          <span data-testid="luot-tai-luc">{loadedAtLabel(rq.dataUpdatedAt)}</span>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Button variant="ghost" onClick={reload} disabled={busy} data-testid="luot-tai-lai">
@@ -164,12 +179,12 @@ export function ReviewRunDetailClient({ sessionId, runId }: { sessionId: number;
 
       {view === "ket-qua" ? (
         <section className="space-y-2 text-sm" data-testid="the-noi-dung-ket-qua">
-          {counts.length ? (
-            <p data-testid="luot-so-nhom">{counts.map((c) => `${c.label} ${c.count}`).join(" · ")}</p>
+          {progress === "done" ? (
+            <ReviewRunResults sessionId={sessionId} runId={runId} run={run} filters={filters} />
           ) : (
+            // Lượt chưa xong / hỏng: chưa có dòng (HĐ4 §3.3 `summary` = null; E9 409 `REVIEW_RUN_NOT_DONE`) ⇒ không gọi E9.
             <p className="text-muted-foreground">{RUN_NO_SUMMARY}</p>
           )}
-          <p className="text-muted-foreground">{RUN_RESULTS_NEXT_PHASE}</p>
         </section>
       ) : null}
       {view === "chi-tieu" ? <RunQuotaView view={run.quota_view} /> : null}

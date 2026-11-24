@@ -15,7 +15,7 @@
  *
  * Không tự tải lại khi quay lại cửa sổ (R6 — giới hạn `ADMIN_READ` theo IP); không tự thử lại (người dùng bấm "Tải lại").
  */
-import { keepPreviousData, useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query"
 
 import {
   cancelReviewSession,
@@ -131,8 +131,35 @@ export function useReviewFloorCandidates(sessionId: number, enabled = true) {
 }
 
 /**
+ * F4 — giữ dòng của trang trước làm chỗ tạm CHỈ khi lật trang trong CÙNG lần xét / lượt / tab / bộ lọc / cỡ trang. Đổi tab hay bộ lọc
+ * ⇒ "đang tải", KHÔNG vẽ dòng của tab / bộ lọc khác dưới tiêu đề mới.
+ */
+export function isSameRowsQueryOtherPage(
+  previousKey: readonly unknown[] | undefined,
+  sessionId: number,
+  runId: number,
+  params: ReviewRowParams,
+): boolean {
+  if (previousKey === undefined) return false
+  const prev = reviewSessionKeys.rows(sessionId, runId, params)
+  if (previousKey.length !== prev.length) return false
+  for (let i = 0; i < prev.length - 1; i += 1) if (previousKey[i] !== prev[i]) return false
+  const p = previousKey[prev.length - 1] as ReviewRowParams | undefined
+  if (p === undefined || p === null || typeof p !== "object") return false
+  return (
+    p.tab === params.tab &&
+    p.offering_academic_info_id === params.offering_academic_info_id &&
+    p.reason_code === params.reason_code &&
+    p.flag === params.flag &&
+    p.page_size === params.page_size
+  )
+}
+
+/**
  * E9 — dòng của lượt kiểm. KHÔNG mang `config_changed_since_run` (băng ấy đọc từ E8). Dòng của lượt đã xong là bất biến trừ
- * họ tên / đơn vị (HĐ4 §7) ⇒ giữ trang cũ khi lật trang cho bảng khỏi nháy (thiết kế §6.1). Đợt F4 chốt lại tuỳ chọn này.
+ * họ tên / đơn vị (HĐ4 §7) ⇒ `staleTime` 2 phút (bớt lần gọi `ADMIN_READ` khi quay lại trang đã xem — R6). F4 chốt: giữ trang cũ
+ * làm chỗ tạm CHỈ khi lật trang (`isSameRowsQueryOtherPage`); đổi tab / bộ lọc ⇒ "đang tải". Tải lỗi (kể cả 429) ⇒ màn đọc
+ * `isError` TRƯỚC `data`, không vẽ dòng cũ.
  */
 export function useReviewRunRows(sessionId: number, runId: number, params: ReviewRowParams, enabled = true) {
   return useQuery({
@@ -142,7 +169,8 @@ export function useReviewRunRows(sessionId: number, runId: number, params: Revie
     staleTime: 2 * 60 * 1000,
     retry: false,
     refetchOnWindowFocus: false,
-    placeholderData: keepPreviousData,
+    placeholderData: (previousData, previousQuery) =>
+      isSameRowsQueryOtherPage(previousQuery?.queryKey, sessionId, runId, params) ? previousData : undefined,
   })
 }
 

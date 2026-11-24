@@ -23,7 +23,6 @@ import {
   RUN_NOT_DONE_NOTE,
   RUN_NOT_FOUND_MESSAGE,
   RUN_NO_SUMMARY,
-  RUN_RESULTS_NEXT_PHASE,
   runFailedMessage,
 } from "@/lib/review-sessions/messages"
 import { server } from "@/test/mocks/server"
@@ -188,10 +187,11 @@ describe("M5 — đầu trang, băng cảnh báo", () => {
       "Cổng học phí lúc chạy: Phải đóng đủ (hoặc được miễn) học phí học kỳ 1",
     )
     expect(screen.getByTestId("luot-anh-chup")).toHaveTextContent(`Ảnh chụp lúc ${formatDateTimeVN("2026-11-24T02:12:00Z")}`)
-    expect(screen.getByTestId("luot-so-nhom")).toHaveTextContent(
-      "Đạt — máy đề xuất 120 · Cần Ban thư ký quyết 8 · Chưa đạt — chờ lần sau 31 · Chưa đủ điều kiện 57",
-    )
-    expect(screen.getByTestId("the-noi-dung-ket-qua")).toHaveTextContent(RUN_RESULTS_NEXT_PHASE)
+    // F4: thẻ "Kết quả" = bốn tab, số trên tab là `summary.tab_counts` của máy chủ (thay dòng tóm tắt + câu "đợt sau" của F3).
+    expect(screen.getByTestId("kq-tab-auto")).toHaveTextContent("Đạt — máy đề xuất 120")
+    expect(screen.getByTestId("kq-tab-needs_decision")).toHaveTextContent("Cần Ban thư ký quyết 8")
+    expect(screen.getByTestId("kq-tab-not_passed")).toHaveTextContent("Chưa đạt — chờ lần sau 31")
+    expect(screen.getByTestId("kq-tab-ineligible")).toHaveTextContent("Chưa đủ điều kiện 57")
     expect(screen.getAllByTestId("ve-lan-xet")[0]).toHaveAttribute("href", "/review-sessions/3")
     expect(screen.queryByTestId("bang-luot-cu")).toBeNull()
     expect(screen.queryByTestId("bang-luot-cau-hinh-doi")).toBeNull()
