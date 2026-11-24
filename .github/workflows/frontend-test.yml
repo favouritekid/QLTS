@@ -40,7 +40,25 @@ on:
       # hoạt và `Build` + `Check (type+lint+test)` treo ở "expected, not run" —
       # đúng cái bẫy mà chú thích ngay trên mô tả, chỉ là thiếu mất một dòng.
       - 'tests-e2e/**'
+  # 23-11-2026 — CHẠY TAY trên một nhánh ĐÃ ĐẨY mà KHÔNG mở PR (vd. `ci/<việc>`):
+  #
+  #     gh workflow run frontend-test.yml --ref ci/<nhánh>
+  #
+  # ⚠️ Chỉ dùng được khi khối này đã có trên nhánh MẶC ĐỊNH (`main`) VÀ trên
+  # nhánh được chạy. Cây được test là HEAD của nhánh, không phải commit merge
+  # tạm với base. Hai check mang tên `<tên> [workflow_dispatch]` (xem `name:`
+  # của job) để không thoả required check `Build` / `Check (type+lint+test)` của
+  # một PR trùng SHA. Khoá ở `test_ci_test_visibility.py::TestWorkflowDispatchHaiCongPR`.
+  workflow_dispatch:
 
+# Một scope ⇒ mọi scope khác `none`. `contents: read` đủ cho checkout; không
+# bước nào gọi API hay dùng secret. Ghim để lượt dispatch (nhận quyền mặc định
+# của repo, hiện `read`) không bao giờ cầm token ghi nếu cài đặt repo bị đổi.
+permissions:
+  contents: read
+
+# PR: ref `refs/pull/<số>/merge`; dispatch: `refs/heads/<nhánh>` ⇒ không chung
+# nhóm, dispatch không huỷ được lượt PR nào.
 concurrency:
   group: fe-pr-${{ github.ref }}
   cancel-in-progress: true
@@ -52,7 +70,10 @@ jobs:
     # checks (type-check + lint + vitest) bundle into a single job; the
     # expensive ``next build`` keeps its own runner for parallelism.
     # Result: wall-clock budget <4 phút median holds even on cold cache.
-    name: ${{ matrix.task.name }}
+    #
+    # Tên check = `matrix.task.name` CHỈ trên lượt `pull_request` (đúng hai
+    # context ruleset 16381130 đòi). Sự kiện khác ⇒ `<tên> [<sự kiện>]`.
+    name: ${{ github.event_name == 'pull_request' && matrix.task.name || format('{0} [{1}]', matrix.task.name, github.event_name) }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
