@@ -177,7 +177,7 @@ export function ReviewFloorsEditor({ sessionId, busy, draft, onDraftChange, onCl
     onClose()
   }
 
-  if (q.isError) {
+  if (q.isError && !q.data) {
     return (
       <div className="space-y-2">
         <ReviewErrorAlert testId="san-tai-loi" message={describeReviewSessionError(q.error, "read").message} />
