@@ -150,7 +150,7 @@ export function quotaTableLinkLabel(year: number): string {
  * chuyển hướng làm mất tham số; cán bộ là Thư ký bị proxy đẩy khỏi `/admin/*`).
  */
 export function quotaTableHref(year: number): string {
-  return `/quota-tables?year=${year}`
+  return `/admin/quota-tables?year=${year}`
 }
 /** [ĐX] — nút của hành động có ở đợt giao diện sau (F2 "Sửa điểm sàn", F3 "Kiểm hồ sơ"). */
 export const ACTION_NOT_YET = "Chức năng này có ở đợt giao diện sau."
