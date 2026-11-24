@@ -65,7 +65,7 @@ export const reviewSessionKeys = {
  * (trang, bộ lọc, lượt khác) ⇒ "đang tải", không mượn dữ liệu của khoá khác.
  */
 export const FRESH_ONLY_QUERY_OPTIONS = {
-  staleTime: 0,
+  staleTime: 30_000,
   gcTime: 0,
   retry: false,
   refetchOnWindowFocus: false,
