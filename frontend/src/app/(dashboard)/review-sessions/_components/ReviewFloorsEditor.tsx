@@ -166,7 +166,9 @@ function FloorRow(props: {
  *    chế độ soạn + câu máy chủ; 400 `bad_member` / `duplicate` ⇒ câu máy chủ + tô đúng id; 422 ⇒ tô theo `loc`; đóng băng / mất kết
  *    nối ⇒ §5, giữ bản soạn. Làm mới E2 / E3 / E7 / E8 / E10 khi E4 kết thúc do hook lo (bất kể kết quả).
  */
-export function ReviewFloorsEditor({ sessionId, busy, draft, onDraftChange, onClose }: Props) {
+export function ReviewFloorsEditor(props: Props) {
+  const { sessionId, busy, onClose } = props
+  const [draft, onDraftChange] = useState<FloorDraft>(props.draft)
   const q = useReviewFloorCandidates(sessionId)
   const put = usePutReviewFloors(sessionId)
   const [confirmEmpty, setConfirmEmpty] = useState(false)
