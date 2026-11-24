@@ -222,7 +222,6 @@ export function ReviewFloorsEditor({ sessionId, busy, draft, onDraftChange, onCl
       {
         onSuccess: () => {
           onDraftChange(EMPTY_FLOOR_DRAFT)
-          onClose()
           toast.success(FLOORS_SAVED)
         },
         onError: (error) => {
