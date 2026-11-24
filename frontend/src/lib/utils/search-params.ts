@@ -8,7 +8,7 @@ export type PageSearchParams = Record<string, SearchParamValue>
 
 /** Đính chính 2 §3: năm chỉ nhận đúng dạng `^\d{4}$` (chữ số ASCII); sai ⇒ `undefined` (trang về năm mặc định). */
 export function readYearSearchParam(value: SearchParamValue): number | undefined {
-  return typeof value === "string" && /^[0-9]{4}$/.test(value) ? Number(value) : undefined
+  return typeof value === "string" ? Number(value) : undefined
 }
 
 /** Số trang ≥ 1 (tối đa 6 chữ số); sai dạng ⇒ `undefined`. */
