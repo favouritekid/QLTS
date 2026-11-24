@@ -1,0 +1,451 @@
+name: Chạy chọn ca backend (thủ công)
+
+# ============================================================================
+# 23-11-2026 — chạy RIÊNG vài tệp / node id pytest backend trên một nhánh ĐÃ
+# ĐẨY (thường là `ci/<việc>`): vài phút, MỘT job, thay vì 14 lát của cổng PR
+# hay 12 lát của nightly (~1 giờ, cộng hàng chờ vì trần 20 job của kho).
+#
+# Dùng cho biến thể kiểm ngược (CLAUDE.md §3) và lần sửa nhỏ cần pytest THẬT
+# trên Postgres + Redis THẬT mà không phải chờ cả cổng:
+#
+#     gh workflow run ci-chon-ca.yml --ref ci/<nhánh> \
+#       -f ca="tests/unit/test_x.py tests/api/test_y.py::test_z"
+#
+# ⚠️ GitHub chỉ nhận dispatch cho workflow đã có trên nhánh MẶC ĐỊNH (`main`),
+# rồi chạy BẢN workflow của `--ref` — nhánh `--ref` cũng phải chứa tệp này.
+#
+# KHÔNG phải required check và KHÔNG thay cổng PR. Xanh ở đây chỉ nói: đúng các
+# ca được chọn, trên đúng HEAD của `--ref`, đã chạy đủ và đạt. Nó không nói gì
+# về các ca KHÔNG được chọn.
+#
+# Fail-closed — mỗi điểm khoá trong
+# `Backend_FastAPI/tests/unit/test_ci_test_visibility.py::TestWorkflowChayChonCa`:
+#   1. Trigger DUY NHẤT `workflow_dispatch`: không `push`, `pull_request`,
+#      `pull_request_target`, `schedule`, `workflow_call`.
+#   2. Input `ca` vào shell CHỈ qua `env:` của MỘT bước (`kiem`); không `run:`
+#      nào chứa biểu thức (chống chèn lệnh). Bước `kiem` đối chiếu TỪNG mục với
+#      một mẫu chặt, từ chối mục sai / trùng / chồng lấn / tệp không tồn tại,
+#      rồi mới ghi danh sách. Các bước sau đọc DANH SÁCH ĐÃ KIỂM, không đọc lại
+#      input. Một mục sai ⇒ không chạy gì (không chạy một phần danh sách).
+#   3. Collect ra 0 ca ⇒ ĐỎ; MỘT mục collect ra 0 ca ⇒ ĐỎ (tệp skip cả module
+#      là kiểu xanh giả kinh điển); lỗi collect ⇒ ĐỎ.
+#   4. Kết quả lấy từ plugin `.github/scripts/plugin_chon_ca/` (ghi NGUYÊN
+#      `report.nodeid` + pha + outcome), KHÔNG từ JUnit (ánh xạ JUnit có va
+#      chạm). TẬP node id chạy phải ĐÚNG tập node id collect; pytest rc khác 0
+#      ⇒ ĐỎ; ca failed / errors / chạy dở ⇒ ĐỎ (PASSED chỉ khi setup + call
+#      passed và teardown không lỗi). 0 ca PASSED (vd. marker / fixture skip
+#      TOÀN BỘ sau collect, pytest vẫn thoát 0) ⇒ ĐỎ; MỘT mục mà mọi ca đều
+#      skip / xfail ⇒ ĐỎ. Skip một phần ⇒ cảnh báo, và kết luận in rõ số ca
+#      SKIP (không được kiểm).
+#      Không nuốt mã lỗi, không `continue-on-error`, không `if:`.
+#   5. Tên job không chứa tên required check nào (`pytest`, `Build`, …): một
+#      lượt chạy MỘT PHẦN không bao giờ được thoả required check của PR.
+#   6. `permissions: contents: read`; không secret, không `environment`.
+#   7. `concurrency` riêng TỪNG lượt (`github.run_id`): không huỷ lượt nào.
+#
+# CỐ Ý không có input chia lát: workflow này cho VÀI tệp. Chạy nhiều thì dùng
+# `backend-test.yml` (dispatch, đủ cổng PR) hoặc `nightly-backend-pytest.yml`
+# (toàn bộ backend, input `shards`).
+#
+# Môi trường — runner, services, env, cài deps, `BO_QUA`, `--timeout=60` — soi
+# gương job `pytest-shard` của `nightly-backend-pytest.yml`; test khoá bằng
+# nhau, lệch một khoá là đỏ.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ca:
+        description: 'Tệp / node id dưới tests/, cách nhau bằng khoảng trắng hoặc xuống dòng. Vd: tests/unit/test_x.py tests/api/test_y.py::test_z'
+        required: true
+        type: string
+
+# Một scope ⇒ mọi scope khác là `none`. `contents: read` đủ cho checkout.
+permissions:
+  contents: read
+
+# Nhóm riêng cho TỪNG lượt (`run_id` duy nhất) ⇒ không lượt nào huỷ lượt nào,
+# kể cả hai lượt trên cùng một nhánh.
+concurrency:
+  group: ci-chon-ca-${{ github.ref }}-${{ github.run_id }}
+  cancel-in-progress: false
+
+env:
+  # ĐỒNG BỘ với `nightly-backend-pytest.yml` (test khoá bằng nhau).
+  BO_QUA: "--ignore-glob=tests/integration/test_debug*.py"
+
+jobs:
+  chon-ca:
+    # Tên TĨNH, không chứa tên required check nào — xem điểm 5 ở đầu tệp.
+    name: chạy chọn ca backend
+    # Cùng ảnh runner với lát nightly (ghim 24.04, lý do ở nightly-backend-pytest.yml).
+    runs-on: ubuntu-24.04
+    # Dành cho vài tệp. Một tệp nặng nhất của cổng PR chạy ~4 phút; trần này
+    # chỉ chặn một lượt treo giữ runner tới trần mặc định 6 giờ.
+    timeout-minutes: 60
+
+    env:
+      APP_ENV: test
+      DATABASE_URL: postgresql+asyncpg://test:test@localhost:5432/qlts_test
+      REDIS_URL: redis://localhost:6379/0
+      SECRET_KEY: test-secret-key-for-ci-only
+      JWT_SECRET_KEY: test-jwt-secret-for-ci-only
+      MAIL_USERNAME: ci-test@example.com
+      MAIL_PASSWORD: ci-test-placeholder
+      MAIL_FROM: ci-test@example.com
+      MAIL_SERVER: smtp.example.com
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: qlts_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # NƠI DUY NHẤT input chạm tới shell, và chỉ như một BIẾN MÔI TRƯỜNG —
+      # không bao giờ được dán vào thân `run:` (đó là chèn lệnh).
+      # Chạy TRƯỚC khi cài phụ thuộc: input sai thì đỏ sau vài giây.
+      - name: Kiểm danh sách ca (input → danh sách đã kiểm)
+        id: kiem
+        working-directory: Backend_FastAPI
+        env:
+          CA: ${{ inputs.ca }}
+        run: |
+          set -euo pipefail
+          # So khớp theo BYTE: dưới locale UTF-8, khoảng `[A-Za-z]` có thể
+          # khớp cả chữ có dấu hay chữ trông giống Latin.
+          export LC_ALL=C
+
+          # Mẫu cho MỘT mục, ghép từ ba mảnh:
+          #   tệp   tests/<thư mục>/…/test_<tên>.py  — chữ, số, `_` (không `.`, không `-`)
+          #   tên   ::Lớp, ::hàm                      — định danh Python
+          #   tham  [id]                              — chỉ ở CUỐI, sau ít nhất một ::tên
+          # Vì mục phải bắt đầu bằng `tests/`, nó không bao giờ thành CỜ pytest.
+          RE_TEP='tests/([A-Za-z0-9_]+/)*test_[A-Za-z0-9_]*[.]py'
+          RE_TEN='::[A-Za-z_][A-Za-z0-9_]*'
+          RE_THAM='[[][A-Za-z0-9_.,:=+/@%-]+[]]'
+          RE_MUC="^${RE_TEP}(${RE_TEN})*(${RE_TEN}${RE_THAM})?\$"
+
+          # Tách theo khoảng trắng / tab / xuống dòng (cả CR của CRLF).
+          # `tr` đổi TỪNG ký tự của tập đầu thành ký tự cùng vị trí ở tập sau;
+          # `[\n*]` là `\n` lặp cho đủ độ dài tập đầu (cú pháp POSIX). Viết ba
+          # lần `\n` cũng đúng nghĩa ấy, nhưng shellcheck SC2020 thấy chữ `n`
+          # lặp lại và tưởng là thay CẢ TỪ — actionlint đỏ.
+          mapfile -t THO < <(printf '%s\n' "${CA:-}" | tr ' \t\r' '[\n*]')
+
+          HOP_LE=()
+          LOI=0
+          for muc in "${THO[@]}"; do
+            [ -n "$muc" ] || continue
+
+            ly_do=""
+            case "$muc" in
+              -*) ly_do="bắt đầu bằng '-' — pytest sẽ hiểu là CỜ" ;;
+              *..*) ly_do="chứa '..'" ;;
+            esac
+            if [ -z "$ly_do" ] && [[ ! $muc =~ $RE_MUC ]]; then
+              ly_do="không khớp mẫu tests/…/test_*.py[::Lớp][::hàm][[id]]"
+            fi
+            if [ -n "$ly_do" ]; then
+              printf '::error::Mục bị từ chối: %s — %s\n' "$muc" "$ly_do"
+              LOI=$((LOI + 1))
+              continue
+            fi
+
+            tep="${muc%%::*}"
+            if [ ! -f "$tep" ]; then
+              printf '::error::Mục bị từ chối: %s — không có tệp %s trên ref này (tính từ Backend_FastAPI/)\n' "$muc" "$tep"
+              LOI=$((LOI + 1))
+              continue
+            fi
+
+            # Trùng / chồng lấn: một ca thuộc hai mục thì đếm theo mục sai,
+            # và pytest có thể chạy nó hai lần hoặc gộp lặng lẽ.
+            # Tên biến luôn trong ngoặc nhọn khi ngay sau là `[`: `[` là ký tự
+            # THƯỜNG nối sau giá trị (bash vốn hiểu thế). Bỏ ngoặc nhọn thì
+            # công cụ kiểm (SC1087) đọc thành phần tử mảng — actionlint đỏ.
+            # (Dòng chú thích KHÔNG được mở đầu bằng chữ "shellcheck": công cụ
+            # đọc nó thành chỉ thị và báo SC1072/SC1073.)
+            for cu in "${HOP_LE[@]}"; do
+              case "$muc" in
+                "$cu")
+                  printf '::error::Mục bị từ chối: %s — TRÙNG với mục đã có\n' "$muc"
+                  LOI=$((LOI + 1))
+                  continue 2
+                  ;;
+                "${cu}::"*|"${cu}["*)
+                  printf '::error::Mục bị từ chối: %s — nằm trong mục đã có %s (chồng lấn)\n' "$muc" "$cu"
+                  LOI=$((LOI + 1))
+                  continue 2
+                  ;;
+              esac
+              case "$cu" in
+                "${muc}::"*|"${muc}["*)
+                  printf '::error::Mục bị từ chối: %s — chứa mục đã có %s (chồng lấn)\n' "$muc" "$cu"
+                  LOI=$((LOI + 1))
+                  continue 2
+                  ;;
+              esac
+            done
+            HOP_LE+=("$muc")
+          done
+
+          if [ "$LOI" -ne 0 ]; then
+            echo "::error::$LOI mục bị từ chối — KHÔNG chạy gì (không chạy một phần danh sách)."
+            exit 1
+          fi
+          if [ "${#HOP_LE[@]}" -eq 0 ]; then
+            echo "::error::Input 'ca' rỗng — không có gì để chạy."
+            exit 1
+          fi
+          printf '%s\n' "${HOP_LE[@]}" > "$RUNNER_TEMP/ca.txt"
+          echo "Danh sách đã kiểm: ${#HOP_LE[@]} mục"
+          printf '  %s\n' "${HOP_LE[@]}"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: Backend_FastAPI/requirements-dev.txt
+
+      - name: Install backend dependencies (dev)
+        working-directory: Backend_FastAPI
+        run: pip install -r requirements-dev.txt
+
+      # Đếm TRƯỚC khi chạy, theo TỪNG mục. Chỉ đếm tổng thì một tệp skip cả
+      # module (hoặc một node id gõ sai mà pytest vẫn thoát 0) bị các mục khác
+      # che đi.
+      - name: Thu thập (collect-only) — đếm ca theo từng mục
+        id: thu-thap
+        working-directory: Backend_FastAPI
+        run: |
+          set -euo pipefail
+          mapfile -t DANH_SACH < "$RUNNER_TEMP/ca.txt"
+          if [ "${#DANH_SACH[@]}" -eq 0 ]; then
+            echo "::error::Danh sách đã kiểm rỗng."
+            exit 1
+          fi
+          THO="$RUNNER_TEMP/collect-raw.txt"
+          NODE="$RUNNER_TEMP/nodeid.txt"
+
+          # `-qq`, KHÔNG phải `-q`: pytest.ini đặt `addopts = -v`; `-v` gặp `-q`
+          # thành mức mặc định, và ở mức đó `--collect-only` in CÂY chứ không
+          # in node id — phép đếm bên dưới sẽ ra 0 (đã đo ở nightly).
+          rc=0
+          python -m pytest "${DANH_SACH[@]}" --collect-only -qq "$BO_QUA" > "$THO" 2>&1 || rc=$?
+
+          if grep -q '^ERROR ' "$THO"; then
+            echo "::error::Có lỗi khi COLLECT — pytest bỏ luôn danh sách node id."
+            grep '^ERROR ' "$THO"
+            tail -n 30 "$THO"
+            exit 1
+          fi
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::pytest --collect-only thoát $rc (4 = node id không tồn tại, 5 = không collect được ca nào)."
+            tail -n 30 "$THO"
+            exit 1
+          fi
+
+          # Node id = dòng bắt đầu bằng `tests/….py::`. `sort -u` vì phần tóm
+          # tắt cảnh báo có thể in lại node id.
+          awk '/^tests\/[^[:space:]]*[.]py::/' "$THO" | LC_ALL=C sort -u > "$NODE"
+          SO_CA=$(awk 'END { print NR }' "$NODE")
+          if [ "$SO_CA" -eq 0 ]; then
+            echo "::error::Collect ra 0 ca — không có gì để chạy, lượt này KHÔNG được xanh."
+            tail -n 30 "$THO"
+            exit 1
+          fi
+
+          # Bảng mục → node id (TAB giữa hai cột): nguồn DUY NHẤT cho bước `chay`
+          # về tập ca phải chạy và ca nào thuộc mục nào. Ghi ra tệp tạm, chỉ
+          # đổi tên thành tệp thật khi bước này đạt.
+          echo "Số ca collect theo từng mục:"
+          TAM="$RUNNER_TEMP/muc_nodeid.tmp"
+          : > "$TAM"
+          TONG=0
+          LOI=0
+          for muc in "${DANH_SACH[@]}"; do
+            n=$(MUC="$muc" RA="$TAM" awk '
+              BEGIN { p = ENVIRON["MUC"]; d = length(p); ra = ENVIRON["RA"] }
+              index($0, p) == 1 {
+                sau = substr($0, d + 1, 1)
+                if (length($0) == d || sau == ":" || sau == "[") { c++; print p "\t" $0 >> ra }
+              }
+              END { print c + 0 }' "$NODE")
+            printf '  %6s  %s\n' "$n" "$muc"
+            TONG=$((TONG + n))
+            if [ "$n" -eq 0 ]; then
+              printf '::error::Mục %s collect ra 0 ca (skip cả module? tên sai?) — chạy tiếp là XANH GIẢ.\n' "$muc"
+              LOI=$((LOI + 1))
+            fi
+          done
+          if [ "$TONG" -ne "$SO_CA" ]; then
+            echo "::error::Tổng theo mục ($TONG) khác số node id collect ($SO_CA) — có ca không thuộc mục nào."
+            LOI=$((LOI + 1))
+          fi
+          if [ "$LOI" -ne 0 ]; then
+            exit 1
+          fi
+          mv "$TAM" "$RUNNER_TEMP/muc_nodeid.tsv"
+          echo "Collect: $SO_CA ca từ ${#DANH_SACH[@]} mục."
+
+      - name: Chạy pytest trên các ca đã chọn
+        id: chay
+        working-directory: Backend_FastAPI
+        run: |
+          set -euo pipefail
+          mapfile -t DANH_SACH < "$RUNNER_TEMP/ca.txt"
+
+          # Plugin ghi NGUYÊN `report.nodeid` + pha + kết quả của từng ca
+          # (`.github/scripts/plugin_chon_ca/`). Thư mục RIÊNG, chỉ một module:
+          # thêm vào PYTHONPATH không che module nào của bộ test.
+          THU_MUC_PLUGIN="$(cd .. && pwd)/.github/scripts/plugin_chon_ca"
+          if [ ! -f "$THU_MUC_PLUGIN/ci_chon_ca_ghi_ket_qua.py" ]; then
+            echo "::error::Thiếu plugin $THU_MUC_PLUGIN/ci_chon_ca_ghi_ket_qua.py — không phán quyết được theo node id."
+            exit 1
+          fi
+          KET_QUA="$RUNNER_TEMP/ket_qua.jsonl"
+          rm -f "$KET_QUA"
+
+          # Cùng cờ với lát nightly (`--timeout=60` cắt một ca treo), cộng plugin.
+          rc=0
+          PYTHONPATH="$THU_MUC_PLUGIN${PYTHONPATH:+:$PYTHONPATH}" CI_CHON_CA_KET_QUA="$KET_QUA" python -m pytest "${DANH_SACH[@]}" -q --tb=short --timeout=60 "$BO_QUA" -p ci_chon_ca_ghi_ket_qua || rc=$?
+          echo "pytest rc=$rc"
+
+          # MỌI phán quyết của bước này nằm ở MỘT chỗ — đoạn dưới: rc, danh tính
+          # ca, ca đỏ, skip. Nó tích luỹ lỗi rồi thoát theo TỔNG (thoát theo lệnh
+          # cuối là cách một bộ kiểm in "SAI" mà vẫn trả 0); `set -e` đưa mã
+          # thoát ra thành kết quả bước.
+          python - "$KET_QUA" "$RUNNER_TEMP/muc_nodeid.tsv" "$rc" <<'PY'
+          import json
+          import os
+          import sys
+
+          duong_kq, duong_bang, rc = sys.argv[1], sys.argv[2], int(sys.argv[3])
+
+          # Mục → node id, do bước `thu-thap` ghi: tập ca PHẢI chạy, node id GỐC.
+          muc_cua = {}
+          with open(duong_bang, encoding="utf-8") as fh:
+              for dong_bang in fh:
+                  muc, node = dong_bang.rstrip("\n").split("\t", 1)
+                  muc_cua.setdefault(muc, []).append(node)
+          tap_mong = {n for cac in muc_cua.values() for n in cac}
+
+          loi = []
+          if rc != 0:
+              loi.append("pytest rc=%d (1 = có ca đỏ, 2 = bị ngắt, 3 = lỗi nội bộ, "
+                         "4 = dùng sai hoặc node id chết, 5 = không collect được ca nào)." % rc)
+
+          # Báo cáo từng pha, theo `report.nodeid` GỐC: node id → {pha: (outcome, xfail?)}.
+          pha = {}
+          trung = []
+          if os.path.isfile(duong_kq):
+              with open(duong_kq, encoding="utf-8") as fh:
+                  for dong_kq in fh:
+                      bg = json.loads(dong_kq)
+                      cua_node = pha.setdefault(bg["nodeid"], {})
+                      if bg["when"] in cua_node:
+                          trung.append("%s (%s)" % (bg["nodeid"], bg["when"]))
+                      cua_node[bg["when"]] = (bg["outcome"], "wasxfail" in bg)
+          else:
+              loi.append("Không có tệp kết quả của plugin — phiên pytest không chạy tới "
+                         "cuối, hoặc plugin không được nạp.")
+          if trung:
+              loi.append("%d pha bị báo HAI lần (ca chạy lặp): %s"
+                         % (len(trung), ", ".join(trung[:10])))
+
+
+          def phan_loai(cac_pha):
+              """PASSED ⇔ setup passed + call passed + teardown có mặt và KHÔNG failed.
+              Setup / teardown failed ⇒ errors; call failed (kể cả xpass strict) ⇒
+              failed. Skip ở setup / call (kể cả xfail) ⇒ skipped. xpass không
+              strict ⇒ call passed ⇒ passed. Thiếu pha ⇒ chạy dở."""
+              ket = {w: o for w, (o, _) in cac_pha.items()}
+              if "failed" in (ket.get("setup"), ket.get("teardown")):
+                  return "errors"
+              if ket.get("call") == "failed":
+                  return "failed"
+              if "teardown" not in ket:
+                  return "chay-do"
+              if "skipped" in (ket.get("setup"), ket.get("call")):
+                  return "skipped"
+              if ket.get("setup") == "passed" and ket.get("call") == "passed":
+                  return "passed"
+              return "chay-do"
+
+
+          trang_thai = {n: phan_loai(p) for n, p in pha.items()}
+          LOAI = ("passed", "failed", "errors", "skipped", "chay-do")
+          dem = {t: sum(1 for v in trang_thai.values() if v == t) for t in LOAI}
+          dong = ("collect %d · chạy %d · passed %d · failed %d · errors %d · skipped %d · chạy dở %d"
+                  % (len(tap_mong), len(trang_thai), dem["passed"], dem["failed"],
+                     dem["errors"], dem["skipped"], dem["chay-do"]))
+          print(dong)
+
+          # (1) DANH TÍNH: so TẬP chuỗi node id GỐC, không qua khoá trung gian.
+          thieu = sorted(tap_mong - set(trang_thai))
+          thua = sorted(set(trang_thai) - tap_mong)
+          if thieu or thua:
+              loi.append("Tập ca chạy KHÁC tập ca collect: thiếu %d, thừa %d."
+                         % (len(thieu), len(thua)))
+              for n in thieu[:30]:
+                  print("  THIẾU %s" % n)
+              for n in thua[:30]:
+                  print("  THỪA  %s" % n)
+          # (2) Có ca đỏ, hoặc chạy dở.
+          if dem["failed"] or dem["errors"] or dem["chay-do"]:
+              loi.append("%d ca failed, %d ca errors, %d ca chạy dở."
+                         % (dem["failed"], dem["errors"], dem["chay-do"]))
+          # (3) 0 ca PASSED — vd. marker / fixture skip TOÀN BỘ sau collect, rc vẫn 0.
+          if dem["passed"] == 0:
+              loi.append("0 ca PASSED (chạy %d, skip %d) — không ca nào thật sự được kiểm."
+                         % (len(trang_thai), dem["skipped"]))
+          # (4) MỘT mục mà mọi ca đều skip: các mục khác không được che nó.
+          for muc, cac in muc_cua.items():
+              tt = [trang_thai.get(n) for n in cac]
+              if tt and all(t == "skipped" for t in tt):
+                  loi.append("Mục %s: toàn bộ %d ca bị SKIP / XFAIL." % (muc, len(tt)))
+
+          if dem["skipped"]:
+              print("::warning::%d ca bị SKIP / XFAIL — đã chạy nhưng KHÔNG được kiểm. Đọc "
+                    "lý do trước khi coi lượt này là bằng chứng." % dem["skipped"])
+              for n in sorted(n for n, v in trang_thai.items() if v == "skipped")[:30]:
+                  xfail = any(x for _, x in pha[n].values())
+                  print("  %s %s" % ("XFAIL" if xfail else "SKIP ", n))
+
+          if loi:
+              ket_luan = "ĐỎ — %d lỗi." % len(loi)
+          elif dem["skipped"]:
+              ket_luan = ("%d/%d ca PASSED, %d ca SKIP / XFAIL (KHÔNG được kiểm)."
+                          % (dem["passed"], len(tap_mong), dem["skipped"]))
+          else:
+              ket_luan = "%d/%d ca PASSED, không ca nào skip." % (dem["passed"], len(tap_mong))
+          for dong_loi in loi:
+              print("::error::" + dong_loi)
+          print("KẾT LUẬN: " + ket_luan)
+          tom_tat = os.environ.get("GITHUB_STEP_SUMMARY")
+          if tom_tat:
+              with open(tom_tat, "a", encoding="utf-8") as fh:
+                  fh.write("### Chạy chọn ca\n\n%s\n\nKẾT LUẬN: %s\n" % (dong, ket_luan))
+          sys.exit(1 if loi else 0)
+          PY

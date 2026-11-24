@@ -57,8 +57,10 @@ on:
 # chồng lên nhau và không lượt nào bị huỷ.
 #
 # ⚠️ KHOÁ THEO `github.ref` TRẦN LÀ BẪY ở workflow này — khác với
-# `backend-test.yml`/`frontend-test.yml` (chỉ chạy trên `pull_request`, nên `ref`
-# là duy nhất theo PR). Ở đây `push` và `schedule` DÙNG CHUNG `refs/heads/main`,
+# `backend-test.yml`/`frontend-test.yml` (chỉ `pull_request` với ref
+# `refs/pull/<số>/merge` duy nhất theo PR, và từ 23-11-2026 `workflow_dispatch`
+# với ref `refs/heads/<nhánh>` — hai loại không bao giờ chung nhóm). Ở đây
+# `push` và `schedule` DÙNG CHUNG `refs/heads/main`,
 # nên nhóm theo `ref` trần sẽ để một lần merge **huỷ lượt cron hàng tuần** —
 # và mất luôn chuông `audit-alarm`, thứ duy nhất biến audit đỏ thành issue.
 # `github.event_name` trong khoá là thứ tách ba đường ấy ra.
