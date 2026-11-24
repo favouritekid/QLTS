@@ -98,7 +98,7 @@ function CreateReviewSessionForm({ defaultYear, onClose }: { defaultYear: number
   const roundItems: ReviewRoundOption[] = rounds.isError ? [] : (rounds.data?.items ?? [])
   // Đợt đã chọn phải còn trong danh sách MỚI NHẤT và còn chọn được (sau 400 `review_round_invalid` / `review_round_archived`
   // danh sách được tải lại).
-  const roundSelected = roundItems.some((r) => String(r.id) === roundId && roundSelectable(r))
+  const roundSelected = roundItems.some((r) => String(r.id) === roundId)
   const canSubmit = roundSelected && !create.isPending && !rounds.isFetching
   const err = create.error ? createErrorView(create.error) : null
 
