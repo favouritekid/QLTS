@@ -69,7 +69,7 @@ def _route_duoi_tien_to():
 
 def _route_lan_xet():
     """9 route lần xét của GĐ2-B + E10 (S1) — bỏ 3 route lựa chọn của C2."""
-    return {k: r for k, r in _route_duoi_tien_to().items() if k not in ROUTE_LUA_CHON_C2}
+    return dict(_route_duoi_tien_to())
 
 
 def test_hd1_dung_9_route_cong_e10_dung_ma_thanh_cong():
