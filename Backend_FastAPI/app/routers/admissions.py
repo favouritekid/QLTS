@@ -48,6 +48,7 @@ from ..services.user_service import emit_data_updated as _emit_realtime_update
 from ..core.events import SystemEvents
 from ..utils.exceptions import (
     ProfileLockedByDecisionError,
+    ProfileVersionConflict,
     ResourceNotFoundError,
     BadRequest,
     BusinessRuleViolation,
@@ -1486,7 +1487,8 @@ async def enroll_student(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
         )
-    except ProfileLockedByDecisionError:
+    except (ProfileLockedByDecisionError, ProfileVersionConflict):
+        # Owner 22-11 (câu 409): PROFILE_VERSION_CONFLICT cũng giữ error_code + câu tiếng Việt (handler toàn cục).
         # Review max PR #724 (R8): GIỮ error_code + public_payload (handler toàn cục) — gói thành
         # HTTPException làm giao diện mất mã COUNCIL_DECISION_LOCKS_PROFILE và câu hướng dẫn.
         raise
@@ -1952,7 +1954,8 @@ async def approve_admission(
 
     except BadRequest as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-    except ProfileLockedByDecisionError:
+    except (ProfileLockedByDecisionError, ProfileVersionConflict):
+        # Owner 22-11 (câu 409): PROFILE_VERSION_CONFLICT cũng giữ error_code + câu tiếng Việt (handler toàn cục).
         # Review max PR #724 (R8): GIỮ error_code + public_payload (handler toàn cục) — gói thành
         # HTTPException làm giao diện mất mã COUNCIL_DECISION_LOCKS_PROFILE và câu hướng dẫn.
         raise
@@ -2015,7 +2018,8 @@ async def reject_admission(
 
     except BadRequest as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-    except ProfileLockedByDecisionError:
+    except (ProfileLockedByDecisionError, ProfileVersionConflict):
+        # Owner 22-11 (câu 409): PROFILE_VERSION_CONFLICT cũng giữ error_code + câu tiếng Việt (handler toàn cục).
         # Review max PR #724 (R8): GIỮ error_code + public_payload (handler toàn cục) — gói thành
         # HTTPException làm giao diện mất mã COUNCIL_DECISION_LOCKS_PROFILE và câu hướng dẫn.
         raise
@@ -2069,7 +2073,8 @@ async def request_revision(
 
     except BadRequest as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-    except ProfileLockedByDecisionError:
+    except (ProfileLockedByDecisionError, ProfileVersionConflict):
+        # Owner 22-11 (câu 409): PROFILE_VERSION_CONFLICT cũng giữ error_code + câu tiếng Việt (handler toàn cục).
         # Review max PR #724 (R8): GIỮ error_code + public_payload (handler toàn cục) — gói thành
         # HTTPException làm giao diện mất mã COUNCIL_DECISION_LOCKS_PROFILE và câu hướng dẫn.
         raise
@@ -2135,7 +2140,8 @@ async def resubmit_admission(
 
     except BadRequest as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-    except ProfileLockedByDecisionError:
+    except (ProfileLockedByDecisionError, ProfileVersionConflict):
+        # Owner 22-11 (câu 409): PROFILE_VERSION_CONFLICT cũng giữ error_code + câu tiếng Việt (handler toàn cục).
         # Review max PR #724 (R8): GIỮ error_code + public_payload (handler toàn cục) — gói thành
         # HTTPException làm giao diện mất mã COUNCIL_DECISION_LOCKS_PROFILE và câu hướng dẫn.
         raise
@@ -2202,7 +2208,8 @@ async def minor_correction(
 
         return result
 
-    except ProfileLockedByDecisionError:
+    except (ProfileLockedByDecisionError, ProfileVersionConflict):
+        # Owner 22-11 (câu 409): PROFILE_VERSION_CONFLICT cũng giữ error_code + câu tiếng Việt (handler toàn cục).
         # Review max PR #724 (R8): GIỮ error_code + public_payload (handler toàn cục) — gói thành
         # HTTPException làm giao diện mất mã COUNCIL_DECISION_LOCKS_PROFILE và câu hướng dẫn.
         raise
@@ -2308,7 +2315,8 @@ async def override_admission(
 
     except BadRequest as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-    except ProfileLockedByDecisionError:
+    except (ProfileLockedByDecisionError, ProfileVersionConflict):
+        # Owner 22-11 (câu 409): PROFILE_VERSION_CONFLICT cũng giữ error_code + câu tiếng Việt (handler toàn cục).
         # Review max PR #724 (R8): GIỮ error_code + public_payload (handler toàn cục) — gói thành
         # HTTPException làm giao diện mất mã COUNCIL_DECISION_LOCKS_PROFILE và câu hướng dẫn.
         raise
@@ -2379,7 +2387,8 @@ async def withdraw_admission(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     except BadRequest as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-    except ProfileLockedByDecisionError:
+    except (ProfileLockedByDecisionError, ProfileVersionConflict):
+        # Owner 22-11 (câu 409): PROFILE_VERSION_CONFLICT cũng giữ error_code + câu tiếng Việt (handler toàn cục).
         # Review max PR #724 (R8): GIỮ error_code + public_payload (handler toàn cục) — gói thành
         # HTTPException làm giao diện mất mã COUNCIL_DECISION_LOCKS_PROFILE và câu hướng dẫn.
         raise
@@ -2496,7 +2505,8 @@ async def finalize_enrollment(
 
     except BadRequest as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-    except ProfileLockedByDecisionError:
+    except (ProfileLockedByDecisionError, ProfileVersionConflict):
+        # Owner 22-11 (câu 409): PROFILE_VERSION_CONFLICT cũng giữ error_code + câu tiếng Việt (handler toàn cục).
         # Review max PR #724 (R8): GIỮ error_code + public_payload (handler toàn cục) — gói thành
         # HTTPException làm giao diện mất mã COUNCIL_DECISION_LOCKS_PROFILE và câu hướng dẫn.
         raise
@@ -2872,7 +2882,8 @@ async def drop_student(
 
     except BadRequest as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-    except ProfileLockedByDecisionError:
+    except (ProfileLockedByDecisionError, ProfileVersionConflict):
+        # Owner 22-11 (câu 409): PROFILE_VERSION_CONFLICT cũng giữ error_code + câu tiếng Việt (handler toàn cục).
         # Review max PR #724 (R8): GIỮ error_code + public_payload (handler toàn cục) — gói thành
         # HTTPException làm giao diện mất mã COUNCIL_DECISION_LOCKS_PROFILE và câu hướng dẫn.
         raise

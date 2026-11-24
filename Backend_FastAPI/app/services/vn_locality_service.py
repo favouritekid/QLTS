@@ -194,6 +194,14 @@ class VnLocalityService:
     # ``area_code`` tại chỗ.
     # =========================================================================
 
+    async def get_active_commune(
+        self, commune_code: str
+    ) -> Optional[VnCommuneAreaMap]:
+        """Dòng xã → KV còn hiệu lực (``effective_to IS NULL``) của 1 mã xã — đường
+        đọc công khai cho service khác (danh mục trường THCS nội bộ: mã xã bắt buộc +
+        KV gợi ý). MỘT định nghĩa "còn hiệu lực" với ``lookup_commune_kv``."""
+        return await self._active_commune(commune_code)
+
     async def _active_commune(
         self, commune_code: str, exclude_id: Optional[int] = None
     ) -> Optional[VnCommuneAreaMap]:

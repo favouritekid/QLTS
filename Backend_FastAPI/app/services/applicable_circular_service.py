@@ -24,7 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import models
 from ..constants.admission_circular import CIRCULAR_SOURCE_MANUAL, CIRCULARS
-from ..utils.exceptions import BusinessRuleViolation, ConflictError
+from ..utils.exceptions import BusinessRuleViolation, ProfileVersionConflict
 from .priority_override_service import (
     _HARD_DENIED_STATUS,
     _MAX_REASON_LEN,
@@ -57,10 +57,7 @@ async def change_applicable_circular(
             mã thông tư lạ; đổi sang đúng giá trị đang có.
     """
     if expected_version != profile.version:
-        raise ConflictError(
-            "Hồ sơ vừa được người khác sửa (phiên bản %s, hiện tại %s). Vui lòng tải lại."
-            % (expected_version, profile.version)
-        )
+        raise ProfileVersionConflict(current_version=profile.version, expected_version=expected_version)
 
     if actor.role not in _VAI_TRO_DUOC_DOI:
         raise PermissionError("Chỉ quản lý hoặc quản trị được đổi thông tư áp dụng của hồ sơ.")

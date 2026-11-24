@@ -63,6 +63,10 @@ ADMISSION_ROUTER_MODULES: Final[frozenset[str]] = frozenset(
         "app.routers.council_documents",
         # Lần xét tuyển GĐ2 (GĐ2-A: bảng chỉ tiêu năm / nhóm ngành) — dưới tiền tố v1 /api/admission-config.
         "app.routers.admission_review",
+        # Lần xét tuyển GĐ2-C C1: quyền "Thư ký Hội đồng" (Admin gán / thu hồi) — dưới tiền tố v1 /api/admission-config.
+        "app.routers.admission_review_secretary",
+        # Lần xét tuyển GĐ2-C C2: lựa chọn của Ban thư ký — dưới tiền tố v1 /api/admission-config.
+        "app.routers.admission_review_selection",
         "app.routers.admin_backfill",
         "app.routers.admin_priority_config",
         "app.routers.admin_v2_admission_round",
@@ -76,6 +80,9 @@ ADMISSION_ROUTER_MODULES: Final[frozenset[str]] = frozenset(
         # khai ở đây để danh mục chuẩn khớp route thật. (``document_evidence`` chỉ có GET — không cần phân loại.)
         "app.routers.document_bulk_verify",
         "app.routers.document_cross_review",
+        # GĐ2 L3 (22-11): áp ghép tên trường THCS SỬA lịch sử học hồ sơ ⇒ miền tuyển sinh, dưới tiền tố
+        # ``/api/v2/admissions`` (đã đóng băng ở cả hai tầng).
+        "app.routers.admissions_thcs_school_mapping",
     }
 )
 
@@ -105,6 +112,8 @@ NON_ADMISSION_ROUTER_MODULES: Final[frozenset[str]] = frozenset(
         "app.routers.admin_v2_system_config",
         "app.routers.admin_vn_locality",
         "app.routers.admin_vn_school",
+        # GĐ2 L3 (22-11): ghép tên trường THCS — chỉ ghi bảng ghép / danh mục trường, KHÔNG sửa hồ sơ.
+        "app.routers.admin_thcs_school_mapping",
         "app.routers.auth",
         "app.routers.collaborators",
         "app.routers.commissions",
@@ -197,6 +206,11 @@ ADMISSION_WRITE_ROUTES: Final[tuple[tuple[str, str], ...]] = (
     ("PUT", "/api/admission-config/review-sessions/{session_id}/floors"),
     ("POST", "/api/admission-config/review-sessions/{session_id}/cancel"),
     ("POST", "/api/admission-config/review-sessions/{session_id}/runs"),
+    # Lần xét tuyển GĐ2-C C1 (22-11): gán / thu hồi quyền Thư ký Hội đồng — rà tay từ route thật.
+    ("POST", "/api/admission-config/review-secretaries"),
+    ("POST", "/api/admission-config/review-secretaries/{grant_id}/revoke"),
+    # Lần xét tuyển GĐ2-C C2 (22-11): Ban thư ký ghi lựa chọn — rà tay từ route thật.
+    ("PUT", "/api/admission-config/review-sessions/{session_id}/selections/{profile_id}"),
     ("POST", "/api/admission-config/criteria"),
     ("DELETE", "/api/admission-config/criteria/{criteria_id}"),
     ("PUT", "/api/admission-config/criteria/{criteria_id}"),
@@ -297,6 +311,8 @@ ADMISSION_WRITE_ROUTES: Final[tuple[tuple[str, str], ...]] = (
     ("POST", "/api/v2/admin/years/{academic_year}/rounds"),
     ("POST", "/api/v2/admin/years/{academic_year}/rounds/bulk-create"),
     ("POST", "/api/v2/admissions/magic-link/{action}/{token}"),
+    # GĐ2 L3 (22-11): áp ghép tên trường THCS vào lịch sử học (chạy thử + chạy thật).
+    ("POST", "/api/v2/admissions/thcs-school-mapping/apply"),
     ("POST", "/api/v2/admissions/{profile_id}/admin-rollback"),
     # V3 — đổi thông tư áp dụng: thao tác ghi tuyển sinh ⇒ bị đóng băng như ấn định KV.
     ("POST", "/api/v2/admissions/{profile_id}/applicable-circular"),

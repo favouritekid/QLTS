@@ -175,8 +175,10 @@ class ConflictError(BaseAppException):
 
 
 class CombinedKeyChangeAndRevokeError(ConflictError):
-    """Một lần lưu tài khoản vừa ĐỔI cột khoá (email / tên đăng nhập) vừa kéo theo TỰ THU HỒI quyền duyệt chéo (khoá tài
-    khoản, hạ vai khỏi Cán bộ) ⇒ từ chối (HTTP 409) — owner 23-11, PR-B lượt 8 ("chặn gộp, làm 2 bước").
+    """Một lần lưu tài khoản vừa ĐỔI cột khoá (email / tên đăng nhập) vừa kéo theo TỰ THU HỒI quyền — quyền duyệt chéo (khoá
+    tài khoản, hạ vai khỏi Cán bộ) hoặc, từ GĐ2-C C1, quyền Thư ký Hội đồng (khoá tài khoản, đổi Quản lý / Cán bộ sang vai
+    không được gán) ⇒ từ chối (HTTP 409) — owner 23-11, PR-B lượt 8 ("chặn gộp, làm 2 bước"); owner 23-11 C1 câu 1 "Giữ chặn
+    mọi ca thu hồi".
 
     Vì sao: đổi cột khoá buộc khoá dòng người ``FOR UPDATE`` ngay từ đầu (lượt 6); thu hồi phải đi chờ dòng quyền chéo
     ``FOR UPDATE``; lô duyệt chéo (§5.4) giữ dòng quyền ``FOR SHARE`` rồi xin người bấm ``FOR KEY SHARE`` ⇒ hai bên chờ nhau
@@ -185,13 +187,16 @@ class CombinedKeyChangeAndRevokeError(ConflictError):
     quan trọng. Quyết định đọc DƯỚI khoá dòng người (``document_cross_review_service.revoke_grants_on_account_change``) và
     báo TRƯỚC khi khoá dòng quyền — không ghi gì.
 
-    Câu chữ và mã lỗi: owner duyệt nguyên văn 23-11 (``gd1b/sua/QUYET-DINH-OWNER-PR-B-LUOT8-CAU-CHU-VA-DOCKER-2026-11-23.md``)."""
+    Mã lỗi: owner duyệt 23-11 (``gd1b/sua/QUYET-DINH-OWNER-PR-B-LUOT8-CAU-CHU-VA-DOCKER-2026-11-23.md``). Câu ``detail``:
+    owner duyệt nguyên văn 23-11, câu chung cho cả quyền duyệt chéo lẫn quyền Thư ký, CHỈ áp trong nhánh C1 (PR-B đứng riêng
+    giữ câu cũ) — ``gd2/gd2c/c1/QUYET-DINH-OWNER-C1-CHAN-GOP-VA-CAU-409-2026-11-23.md`` câu 2. Không đổi chữ nào; khoá ở
+    ``tests/api/test_gd2c_c1_thu_ky_chan_gop.py``. Tiêu đề giao diện ("Cần lưu làm hai lần") ở ``useAdminUpdateUser``."""
 
     status_code = status.HTTP_409_CONFLICT
     error_code = "COMBINED_KEY_CHANGE_AND_REVOKE"
     detail = (
-        "Không thể vừa đổi email vừa khoá tài khoản hoặc chuyển Cán bộ sang vai khác trong cùng một lần lưu. "
-        "Hãy lưu hai lần: đổi email trước, rồi khoá tài khoản / đổi vai (hoặc ngược lại)."
+        "Không thể vừa đổi email vừa khoá tài khoản hoặc đổi vai làm mất quyền duyệt chéo / quyền Thư ký trong cùng một "
+        "lần lưu. Hãy lưu hai lần: đổi email trước, rồi khoá tài khoản / đổi vai (hoặc ngược lại)."
     )
 
 
@@ -300,6 +305,49 @@ class ProfileLockedByDecisionError(ConflictError):
     status_code = status.HTTP_409_CONFLICT
     error_code = "COUNCIL_DECISION_LOCKS_PROFILE"
     detail = "Hồ sơ đã có tên trong Quyết định đã ký — thao tác bị chặn."
+
+
+#: Owner 22-11 (``QUYET-DINH-OWNER-THCS-CAU-409``) DUYỆT NGUYÊN CÂU — lưu form hồ sơ bằng bản đã cũ (``update_profile``).
+#: Không đổi chữ nào (test khoá nguyên văn).
+PROFILE_VERSION_CONFLICT_SAVE_DETAIL = (
+    "Hồ sơ vừa được cập nhật ở nơi khác sau khi bạn mở (người dùng khác, hoặc Admin áp ghép trường THCS vào lịch "
+    "sử học). Bản bạn đang sửa đã cũ nên CHƯA được lưu. Tải lại trang hồ sơ rồi nhập lại phần vừa sửa."
+)
+#: Câu TRUNG TÍNH cho mọi THAO TÁC trên hồ sơ (duyệt, từ chối, yêu cầu bổ sung, nộp lại, ghi đè, nhận / bỏ nhận duyệt,
+#: hoàn tất, rút, đánh dấu bỏ học, hiệu chỉnh nhỏ, ấn định KV, duyệt / từ chối / bỏ tick minh chứng ưu tiên, đổi thông
+#: tư, mục lô duyệt / từ chối). Owner 22-11 (``QUYET-DINH-OWNER-THCS-CAU-THAO-TAC``) DUYỆT NGUYÊN CÂU — không đổi chữ
+#: nào (test khoá nguyên văn).
+PROFILE_VERSION_CONFLICT_ACTION_DETAIL = (
+    "Hồ sơ vừa được cập nhật ở nơi khác sau khi bạn mở. Thao tác CHƯA được thực hiện. Tải lại trang rồi thử lại."
+)
+
+
+class ProfileVersionConflict(ConflictError):
+    """Thao tác / lưu hồ sơ bằng bản đã CŨ (khoá lạc quan ``version`` lệch) — HTTP 409, mã ``PROFILE_VERSION_CONFLICT``.
+
+    MỘT lớp cho MỌI chỗ kiểm ``version`` của hồ sơ tuyển sinh (owner 22-11: câu 1 công cụ ghép THCS + câu 409). Mã riêng
+    để giao diện hiện NGUYÊN câu (``USER_FACING_CONFLICT_CODES``) thay vì câu chung "trùng hoặc đã thay đổi". Câu mặc định
+    là câu THAO TÁC trung tính; đường lưu form truyền :data:`PROFILE_VERSION_CONFLICT_SAVE_DETAIL`. ``public_payload``
+    chỉ mang số phiên bản hiện tại (không dữ liệu cá nhân). Router gói ``ConflictError`` thành ``HTTPException`` PHẢI để
+    lớp này đi qua (``except (ProfileLockedByDecisionError, ProfileVersionConflict): raise``)."""
+
+    status_code = status.HTTP_409_CONFLICT
+    error_code = "PROFILE_VERSION_CONFLICT"
+    detail = PROFILE_VERSION_CONFLICT_ACTION_DETAIL
+
+    def __init__(
+        self,
+        *,
+        current_version: Any,
+        expected_version: Any = None,
+        detail: Optional[str] = None,
+    ):
+        super().__init__(
+            detail=detail,
+            context={"expected_version": expected_version, "current_version": current_version},
+            public_payload={"current_version": current_version},
+        )
+        self.current_version = current_version
 
 
 # ============================================================================

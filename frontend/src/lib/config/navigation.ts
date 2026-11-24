@@ -330,11 +330,21 @@ export const navigationConfig: NavigationConfig = {
         },
         {
           // GĐ2-F1 — bảng chỉ tiêu năm / nhóm ngành (GĐ2-A). Đặt ngay sau "Cấu hình Tuyển sinh" (cùng mảng cấu hình tuyển
-          // sinh). Chỉ Admin: máy chủ chặn mọi vai khác (Casbin + `require_quota_table_admin` ⇒ 403); `roles` chỉ là bộ
-          // lọc thô của menu như mục "Cấu hình Ưu tiên" — trang tự báo khi máy chủ trả 403.
+          // sinh). XEM = Admin + Ban thư ký (GĐ2-C C2, cổng `require_review_secretary`); GHI = chỉ Admin. Đường NGOÀI
+          // `/admin/*` (KT-6: Thư ký có thể là cán bộ thường, proxy chặn cán bộ ở `/admin/*`). `roles` chỉ là bộ lọc thô:
+          // máy chủ CHƯA có cờ "người gọi là Thư ký" để hiện mục cho Quản lý / Cán bộ được gán (bàn giao C2 §7.4 G5) ⇒ họ vào
+          // bằng đường dẫn `/quota-tables`; trang tự báo khi máy chủ trả 403 / 404.
           label: "Bảng chỉ tiêu năm",
-          href: "/admin/quota-tables",
+          href: "/quota-tables",
           icon: Target,
+          roles: ["admin"],
+        },
+        {
+          // GĐ2-C C1 — Admin gán / thu hồi quyền "Thư ký Hội đồng". Chỉ Admin: máy chủ chặn mọi vai khác (Casbin +
+          // `require_review_secretary_admin` ⇒ 403); `roles` chỉ là bộ lọc thô của menu — trang tự báo khi máy chủ trả 403.
+          label: "Thư ký Hội đồng",
+          href: "/admin/review-secretaries",
+          icon: UserCheck,
           roles: ["admin"],
         },
         {
@@ -367,9 +377,17 @@ export const navigationConfig: NavigationConfig = {
         },
         {
           // PR-B — quản lý danh mục trường (vn_school) + KV theo năm. Admin-only.
-          label: "Trường THPT",
+          // 22-11: thêm trường THCS mã nội bộ NB… ⇒ không còn chỉ THPT.
+          label: "Danh mục trường",
           href: "/admin/vn-schools",
           icon: School,
+          roles: ["admin"],
+        },
+        {
+          // GĐ2 L3 (owner 22-11) — ghép tên trường THCS gõ tay với danh mục. Admin-only.
+          label: "Ghép trường THCS",
+          href: "/admin/thcs-school-mapping",
+          icon: ArrowLeftRight,
           roles: ["admin"],
         },
         {

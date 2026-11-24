@@ -4581,12 +4581,19 @@ async def require_priority_evidence_reviewer(
 # GĐ2-A — bảng chỉ tiêu năm / nhóm ngành (đặc tả GĐ2 bản 3 §10: "Bảng chỉ tiêu … Admin — lớp 'chỉ Admin'"). CHỈ THÊM.
 # Tầng chủ sở hữu VAI = Casbin (chỉ admin có dòng — wildcard; migration KHÔNG thêm dòng cho vai khác). Dependency dưới
 # đây là LỚP PHỤ fail-closed (khuôn ``require_council_document_admin``): vai khác lọt Casbin (cấu hình sai) vẫn 403.
-# Quyền xem của Ban thư ký (đặc tả §11 "GET + Ban thư ký") đến cùng bảng quyền Ban thư ký ở GĐ2-B.
+# Quyền xem của Ban thư ký (đặc tả §11 "GET + Ban thư ký"): GĐ2-C C2 — route GET dùng ``require_review_secretary``; ba route
+# GHI giữ lớp này. ``quota_table_write_allowed`` = MỘT vị từ cho lớp này VÀ cờ ``available_actions`` của GET (người xem không
+# ghi được ⇒ cờ rỗng).
 # =====================================================================================================================
+def quota_table_write_allowed(user: Any) -> bool:
+    """Người này được sửa / khoá / mở khoá bảng chỉ tiêu năm (chỉ Admin)."""
+    return user.role == UserRole.ADMIN
+
+
 async def require_quota_table_admin(
     current_user: models.User = Depends(check_permission),
 ) -> models.User:
-    if current_user.role != UserRole.ADMIN:
+    if not quota_table_write_allowed(current_user):
         raise PermissionDeniedError(detail="Chỉ Admin được xem / sửa / khoá bảng chỉ tiêu năm.")
     return current_user
 
@@ -4608,4 +4615,37 @@ async def require_review_admin(
 ) -> models.User:
     if current_user.role != UserRole.ADMIN:
         raise PermissionDeniedError(detail=REVIEW_ADMIN_ONLY_DETAIL)
+    return current_user
+
+
+# =====================================================================================================================
+# GĐ2-C C1 — quyền "Thư ký Hội đồng" (QĐB:26; thiết kế GĐ2-C 22-11 §4). CHỈ THÊM hàm mới.
+# - Gán / thu hồi / liệt kê: CHỈ Admin. Vai = Casbin (chỉ admin có dòng — wildcard; C1 KHÔNG thêm dòng Casbin nào) + lớp phụ
+#   fail-closed ở đây (khuôn ``require_cross_review_admin`` / ``require_quota_table_admin``).
+# - ``require_review_secretary``: cổng cho route Ban thư ký từ GĐ2-C C2 (Casbin mở ``manager``, ``officer`` ở PR ấy). Đọc
+#   vai / trạng thái người gọi + quyền gán còn hiệu lực TRONG giao dịch của chính yêu cầu, khoá ``FOR SHARE`` — phiên
+#   ``database.get_db`` là MỘT cho cả cổng lẫn route (FastAPI dùng lại kết quả dependency trong một yêu cầu) ⇒ thu hồi / khoá
+#   tài khoản chen giữa hai lần bấm thì lần bấm sau bị chặn; tới khi lần bấm đang ghi thì CHỜ lần bấm ấy commit (T17). Admin
+#   ĐANG HOẠT ĐỘNG luôn là Thư ký (owner 22-11 câu 1) — luật "người đề xuất ≠ người khoá" vẫn áp cho Admin ở C4 / C5b. Không
+#   đạt ⇒ 404 cùng thân (không lộ lần xét có tồn tại).
+# =====================================================================================================================
+async def require_review_secretary_admin(
+    current_user: models.User = Depends(check_permission),
+) -> models.User:
+    if current_user.role != UserRole.ADMIN:
+        raise PermissionDeniedError(detail="Chỉ Admin được gán / thu hồi / xem quyền Thư ký Hội đồng.")
+    return current_user
+
+
+async def require_review_secretary(
+    current_user: models.User = Depends(check_permission),
+    db: AsyncSession = Depends(database.get_db),
+) -> models.User:
+    """Người gọi phải là Thư ký Hội đồng: Admin đang hoạt động (luôn là Thư ký, không cần gán), hoặc Quản lý / Cán bộ đang
+    hoạt động có quyền gán CÒN HIỆU LỰC. Dòng người + dòng quyền khoá ``FOR SHARE`` tới hết giao dịch của yêu cầu — route dùng
+    cổng này phải ghi trên CÙNG ``db`` (khai ``Depends(database.get_db)``), không mở phiên riêng. Không đạt ⇒ 404
+    ``Không tìm thấy``. Cổng này KHÔNG miễn luật "người đề xuất ≠ người khoá" cho ai (kiểm ở dịch vụ lần xét, C4 / C5b)."""
+    from ..services.review_secretary_service import require_secretary_access
+
+    await require_secretary_access(db, user=current_user)
     return current_user

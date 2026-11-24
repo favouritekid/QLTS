@@ -85,6 +85,14 @@ from .admission_review import (  # noqa: E402
     AdmissionReviewSession,
 )
 from . import admission_review_ddl  # noqa: E402,F401
+# GĐ2-C C1: quyền "Thư ký Hội đồng" gán theo từng người + trigger "chỉ thu hồi, không xoá" (bản cho create_all(); bản thật:
+# migration gd2c20261122).
+from .admission_review_secretary import AdmissionReviewSecretaryGrant  # noqa: E402
+from . import admission_review_secretary_ddl  # noqa: E402,F401
+# GĐ2-C C2: lựa chọn của Ban thư ký (chỉ thêm, chỉ khi lần xét nháp) + trigger (bản cho create_all(); bản thật: migration
+# gd2cs20261122). Đăng ký SAU admission_review_ddl: hàm trigger gọi admission_review_assert_session_draft của GĐ2-B.
+from .admission_review_selection import AdmissionReviewSelection  # noqa: E402
+from . import admission_review_selection_ddl  # noqa: E402,F401
 
 # Admission Config Domain (Phase 1: Relational admission system)
 from .admission_config import (
@@ -163,6 +171,8 @@ from .vn_locality import VnCommuneAreaMap
 # Q9 #07 PR5 v1.3 (phase1_09) — VN school 3-table family + SCD
 # Replaces VnHighSchool (PR1 single-table placeholder, dropped phase1_09)
 from .vn_school import VnSchool, VnSchoolNameHistory, VnSchoolKvAssignment
+# GĐ2 L3 (owner 22-11) — bảng ghép tên trường THCS gõ tay → trường trong danh mục.
+from .thcs_school_name_mapping import ThcsSchoolNameMapping
 # Q9 #07 Phase E Foundation (q9_07_e0a) — priority bonus intervention audit log.
 from .priority_audit import PriorityAuditLog
 
@@ -276,6 +286,8 @@ __all__ = [
     "AdmissionReviewFloor",
     "AdmissionReviewRun",
     "AdmissionReviewRow",
+    "AdmissionReviewSecretaryGrant",  # GĐ2-C C1
+    "AdmissionReviewSelection",  # GĐ2-C C2
     "ProfileSubjectScore",
     "ProfileDocument",
     "DocumentAuditLog",  # Audit trail for document operations
@@ -336,6 +348,7 @@ __all__ = [
     "VnSchool",
     "VnSchoolNameHistory",
     "VnSchoolKvAssignment",
+    "ThcsSchoolNameMapping",
     # Q9 #07 Phase E Foundation
     "PriorityAuditLog",
     # Finance Module (Phase 0+1: Foundation)

@@ -43,6 +43,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import AsyncSessionLocal
 from app.models.vn_school import VnSchool, VnSchoolKvAssignment
+from app.models.vn_school_internal_code import not_internal_code_sql
 
 
 # Sentinel year covering all realistic candidates (born 1990s+, TN THPT 2008+).
@@ -99,7 +100,13 @@ async def detect_clusters(db: AsyncSession) -> List[List[VnSchool]]:
     """
     q = await db.execute(
         select(VnSchool)
-        .where(VnSchool.is_active.is_(True), VnSchool.level == "THPT")
+        .where(
+            VnSchool.is_active.is_(True),
+            VnSchool.level == "THPT",
+            # Trường nội bộ NB… (THCS do Admin tạo) không thuộc danh mục Bộ — không
+            # bao giờ được gộp / tách theo cặp mã Bộ (``int(moet_school_code)``).
+            not_internal_code_sql(VnSchool.moet_school_code),
+        )
         .order_by(VnSchool.moet_province_code, VnSchool.moet_school_code)
     )
     schools = list(q.scalars().all())

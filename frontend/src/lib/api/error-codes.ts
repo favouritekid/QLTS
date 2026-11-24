@@ -69,9 +69,14 @@ export function isAuthStateUnavailable(
 
 /**
  * Một lần lưu tài khoản (Admin sửa người dùng) vừa ĐỔI email vừa khoá tài
- * khoản / chuyển Cán bộ sang vai khác ⇒ máy chủ từ chối 409 (owner 23-11,
- * PR-B lượt 8 — "chặn gộp, làm 2 bước"). `detail` của máy chủ nói phải làm gì;
- * giao diện hiện NGUYÊN câu ấy, không tự viết lại.
+ * khoản / đổi vai làm mất quyền (duyệt chéo, hoặc — GĐ2-C C1 — Thư ký Hội
+ * đồng) ⇒ máy chủ từ chối 409 (owner 23-11, PR-B lượt 8 — "chặn gộp, làm 2
+ * bước"; owner 23-11 C1 "Giữ chặn mọi ca thu hồi"). `detail` của máy chủ nói
+ * phải làm gì; giao diện hiện NGUYÊN câu ấy, không tự viết lại. Câu hiện tại:
+ * quyết định owner 23-11
+ * `gd2/gd2c/c1/QUYET-DINH-OWNER-C1-CHAN-GOP-VA-CAU-409-2026-11-23.md` (khoá ở
+ * test API `test_gd2c_c1_thu_ky_chan_gop.py`); tiêu đề "Cần lưu làm hai lần"
+ * giữ nguyên (`useAdminUpdateUser`).
  *
  * Backend source: `CombinedKeyChangeAndRevokeError` in
  * `Backend_FastAPI/app/utils/exceptions.py`.
@@ -146,5 +151,25 @@ export function userFacingUnavailableDetail(
   const { error_code: code, detail } = data as { error_code?: unknown; detail?: unknown };
   if (typeof code !== "string") return null;
   if (!USER_FACING_UNAVAILABLE_ERROR_CODES.has(code) && !T6_PUBLISH_STOP_ERROR_CODES.has(code)) return null;
+  return typeof detail === "string" && detail ? detail : null;
+}
+
+/**
+ * Lưu / thao tác trên hồ sơ bằng bản đã CŨ (khoá lạc quan `version` lệch) — 409.
+ * Backend: `ProfileVersionConflict` (`app/utils/exceptions.py`), dùng chung cho MỌI
+ * chỗ kiểm `version` của hồ sơ (owner 22-11, câu 409). `detail` là câu tiếng Việt
+ * viết cho người dùng (lưu form / thao tác) — giao diện hiện NGUYÊN câu.
+ */
+export const PROFILE_VERSION_CONFLICT_ERROR_CODE = "PROFILE_VERSION_CONFLICT";
+
+/** `detail` của 409 `PROFILE_VERSION_CONFLICT`, hoặc null với mọi phản hồi khác. */
+export function profileVersionConflictDetail(
+  response: { status?: number; data?: unknown } | undefined,
+): string | null {
+  if (response?.status !== 409) return null;
+  const data = response.data;
+  if (typeof data !== "object" || data === null) return null;
+  const { error_code: code, detail } = data as { error_code?: unknown; detail?: unknown };
+  if (code !== PROFILE_VERSION_CONFLICT_ERROR_CODE) return null;
   return typeof detail === "string" && detail ? detail : null;
 }

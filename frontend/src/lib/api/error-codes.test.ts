@@ -11,7 +11,9 @@ import {
   AUTH_STATE_UNAVAILABLE_ERROR_CODE,
   COMBINED_KEY_CHANGE_AND_REVOKE_ERROR_CODE,
   combinedKeyChangeAndRevokeDetail,
+  PROFILE_VERSION_CONFLICT_ERROR_CODE,
   isAuthStateUnavailable,
+  profileVersionConflictDetail,
   t6PublishStopDetail,
   userFacingUnavailableDetail,
 } from "./error-codes";
@@ -124,5 +126,30 @@ describe("userFacingUnavailableDetail — 503 họ fail-closed", () => {
     ["503 frozen (code, no error_code)", { status: 503, data: { code: "ADMISSION_FROZEN", detail: "x" } }],
   ])("null for %s", (_name, response) => {
     expect(userFacingUnavailableDetail(response)).toBeNull();
+  });
+});
+
+// Owner 22-11 (câu 409): giá trị viết NGUYÊN VĂN như backend đặt (`ProfileVersionConflict.error_code`).
+describe("profileVersionConflictDetail", () => {
+  const CAU = "Hồ sơ vừa được cập nhật ở nơi khác sau khi bạn mở. Thao tác CHƯA được thực hiện. Tải lại trang rồi thử lại.";
+
+  it("mã đúng nguyên văn backend", () => {
+    expect(PROFILE_VERSION_CONFLICT_ERROR_CODE).toBe("PROFILE_VERSION_CONFLICT");
+  });
+
+  it("409 + PROFILE_VERSION_CONFLICT ⇒ nguyên câu của máy chủ", () => {
+    expect(
+      profileVersionConflictDetail({
+        status: 409,
+        data: { error_code: "PROFILE_VERSION_CONFLICT", detail: CAU, current_version: 4 },
+      }),
+    ).toBe(CAU);
+  });
+
+  it("409 mã khác, status khác, thân lạ ⇒ null", () => {
+    expect(profileVersionConflictDetail({ status: 409, data: { error_code: "CONFLICT", detail: "x" } })).toBeNull();
+    expect(profileVersionConflictDetail({ status: 400, data: { error_code: "PROFILE_VERSION_CONFLICT", detail: "x" } })).toBeNull();
+    expect(profileVersionConflictDetail({ status: 409, data: "<html>" })).toBeNull();
+    expect(profileVersionConflictDetail(undefined)).toBeNull();
   });
 });

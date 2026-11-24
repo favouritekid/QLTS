@@ -158,7 +158,13 @@ KHONG_CAN_KHOA_THEO_THU_TU = {
 }
 #: Ngoài hai sổ (không ghi vai / trạng thái) mà vẫn phải khoá theo thứ tự: K4 — xoá tài khoản lẻ / lô; người bấm được nhật ký
 #: router tham chiếu SAU K4 (owner 22-11 "K4 ↔ K4").
-KHOA_THEO_THU_TU_NGOAI_SO = {("services/user_deletion_policy.py", "assert_user_deletable")}
+#: GĐ2-C C1: Admin gán / thu hồi quyền Thư ký Hội đồng ghi dòng có khoá ngoại tới người được gán + Admin bấm ⇒ khoá cả hai
+#: theo id tăng TRƯỚC câu ghi (ca hai phiên với K4: ``tests/api/test_gd2c_c1_thu_ky_k4_hai_phien.py``).
+KHOA_THEO_THU_TU_NGOAI_SO = {
+    ("services/user_deletion_policy.py", "assert_user_deletable"),
+    ("services/review_secretary_service.py", "create_grant"),
+    ("services/review_secretary_service.py", "revoke_grant"),
+}
 
 
 def test_duong_ghi_tai_khoan_dang_co_khoa_nguoi_theo_thu_tu_k4():

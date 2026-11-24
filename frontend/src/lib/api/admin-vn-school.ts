@@ -12,6 +12,9 @@ import type {
   KvAssignmentCreate,
   KvAssignmentResponse,
   KvAssignmentUpdate,
+  KvFromCommuneCreate,
+  KvMismatchResponse,
+  KvSuggestionResponse,
   SchoolCreate,
   SchoolListResponse,
   SchoolProvince,
@@ -123,6 +126,37 @@ export async function deleteKvAssignment(assignmentId: number): Promise<void> {
   await api.delete(`${BASE}/kv/${assignmentId}`)
 }
 
+// --- KV gợi ý từ xã (trường nội bộ NB) ---
+
+export async function getKvSuggestion(
+  schoolId: number,
+): Promise<KvSuggestionResponse> {
+  const { data } = await api.get<KvSuggestionResponse>(
+    `${BASE}/schools/${schoolId}/kv-suggestion`,
+  )
+  return data
+}
+
+/** Xác nhận KV gợi ý — BE chép KV hiện hành của xã (không gửi kv_code). */
+export async function confirmKvFromCommune(
+  schoolId: number,
+  payload: KvFromCommuneCreate,
+): Promise<KvAssignmentResponse> {
+  const { data } = await api.post<KvAssignmentResponse>(
+    `${BASE}/schools/${schoolId}/kv/from-commune`,
+    payload,
+  )
+  return data
+}
+
+/** Câu kiểm lệch: trường nội bộ có KV chép từ xã khác KV hiện hành của xã. */
+export async function getInternalKvMismatch(): Promise<KvMismatchResponse> {
+  const { data } = await api.get<KvMismatchResponse>(
+    `${BASE}/internal/kv-mismatch`,
+  )
+  return data
+}
+
 export const adminVnSchoolApi = {
   listSchools,
   listSchoolProvinces,
@@ -134,6 +168,9 @@ export const adminVnSchoolApi = {
   addKvAssignment,
   updateKvAssignment,
   deleteKvAssignment,
+  getKvSuggestion,
+  confirmKvFromCommune,
+  getInternalKvMismatch,
 }
 
 export default adminVnSchoolApi

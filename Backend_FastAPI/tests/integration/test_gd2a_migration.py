@@ -2,9 +2,9 @@
 """GĐ2-A — migration ``gd2a20261118`` trên PostgreSQL THẬT (CSDL dùng một lần), nâng / hạ qua ĐÚNG ``alembic`` (tiến trình
 con ⇒ đúng ``env.py`` AUTOCOMMIT). Khuôn ``test_gd1b_migration.py``.
 
-CSDL trước nâng cấp = ``create_all()`` của model HIỆN TẠI rồi gỡ phần GĐ2-B (nối sau, phụ thuộc GĐ2-A —
-:data:`GO_GD2B`) và ĐÚNG phần GĐ2-A (3 bảng, 4 hàm + 4 trigger, ràng buộc ``uq_offering_academic_info_id_year``) ⇒ mọi
-thứ khác y như thật. Sau nâng cấp, so lược đồ phần GĐ2-A với một CSDL dựng
+CSDL trước nâng cấp = ``create_all()`` của model HIỆN TẠI rồi gỡ mọi phần nối sau GĐ2-B (:data:`GO_SAU_GD2B`), phần
+GĐ2-B (nối sau, phụ thuộc GĐ2-A — :data:`GO_GD2B`) và ĐÚNG phần GĐ2-A (3 bảng, 4 hàm + 4 trigger, ràng buộc
+``uq_offering_academic_info_id_year``) ⇒ mọi thứ khác y như thật. Sau nâng cấp, so lược đồ phần GĐ2-A với một CSDL dựng
 thẳng từ model: đó là phép khoá "migration = model". Hạ cấp FAIL-CLOSED khi còn dữ liệu; cờ CHO PHÉP mới xoá.
 """
 import asyncio
@@ -45,7 +45,43 @@ GO_GD2B = (
     "admission_review_floor_guard(), admission_review_run_guard(), admission_review_row_guard()",
     "ALTER TABLE offering_admission_round DROP CONSTRAINT uq_offering_admission_round_id_year",
 )
+#: GĐ2-C C1 (``gd2c20261122``, nối SAU ``gd2b20261121``): bảng quyền Thư ký + hàm trigger "chỉ thu hồi".
+#: ``tests/integration/test_gd2c_c1_migration.py`` dùng ĐÚNG danh sách này.
+GO_GD2C_C1 = (
+    "DROP TABLE admission_review_secretary_grant",
+    "DROP FUNCTION admission_review_secretary_grant_revoke_only()",
+)
+#: GĐ2-C C2 (``gd2cs20261122``, nối SAU ``gd2c20261122``): bảng lựa chọn Ban thư ký + hàm trigger. Bảng mất ⇒ trigger mất theo.
+#: Dòng Casbin của migration ấy KHÔNG gỡ: ``create_all()`` không chèn dòng Casbin nào; migration chèn ``WHERE NOT EXISTS``.
+#: ``tests/integration/test_gd2c_c2_migration.py`` dùng ĐÚNG danh sách này.
+GO_GD2C_C2 = (
+    "DROP TABLE admission_review_selection",
+    "DROP FUNCTION admission_review_selection_guard()",
+)
+#: Danh mục THCS — bảng ghép tên trường (``thcsmap20261122``, nối SAU ``thcsnb20261122``). Bảng có khoá ngoại vào
+#: ``vn_school`` ⇒ gỡ TRƯỚC phần mã nội bộ. ``test_thcs_mapping_migration.py`` gỡ đúng bảng này.
+GO_THCS_MAP = ("DROP TABLE thcs_school_name_mapping",)
+#: Danh mục THCS — mã nội bộ ``NB`` (``thcsnb20261122``; đoàn 3b nối THẲNG sau ``gd2cs20261122``, trước đó sau
+#: ``gd2f20261119``): chỉ mục + CHECK trên ``vn_school`` + sequence. ``test_thcs_danh_muc_migration.py`` dùng ĐÚNG danh sách này.
+GO_THCS_NB = (
+    "DROP INDEX uq_vn_school_internal_code",
+    "ALTER TABLE vn_school DROP CONSTRAINT ck_vn_school_internal_code_format",
+    "DROP SEQUENCE vn_school_internal_code_seq",
+)
+#: Mọi phần nối SAU C2 (mới tới cũ) — đoàn 3b: danh mục THCS. ``test_gd2c_c2_migration.py`` dựng CSDL "ở ``gd2c20261122``"
+#: bằng ``(*GO_SAU_GD2C_C2, *GO_GD2C_C2)``. ``tests/unit/test_migration_go_sau_phu_du.py`` khoá: mỗi ``GO_SAU_*`` = ghép
+#: ĐÚNG các danh sách gỡ của MỌI revision nối sau nó (migration mới nối sau head mà chưa có danh sách gỡ ⇒ ĐỎ).
+GO_SAU_GD2C_C2 = (*GO_THCS_MAP, *GO_THCS_NB)
+#: Mọi phần nối SAU C1 (mới tới cũ) — ``test_gd2c_c1_migration.py`` dựng CSDL "ở ``gd2b20261121``" bằng
+#: ``(*GO_SAU_GD2C_C1, *GO_GD2C_C1)``.
+GO_SAU_GD2C_C1 = (*GO_SAU_GD2C_C2, *GO_GD2C_C2)
+#: MỌI phần nối SAU GĐ2-B, xếp từ MỚI tới cũ (gỡ ngược chuỗi Alembic). Lượt nâng tới ``head`` ở
+#: :func:`test_nang_cap_luoc_do_khop_model_va_trigger_song` chạy lại mọi migration sau GĐ2-A ⇒ CSDL trước nâng cấp KHÔNG được còn
+#: phần nào của chúng (``CREATE TABLE`` trùng ⇒ đỏ). Migration mới nối sau head ⇒ thêm phần gỡ của nó vào ĐẦU bộ này.
+#: ``tests/integration/test_gd2b_migration.py`` dựng CSDL "ở ``gd2f20261119``" bằng ``(*GO_SAU_GD2B, *GO_GD2B)``.
+GO_SAU_GD2B = (*GO_SAU_GD2C_C1, *GO_GD2C_C1)
 GO_GD2A = (
+    *GO_SAU_GD2B,
     *GO_GD2B,
     "DROP TRIGGER trg_chan_sua_chi_tieu_nganh_khi_bang_khoa ON offering_academic_info",
     "DROP TABLE admission_quota_group_member, admission_quota_group, admission_quota_table",

@@ -3,7 +3,11 @@
 Admin thêm trường cấp THCS + KV (nguồn ``manual_admin``) qua ĐÚNG dịch vụ của trang Admin (``VnSchoolService``) ⇒ hồ sơ trung cấp
 sau THCS tính ra KV; trước đó "KV chờ xác minh". Cờ DTNT đọc từ ``vn_school.is_dtnt``. Mỗi bước so CẢ HAI đường: từng hồ sơ
 (``resolve_kv_for_profile`` — ba hàm đọc thật) và lô (``decide_kv_for_profile`` trên ``read_school_kv`` / ``read_school_dtnt`` của bộ
-nạp GĐ2-B, cùng giao dịch). Dữ liệu giả, rollback cuối mỗi ca."""
+nạp GĐ2-B, cùng giao dịch). Dữ liệu giả, rollback cuối mỗi ca.
+
+Luật danh mục THCS (owner 22-11, ``vn_school_service.create_school``): cấp THCS KHÔNG có mã Bộ — Admin để trống ô mã, máy sinh
+mã nội bộ ``NB`` + 6 số, bắt buộc mã xã còn hiệu lực trong bảng xã → KV. Mỗi ca dựng MỘT dòng xã giả rồi tạo trường theo đúng
+đường ấy (không nới luật). KV của trường vẫn CHỈ đến từ ``vn_school_kv_assignment`` — mã xã của trường không vào phép tính KV."""
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -12,6 +16,8 @@ import pytest
 import pytest_asyncio
 
 from app.database import AsyncSessionLocal
+from app.models.vn_locality import VnCommuneAreaMap
+from app.models.vn_school_internal_code import is_internal_school_code
 from app.repositories import admission_review_load_repository as load_repo
 from app.services import priority_service as ps
 from app.services.vn_school_service import VnSchoolService
@@ -19,6 +25,7 @@ from app.services.vn_school_service import VnSchoolService
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
 TL, AT = "trung_cap", "chinh_quy"
+MA_XA = "99731"  # xã giả riêng của tệp này (không trùng mã xã giả của test khác)
 
 
 @pytest_asyncio.fixture
@@ -31,15 +38,26 @@ async def db(setup_test_database):
             await session.close()
 
 
-def _truong(ma: str, **kw) -> dict:
+def _truong(nhan: str, **kw) -> dict:
+    # Không có khoá ``moet_school_code`` (ô mã để trống) ⇒ ``create_school`` sinh mã nội bộ NB.
     return {
-        "moet_school_code": ma,
         "moet_province_code": "99",
-        "name": "Trường THCS giả " + ma,
+        "name": "Trường THCS giả " + nhan,
         "province": "Tỉnh giả",
         "level": "THCS",
+        "commune_code": MA_XA,
         "is_dtnt": kw.get("is_dtnt", False),
     }
+
+
+async def _tao_truong(db, s: VnSchoolService, nhan: str, kv_xa: str, **kw):
+    """Admin tạo trường cấp THCS qua ĐÚNG đường của trang Admin: dựng xã giả (KV hiện hành ``kv_xa``) rồi ``create_school``."""
+    db.add(VnCommuneAreaMap(commune_code=MA_XA, province="Tỉnh giả", district="", ward="Xã giả L3", area_code=kv_xa))
+    await db.flush()
+    truong, _ = await s.create_school(_truong(nhan, **kw))
+    await db.flush()
+    assert is_internal_school_code(truong.moet_school_code), truong.moet_school_code
+    return truong
 
 
 def _ho_so(lich_su):
@@ -75,8 +93,8 @@ async def test_admin_them_truong_thcs_va_kv_thi_ho_so_tinh_ra_kv(db):
     kv, meta = await _hai_duong(db, _ho_so([_dong(None)]))
     assert (kv, meta["rule_applied"], meta["reason"]) == (None, "kv_pending_verification", "thcs_school_not_in_catalog")
     # Admin thêm trường cấp THCS (chưa có KV) và cán bộ chọn lại trường ⇒ vẫn chờ: trường chưa có KV. Em học THCS 2021 → 2025.
-    truong, _ = await s.create_school(_truong("GTHCS1"))
-    await db.flush()
+    # Xã của trường có KV hiện hành KV2-NT (= KV Admin thêm ở dưới, owner L3A câu 2); trường mới vẫn CHƯA có dòng KV nào.
+    truong = await _tao_truong(db, s, "GTHCS1", "KV2-NT")
     hs = _ho_so([_dong(truong.id, 2021, 2025)])
     kv, meta = await _hai_duong(db, hs)
     assert (kv, meta["reason"]) == (None, "thcs_school_kv_missing")
@@ -91,8 +109,7 @@ async def test_admin_them_truong_thcs_va_kv_thi_ho_so_tinh_ra_kv(db):
 
 async def test_kv_truong_bat_dau_sau_nam_lop_6_thi_cho_xac_minh(db):
     s = VnSchoolService(db)
-    truong, _ = await s.create_school(_truong("GTHCS2"))
-    await db.flush()
+    truong = await _tao_truong(db, s, "GTHCS2", "KV1")
     await s.add_kv_assignment(truong.id, {"kv_code": "KV1", "effective_from_year": 2020, "effective_to_year": None,
                                           "source": "manual_admin", "notes": None})
     await db.flush()
@@ -103,8 +120,7 @@ async def test_kv_truong_bat_dau_sau_nam_lop_6_thi_cho_xac_minh(db):
 
 async def test_truong_thcs_dtnt_thi_cho_xac_minh(db):
     s = VnSchoolService(db)
-    truong, _ = await s.create_school(_truong("GTHCS3", is_dtnt=True))
-    await db.flush()
+    truong = await _tao_truong(db, s, "GTHCS3", "KV1", is_dtnt=True)
     await s.add_kv_assignment(truong.id, {"kv_code": "KV1", "effective_from_year": 2000, "effective_to_year": None,
                                           "source": "manual_admin", "notes": None})
     await db.flush()

@@ -1569,6 +1569,60 @@ jobs:
               tests/api/test_gd2b_lan_xet_api.py
               tests/api/test_gd2b_lan_xet_hai_phien_api.py
               tests/api/test_gd2b_chay_kiem_api.py
+          # GĐ2-C C1 (22-11): quyền "Thư ký Hội đồng" — bảng quyền + migration, route Admin gán / thu hồi, cổng
+          # `deps.require_review_secretary` (hai phiên, T17), tự thu hồi khi khoá / đổi vai, K4 (sổ + hai phiên). Lát RIÊNG, tên
+          # KHÁC `Tier 5k` của GĐ2-B (nhánh song song) để hai nhánh gộp không đè nhau. Ngoài mọi tier thì required check vẫn xanh
+          # mà không chạy (CLAUDE.md §11). Ghim WHOLE-FILE. `tests/api/gd2c_thu_ky_tro_giup.py` là trợ giúp, KHÔNG phải tệp test.
+          # Gộp PR-B 5effed10 (23-11): `test_gd2c_c1_thu_ky_chan_gop.py` — chặn lưu gộp email + khoá / hạ vai với người giữ
+          # quyền Thư ký (409 trước khi khoá dòng quyền Thư ký; hai phiên) + đổi vai riêng thu hồi cả hai quyền cùng giao dịch.
+          - tier: Tier 5l — GĐ2-C Thư ký Hội đồng (C1)
+            tests: >-
+              tests/unit/test_gd2c_c1_ddl_lockin.py
+              tests/integration/test_gd2c_c1_rang_buoc_db.py
+              tests/integration/test_gd2c_c1_migration.py
+              tests/api/test_gd2c_c1_thu_ky_api.py
+              tests/api/test_gd2c_c1_thu_ky_cong.py
+              tests/api/test_gd2c_c1_thu_ky_k4_hai_phien.py
+              tests/api/test_gd2c_c1_thu_ky_chan_gop.py
+          # GĐ2-C C2 (22-11): lựa chọn của Ban thư ký — bảng chỉ thêm + trigger "chỉ khi nháp" + migration gd2cs20261122 (dòng
+          # Casbin route Ban thư ký), route PUT / GET (cổng Thư ký), T9 SELECTION_STALE, cờ "đang ngừng" (hàm cho C4), K4, đóng
+          # băng, hai phiên (thứ tự khoá). Lát RIÊNG như 5k / 5l; ngoài mọi tier thì required check vẫn xanh mà không chạy
+          # (CLAUDE.md §11). Ghim WHOLE-FILE. Tệp cũ bị chạm nằm sẵn ở tier của chúng (5j, 5k, 5l, 4b, 5i).
+          - tier: Tier 5m — GĐ2-C lựa chọn của Ban thư ký (C2)
+            tests: >-
+              tests/unit/test_gd2c_c2_ddl_lockin.py
+              tests/integration/test_gd2c_c2_rang_buoc_db.py
+              tests/integration/test_gd2c_c2_migration.py
+              tests/api/test_gd2c_c2_lua_chon_api.py
+          # GĐ2 L3 — danh mục THCS (owner 22-11): mã nội bộ NB + 6 số, bộ nạp danh mục Bộ bỏ qua NB, mã xã bắt buộc,
+          # KV gợi ý từ xã (từ năm 2000) + câu kiểm lệch; công cụ ghép tên trường THCS gõ tay (bảng ghép + áp ghép có chạy
+          # thử, chạy thật khoá bằng cờ). Lát RIÊNG (ca API + migration trên CSDL thật). Ngoài mọi tier thì
+          # required check vẫn xanh mà không chạy (CLAUDE.md §11). Ghim WHOLE-FILE.
+          # `tests/unit/test_vn_school_admin_service.py` (ca THCS đổi sang mã nội bộ) ghim ở ĐÚNG MỘT lát: Tier 5k GĐ2-B ở trên
+          # (gộp đoàn 3b — hai lát cùng ghim ⇒ chạy hai lần, cổng "không trùng" đỏ). Lát này tên 5n, KHÁC hẳn 5k.
+          # Owner 22-11 (câu 409): lỗi xung đột phiên bản hồ sơ dùng chung `PROFILE_VERSION_CONFLICT` — ca hợp đồng (AST) +
+          # `tests/api/test_qa_wave7_notif_and_race.py` (tệp cũ, ngoài mọi tier: sửa phép khoá câu tiếng Anh ⇒ phải phân loại).
+          # CI 23-11 (N5): 3 tệp cũ khác ngoài mọi tier cũng khoá tên lớp `ConflictError` / chữ "version" của câu cũ
+          # (đỏ ở nightly, không lát PR nào chạy) — sửa sang hợp đồng mới ⇒ phân loại WHOLE vào đây. Hai tệp cùng đợt
+          # sửa đã có lát riêng: `test_admission_confirm_lock.py` (Tier 2a), `test_admission_state_transitions.py` (Tier 4s).
+          # Đoàn 3b (rà đoàn 3 J''3): `test_migration_go_sau_phu_du.py` — tĩnh, không CSDL: mọi revision nối sau gd2f20261119
+          # có danh sách gỡ, mỗi `GO_SAU_*` phủ đủ các revision sau nó, fixture của từng test migration gỡ đúng thứ tự.
+          - tier: Tier 5n — GĐ2 danh mục THCS + công cụ ghép
+            tests: >-
+              tests/unit/test_vn_school_thcs_noi_bo_ddl.py
+              tests/unit/test_vn_school_thcs_noi_bo.py
+              tests/api/test_admin_vn_school_thcs_noi_bo_api.py
+              tests/integration/test_thcs_danh_muc_migration.py
+              tests/unit/test_thcs_school_name_normalize.py
+              tests/unit/test_thcs_school_mapping_service.py
+              tests/api/test_thcs_school_mapping_api.py
+              tests/integration/test_thcs_mapping_migration.py
+              tests/unit/test_profile_version_conflict_contract.py
+              tests/api/test_qa_wave7_notif_and_race.py
+              tests/integration/test_admission_version_lock_required.py
+              tests/integration/test_race_condition_probe.py
+              tests/unit/test_priority_override_service.py
+              tests/unit/test_migration_go_sau_phu_du.py
 
     env:
       APP_ENV: test

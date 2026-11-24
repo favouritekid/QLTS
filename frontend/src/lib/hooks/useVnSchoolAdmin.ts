@@ -10,9 +10,12 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 
 import {
   addKvAssignment,
+  confirmKvFromCommune,
   createSchool,
   deactivateSchool,
   deleteKvAssignment,
+  getInternalKvMismatch,
+  getKvSuggestion,
   importSchoolCsv,
   listKvAssignments,
   listSchoolProvinces,
@@ -24,6 +27,7 @@ import {
 import type {
   KvAssignmentCreate,
   KvAssignmentUpdate,
+  KvFromCommuneCreate,
   SchoolCreate,
   SchoolUpdate,
 } from "@/lib/zod/vn-school-admin"
@@ -34,6 +38,9 @@ export const vnSchoolKeys = {
     [...vnSchoolKeys.all, "list", params] as const,
   provinces: () => [...vnSchoolKeys.all, "provinces"] as const,
   kv: (schoolId: number) => [...vnSchoolKeys.all, "kv", schoolId] as const,
+  kvSuggestion: (schoolId: number) =>
+    [...vnSchoolKeys.all, "kv-suggestion", schoolId] as const,
+  kvMismatch: () => [...vnSchoolKeys.all, "kv-mismatch"] as const,
 }
 
 export function useSchools(params: ListSchoolsParams) {
@@ -119,5 +126,39 @@ export function useDeleteKvAssignment() {
   return useMutation({
     mutationFn: (id: number) => deleteKvAssignment(id),
     onSuccess: () => qc.invalidateQueries({ queryKey: vnSchoolKeys.all }),
+  })
+}
+
+// --- KV gợi ý từ xã (trường nội bộ NB) ---
+
+/** Chỉ gọi cho trường mã nội bộ (BE trả reason cho trường khác — vẫn an toàn). */
+export function useKvSuggestion(schoolId: number | null, enabled = true) {
+  return useQuery({
+    queryKey: vnSchoolKeys.kvSuggestion(schoolId ?? 0),
+    queryFn: () => getKvSuggestion(schoolId!),
+    enabled: enabled && schoolId != null,
+    staleTime: 30 * 1000,
+  })
+}
+
+export function useConfirmKvFromCommune() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      schoolId,
+      data,
+    }: {
+      schoolId: number
+      data: KvFromCommuneCreate
+    }) => confirmKvFromCommune(schoolId, data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: vnSchoolKeys.all }),
+  })
+}
+
+export function useInternalKvMismatch() {
+  return useQuery({
+    queryKey: vnSchoolKeys.kvMismatch(),
+    queryFn: () => getInternalKvMismatch(),
+    staleTime: 60 * 1000,
   })
 }

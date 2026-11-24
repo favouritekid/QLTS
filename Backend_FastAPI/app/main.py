@@ -41,6 +41,8 @@ from .routers import (
     admission_paths,  # ✅ PHASE 1: Admission Configuration Console
     council_documents,  # Lần xét tuyển GĐ1: kho mẫu + bộ văn bản Hội đồng
     admission_review,  # Lần xét tuyển GĐ2: bảng chỉ tiêu năm / nhóm ngành (GĐ2-A)
+    admission_review_secretary,  # Lần xét tuyển GĐ2-C C1: quyền "Thư ký Hội đồng" (Admin gán / thu hồi)
+    admission_review_selection,  # Lần xét tuyển GĐ2-C C2: lựa chọn của Ban thư ký (xem / ghi)
     admin_v2_casbin,  # ✅ T0-5 cold cutover: admin-only Casbin reload endpoint
     admin_v2_admission_round,  # ✅ #184 Phase 2 v8.2 PR-2A v2: year-level rounds CRUD + bulk-create + extend
     admin_v2_path_subject_group,  # ✅ #184 Phase 2 v8.2 PR-2D: path-level subject group config + clone endpoint
@@ -48,6 +50,7 @@ from .routers import (
     admin_priority_config,  # ✅ Q9 #07 PR3: priority KV/UT bonus configs per year + clone + seed TT 05/2021
     admin_vn_locality,  # ✅ Q9 #07 PR4: commune + high school CSV import + dropdown search
     admin_vn_school,  # PR-B: admin CRUD vn_school + KV assignment
+    admin_thcs_school_mapping,  # GĐ2 L3: ghép tên trường THCS gõ tay (danh mục, không đóng băng)
     vn_school,  # ✅ Q9 #07 Phase D.0b: public school search (candidate FE)
     admin_v2_system_config,  # ✅ #184 PR-1D / phase1_13: admin runtime config
     admin_backfill,  # ✅ #184 Phase 3 PR-3D-B BE-2: admin backfill exception queue (Q-P3-09)
@@ -56,6 +59,7 @@ from .routers import (
     document_cross_review,  # GĐ1b: duyệt chéo tạm thời
     document_evidence,  # GĐ1b: tải tệp bằng chứng duyệt (K5)
     admissions_magic_link,  # ✅ PR-CO-2-BE / PR-3E: multi-action magic-link consume (4 actions)
+    admissions_thcs_school_mapping,  # GĐ2 L3: áp ghép trường THCS vào lịch sử học (dưới /api/v2/admissions — bị đóng băng)
     admissions_v2,  # ✅ #184 Phase 3 PR-3C Sub-3.3: multi-NV choice-engine endpoints (publish-result T6)
     enrollment_letters,  # ✅ Giấy báo nhập học PDF (official issuance)
     auth,
@@ -839,12 +843,17 @@ fastapi_app.include_router(document_evidence.router, prefix="/api")
 fastapi_app.include_router(admissions.router, prefix="/api")  # ✅ Admission Profile workflow
 fastapi_app.include_router(enrollment_letters.router, prefix="/api")  # ✅ Giấy báo nhập học PDF (official issuance)
 fastapi_app.include_router(admissions_magic_link.router)  # ✅ PR-CO-2-BE / PR-3E: multi-action magic-link (router declares /api/v2/admissions/magic-link prefix)
+# GĐ2 L3 — PHẢI đứng TRƯỚC ``admissions_v2.router`` (cùng tiền tố /api/v2/admissions; route có tham số đường dẫn của v2
+# không được khớp nhầm /thcs-school-mapping/...).
+fastapi_app.include_router(admissions_thcs_school_mapping.router)
 fastapi_app.include_router(admissions_v2.router)  # ✅ #184 Phase 3 PR-3C: multi-NV choice-engine v2 (router declares /api/v2 prefix)
 fastapi_app.include_router(admin_backfill.router)  # ✅ #184 Phase 3 PR-3D-B BE-2: admin backfill exception queue (router declares /api/v2/admin prefix)
 fastapi_app.include_router(admission_config.router, prefix="/api")  # ✅ PHASE 3: Admission Config + Scoring
 fastapi_app.include_router(admission_paths.router, prefix="/api")  # ✅ PHASE 1: Admission Configuration Console
 fastapi_app.include_router(council_documents.router, prefix="/api")  # Văn bản Hội đồng (dưới /api/admission-config — bị đóng băng)
 fastapi_app.include_router(admission_review.router, prefix="/api")  # GĐ2: bảng chỉ tiêu năm (dưới /api/admission-config — bị đóng băng)
+fastapi_app.include_router(admission_review_secretary.router, prefix="/api")  # GĐ2-C C1: quyền Thư ký Hội đồng (dưới /api/admission-config — bị đóng băng)
+fastapi_app.include_router(admission_review_selection.router, prefix="/api")  # GĐ2-C C2: lựa chọn của Ban thư ký (dưới /api/admission-config — bị đóng băng)
 fastapi_app.include_router(admin_v2_casbin.router)  # ✅ T0-5: POST /api/v2/admin/casbin/reload (router declares full prefix)
 fastapi_app.include_router(admin_v2_system_config.router)  # ✅ #184 PR-1D: GET/PATCH /api/v2/admin/system-config (router declares full prefix)
 fastapi_app.include_router(admin_v2_admission_round.router)  # ✅ #184 Phase 2 v8.2 PR-2A v2: year-level rounds (router declares full prefix)
@@ -853,6 +862,7 @@ fastapi_app.include_router(admission_reports.router)  # Weekly admission report 
 fastapi_app.include_router(admin_priority_config.router)  # ✅ Q9 #07 PR3: priority KV/UT configs (router declares full prefix)
 fastapi_app.include_router(admin_vn_locality.admin_router)  # ✅ Q9 #07 PR4: admin commune CSV import
 fastapi_app.include_router(admin_vn_school.admin_router)  # PR-B: admin vn_school + KV assignment CRUD
+fastapi_app.include_router(admin_thcs_school_mapping.admin_router)  # GĐ2 L3: ghép tên trường THCS gõ tay
 fastapi_app.include_router(vn_school.router)  # ✅ Q9 #07 Phase D.0b: public search (candidate FE dropdown)
 fastapi_app.include_router(document_groups.router, prefix="/api")  # ✅ PHASE A.3: DocumentGroup CRUD
 fastapi_app.include_router(config_data.router, prefix="/api") # ✅ NEW: Config Data
