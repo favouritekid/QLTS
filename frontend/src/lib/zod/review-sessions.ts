@@ -29,7 +29,7 @@ export const FLOOR_SCORE_INPUT_PATTERN = /^[0-9]{1,3}(\.[0-9]{1,2})?$/
 const id = z.number().int().positive()
 const int = z.number().int()
 const isoTime = z.string().min(1)
-const scoreText = z.string().regex(SCORE_TEXT_PATTERN)
+const scoreText = z.union([z.string().regex(SCORE_TEXT_PATTERN), z.number()])
 const countMap = z.record(z.string(), int)
 
 /** Độ dài theo KÝ TỰ (code point) như `len()` của Python ở máy chủ — không theo đơn vị UTF-16 của JS. */
