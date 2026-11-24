@@ -12,3 +12,7 @@ export function yearOptions(selected?: number): number[] {
   if (selected !== undefined && !years.includes(selected)) years.push(selected)
   return years.sort((a, b) => b - a)
 }
+
+export function canSeeCreate(user: { role?: string } | null): boolean {
+  return user?.role !== "collaborator"
+}
