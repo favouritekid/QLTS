@@ -203,7 +203,7 @@ export function ReviewFloorsEditor({ sessionId, busy, draft, onDraftChange, onCl
   }
 
   const c = q.data
-  const canEdit = c.available_actions.includes("edit_floors")
+  const canEdit = c.session_status === "draft"
   const plan = buildFloorsPlan(c.items, draft.overrides)
   const groups = groupFloorCandidates(c.items)
   const conflicts = draft.staleConflict ? floorDraftConflicts(c.items, draft.overrides) : []
