@@ -124,7 +124,7 @@ function FloorRow(props: {
       <TableCell>{item.group_code ?? "—"}</TableCell>
       <TableCell data-testid={`san-chi-tieu-${id}`}>{annualQuotaLabel(item.annual_admission_quota)}</TableCell>
       <TableCell>
-        {item.floor_accepted ? (
+        {!item.is_deleted ? (
           <div className="space-y-1">
             <Input
               data-testid={`san-o-${id}`}
