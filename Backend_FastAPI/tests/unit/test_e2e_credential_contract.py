@@ -680,6 +680,8 @@ class TestHopDongMfaNightly:
             "pytest.ini": goc / "Backend_FastAPI" / "pytest.ini",
             "backend-test.yml": goc / ".github" / "workflows" / "backend-test.yml",
             "nightly-regression.yml": DUONG_WF,
+            # 23-11-2026: chạy pytest trên ca TUỲ CHỌN (có thể là chính tệp này).
+            "ci-chon-ca.yml": goc / ".github" / "workflows" / "ci-chon-ca.yml",
         }
         cam = ("--fulltrace", "--showlocals", " -l ", "-vv")
         for ten, duong in nguon.items():

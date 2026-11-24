@@ -280,6 +280,24 @@ async def _truncate_all_tables():
     await truncate_all_tables(settings, engine)
 
 
+async def _xoa_cache_dan_xuat_tu_csdl():
+    """Xoá cache DẪN XUẤT từ CSDL trên FakeRedis dùng chung (``_fake_server``) — đi CÙNG lượt dựng lại CSDL đầu mỗi ca.
+
+    Tầng CHỦ SỞ HỮU của bất biến "mỗi ca bắt đầu với trạng thái sạch" là ``setup_test_database``: nó truncate CSDL, nhưng
+    FakeRedis sống suốt tiến trình pytest của một lát. Cache pipeline (``pipeline:all_stages`` / ``pipeline:all_statuses``,
+    không TTL ngắn) vì thế mang stage của CA TRƯỚC sang ca sau: CI 23-11 N4 — ``test_az_phan_quyen.py::TestAZ3PipelineBoard``
+    ca đối chứng đỏ ở C1 ("Fake Stage CACHED" do ``test_pipeline_api.py`` mồi) và ở C2 (``stage_a`` thật do
+    ``test_bugfix_contract.py`` để lại), còn các ca "không lộ lead đơn vị khác" thì xanh GIẢ. Chỉ xoá đúng hai khoá này
+    (KHÔNG ``flushdb``: phiên / blacklist / rate-limit của fixture khác cũng ở đây)."""
+    from app.services.pipeline_service import PIPELINE_STAGES_CACHE_KEY, PIPELINE_STATUSES_CACHE_KEY
+
+    r = fakeredis.aioredis.FakeRedis(server=_fake_server, decode_responses=True)
+    try:
+        await r.delete(PIPELINE_STAGES_CACHE_KEY, PIPELINE_STATUSES_CACHE_KEY)
+    finally:
+        await r.aclose()
+
+
 @pytest_asyncio.fixture(scope="function", autouse=False)
 async def setup_test_database(manage_engine):
     global _schema_initialized
@@ -300,6 +318,8 @@ async def setup_test_database(manage_engine):
         log.info("--- [FUNCTION SETUP] Truncating all tables ---")
         await _truncate_all_tables()
         log.info("--- [FUNCTION SETUP] Truncate complete ---")
+    # CSDL vừa sạch ⇒ cache dẫn xuất từ nó cũng phải sạch (xem ``_xoa_cache_dan_xuat_tu_csdl``).
+    await _xoa_cache_dan_xuat_tu_csdl()
 
     yield
 
