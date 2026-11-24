@@ -182,7 +182,9 @@ jobs:
             # và pytest có thể chạy nó hai lần hoặc gộp lặng lẽ.
             # Tên biến luôn trong ngoặc nhọn khi ngay sau là `[`: `[` là ký tự
             # THƯỜNG nối sau giá trị (bash vốn hiểu thế). Bỏ ngoặc nhọn thì
-            # shellcheck SC1087 đọc thành phần tử mảng — actionlint đỏ.
+            # công cụ kiểm (SC1087) đọc thành phần tử mảng — actionlint đỏ.
+            # (Dòng chú thích KHÔNG được mở đầu bằng chữ "shellcheck": công cụ
+            # đọc nó thành chỉ thị và báo SC1072/SC1073.)
             for cu in "${HOP_LE[@]}"; do
               case "$muc" in
                 "$cu")
