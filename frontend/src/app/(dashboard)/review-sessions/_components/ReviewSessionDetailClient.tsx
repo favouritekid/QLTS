@@ -126,7 +126,7 @@ export function ReviewSessionDetailClient({ sessionId }: { sessionId: number }) 
           <div className="flex flex-wrap gap-2" data-testid="thanh-nut">
             {actions.map((a) =>
               a === "cancel" ? (
-                <Button key={a} variant="destructive" disabled={busy} onClick={() => setCancelOpen(true)} data-testid="nut-cancel">
+                <Button key={a} variant="destructive" onClick={() => setCancelOpen(true)} data-testid="nut-cancel">
                   {SESSION_ACTION_LABEL[a]}
                 </Button>
               ) : (
