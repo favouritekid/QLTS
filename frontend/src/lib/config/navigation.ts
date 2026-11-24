@@ -346,7 +346,7 @@ export const navigationConfig: NavigationConfig = {
           // trên màn theo `available_actions`, trang tự báo khi máy chủ trả 403. F5: chuyển sang CÙNG cờ với "Bảng chỉ tiêu năm"
           // (đính chính §5).
           label: "Lần xét tuyển",
-          href: "/review-sessions",
+          href: "/admin/review-sessions",
           icon: ClipboardCheck,
           roles: ["admin"],
         },
