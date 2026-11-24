@@ -86,7 +86,7 @@ export function ReviewSessionDetailClient({ sessionId }: { sessionId: number }) 
   }
 
   const s = q.data
-  const actions = knownSessionActions(s.available_actions)
+  const actions = knownSessionActions(s.status === "draft" ? ["edit_floors", "run_evaluate", "cancel"] : s.available_actions)
   const busy = q.isFetching
   const notYet = actions.some((a) => a !== "cancel")
 
