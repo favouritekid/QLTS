@@ -49,7 +49,7 @@ export function ReviewSessionsListClient({ filters }: { filters: ReviewSessionLi
   const go = (next: ReviewSessionListFilters) => router.replace(reviewSessionListHref(next))
 
   let body: ReactNode
-  if (q.isError) {
+  if (q.isError && !q.data) {
     body = <ReviewErrorAlert testId="ds-lan-xet-loi" message={describeReviewSessionError(q.error, "read").message} />
   } else if (!q.data) {
     body = (
