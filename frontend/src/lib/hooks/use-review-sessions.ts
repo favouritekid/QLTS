@@ -69,6 +69,7 @@ export const FRESH_ONLY_QUERY_OPTIONS = {
   gcTime: 0,
   retry: false,
   refetchOnWindowFocus: false,
+  placeholderData: keepPreviousData,
 } as const
 
 // ═══════════════════════════════════════ đọc ═══════════════════════════════════════
