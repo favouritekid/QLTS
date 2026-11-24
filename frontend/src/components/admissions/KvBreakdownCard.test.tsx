@@ -68,6 +68,14 @@ describe("KvBreakdownCard", () => {
     expect(screen.getByText(/chưa khai trình độ văn hóa/i)).toBeInTheDocument()
   })
 
+  // Đoàn 3c (24-11) — Codex L5 NỢ-1 (`KvBreakdownCard.tsx:152`): mã dừng L3 của THPT hiện câu, không hiện mã thô.
+  it("mã dừng history_entries_inconsistent hiện câu tiếng Việt, không hiện mã", () => {
+    render(<KvBreakdownCard kv={null} reason="history_entries_inconsistent" />)
+    const o = screen.getByTestId("kv-breakdown-empty")
+    expect(o.textContent).toContain("“Lớp cuối” không phải 10, 11 hay 12")
+    expect(o.textContent).not.toContain("history_entries_inconsistent")
+  })
+
   it("renders parent-supplied emptyStateHint slot", () => {
     render(
       <KvBreakdownCard
@@ -97,6 +105,15 @@ describe("KvBreakdownCard", () => {
     )
     expect(screen.getByText(/lịch sử học các trường THPT/i)).toBeInTheDocument()
     expect(screen.getByText(/trường học lâu nhất/i)).toBeInTheDocument()
+  })
+
+  // Đoàn 3c (24-11) — Codex L5 NỢ-1 (`KvBreakdownCard.tsx:173,179`): mã đường tính HIỆN HÀNH của máy chủ có nhãn.
+  it("mã đường tính hiện hành lich_su_thpt / thuong_tru hiện nhãn tiếng Việt", () => {
+    const { rerender } = render(<KvBreakdownCard kv="KV1" pathway="lich_su_thpt" ruleApplied="longest_duration" />)
+    expect(screen.getByTestId("kv-breakdown-details").textContent).toContain("Theo lịch sử học các trường THPT")
+    rerender(<KvBreakdownCard kv="KV2" pathway="thuong_tru" ruleApplied="commune_lookup" />)
+    expect(screen.getByTestId("kv-breakdown-details").textContent).toContain("Theo nơi thường trú")
+    expect(screen.getByTestId("kv-breakdown-details").textContent).not.toContain("thuong_tru")
   })
 
   it("falls back to raw value when pathway not in label map", () => {
