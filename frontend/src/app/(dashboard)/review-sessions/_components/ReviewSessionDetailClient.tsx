@@ -1,0 +1,239 @@
+"use client"
+
+import Link from "next/link"
+import { useRouter } from "next/navigation"
+import { useState } from "react"
+import { AlertTriangle, Loader2, RefreshCw } from "lucide-react"
+
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { formatDateTimeVN } from "@/lib/document-review/messages"
+import { useReviewRunTracker } from "@/lib/hooks/use-review-run-tracker"
+import { useReviewSession } from "@/lib/hooks/use-review-sessions"
+import { EMPTY_FLOOR_DRAFT, type FloorDraft } from "@/lib/review-sessions/floor-draft"
+import {
+  CANCELLED_FLOORS_NOTE,
+  CONFIG_CHANGED_BANNER,
+  NO_DONE_RUN,
+  RELOADING,
+  REVIEW_DRAFT_NOTE,
+  SESSION_ACTION_LABEL,
+  describeReviewSessionError,
+  knownSessionActions,
+  latestDoneRunLink,
+  quotaTableDraftBanner,
+  quotaTableHref,
+  quotaTableLinkLabel,
+  quotaTableStatusLabel,
+  sessionStatusLabel,
+  userRef,
+} from "@/lib/review-sessions/messages"
+import { isBusyPhase } from "@/lib/review-sessions/run-tracking"
+import { REVIEW_SESSIONS_ROUTE, reviewRunHref } from "@/lib/review-sessions/url"
+
+import { CancelReviewSessionDialog } from "./CancelReviewSessionDialog"
+import { LatestRunSummary } from "./LatestRunSummary"
+import { ReviewErrorAlert } from "./ReviewErrorAlert"
+import { ReviewFloorsSection } from "./ReviewFloorsSection"
+import { ReviewRunTrackerBand } from "./ReviewRunTrackerBand"
+import { ReviewRunsSection } from "./ReviewRunsSection"
+
+function Banner({ testId, children }: { testId: string; children: string }) {
+  return (
+    <Alert data-testid={testId}>
+      <AlertTriangle className="h-4 w-4" />
+      <AlertDescription>{children}</AlertDescription>
+    </Alert>
+  )
+}
+
+/**
+ * M2 — chi tiết lần xét (E3, `no-store`; query `staleTime` / `gcTime` 0 — đính chính 2 §1). Lấy lại khi vào trang, sau MỌI thao
+ * tác ghi (hook lo, bất kể kết quả) và khi bấm "Tải lại". Tải lỗi (kể cả 429) ⇒ hiện LỖI, không vẽ dữ liệu cũ.
+ *
+ * Thanh nút CHỈ theo `available_actions` của máy chủ (`[]` ⇒ không nút; giá trị lạ bỏ qua) — không theo `status`, không theo vai.
+ * Trong lúc E3 đang tải lại, nút ghi bị khoá để thao tác kế luôn dùng `version` mới nhất. F1 làm "Huỷ lần xét" (M7); F2 mở "Sửa
+ * điểm sàn" (M3 — soạn theo E10, lưu qua E4); F3 mở "Kiểm hồ sơ" (M4 — E6 rồi theo dõi lượt qua E7 / E8, `useReviewRunTracker`) và
+ * danh sách lượt kiểm (E7, chỉ tải khi mở). Băng cảnh báo hiện NGUYÊN cờ máy chủ, không suy.
+ *
+ * F3 — việc theo dõi lượt kiểm (pha + hẹn hỏi lại) cũng nằm Ở ĐÂY, TRƯỚC mọi nhánh dữ liệu / lỗi (khuôn F01-4): E6 xong ⇒ E3 tải
+ * lại; nếu E3 lỗi (vd 429) thì nhánh lỗi vẫn vẽ băng theo dõi và việc theo dõi KHÔNG dừng. Lượt của lần bấm này `done` ⇒ mở M5.
+ *
+ * Rà F01-4 (CHẶN): bản soạn lý do huỷ và cờ "đang huỷ" nằm Ở ĐÂY — TRƯỚC mọi nhánh dữ liệu / lỗi — nên sống qua lúc E3 tải lại lỗi
+ * (nhánh lỗi tháo hộp huỷ). Tải lại thành công ⇒ hộp hiện lại (nếu máy chủ còn trả `cancel`) với NGUYÊN lý do đã gõ và `version` mới.
+ * MỘT nguồn: hộp không giữ bản sao. Trang dựng thành phần này với `key` = id lần xét ⇒ bản soạn không mang sang lần xét khác.
+ * F2 dùng CÙNG khuôn cho bản soạn điểm sàn (`floorDraft`) và cờ "đang soạn" (`floorEditing`): E4 409 ⇒ E3 tải lại lỗi ⇒ nhánh lỗi
+ * tháo bộ soạn, bản soạn vẫn còn; tải lại thành công ⇒ bộ soạn hiện lại (nếu máy chủ còn trả `edit_floors`) với nguyên các ô đã gõ.
+ */
+export function ReviewSessionDetailClient({ sessionId }: { sessionId: number }) {
+  const q = useReviewSession(sessionId)
+  const [cancelOpen, setCancelOpen] = useState(false)
+  const [cancelReason, setCancelReason] = useState("")
+  const [floorEditing, setFloorEditing] = useState(false)
+  const [floorDraft, setFloorDraft] = useState<FloorDraft>(EMPTY_FLOOR_DRAFT)
+  const router = useRouter()
+  const tracker = useReviewRunTracker(sessionId, (runId) => router.push(reviewRunHref(sessionId, runId)))
+  const trackerBand = <ReviewRunTrackerBand sessionId={sessionId} phase={tracker.phase} onRetry={tracker.retry} />
+
+  if (q.isError) {
+    return (
+      <div className="space-y-3">
+        <ReviewErrorAlert testId="lan-xet-loi" message={describeReviewSessionError(q.error, "read").message} />
+        {trackerBand}
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" onClick={() => void q.refetch()} disabled={q.isFetching} data-testid="lan-xet-tai-lai">
+            <RefreshCw className="mr-1 h-4 w-4" />
+            Tải lại
+          </Button>
+          <Button asChild variant="ghost">
+            <Link href={REVIEW_SESSIONS_ROUTE} data-testid="ve-danh-sach">
+              Về danh sách lần xét
+            </Link>
+          </Button>
+        </div>
+      </div>
+    )
+  }
+
+  if (!q.data) {
+    return (
+      <p className="flex items-center gap-2 text-sm text-muted-foreground" data-testid="lan-xet-dang-tai">
+        <Loader2 className="h-4 w-4 animate-spin" /> Đang tải lần xét…
+      </p>
+    )
+  }
+
+  const s = q.data
+  const actions = knownSessionActions(s.available_actions)
+  const busy = q.isFetching
+  const runBusy = isBusyPhase(tracker.phase)
+
+  return (
+    <div className="space-y-4">
+      <header className="space-y-2">
+        <div className="flex flex-wrap items-center gap-3">
+          <h1 className="text-2xl font-semibold" data-testid="lan-xet-tieu-de">
+            Lần xét số {s.seq_no} — năm {s.academic_year} — {s.admission_round.round_name}
+          </h1>
+          <Badge variant="outline" data-testid="lan-xet-trang-thai">
+            {sessionStatusLabel(s.status)}
+          </Badge>
+        </div>
+        <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted-foreground">
+          <span data-testid="lan-xet-bang-chi-tieu">
+            Bảng chỉ tiêu năm: {quotaTableStatusLabel(s.quota_table.status)} (phiên bản {s.quota_table.version}) ·{" "}
+            <Link href={quotaTableHref(s.academic_year)} className="underline" data-testid="lan-xet-lien-ket-bang-chi-tieu">
+              {quotaTableLinkLabel(s.academic_year)}
+            </Link>
+          </span>
+          <span data-testid="lan-xet-tao">
+            Tạo bởi {userRef(s.created_by_user_id)} lúc {formatDateTimeVN(s.created_at)}
+          </span>
+        </div>
+        {s.cancelled_at !== null ? (
+          <p className="text-sm" data-testid="lan-xet-huy">
+            Huỷ bởi {userRef(s.cancelled_by_user_id)} lúc {formatDateTimeVN(s.cancelled_at)}
+            {s.cancel_reason !== null ? ` — Lý do: ${s.cancel_reason}` : null}
+          </p>
+        ) : null}
+        <p className="text-sm text-muted-foreground">{REVIEW_DRAFT_NOTE}</p>
+      </header>
+
+      <div className="flex flex-wrap items-center gap-2">
+        {actions.length ? (
+          <div className="flex flex-wrap gap-2" data-testid="thanh-nut">
+            {actions.map((a) =>
+              a === "cancel" ? (
+                <Button key={a} variant="destructive" disabled={busy} onClick={() => setCancelOpen(true)} data-testid="nut-cancel">
+                  {SESSION_ACTION_LABEL[a]}
+                </Button>
+              ) : a === "edit_floors" ? (
+                <Button
+                  key={a}
+                  variant="outline"
+                  disabled={busy || floorEditing}
+                  onClick={() => setFloorEditing(true)}
+                  data-testid="nut-edit_floors"
+                >
+                  {SESSION_ACTION_LABEL[a]}
+                </Button>
+              ) : (
+                // "Kiểm hồ sơ": gửi `version` của E3 đang xem + mốc `latest_run.id` (tra E7 khi mất kết nối). Khoá khi E3 đang tải lại
+                // hoặc đang gửi / theo dõi (không bấm lại — HĐ4 E6). Lượt kết thúc / lỗi ⇒ mở lại; máy chủ là chốt (409 / 503).
+                <Button
+                  key={a}
+                  variant="outline"
+                  disabled={busy || runBusy}
+                  onClick={() => tracker.start(s.version, s.latest_run?.id ?? null)}
+                  data-testid={`nut-${a}`}
+                >
+                  {SESSION_ACTION_LABEL[a]}
+                </Button>
+              ),
+            )}
+          </div>
+        ) : null}
+        <Button variant="ghost" onClick={() => void q.refetch()} disabled={busy} data-testid="lan-xet-tai-lai">
+          <RefreshCw className="mr-1 h-4 w-4" />
+          Tải lại
+        </Button>
+        {busy ? (
+          <span className="text-sm text-muted-foreground" data-testid="lan-xet-dang-tai-lai">
+            {RELOADING}
+          </span>
+        ) : null}
+      </div>
+      {trackerBand}
+
+      {s.latest_run?.config_changed_since_run ? <Banner testId="bang-cau-hinh-doi">{CONFIG_CHANGED_BANNER}</Banner> : null}
+      {s.quota_table.status === "draft" ? (
+        <Banner testId="bang-chi-tieu-nhap">{quotaTableDraftBanner(s.academic_year)}</Banner>
+      ) : null}
+      {s.status === "cancelled" ? <Banner testId="bang-da-huy">{CANCELLED_FLOORS_NOTE}</Banner> : null}
+
+      <section className="space-y-2 rounded-md border p-4 text-sm" data-testid="lan-xet-tom-tat">
+        <div>
+          Số điểm sàn: <span data-testid="lan-xet-so-san">{s.floors.length}</span>
+        </div>
+        <div className="space-y-1">
+          <div className="font-medium">Lượt kiểm gần nhất</div>
+          <LatestRunSummary run={s.latest_run} testId="lan-xet-luot" />
+        </div>
+        {s.latest_done_run_id === null ? (
+          <p className="text-muted-foreground" data-testid="lan-xet-chua-luot-xong">
+            {NO_DONE_RUN}
+          </p>
+        ) : (
+          <Link href={reviewRunHref(s.id, s.latest_done_run_id)} className="underline" data-testid="lan-xet-xem-ket-qua">
+            {latestDoneRunLink(s.latest_done_run_id)}
+          </Link>
+        )}
+      </section>
+
+      <ReviewFloorsSection
+        sessionId={s.id}
+        floors={s.floors}
+        editing={floorEditing && actions.includes("edit_floors")}
+        busy={busy}
+        draft={floorDraft}
+        onDraftChange={setFloorDraft}
+        onCloseEditor={() => setFloorEditing(false)}
+      />
+
+      <ReviewRunsSection sessionId={s.id} />
+
+      <CancelReviewSessionDialog
+        open={cancelOpen && actions.includes("cancel")}
+        onOpenChange={setCancelOpen}
+        sessionId={s.id}
+        version={s.version}
+        seqNo={s.seq_no}
+        academicYear={s.academic_year}
+        busy={busy}
+        reason={cancelReason}
+        onReasonChange={setCancelReason}
+      />
+    </div>
+  )
+}
