@@ -270,7 +270,7 @@ export function describeReviewSessionError(error: unknown, op: "read" | "write" 
       : { ...base, kind: "network", message: READ_NETWORK_MESSAGE }
   }
   if (e.status === 401) return { ...base, kind: "unauthorized", message: UNAUTHORIZED_MESSAGE }
-  if (e.status === 403) return { ...base, kind: "forbidden", message: FORBIDDEN_MESSAGE }
+  if (e.status === 403) return { ...base, kind: "forbidden", message: e.detail ?? FORBIDDEN_MESSAGE }
   if (e.status === 404) {
     return {
       ...base,
