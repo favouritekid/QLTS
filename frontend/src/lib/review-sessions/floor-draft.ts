@@ -28,7 +28,7 @@ export function normalizeFloorInput(raw: string): FloorInput {
   const m = FLOOR_INPUT_PATTERN.exec(s)
   if (!m) return { kind: "invalid" }
   const whole = m[1].replace(/^0+(?=[0-9])/, "")
-  const frac = (m[2] ?? "").padEnd(2, "0")
+  const frac = m[2] ?? "00"
   return { kind: "ok", value: `${whole}.${frac}` }
 }
 
