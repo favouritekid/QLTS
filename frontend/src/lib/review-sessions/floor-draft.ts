@@ -128,7 +128,7 @@ export interface FloorGroup {
 export function groupFloorCandidates(items: readonly ReviewFloorCandidate[]): FloorGroup[] {
   const groups: Record<FloorGroupKey, ReviewFloorCandidate[]> = { needs_floor: [], closed: [], not_reviewable: [], other: [] }
   for (const item of items) {
-    if (item.floor_applicable) groups.needs_floor.push(item)
+    if (item.state === "ok" || item.state === "floor_missing") groups.needs_floor.push(item)
     else if (item.state === "quota_closed") groups.closed.push(item)
     else if (NOT_REVIEWABLE_STATES.includes(item.state)) groups.not_reviewable.push(item)
     else groups.other.push(item)
