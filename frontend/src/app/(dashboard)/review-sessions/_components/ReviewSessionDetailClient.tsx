@@ -58,7 +58,7 @@ export function ReviewSessionDetailClient({ sessionId }: { sessionId: number }) 
   const [cancelOpen, setCancelOpen] = useState(false)
   const [cancelReason, setCancelReason] = useState("")
 
-  if (q.isError) {
+  if (q.isError && !q.data) {
     return (
       <div className="space-y-3">
         <ReviewErrorAlert testId="lan-xet-loi" message={describeReviewSessionError(q.error, "read").message} />
