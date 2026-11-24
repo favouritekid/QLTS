@@ -419,13 +419,16 @@ async def tab_counts(db: Executor, run_id: int) -> Dict[str, int]:
 # GĐ2-B đợt 2 (L3a + L4) — đọc phụ cho dịch vụ ghi và phản hồi của 9 API (hợp đồng API bản 4 §3). Không khoá, không luật.
 # ---------------------------------------------------------------------------------------------------------------------
 async def read_rounds(db: Executor, round_ids: Sequence[int]) -> Dict[int, Row]:
-    """Đợt tuyển sinh theo id — mỗi ``Row``: ``id``, ``academic_year``, ``round_code``, ``round_name``. Id không có không có khoá."""
+    """Đợt tuyển sinh theo id — mỗi ``Row``: ``id``, ``academic_year``, ``round_code``, ``round_name``, ``archived_at`` (E1 chặn đợt đã
+    lưu trữ — ``admission_review_service.round_accepts_new_session``). Id không có không có khoá."""
     ids = sorted({int(i) for i in round_ids})
     if not ids:
         return {}
     o = models.OfferingAdmissionRound
     rows = (
-        await db.execute(select(o.id, o.academic_year, o.round_code, o.round_name).where(o.id.in_(ids)))
+        await db.execute(
+            select(o.id, o.academic_year, o.round_code, o.round_name, o.archived_at).where(o.id.in_(ids))
+        )
     ).all()
     return {int(r.id): r for r in rows}
 

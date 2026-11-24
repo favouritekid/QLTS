@@ -17,6 +17,9 @@ pytestmark = pytest.mark.unit
 HOP_DONG_5 = [
     ("dot_sai", lambda: e.review_round_invalid(7), 400, "VALIDATION_ERROR",
      {"reason_code": "review_round_invalid", "admission_round_id": 7}),
+    # Phụ lục HĐ4 E10 §G1 (owner G1 24-11): đợt đã lưu trữ.
+    ("dot_da_luu_tru", lambda: e.review_round_archived(8), 400, "VALIDATION_ERROR",
+     {"reason_code": "review_round_archived", "admission_round_id": 8}),
     ("san_trung", lambda: e.review_floor_duplicate([5, 3, 5]), 400, "VALIDATION_ERROR",
      {"reason_code": "review_floor_duplicate", "duplicate_offering_academic_info_ids": [3, 5]}),
     ("san_sai_hoc_vu", lambda: e.review_floor_bad_member([9, 2, 9], 2026), 400, "VALIDATION_ERROR",
@@ -83,7 +86,8 @@ def test_san_sai_hoc_vu_cau_bao_neu_nam():
 def test_moi_ma_ly_do_co_cau_bao():
     """Mỗi mã lý do của hợp đồng §5 có câu tiếng Việt riêng (không rơi về chính mã)."""
     ma = {
-        "review_round_invalid", "review_floor_duplicate", "review_floor_bad_member", "review_session_not_found",
+        "review_round_invalid", "review_round_archived", "review_floor_duplicate", "review_floor_bad_member",
+        "review_session_not_found",
         "review_run_not_found", "review_quota_table_missing", "review_session_stale", "review_session_not_draft",
         "review_run_in_progress", "review_run_not_done", "fee_gate_mode_invalid", "residence_proof_doc_type_missing",
     }
