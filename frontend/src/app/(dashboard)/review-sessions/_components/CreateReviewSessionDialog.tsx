@@ -165,8 +165,8 @@ function CreateReviewSessionForm({ defaultYear, onClose }: { defaultYear: number
       {err ? (
         <ReviewErrorAlert testId="tao-loi" message={err.message}>
           {err.quotaYear !== null ? (
-            <Link href={quotaTableHref(err.quotaYear)} className="font-medium underline" data-testid="tao-lien-ket-bang-chi-tieu">
-              {quotaTableLinkLabel(err.quotaYear)}
+            <Link href={quotaTableHref(year)} className="font-medium underline" data-testid="tao-lien-ket-bang-chi-tieu">
+              {quotaTableLinkLabel(year)}
             </Link>
           ) : null}
         </ReviewErrorAlert>
