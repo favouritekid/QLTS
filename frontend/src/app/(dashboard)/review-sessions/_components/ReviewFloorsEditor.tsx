@@ -252,10 +252,6 @@ export function ReviewFloorsEditor({ sessionId, busy, draft, onDraftChange, onCl
 
   const save = () => {
     if (!canSave) return
-    if (plan.floors.length === 0) {
-      setConfirmEmpty(true)
-      return
-    }
     send(plan.floors)
   }
 
