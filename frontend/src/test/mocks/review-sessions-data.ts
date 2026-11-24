@@ -5,8 +5,6 @@
 export const API = "http://localhost:8000"
 /** Tiền tố E1–E9. */
 export const RS = `${API}/api/admission-config/review-sessions`
-/** Route có sẵn: đợt tuyển sinh của một năm. */
-export const roundsUrl = (year: number) => `${API}/api/v2/admin/years/${year}/rounds`
 
 type Obj = Record<string, unknown>
 

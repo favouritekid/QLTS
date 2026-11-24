@@ -12,7 +12,7 @@
  * 3. E6 tự đặt thời gian chờ > 60 s (KT-11). Biến thể phá: bỏ `timeout` ⇒ ĐỎ.
  */
 import type { ReactNode } from "react"
-import { QueryClient, QueryClientProvider, type UseQueryResult } from "@tanstack/react-query"
+import { QueryClientProvider, type QueryClient, type UseQueryResult } from "@tanstack/react-query"
 import { act, renderHook, waitFor } from "@testing-library/react"
 import { delay, http, HttpResponse } from "msw"
 import { afterEach, describe, expect, it, vi } from "vitest"
@@ -20,6 +20,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { api } from "@/lib/api/client"
 import { REVIEW_RUN_TIMEOUT_MS, createReviewRun } from "@/lib/api/review-sessions"
 import { server } from "@/test/mocks/server"
+import { appLikeQueryClient } from "@/test/review-sessions-render"
 import {
   RS,
   listItemGia,
@@ -40,18 +41,8 @@ import {
   useReviewSessionList,
 } from "./use-review-sessions"
 
-/**
- * CÙNG mặc định QueryClient của ứng dụng (`src/app/providers.tsx`: `staleTime` / `gcTime` 5 phút, không tự tải lại khi quay lại
- * cửa sổ). Test chạy trên mặc định THẬT để biến thể "bỏ tuỳ chọn ở hook" rơi về đúng giá trị production.
- */
-function appLikeClient(): QueryClient {
-  return new QueryClient({
-    defaultOptions: {
-      queries: { staleTime: 5 * 60 * 1000, gcTime: 5 * 60 * 1000, refetchOnWindowFocus: false, retry: false },
-      mutations: { retry: false },
-    },
-  })
-}
+/** CÙNG mặc định QueryClient của ứng dụng — xem `src/test/review-sessions-render.tsx`. */
+const appLikeClient = appLikeQueryClient
 
 function wrapperFor(qc: QueryClient) {
   return function Wrapper({ children }: { children: ReactNode }) {
