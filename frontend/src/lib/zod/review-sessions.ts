@@ -151,7 +151,7 @@ export const sessionSchema = z.object({
   latest_done_run_id: int.nullable(),
   /** Một nguồn với cổng ghi (`session_actions`) — nút hiện theo đây, KHÔNG theo `status` / vai. */
   available_actions: z.array(z.string()),
-})
+}).strict()
 export type ReviewSession = z.infer<typeof sessionSchema>
 
 /** `SessionListItemOut` — dòng của E2. */
