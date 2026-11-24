@@ -126,7 +126,7 @@ export function useReviewFloorCandidates(sessionId: number, enabled = true) {
     queryKey: reviewSessionKeys.floorCandidates(sessionId),
     queryFn: ({ signal }) => getReviewFloorCandidates(sessionId, signal),
     enabled,
-    ...FRESH_ONLY_QUERY_OPTIONS,
+    ...FRESH_ONLY_QUERY_OPTIONS, staleTime: 30_000,
   })
 }
 
