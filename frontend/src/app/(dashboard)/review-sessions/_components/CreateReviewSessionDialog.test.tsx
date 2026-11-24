@@ -2,8 +2,8 @@
  * GĐ2-B F1 — M1 hộp "Tạo lần xét" (E1), mở từ ĐÚNG trang `/review-sessions?nam=2026` (máy chủ giả MSW).
  *
  * Khoá (thiết kế §3.2, §6.2 F1; đính chính §2 + đính chính 2 §3; owner G1):
- *  - đợt hiện kèm NHÃN tình trạng (đợt "Tạm dừng" / "Đã lưu trữ" vẫn chọn được — máy chủ là chốt, G1); thân E1 đúng hai trường;
- *    201 ⇒ sang chi tiết lần xét;
+ *  - đợt hiện kèm NHÃN tình trạng; đợt "Tạm dừng" chọn được, đợt "Đã lưu trữ" KHOÁ (owner G1, phụ lục HĐ4 E10 §2, rà R2 — lớp UX;
+ *    máy chủ vẫn là chốt với 400 `review_round_archived`); thân E1 đúng hai trường; 201 ⇒ sang chi tiết lần xét;
  *  - 409 `REVIEW_QUOTA_TABLE_MISSING` ⇒ câu máy chủ + liên kết `/quota-tables?year=<academic_year TRONG THÂN LỖI>` (không
  *    `/admin/quota-tables`) — biến thể phá: lấy năm của ô chọn thay vì thân lỗi, hoặc trỏ `/admin/quota-tables` ⇒ ĐỎ;
  *  - 400 `review_round_invalid` ⇒ câu máy chủ, TẢI LẠI danh sách đợt, giữ hộp;
@@ -81,7 +81,7 @@ async function chonDotVaTao(id: string) {
 }
 
 describe("M1 — tạo lần xét (E1)", () => {
-  it("đợt hiện kèm nhãn tình trạng; đợt Tạm dừng / Đã lưu trữ KHÔNG bị khoá (máy chủ là chốt — G1); 201 ⇒ sang chi tiết", async () => {
+  it("đợt hiện kèm nhãn tình trạng; đợt Đang hoạt động / Tạm dừng chọn được (G1); 201 ⇒ sang chi tiết", async () => {
     const dem = mayChu(() =>
       HttpResponse.json(sessionGia({ id: 9, version: 1, floors: [], latest_run: null, latest_done_run_id: null }), { status: 201 }),
     )
@@ -96,7 +96,8 @@ describe("M1 — tạo lần xét (E1)", () => {
       "Đợt 1 (D1) — Tạm dừng",
       "Đợt 0 (D0) — Đã lưu trữ",
     ])
-    for (const o of within(dot).getAllByRole("option")) expect(o).not.toBeDisabled()
+    expect(within(dot).getByRole("option", { name: "Đợt 2 (D2) — Đang hoạt động" })).toBeEnabled()
+    expect(within(dot).getByRole("option", { name: "Đợt 1 (D1) — Tạm dừng" })).toBeEnabled()
     expect(screen.getByTestId("tao-xac-nhan")).toBeDisabled()
 
     await chonDotVaTao("8")
@@ -148,23 +149,51 @@ describe("M1 — tạo lần xét (E1)", () => {
     expect(screen.getByTestId("hop-tao-lan-xet")).toBeInTheDocument()
   })
 
-  it("rà F01-5 — 400 review_round_archived (đợt đã lưu trữ, S1) ⇒ câu máy chủ nguyên văn, không câu 'Có lỗi (mã: …)'; tải lại đợt, giữ hộp", async () => {
+  it("rà F01-5 — 400 review_round_archived (đợt vừa bị lưu trữ ở nơi khác) ⇒ câu máy chủ nguyên văn; tải lại đợt, đợt ấy nay KHOÁ, bỏ chọn", async () => {
+    // Lúc hộp tải danh sách, đợt 1 (id 8) còn "Tạm dừng"; người khác lưu trữ nó TRƯỚC khi bấm Tạo ⇒ máy chủ (chốt) trả 400.
+    // Biến thể phá V22: bỏ `roundSelectable` khỏi kiểm "đợt đã chọn còn hợp lệ" ⇒ nút Tạo mở lại cho đợt đã lưu trữ ⇒ ĐỎ.
     const CAU_S1 =
       "Đợt tuyển sinh này đã lưu trữ — không tạo lần xét trên đợt đã lưu trữ. Khôi phục đợt hoặc chọn đợt khác rồi làm lại."
-    const dem = mayChu(() =>
-      HttpResponse.json(
-        { reason_code: "review_round_archived", admission_round_id: 9, detail: CAU_S1, error_code: "VALIDATION_ERROR" },
-        { status: 400 },
-      ),
+    const dem = mayChu(
+      () =>
+        HttpResponse.json(
+          { reason_code: "review_round_archived", admission_round_id: 8, detail: CAU_S1, error_code: "VALIDATION_ERROR" },
+          { status: 400 },
+        ),
+      (y) => {
+        const daLuuTru = (dem.dot[y] ?? 0) > 1
+        const items = DOT_2026.map((r) => (r.id === 8 && daLuuTru ? { ...r, archived_at: "2026-11-24T05:00:00Z" } : r))
+        return HttpResponse.json({ total: items.length, items })
+      },
     )
     await moHop()
-    await chonDotVaTao("9")
+    await chonDotVaTao("8")
     const loi = await screen.findByTestId("tao-loi")
     expect(loi).toHaveTextContent(CAU_S1)
     expect(loi).not.toHaveTextContent("Có lỗi (mã:")
     await waitFor(() => expect(dem.dot[2026]).toBe(2))
+    await waitFor(() => expect(screen.getByRole("option", { name: "Đợt 1 (D1) — Đã lưu trữ" })).toBeDisabled())
+    expect(screen.getByTestId("tao-dot")).toHaveValue("")
+    expect(screen.getByTestId("tao-xac-nhan")).toBeDisabled()
     expect(screen.getByTestId("hop-tao-lan-xet")).toBeInTheDocument()
-    expect(dem.than).toEqual([{ academic_year: 2026, admission_round_id: 9 }])
+    expect(dem.than).toEqual([{ academic_year: 2026, admission_round_id: 8 }])
+  })
+
+  it("rà R2 — đợt đã lưu trữ: nhãn 'Đã lưu trữ', KHÔNG chọn được (G1, phụ lục E10 §2); cố chọn vẫn không mở nút Tạo, không gửi E1", async () => {
+    // Biến thể phá V21: bỏ `disabled` của <option> đợt đã lưu trữ ⇒ ĐỎ ở `toBeDisabled`.
+    // Biến thể phá V22: bỏ `roundSelectable` khỏi kiểm "đợt đã chọn còn hợp lệ" ⇒ nút Tạo mở ⇒ ĐỎ ở bước cố chọn.
+    const dem = mayChu(() => HttpResponse.json({}, { status: 201 }))
+    await moHop()
+    const dot = await screen.findByTestId("tao-dot")
+    const luuTru = within(dot).getByRole("option", { name: "Đợt 0 (D0) — Đã lưu trữ" })
+    expect(luuTru).toBeDisabled()
+    expect(within(dot).getByRole("option", { name: "Đợt 1 (D1) — Tạm dừng" })).toBeEnabled()
+
+    // Đặt giá trị bằng lập trình (trình duyệt không cho bấm đợt khoá; jsdom vẫn đặt được) ⇒ lựa chọn không được nhận.
+    fireEvent.change(dot, { target: { value: "9" } })
+    expect(screen.getByTestId("tao-xac-nhan")).toBeDisabled()
+    expect(dot).toHaveValue("")
+    expect(dem.than).toEqual([])
   })
 
   it("503 đóng băng ⇒ câu đóng băng", async () => {

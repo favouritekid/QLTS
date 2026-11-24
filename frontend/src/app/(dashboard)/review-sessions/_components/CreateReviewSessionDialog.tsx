@@ -39,9 +39,10 @@ interface Props {
 }
 
 /**
- * M1 — hộp "Tạo lần xét" (E1). Chọn năm ⇒ tải đợt của năm ⇒ chọn đợt ⇒ Tạo. Đợt nào được chọn do MÁY CHỦ quyết (owner G1:
- * được đợt "Ngừng", không được đợt đã lưu trữ — chặn ở máy chủ); giao diện chỉ hiện nhãn tình trạng đợt, không ẩn / khoá đợt nào.
- * Nội dung chỉ dựng khi hộp mở ⇒ mở lại là bắt đầu sạch.
+ * M1 — hộp "Tạo lần xét" (E1). Chọn năm ⇒ tải đợt của năm ⇒ chọn đợt ⇒ Tạo. Owner G1: ĐƯỢC chọn đợt "Ngừng", KHÔNG được chọn đợt
+ * đã lưu trữ. Tầng CHỦ SỞ HỮU là máy chủ (`admission_review_service.round_accepts_new_session` ⇒ 400 `review_round_archived`, màn
+ * hiện nguyên câu máy chủ). Ở đây chỉ là lớp UX thêm (phụ lục HĐ4 E10 §2, rà R2): đợt có `archived_at` hiện nhãn "Đã lưu trữ" và
+ * KHÔNG chọn được, để người dùng khỏi gặp một lượt 400 đoán trước được. Nội dung chỉ dựng khi hộp mở ⇒ mở lại là bắt đầu sạch.
  */
 export function CreateReviewSessionDialog({ open, onOpenChange, defaultYear }: Props) {
   return (
@@ -79,6 +80,14 @@ function createErrorView(error: unknown): CreateErrorView {
   return { message: v.message, quotaYear: null }
 }
 
+/**
+ * Đợt CHỌN ĐƯỢC trong hộp = chưa lưu trữ (`archived_at` trống) — cùng nghĩa vị từ máy chủ `round_accepts_new_session` (máy chủ là
+ * chốt). MỘT chỗ cho cả khoá lựa chọn lẫn kiểm "đợt đã chọn còn hợp lệ" (sau 400, danh sách đợt tải lại có thể đã lưu trữ đợt ấy).
+ */
+function roundSelectable(round: ReviewRoundOption): boolean {
+  return round.archived_at === null
+}
+
 function CreateReviewSessionForm({ defaultYear, onClose }: { defaultYear: number; onClose: () => void }) {
   const router = useRouter()
   const [year, setYear] = useState(defaultYear)
@@ -87,8 +96,9 @@ function CreateReviewSessionForm({ defaultYear, onClose }: { defaultYear: number
   const create = useCreateReviewSession()
 
   const roundItems: ReviewRoundOption[] = rounds.isError ? [] : (rounds.data?.items ?? [])
-  // Đợt đã chọn phải còn trong danh sách MỚI NHẤT (sau 400 `review_round_invalid` danh sách được tải lại).
-  const roundSelected = roundItems.some((r) => String(r.id) === roundId)
+  // Đợt đã chọn phải còn trong danh sách MỚI NHẤT và còn chọn được (sau 400 `review_round_invalid` / `review_round_archived`
+  // danh sách được tải lại).
+  const roundSelected = roundItems.some((r) => String(r.id) === roundId && roundSelectable(r))
   const canSubmit = roundSelected && !create.isPending && !rounds.isFetching
   const err = create.error ? createErrorView(create.error) : null
 
@@ -154,7 +164,7 @@ function CreateReviewSessionForm({ defaultYear, onClose }: { defaultYear: number
           >
             <option value="">— Chọn đợt —</option>
             {roundItems.map((r) => (
-              <option key={r.id} value={String(r.id)}>
+              <option key={r.id} value={String(r.id)} disabled={!roundSelectable(r)}>
                 {`${r.round_name} (${r.round_code}) — ${roundStateLabel(r)}`}
               </option>
             ))}

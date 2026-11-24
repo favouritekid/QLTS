@@ -94,7 +94,8 @@ export function quotaTableStatusLabel(status: string): string {
 
 /**
  * Nhãn tình trạng đợt — CÙNG chữ trang "Cấu hình tuyển sinh › Đợt" đang dùng (`RoundsManagementTab.tsx` `statusLabel`). CHỈ là
- * nhãn: đợt nào được chọn để tạo lần xét do MÁY CHỦ quyết (owner G1) — giao diện không ẩn / khoá đợt nào.
+ * nhãn. Đợt nào được chọn để tạo lần xét do MÁY CHỦ quyết (owner G1); hộp "Tạo lần xét" khoá thêm đợt đã lưu trữ như một lớp UX
+ * (`CreateReviewSessionDialog.tsx` `roundSelectable`).
  */
 export function roundStateLabel(round: Pick<ReviewRoundOption, "is_active" | "archived_at">): string {
   if (round.archived_at) return "Đã lưu trữ"
