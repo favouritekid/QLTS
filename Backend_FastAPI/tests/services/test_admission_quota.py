@@ -1006,8 +1006,10 @@ class TestQuotaZeroBlocks:
     Schema currently allows annual_admission_quota = 0 (ge=0). Conflating
     that with quota = NULL (unlimited) would let staff admit unbounded
     students into a deliberately closed cohort. ADM-026 round-2 fix:
-    quota=0 blocks ALL approves; only NULL means unlimited. Admin bypass
-    with valid reason still works as a documented escape hatch.
+    quota=0 blocks ALL approves; only NULL means unlimited. N4 (owner
+    20-11): Admin bypass KHÔNG còn mở ngành chỉ tiêu 0 khi Phê duyệt (trước
+    đây là "cửa thoát" có chủ ý); chỉ ``/finalize`` giữ cơ chế cũ. Ca HTTP:
+    ``tests/api/test_phe_duyet_nganh_chi_tieu_0_api.py``.
     """
 
     async def test_quota_zero_blocks_approve_without_bypass(
@@ -1040,10 +1042,11 @@ class TestQuotaZeroBlocks:
                         transition="approve",
                     )
 
-    async def test_quota_zero_admin_bypass_still_works(
+    async def test_chi_tieu_0_admin_xin_vuot_van_bi_chan(
         self, setup_test_database, seed_lead_dependencies
     ):
-        """Admin bypass with valid reason is the documented escape."""
+        """N4: Admin ghi lý do xin vượt ở ngành chỉ tiêu 0 VẪN bị chặn (đảo ca cũ
+        ``test_quota_zero_admin_bypass_still_works``)."""
         seeds = await _seed_offering_with_quota(
             quota=0,
             seed_unit_id=seed_lead_dependencies["unit_id"],
@@ -1061,18 +1064,19 @@ class TestQuotaZeroBlocks:
         async with AsyncSessionLocal() as session:
             async with session.begin():
                 profile = await _profile_with_lead(session, pid)
-                # Should NOT raise — admin override on quota=0 cohort.
-                await admission_service._assert_quota_or_bypass(
-                    session,
-                    profile,
-                    admin,
-                    bypass_quota=True,
-                    bypass_reason=(
-                        "Cohort closed (quota=0) but admit per Hiệu Trưởng "
-                        "directive 2026-04-29."
-                    ),
-                    transition="approve",
-                )
+                with pytest.raises(BusinessRuleViolation) as loi:
+                    await admission_service._assert_quota_or_bypass(
+                        session,
+                        profile,
+                        admin,
+                        bypass_quota=True,
+                        bypass_reason=(
+                            "Cohort closed (quota=0) but admit per Hiệu Trưởng "
+                            "directive 2026-04-29."
+                        ),
+                        transition="approve",
+                    )
+                assert str(loi.value).startswith("Ngành đã đóng tuyển (chỉ tiêu 0)"), str(loi.value)
 
     async def test_quota_null_remains_unlimited(
         self, setup_test_database, seed_lead_dependencies
@@ -1215,6 +1219,47 @@ class TestQuotaDeniedAudit:
             ).scalars().all()
             assert len(rows) == 1
             assert rows[0].actor_user_id == admin.id
+
+
+class TestVetTuChoiKhaiTuongMinh:
+    """Owner 22-11 Q2: ``_audit_quota_bypass_denied`` KHÔNG có mặc định cho ``fail_closed`` — mọi nơi gọi khai tường minh
+    (vết ``quota_bypass_denied_closed`` bắt buộc; hai vết ADM-026 best-effort), để nơi gọi mới không âm thầm rơi vào
+    best-effort."""
+
+    def test_ham_ghi_vet_tu_choi_khong_co_mac_dinh_fail_closed(self):
+        import inspect
+
+        tham_so = inspect.signature(admission_service._audit_quota_bypass_denied).parameters["fail_closed"]
+        assert tham_so.default is inspect.Parameter.empty
+
+    def test_moi_noi_goi_ham_ghi_vet_tu_choi_khai_fail_closed_dung_kieu(self):
+        """Quét AST ``app/``: mỗi lời gọi khai ``fail_closed`` bằng hằng bool; vết ngành đóng = True, hai vết ADM-026 = False.
+
+        Codex N4 lượt 3 H3: GOM mọi giá trị theo hành động (lời gọi sau không đè lời gọi trước — một lời gọi thứ hai
+        ``quota_bypass_denied_closed`` với ``False`` phải làm lệch); ``denial_action`` phải là hằng và không có lời gọi dạng
+        ``**kw`` (không quét được) — lỗi nêu rõ tệp + dòng thay vì ``KeyError`` / ``AttributeError``. Không đếm số lời gọi:
+        thêm một nơi gọi ĐÚNG kiểu là hợp lệ."""
+        import ast
+        import pathlib
+
+        app_dir = pathlib.Path(admission_service.__file__).resolve().parents[1]
+        thay = {}
+        for p in app_dir.rglob("*.py"):
+            for n in ast.walk(ast.parse(p.read_text(encoding="utf-8"))):
+                if isinstance(n, ast.Call) and getattr(n.func, "id", getattr(n.func, "attr", None)) == (
+                    "_audit_quota_bypass_denied"
+                ):
+                    noi = (p.name, n.lineno)
+                    assert not any(k.arg is None for k in n.keywords), (*noi, "lời gọi dạng **kw — không quét được")
+                    kw = {k.arg: k.value for k in n.keywords}
+                    assert isinstance(kw.get("denial_action"), ast.Constant), (*noi, "denial_action không phải hằng")
+                    assert isinstance(kw.get("fail_closed"), ast.Constant), (*noi, "thiếu fail_closed")
+                    thay.setdefault(kw["denial_action"].value, set()).add(kw["fail_closed"].value)
+        assert thay == {
+            "quota_bypass_denied_closed": {True},
+            "quota_bypass_denied_role": {False},
+            "quota_bypass_denied_reason": {False},
+        }, thay
 
 
 # =========================================================================

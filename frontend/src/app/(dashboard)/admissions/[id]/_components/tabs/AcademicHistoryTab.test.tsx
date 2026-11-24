@@ -2,11 +2,13 @@
  * AcademicHistoryTab — Commit 5 fast-entry anchors.
  *
  * Pin:
- *   - Quick-add "Thêm 3 năm THPT" button tạo 3 record (lớp 10/11/12).
+ *   - Thêm nhanh THPT / THCS từ NĂM BẮT ĐẦU lớp đầu cấp (owner 22-11): mỗi lớp
+ *     một dòng Y→Y+1, xem trước "Tốt nghiệp năm …", không tự lấy năm nay.
+ *   - Nhắc nhẹ: dòng 0 năm học, hai dòng trùng năm học, hở năm học.
  *   - Free-text school warning render khi nhập school_name không qua picker.
  */
 
-import { describe, it, expect, vi } from "vitest"
+import { afterEach, describe, it, expect, vi } from "vitest"
 import { render, screen, fireEvent, act, waitFor } from "@testing-library/react"
 import { useForm, FormProvider } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
@@ -88,72 +90,173 @@ function renderTab(opts: Parameters<typeof Harness>[0] = {}) {
   )
 }
 
-describe("AcademicHistoryTab — Commit 5 quick-add 3 năm THPT", () => {
-  it("Button 'Thêm 3 năm THPT' render khi isEditable=true", () => {
-    renderTab({ isEditable: true })
-    expect(screen.getByTestId("academic-quick-add-thpt")).toBeInTheDocument()
+// CẶP FE ↔ backend (owner 22-11 mục C): gõ 2022 ⇒ nút sinh đúng 3 dòng; sau khi chọn
+// trường từ danh mục (mock: school_id 42, level THPT) ra ĐÚNG dữ liệu dưới đây.
+// Backend chép NGUYÊN dữ liệu này ở `Backend_FastAPI/tests/unit/test_priority_kv_lien_cap_g5.py`
+// (`CAP_FE_NUT_THEM_NHANH_2022`) và khoá phía tính tra đúng năm học 2022, 2023, 2024.
+// ĐỔI một bên thì đổi cả hai.
+const CAP_FE_NUT_THEM_NHANH_2022 = [
+  { school_id: 42, school_name: "THPT Chuyên Nguyễn Du", level: "THPT", year_from: 2022, year_to: 2023, grade_to: 10, gpa: null, graduation_type: "THPT" },
+  { school_id: 42, school_name: "THPT Chuyên Nguyễn Du", level: "THPT", year_from: 2023, year_to: 2024, grade_to: 11, gpa: null, graduation_type: "THPT" },
+  { school_id: 42, school_name: "THPT Chuyên Nguyễn Du", level: "THPT", year_from: 2024, year_to: 2025, grade_to: 12, gpa: null, graduation_type: "THPT" },
+]
+
+function typeYear(testId: string, value: string) {
+  fireEvent.change(screen.getByTestId(testId), { target: { value } })
+}
+
+describe("AcademicHistoryTab — thêm nhanh 3 năm THPT từ năm bắt đầu lớp 10 (owner 22-11)", () => {
+  afterEach(() => {
+    vi.useRealTimers()
   })
 
-  it("Button KHÔNG render khi isEditable=false", () => {
+  it("nút và ô năm hiện khi isEditable=true", () => {
+    renderTab({ isEditable: true })
+    expect(screen.getByTestId("academic-quick-add-thpt")).toBeInTheDocument()
+    expect(screen.getByLabelText("Năm bắt đầu lớp 10")).toBeInTheDocument()
+  })
+
+  it("nút KHÔNG hiện khi isEditable=false", () => {
     renderTab({ isEditable: false })
     expect(screen.queryByTestId("academic-quick-add-thpt")).not.toBeInTheDocument()
   })
 
-  it("Click button tạo đúng 3 record lớp 10/11/12 + graduation_type=THPT mọi lớp", () => {
+  it("KHÔNG tự lấy năm nay: chưa gõ năm thì nút khoá, gõ 2022 thì sinh 2022–2025 dù đồng hồ ở năm khác", () => {
+    vi.useFakeTimers({ toFake: ["Date"] })
+    vi.setSystemTime(new Date("2031-03-01T00:00:00Z"))
     let capturedForm: UseFormReturn<AdmissionProfileUpdateInput> | null = null
-    renderTab({
-      isEditable: true,
-      exposeForm: (f) => {
-        capturedForm = f
-      },
-    })
+    renderTab({ isEditable: true, exposeForm: (f) => { capturedForm = f } })
 
+    expect(screen.getByTestId("academic-quick-add-thpt")).toBeDisabled()
+    fireEvent.click(screen.getByTestId("academic-quick-add-thpt"))
+    expect(capturedForm!.getValues("academic_history")).toHaveLength(0)
+
+    typeYear("academic-quick-add-thpt-start", "2022")
+    fireEvent.click(screen.getByTestId("academic-quick-add-thpt"))
+    expect((capturedForm!.getValues("academic_history") ?? []).map((h) => [h.year_from, h.year_to])).toEqual([
+      [2022, 2023],
+      [2023, 2024],
+      [2024, 2025],
+    ])
+  })
+
+  it("gõ 2022 ⇒ xem trước từng năm học + 'Tốt nghiệp năm 2025'; bấm ⇒ đúng 3 dòng Y→Y+1 lớp 10/11/12, ô năm được xoá", () => {
+    let capturedForm: UseFormReturn<AdmissionProfileUpdateInput> | null = null
+    renderTab({ isEditable: true, exposeForm: (f) => { capturedForm = f } })
+
+    typeYear("academic-quick-add-thpt-start", "2022")
+    expect(screen.getByTestId("academic-quick-add-thpt-preview")).toHaveTextContent(
+      "Lớp 10: 2022–2023, lớp 11: 2023–2024, lớp 12: 2024–2025. Tốt nghiệp năm 2025.",
+    )
     fireEvent.click(screen.getByTestId("academic-quick-add-thpt"))
 
-    const history = capturedForm!.getValues("academic_history") ?? []
-    expect(history).toHaveLength(3)
-    expect(history[0].grade_to).toBe(10)
-    expect(history[1].grade_to).toBe(11)
-    expect(history[2].grade_to).toBe(12)
-    // Trình độ = THPT cho MỌI lớp (tương xứng cấp học quick-add)
-    expect(
-      (history as Array<{ graduation_type?: string | null }>).map((h) => h.graduation_type),
-    ).toEqual(["THPT", "THPT", "THPT"])
+    expect(capturedForm!.getValues("academic_history")).toEqual([
+      { school_id: null, school_name: "", level: null, year_from: 2022, year_to: 2023, grade_to: 10, gpa: null, graduation_type: "THPT" },
+      { school_id: null, school_name: "", level: null, year_from: 2023, year_to: 2024, grade_to: 11, gpa: null, graduation_type: "THPT" },
+      { school_id: null, school_name: "", level: null, year_from: 2024, year_to: 2025, grade_to: 12, gpa: null, graduation_type: "THPT" },
+    ])
+    expect(screen.getByTestId("academic-quick-add-thpt-start")).toHaveValue(null)
+    expect(screen.queryByTestId("academic-quick-add-thpt-preview")).not.toBeInTheDocument()
+    // Dòng liền mạch: không nhắc 0 năm / trùng / hở (mọi câu nhắc chất lượng dữ liệu `academic-notice-<i>`).
+    // Khung `academic-notices` VẪN hiện vì câu gợi ý KV (#384): 3 dòng mới chưa chọn trường THPT từ danh mục.
+    expect(screen.queryAllByTestId(/^academic-notice-\d+$/)).toHaveLength(0)
+    expect(screen.getByTestId("academic-kv-hint")).toBeInTheDocument()
+  })
+
+  it("CẶP với backend: gõ 2022, chọn trường từ danh mục cho cả 3 dòng ⇒ đúng dữ liệu CAP_FE_NUT_THEM_NHANH_2022", () => {
+    let capturedForm: UseFormReturn<AdmissionProfileUpdateInput> | null = null
+    renderTab({ isEditable: true, exposeForm: (f) => { capturedForm = f } })
+
+    typeYear("academic-quick-add-thpt-start", "2022")
+    fireEvent.click(screen.getByTestId("academic-quick-add-thpt"))
+    screen.getAllByTestId("mock-pick-real-school").forEach((b) => fireEvent.click(b))
+
+    expect(capturedForm!.getValues("academic_history")).toEqual(CAP_FE_NUT_THEM_NHANH_2022)
+  })
+
+  it("năm sai ⇒ báo 'Năm không hợp lệ', nút khoá", () => {
+    renderTab({ isEditable: true })
+    typeYear("academic-quick-add-thpt-start", "22")
+    expect(screen.getByTestId("academic-quick-add-thpt-invalid")).toHaveTextContent("Năm không hợp lệ")
+    expect(screen.getByTestId("academic-quick-add-thpt")).toBeDisabled()
+    typeYear("academic-quick-add-thpt-start", "2098") // lớp 12 sẽ tới 2101 > 2100
+    expect(screen.getByTestId("academic-quick-add-thpt")).toBeDisabled()
+  })
+
+  it("dòng sinh ra vẫn sửa được (lưu ban lớp 10: 2022→2024) và khi ấy nhắc trùng năm học", () => {
+    let capturedForm: UseFormReturn<AdmissionProfileUpdateInput> | null = null
+    renderTab({ isEditable: true, exposeForm: (f) => { capturedForm = f } })
+
+    typeYear("academic-quick-add-thpt-start", "2022")
+    fireEvent.click(screen.getByTestId("academic-quick-add-thpt"))
+    fireEvent.change(screen.getAllByLabelText("Đến năm")[0], { target: { value: "2024" } })
+
+    expect(capturedForm!.getValues("academic_history.0.year_to")).toBe(2024)
+    expect(screen.getByText(/Trường #1 và #2 cùng có năm học 2023–2024/)).toBeInTheDocument()
   })
 })
 
-describe("AcademicHistoryTab — quick-add 4 năm THCS", () => {
-  it("Button 'Thêm 4 năm THCS' render khi isEditable=true", () => {
+describe("AcademicHistoryTab — thêm nhanh 4 năm THCS từ năm bắt đầu lớp 6", () => {
+  it("nút hiện khi isEditable=true", () => {
     renderTab({ isEditable: true })
     expect(screen.getByTestId("academic-quick-add-thcs")).toBeInTheDocument()
   })
 
-  it("Button KHÔNG render khi isEditable=false", () => {
+  it("nút KHÔNG hiện khi isEditable=false", () => {
     renderTab({ isEditable: false })
     expect(screen.queryByTestId("academic-quick-add-thcs")).not.toBeInTheDocument()
   })
 
-  it("Click tạo đúng 4 record lớp 6/7/8/9 + graduation_type=THCS mọi lớp", () => {
+  it("chưa có THPT ⇒ không gợi ý; gõ 2018 ⇒ 4 dòng 2018→2019 … 2021→2022 lớp 6–9, 'Tốt nghiệp THCS năm 2022'", () => {
     let capturedForm: UseFormReturn<AdmissionProfileUpdateInput> | null = null
-    renderTab({
-      isEditable: true,
-      exposeForm: (f) => {
-        capturedForm = f
-      },
-    })
+    renderTab({ isEditable: true, exposeForm: (f) => { capturedForm = f } })
 
+    expect(screen.queryByTestId("academic-quick-add-thcs-suggest")).not.toBeInTheDocument()
+    expect(screen.getByTestId("academic-quick-add-thcs")).toBeDisabled()
+    typeYear("academic-quick-add-thcs-start", "2018")
+    expect(screen.getByTestId("academic-quick-add-thcs-preview")).toHaveTextContent(
+      "Lớp 6: 2018–2019, lớp 7: 2019–2020, lớp 8: 2020–2021, lớp 9: 2021–2022. Tốt nghiệp THCS năm 2022.",
+    )
     fireEvent.click(screen.getByTestId("academic-quick-add-thcs"))
 
     const history = capturedForm!.getValues("academic_history") ?? []
-    expect(history).toHaveLength(4)
-    expect(history.map((h) => h.grade_to)).toEqual([6, 7, 8, 9])
-    // Trình độ = THCS cho MỌI lớp (tương xứng cấp học quick-add)
-    expect(
-      (history as Array<{ graduation_type?: string | null }>).map((h) => h.graduation_type),
-    ).toEqual(["THCS", "THCS", "THCS", "THCS"])
-    // year_from === year_to mỗi record (1 năm/lớp), năm tăng dần
-    expect(history[0].year_to).toBe(history[0].year_from)
-    expect(history[3].year_to - history[0].year_from).toBe(3)
+    expect(history.map((h) => [h.grade_to, h.year_from, h.year_to])).toEqual([
+      [6, 2018, 2019],
+      [7, 2019, 2020],
+      [8, 2020, 2021],
+      [9, 2021, 2022],
+    ])
+    expect((history as Array<{ graduation_type?: string | null }>).map((h) => h.graduation_type)).toEqual([
+      "THCS",
+      "THCS",
+      "THCS",
+      "THCS",
+    ])
+  })
+
+  it("đã có THPT bắt đầu 2022 ⇒ gợi ý lớp 6 = 2018 (lớp 10 − 4); dùng gợi ý ⇒ nối liền lớp 9 → lớp 10, không nhắc hở", () => {
+    let capturedForm: UseFormReturn<AdmissionProfileUpdateInput> | null = null
+    renderTab({ isEditable: true, exposeForm: (f) => { capturedForm = f } })
+
+    typeYear("academic-quick-add-thpt-start", "2022")
+    fireEvent.click(screen.getByTestId("academic-quick-add-thpt"))
+    expect(screen.getByTestId("academic-quick-add-thcs-suggest")).toHaveTextContent("Gợi ý: 2018 (lớp 10 − 4)")
+    fireEvent.click(screen.getByTestId("academic-quick-add-thcs-suggest"))
+    expect(screen.getByTestId("academic-quick-add-thcs-start")).toHaveValue(2018)
+    fireEvent.click(screen.getByTestId("academic-quick-add-thcs"))
+
+    const history = capturedForm!.getValues("academic_history") ?? []
+    expect(history.map((h) => [h.grade_to, h.year_from, h.year_to])).toEqual([
+      [10, 2022, 2023],
+      [11, 2023, 2024],
+      [12, 2024, 2025],
+      [6, 2018, 2019],
+      [7, 2019, 2020],
+      [8, 2020, 2021],
+      [9, 2021, 2022],
+    ])
+    expect(screen.queryByText(/Hở năm học/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/cùng có năm học/)).not.toBeInTheDocument()
   })
 })
 
@@ -178,7 +281,11 @@ describe("AcademicHistoryTab — soft data-quality notices (Tầng 2/3)", () => 
         ],
       } as Partial<AdmissionProfileUpdateInput>,
     })
-    expect(screen.getByText(/Lớp 12 xuất hiện nhiều lần/i)).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        "Lớp 12 xuất hiện nhiều lần — kiểm tra lại nếu không phải ở lại lớp hoặc chuyển trường giữa năm.",
+      ),
+    ).toBeInTheDocument()
   })
 
   it("cảnh báo khi > 3 năm THPT (cho phép, không chặn)", () => {
@@ -192,7 +299,29 @@ describe("AcademicHistoryTab — soft data-quality notices (Tầng 2/3)", () => 
         ],
       } as Partial<AdmissionProfileUpdateInput>,
     })
-    expect(screen.getByText(/Đang có 4 năm THPT/i)).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        "Đang có 4 năm THPT (thường 3 năm: lớp 10/11/12). Nhiều hơn là bình thường nếu ở lại lớp hoặc chuyển trường.",
+      ),
+    ).toBeInTheDocument()
+  })
+
+  it("em ở lại lớp 10, mỗi năm học một dòng (ví dụ owner 2021→2025) ⇒ hai câu nói 'ở lại lớp', không nhắc trùng / hở / liên cấp", () => {
+    renderTab({
+      defaults: {
+        academic_history: [
+          rec({ school_id: 1, grade_to: 10, year_from: 2021, year_to: 2022 }),
+          rec({ school_id: 1, grade_to: 10, year_from: 2022, year_to: 2023 }),
+          rec({ school_id: 1, grade_to: 11, year_from: 2023, year_to: 2024 }),
+          rec({ school_id: 1, grade_to: 12, year_from: 2024, year_to: 2025 }),
+        ],
+      } as Partial<AdmissionProfileUpdateInput>,
+    })
+    const notices = screen.getAllByRole("status").map((n) => n.textContent?.replace("⚠", "").trim())
+    expect(notices).toEqual([
+      "Lớp 10 xuất hiện nhiều lần — kiểm tra lại nếu không phải ở lại lớp hoặc chuyển trường giữa năm.",
+      "Đang có 4 năm THPT (thường 3 năm: lớp 10/11/12). Nhiều hơn là bình thường nếu ở lại lớp hoặc chuyển trường.",
+    ])
   })
 
   it("cảnh báo năm kết thúc ở tương lai", () => {
@@ -224,20 +353,190 @@ describe("AcademicHistoryTab — soft data-quality notices (Tầng 2/3)", () => 
   })
 
   it("KHÔNG có notice nào khi nhập chuẩn 3 THPT + 4 THCS đã chọn trường", () => {
+    // Mỗi lớp một năm học liền nhau (2015–2016 … 2021–2022): không 0 năm, không trùng, không hở.
     renderTab({
       defaults: {
         academic_history: [
-          rec({ school_id: 1, level: "THCS", grade_to: 6 }),
-          rec({ school_id: 1, level: "THCS", grade_to: 7 }),
-          rec({ school_id: 1, level: "THCS", grade_to: 8 }),
-          rec({ school_id: 1, level: "THCS", grade_to: 9 }),
-          rec({ school_id: 2, grade_to: 10 }),
-          rec({ school_id: 2, grade_to: 11 }),
-          rec({ school_id: 2, grade_to: 12 }),
+          rec({ school_id: 1, level: "THCS", grade_to: 6, year_from: 2015, year_to: 2016 }),
+          rec({ school_id: 1, level: "THCS", grade_to: 7, year_from: 2016, year_to: 2017 }),
+          rec({ school_id: 1, level: "THCS", grade_to: 8, year_from: 2017, year_to: 2018 }),
+          rec({ school_id: 1, level: "THCS", grade_to: 9, year_from: 2018, year_to: 2019 }),
+          rec({ school_id: 2, grade_to: 10, year_from: 2019, year_to: 2020 }),
+          rec({ school_id: 2, grade_to: 11, year_from: 2020, year_to: 2021 }),
+          rec({ school_id: 2, grade_to: 12, year_from: 2021, year_to: 2022 }),
         ],
       } as Partial<AdmissionProfileUpdateInput>,
     })
     expect(screen.queryByTestId("academic-notices")).not.toBeInTheDocument()
+  })
+
+  it("nhắc dòng có hai năm bằng nhau (dữ liệu nút thêm nhanh cũ 2025→2025)", () => {
+    renderTab({
+      defaults: {
+        academic_history: [rec({ year_from: 2025, year_to: 2025, grade_to: 12 })],
+      } as Partial<AdmissionProfileUpdateInput>,
+    })
+    expect(
+      screen.getByText(
+        'Trường #1: "Từ năm" và "Đến năm" cùng là 2025 — theo cách ghi năm học hiện nay, dòng này chưa có năm học nào.',
+      ),
+    ).toBeInTheDocument()
+  })
+
+  it("nhắc hai dòng trùng năm học (khoá năm bắt đầu: 2020→2023 và 2022→2023 trùng 2022–2023)", () => {
+    renderTab({
+      defaults: {
+        academic_history: [
+          rec({ school_id: 1, grade_to: 11, year_from: 2020, year_to: 2023 }),
+          rec({ school_id: 2, grade_to: 12, year_from: 2022, year_to: 2023 }),
+        ],
+      } as Partial<AdmissionProfileUpdateInput>,
+    })
+    expect(screen.getByText(/Trường #1 và #2 cùng có năm học 2022–2023 —/)).toBeInTheDocument()
+  })
+
+  it("KHÔNG nhắc trùng khi hai dòng chỉ chạm nhau ở năm chuyển trường (2020→2022 rồi 2022→2023)", () => {
+    renderTab({
+      defaults: {
+        academic_history: [
+          rec({ school_id: 1, grade_to: 11, year_from: 2020, year_to: 2022 }),
+          rec({ school_id: 2, grade_to: 12, year_from: 2022, year_to: 2023 }),
+        ],
+      } as Partial<AdmissionProfileUpdateInput>,
+    })
+    expect(screen.queryByTestId("academic-notices")).not.toBeInTheDocument()
+  })
+
+  it("nhắc hở một năm học và hở nhiều năm học", () => {
+    renderTab({
+      defaults: {
+        academic_history: [
+          rec({ school_id: 1, level: "THCS", grade_to: 9, year_from: 2017, year_to: 2021 }),
+          rec({ school_id: 2, grade_to: 12, year_from: 2022, year_to: 2025 }),
+          rec({ school_id: 3, grade_to: 12, year_from: 2027, year_to: 2028 }),
+        ],
+      } as Partial<AdmissionProfileUpdateInput>,
+    })
+    expect(screen.getByText(/Hở năm học 2021–2022 \(giữa Trường #1 và #2\)/)).toBeInTheDocument()
+    expect(screen.getByText(/Hở năm học 2025–2026 đến 2026–2027 \(giữa Trường #2 và #3\)/)).toBeInTheDocument()
+  })
+})
+
+describe("AcademicHistoryTab — nhắc dòng liên cấp ghi gộp nhiều năm (owner 22-11 'ở lại lớp', phản chiếu Q8)", () => {
+  const CAU_LIEN_CAP =
+    "Trường #1 là trường liên cấp ghi gộp nhiều năm: khu vực chỉ tính các năm cuối từ lớp 10 trở lên. Nếu em ở lại lớp ở cấp 3, tách mỗi năm học một dòng."
+  const mot = (level: AcademicRecord["level"], year_from: number, year_to: number) =>
+    ({
+      academic_history: [
+        { school_id: 7, school_name: "Trường liên cấp thử", level, year_from, year_to, grade_to: 12, gpa: null },
+      ],
+    }) as Partial<AdmissionProfileUpdateInput>
+
+  it("BẬT với liên cấp 2015→2023 lớp 12 (8 năm học > 3 năm lớp 10–12)", () => {
+    renderTab({ defaults: mot("THCS_THPT", 2015, 2023) })
+    expect(screen.getByText(CAU_LIEN_CAP)).toBeInTheDocument()
+  })
+
+  it("KHÔNG bật với liên cấp 2022→2023 lớp 12 (vào trường ở lớp 12)", () => {
+    renderTab({ defaults: mot("THCS_THPT", 2022, 2023) })
+    expect(screen.queryByText(/ghi gộp nhiều năm/)).not.toBeInTheDocument()
+  })
+
+  it("KHÔNG bật ở đúng biên: liên cấp 2020→2023 lớp 12 (3 năm = lớp 10–12)", () => {
+    renderTab({ defaults: mot("THCS_THPT", 2020, 2023) })
+    expect(screen.queryByText(/ghi gộp nhiều năm/)).not.toBeInTheDocument()
+  })
+
+  it("KHÔNG bật với THPT 2021→2025 lớp 12 (THPT tính đủ mọi năm học)", () => {
+    renderTab({ defaults: mot("THPT", 2021, 2025) })
+    expect(screen.queryByText(/ghi gộp nhiều năm/)).not.toBeInTheDocument()
+  })
+})
+
+describe("AcademicHistoryTab — owner 'điểm 1 và 2' + Codex G5 lượt 2", () => {
+  it("việc 1: 'Thêm trường' KHÔNG mặc định năm (kể cả khi đồng hồ ở năm khác); lưu thiếu năm ⇒ báo tiếng Việt", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] })
+    vi.setSystemTime(new Date("2031-03-01T00:00:00Z"))
+    let capturedForm: UseFormReturn<AdmissionProfileUpdateInput> | null = null
+    try {
+      renderTab({ isEditable: true, withResolver: true, exposeForm: (f) => { capturedForm = f } })
+      fireEvent.click(screen.getByRole("button", { name: /Thêm trường/ }))
+      const row = (capturedForm!.getValues("academic_history") ?? [])[0]
+      expect(row.year_from).toBeUndefined()
+      expect(row.year_to).toBeUndefined()
+      expect(screen.getAllByLabelText("Từ năm")[0]).toHaveValue(null)
+      expect(screen.getAllByLabelText("Đến năm")[0]).toHaveValue(null)
+      await act(async () => {
+        await capturedForm!.trigger("academic_history.0")
+      })
+      expect(screen.getByText("Vui lòng nhập năm bắt đầu")).toBeInTheDocument()
+      expect(screen.getByText("Vui lòng nhập năm kết thúc")).toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("việc 2: mỗi dòng có câu giải thích cách ghi năm và xem trước năm học của dòng", () => {
+    renderTab({
+      defaults: {
+        academic_history: [
+          { school_id: 1, school_name: "Trường X", level: "THPT", year_from: 2022, year_to: 2025, grade_to: 12, gpa: null },
+          { school_id: 2, school_name: "Trường Y", level: "THPT", year_from: 2025, year_to: 2025, grade_to: 12, gpa: null },
+        ],
+      } as Partial<AdmissionProfileUpdateInput>,
+    })
+    expect(screen.getByTestId("academic-row-year-hint-0")).toHaveTextContent("Năm học 2022–2023 ghi 2022 → 2023.")
+    expect(screen.getByTestId("academic-row-years-0")).toHaveTextContent(
+      "Dòng này: năm học 2022–2023, 2023–2024, 2024–2025.",
+    )
+    expect(screen.getByTestId("academic-row-years-1")).toHaveTextContent("Dòng này: chưa có năm học nào.")
+  })
+
+  it("việc 2: dòng do nút thêm nhanh sinh ra xem trước đúng một năm học", () => {
+    renderTab({ isEditable: true })
+    typeYear("academic-quick-add-thpt-start", "2022")
+    fireEvent.click(screen.getByTestId("academic-quick-add-thpt"))
+    expect(screen.getByTestId("academic-row-years-0")).toHaveTextContent("Dòng này: năm học 2022–2023.")
+    expect(screen.getByTestId("academic-row-years-2")).toHaveTextContent("Dòng này: năm học 2024–2025.")
+  })
+
+  it("việc 4: hồ sơ đang ấn định KV thủ công ⇒ cảnh báo sửa lịch sử học làm bản ấn định hết hiệu lực", () => {
+    renderTab({
+      isEditable: true,
+      defaults: { area_resolution_basis: "manual_override" } as Partial<AdmissionProfileUpdateInput>,
+    })
+    expect(screen.getByTestId("academic-kv-override-warning")).toHaveTextContent(
+      "Hồ sơ này đang được ấn định khu vực thủ công. Nếu sửa trường, năm, lớp cuối hoặc trình độ ở đây, bản ấn định sẽ hết hiệu lực và quản lý phải ấn định lại (sửa điểm TB không ảnh hưởng).",
+    )
+  })
+
+  it("việc 4: KHÔNG cảnh báo khi hồ sơ không ấn định tay, hoặc khi chỉ xem", () => {
+    const { unmount } = renderTab({
+      isEditable: true,
+      defaults: { area_resolution_basis: "high_school" } as Partial<AdmissionProfileUpdateInput>,
+    })
+    expect(screen.queryByTestId("academic-kv-override-warning")).not.toBeInTheDocument()
+    unmount()
+    renderTab({
+      isEditable: false,
+      defaults: { area_resolution_basis: "manual_override" } as Partial<AdmissionProfileUpdateInput>,
+    })
+    expect(screen.queryByTestId("academic-kv-override-warning")).not.toBeInTheDocument()
+  })
+
+  it("Codex P2: dòng liên cấp thiếu Lớp cuối ⇒ nhắc cần ghi Lớp cuối", () => {
+    renderTab({
+      defaults: {
+        academic_history: [
+          { school_id: 7, school_name: "Liên cấp X", level: "THCS_THPT", year_from: 2016, year_to: 2023, grade_to: null, gpa: null },
+        ],
+      } as Partial<AdmissionProfileUpdateInput>,
+    })
+    expect(
+      screen.getByText(
+        'Trường #1 là trường liên cấp: cần ghi "Lớp cuối" (lớp cuối cùng em học ở trường này) để tính được khu vực.',
+      ),
+    ).toBeInTheDocument()
   })
 })
 

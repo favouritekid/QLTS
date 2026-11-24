@@ -30,7 +30,7 @@ Security Features:
 import secrets
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
-from typing import Awaitable, List, Mapping, Optional, Dict, Any, Tuple, Callable
+from typing import Awaitable, List, Mapping, NoReturn, Optional, Dict, Any, Tuple, Callable
 from decimal import Decimal, InvalidOperation
 import structlog
 from sqlalchemy import or_, and_, select, func
@@ -76,6 +76,7 @@ from ..utils.admission_status import (
 )
 from ..utils.exceptions import (
     ResourceNotFoundError,
+    AuditTrailUnavailable,
     BadRequest,
     BusinessRuleViolation,
     PermissionDeniedError,
@@ -120,6 +121,8 @@ _BULK_SAFE_DOMAIN_EXCEPTIONS = (
     PermissionDeniedError,
     ConflictError,
     ValidationError,
+    # N4 (owner 22-11 Q1): câu "Không ghi được nhật ký từ chối — hồ sơ chưa đổi, vui lòng thử lại." hiện ở mục lô bị lỗi.
+    AuditTrailUnavailable,
 )
 
 
@@ -740,6 +743,89 @@ async def _count_quota_occupying_profiles(
     )
 
 
+# ═══════════════════════════════ N4 — ngành chỉ tiêu 0 đóng tuyệt đối với Phê duyệt ═══════════════════════════════
+# Owner 20-11 (``gd2/QUYET-DINH-OWNER-H1-VA-N4-2026-11-20.md``, THẮNG hai bản phân tích N4): ngành chỉ tiêu năm 0 ⇒ Phê duyệt
+# ĐƠN và LÔ bị chặn với MỌI vai, kể cả Admin ghi lý do xin vượt (N4-2, N4-6), kể cả hồ sơ đã được tính chỗ nhờ Quyết định
+# hiệu lực (N4-3). Vị từ "ngành đóng" — MỘT nguồn: ``quota_occupancy_service.is_offering_closed``.
+
+#: N4-1: "Hoàn tất nhập học" (``/finalize``) GIỮ phép kiểm chỉ tiêu + cơ chế Admin xin vượt hiện hành — chốt ngành đóng KHÔNG
+#: áp. Mọi nhãn ``transition`` khác ("approve", "bulk_approve", và nhãn mới về sau) ĐỀU chịu chốt: thiếu tên ở đây ⇒ bị chặn
+#: (fail-closed), không phải được thả.
+_CLOSED_OFFERING_EXEMPT_TRANSITIONS = frozenset({"finalize"})
+
+#: N4-6: lý do owner chốt; N4-2: hướng dẫn ĐÚNG việc Admin cần làm theo bảng chỉ tiêu của năm — bảng ĐÃ KHOÁ ⇒ mở khoá có
+#: ghi lý do, đặt chỉ tiêu > 0, khoá lại; bảng CHƯA KHOÁ (nháp, hoặc năm chưa có bảng) ⇒ đặt lại chỉ tiêu, khoá bảng (không
+#: bảo Admin mở một bảng chưa khoá).
+CLOSED_OFFERING_REASON = "Ngành đã đóng tuyển (chỉ tiêu 0)"
+CLOSED_OFFERING_MESSAGE = (
+    CLOSED_OFFERING_REASON + " — chặn Phê duyệt, kể cả khi Admin ghi lý do xin vượt chỉ tiêu. {huong_dan}"
+)
+CLOSED_OFFERING_GUIDE_LOCKED = (
+    "Bảng chỉ tiêu năm {nam} đã khoá: muốn nhận thêm, Admin mở khoá bảng có ghi lý do, đặt chỉ tiêu ngành > 0, "
+    "rồi khoá lại."
+)
+CLOSED_OFFERING_GUIDE_UNLOCKED = (
+    "Bảng chỉ tiêu năm {nam} chưa khoá: muốn nhận thêm, Admin đặt lại chỉ tiêu ngành > 0 rồi khoá bảng."
+)
+
+
+async def _closed_offering_message(db: AsyncSession, academic_year: Optional[int]) -> str:
+    """Câu báo (N4-2 / N4-6) theo trạng thái bảng chỉ tiêu của ``academic_year`` (năm của DÒNG HỌC VỤ — khoá bảng
+    chỉ tiêu theo năm ấy)."""
+    from .admission_quota_table_service import is_quota_table_locked
+
+    mau = (
+        CLOSED_OFFERING_GUIDE_LOCKED
+        if await is_quota_table_locked(db, academic_year)
+        else CLOSED_OFFERING_GUIDE_UNLOCKED
+    )
+    return CLOSED_OFFERING_MESSAGE.format(huong_dan=mau.format(nam=academic_year))
+
+
+async def _raise_offering_closed(
+    db: AsyncSession,
+    profile: models.AdmissionProfile,
+    actor: Optional[models.User],
+    *,
+    bypass_quota: bool,
+    bypass_reason: Optional[str],
+    academic_info: models.OfferingAcademicInfo,
+    quota: int,
+    transition: str,
+    source: str,
+) -> NoReturn:
+    """Chặn Phê duyệt vào ngành đóng (N4). Chỉ đọc ``actor`` khi CÓ xin vượt (nơi gọi nội bộ truyền ``actor=None`` khi
+    không xin vượt — ``tests/integration/test_quota_occupancy_db.py``).
+
+    N4-7: người gọi CHỦ ĐỘNG xin vượt ⇒ ghi ĐÚNG MỘT vết ``quota_bypass_denied_closed`` ở PHIÊN RIÊNG
+    (``_audit_quota_bypass_denied`` — còn lại sau khi giao dịch / savepoint của Phê duyệt lùi). Phê duyệt THÔNG THƯỜNG
+    (không xin vượt) KHÔNG ghi vết xin vượt. Lô: mỗi mục xin vượt bị chặn một vết.
+
+    Codex 22-11 lượt 2 (A-P2): vết này BẮT BUỘC (owner N4-7 "đúng một vết", Admin lẫn Quản lý) ⇒ ghi / commit vết lỗi thì
+    KHÔNG trả lỗi nghiệp vụ "ngành đóng" như thể vết đã có: ``fail_closed=True`` ⇒ ``AuditTrailUnavailable`` (503, mã + câu
+    riêng — owner 22-11 Q1) — đơn: giao dịch router lùi; lô: mục ấy báo đúng câu ấy (lớp thuộc ``_BULK_SAFE_DOMAIN_EXCEPTIONS``,
+    savepoint mục lùi). Hồ sơ giữ nguyên ở cả hai."""
+    if bypass_quota:
+        await _audit_quota_bypass_denied(
+            entity_id=profile.id,
+            actor=actor,
+            denial_action="quota_bypass_denied_closed",
+            denial_detail=f"quota={quota}; role={actor.role}",
+            quota=quota,
+            # Chốt đứng TRƯỚC phép đếm (không cần ``lead.offering_id``) ⇒ không có số đếm.
+            count_before=None,
+            count_after=None,
+            academic_info_id=academic_info.id,
+            academic_year=profile.academic_year,
+            offering_id=profile.lead.offering_id if profile.lead else None,
+            transition=transition,
+            source=source,
+            attempted_reason=bypass_reason,
+            fail_closed=True,
+        )
+    raise BusinessRuleViolation(await _closed_offering_message(db, academic_info.academic_year))
+
+
 async def _assert_quota_or_bypass(
     db: AsyncSession,
     profile: models.AdmissionProfile,
@@ -757,6 +843,13 @@ async def _assert_quota_or_bypass(
     ``entity_audit_log`` row whenever an admin bypasses the cap.
 
     Behaviour:
+    - N4 (owner 20-11): quota ≤ 0 (ngành ĐÓNG — ``_qos.is_offering_closed``)
+      and ``transition`` is NOT ``"finalize"`` → raise
+      ``BusinessRuleViolation`` ("Ngành đã đóng tuyển (chỉ tiêu 0)") for
+      EVERY role, bypass or not, already-counted profile or not; checked
+      right after the NULL branch, BEFORE ``lead.offering_id`` is needed.
+      A bypass request here writes ONE ``quota_bypass_denied_closed`` row
+      (separate session). ``/finalize`` keeps the rules below (N4-1).
     - Profile not yet in a quota status + count + 1 ≤ quota → pass silently.
     - Count + 1 > quota and ``bypass_quota=False`` → raise
       ``BusinessRuleViolation`` (the standard hard-cap error path).
@@ -787,9 +880,10 @@ async def _assert_quota_or_bypass(
         source: Audit ``source`` field. Defaults to ``"api"``.
 
     Raises:
-        BusinessRuleViolation: cap reached and no bypass.
-        PermissionDeniedError: bypass requested by non-admin.
-        ValidationError: bypass requested without valid reason.
+        BusinessRuleViolation: offering closed (quota ≤ 0, not finalize —
+            N4); or cap reached and no bypass.
+        PermissionDeniedError: bypass requested by non-admin (quota > 0).
+        ValidationError: bypass requested without valid reason (quota > 0).
     """
     # F263: lô duyệt truyền ánh xạ đã dò (``_lock_before_batch_approval``) ⇒ không khoá dòng chỉ tiêu ngoài tập.
     academic_info, quota = await _resolve_quota_context(
@@ -805,11 +899,10 @@ async def _assert_quota_or_bypass(
     # Schema currently allows annual_admission_quota = 0 (ge=0). Treating 0
     # as unlimited would let admin/manager admit unbounded students into a
     # deliberately closed cohort. Instead, 0 (or negative for safety) is a
-    # hard block — the only escape is admin bypass with the standard reason
-    # contract. This is the safe interpretation; if product wants a
-    # different model later (e.g. force schema to ge=1, or rename "0" to
-    # "frozen with admin override"), update both schema and this gate
-    # together.
+    # hard block. N4 (owner 20-11): for Phê duyệt đơn / lô there is NO
+    # escape — admin bypass no longer opens a closed offering (chốt ngay sau
+    # nhánh NULL bên dưới). Only ``/finalize`` keeps the admin-bypass escape
+    # below (N4-1: hồ sơ đã chiếm chỗ hoàn tất nhập học theo luật cũ).
     # Disambiguate the two skip flavours so observability can tell them
     # apart. ``_resolve_quota_context`` returns ``(None, None)`` for
     # legacy profiles where neither ``applied_rules.academic_info_id``
@@ -847,6 +940,23 @@ async def _assert_quota_or_bypass(
             academic_info_id=academic_info.id,
         )
         return
+
+    # N4 (owner 20-11; vị trí theo bổ sung Codex 20-11): chỉ tiêu đã đọc DƯỚI khoá dòng học vụ ⇒ đủ căn cứ "ngành đóng",
+    # KHÔNG phụ thuộc phép đếm bên dưới (cần ``lead.offering_id`` — mất nó thì nhánh dưới ``return`` sớm ⇒ chốt đặt sau đó sẽ
+    # lọt). Đặt TRƯỚC ``is_occupying``: hồ sơ đã được tính chỗ (Quyết định hiệu lực) vẫn bị chặn (N4-3). Đặt TRƯỚC kiểm vai
+    # / lý do xin vượt: mọi vai nhận 400 cùng một câu (N4-6).
+    if _qos.is_offering_closed(quota) and transition not in _CLOSED_OFFERING_EXEMPT_TRANSITIONS:
+        await _raise_offering_closed(
+            db,
+            profile,
+            actor,
+            bypass_quota=bypass_quota,
+            bypass_reason=bypass_reason,
+            academic_info=academic_info,
+            quota=quota,
+            transition=transition,
+            source=source,
+        )
 
     # Count seats currently occupied by other profiles. Exclude self so a
     # finalize on an already-approved profile doesn't double-count.
@@ -917,6 +1027,7 @@ async def _assert_quota_or_bypass(
             transition=transition,
             source=source,
             attempted_reason=bypass_reason,
+            fail_closed=False,  # ADM-026 best-effort — owner 22-11 Q2 giữ, khai tường minh
         )
         raise PermissionDeniedError(
             "Chỉ Admin được phép ghi đè chỉ tiêu tuyển sinh (bypass_quota). "
@@ -939,6 +1050,7 @@ async def _assert_quota_or_bypass(
             transition=transition,
             source=source,
             attempted_reason=bypass_reason,
+            fail_closed=False,  # ADM-026 best-effort — owner 22-11 Q2 giữ, khai tường minh
         )
         raise ValidationError(
             "bypass_reason là bắt buộc và phải có ít nhất 20 ký tự khi bypass_quota=true."
@@ -983,27 +1095,47 @@ async def _audit_quota_bypass_denied(
     denial_action: str,
     denial_detail: str,
     quota: int,
-    count_before: int,
-    count_after: int,
+    count_before: Optional[int],
+    count_after: Optional[int],
     academic_info_id: int,
     academic_year: int,
-    offering_id: int,
+    offering_id: Optional[int],
     transition: str,
     source: str,
     attempted_reason: Optional[str],
+    fail_closed: bool,
 ) -> None:
     """
     ADM-026 review (Major #3): persist a denied bypass-attempt audit row.
 
     Runs in its OWN session (``AsyncSessionLocal``) and commits
     independently so the audit row survives the caller's rollback. The
-    caller is about to raise (PermissionDeniedError or ValidationError),
-    which will tear down the route's transaction frame; without an
+    caller is about to raise (PermissionDeniedError, ValidationError, or —
+    N4 ``quota_bypass_denied_closed`` — BusinessRuleViolation with the
+    counts / offering_id left ``None`` because the closed-offering gate runs
+    before counting), which will tear down the route's transaction frame; without an
     independent session, the audit write would also rollback and the
     attempt would leave no trace.
 
-    Best-effort: any exception here is logged but swallowed so we never
-    convert "bypass denied" into "bypass denied + 500 audit error".
+    ``fail_closed`` KHÔNG có giá trị mặc định (owner 22-11 Q2): mọi nơi gọi khai tường
+    minh, để nơi gọi mới không âm thầm rơi vào best-effort.
+
+    Best-effort (``fail_closed=False`` — ADM-026 ``quota_bypass_denied_role`` /
+    ``quota_bypass_denied_reason``, chỉ tiêu > 0, GIỮ nguyên — owner 22-11 Q2): any
+    exception here is logged but swallowed so we never convert "bypass denied" into
+    "bypass denied + 500 audit error".
+
+    ``fail_closed=True`` (N4 ``quota_bypass_denied_closed`` — owner N4-7: vết BẮT
+    BUỘC, Codex 22-11 lượt 2 A-P2): lỗi ghi HOẶC commit vết ⇒ log rồi ném
+    ``AuditTrailUnavailable`` (503, mã + câu riêng — owner 22-11 Q1) — người gọi
+    KHÔNG được trả lỗi nghiệp vụ như thể vết đã ghi. Phiên vết chưa commit ⇒ đóng
+    phiên = lùi ⇒ không có vết dở.
+
+    Ca "commit mơ hồ" (Codex N4 lượt 3 H2, ghi nhận — không vá): máy chủ ĐÃ commit
+    vết nhưng kết nối đứt trước khi kịp báo về ⇒ vết đã có mà người dùng vẫn nhận 503
+    (câu "Không ghi được…" khi ấy nói sai). Rất hiếm; không vá được nếu không có khoá
+    chống ghi trùng. Lần thử lại là một lượt xin vượt MỚI ⇒ sinh một vết mới là đúng
+    ("một lượt, một vết" vẫn giữ).
     """
     from ..database import AsyncSessionLocal
     from ..services import audit_service
@@ -1036,14 +1168,20 @@ async def _audit_quota_bypass_denied(
                 source=source,
             )
             await audit_db.commit()
-    except Exception as audit_err:  # noqa: BLE001 — best-effort, never block denial
+    except Exception as audit_err:  # noqa: BLE001 — best-effort trừ fail_closed ⇒ 503 (AuditTrailUnavailable)
+        # Codex N4 lượt 3 H4: GIỮ nguyên câu log (bộ lọc / cảnh báo dò theo câu); vết bắt buộc thì thêm mã lỗi trả người dùng.
+        ma_loi = {"error_code": AuditTrailUnavailable.error_code} if fail_closed else {}
         log.error(
             "ADM-026 audit write FAILED for denied bypass attempt",
             entity_id=entity_id,
             denial_action=denial_action,
             actor_id=actor.id,
             error=str(audit_err),
+            fail_closed=fail_closed,
+            **ma_loi,
         )
+        if fail_closed:
+            raise AuditTrailUnavailable() from audit_err
 
 
 async def check_enrollment_fee_eligibility(
@@ -10244,7 +10382,8 @@ async def approve_profile(
     # ADM-026: quota gate. Locks the OfferingAcademicInfo row before
     # counting committed seats so concurrent approve calls cannot blow the
     # cap. Admin can override with bypass_quota + bypass_reason; manager
-    # gets 403; missing reason gets 400.
+    # gets 403; missing reason gets 400. N4: ngành chỉ tiêu 0 ⇒ 400 cho MỌI
+    # vai, không cửa vượt (chốt trong ``_assert_quota_or_bypass``).
     await _assert_quota_or_bypass(
         db,
         profile,
@@ -14559,6 +14698,8 @@ async def bulk_approve(
                 # while letting others fail-fast. Errors map to per-item
                 # ``errors[profile_id]`` so the batch keeps moving (matches
                 # existing bulk error shape used for state/version/fee gates).
+                # N4: ngành chỉ tiêu 0 ⇒ mục bị chặn (lý do "Ngành đã đóng tuyển
+                # (chỉ tiêu 0)"), lô vẫn HTTP 200 — kể cả mục Admin xin vượt.
                 try:
                     await _assert_quota_or_bypass(
                         db,

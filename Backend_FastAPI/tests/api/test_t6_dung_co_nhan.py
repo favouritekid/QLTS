@@ -396,3 +396,63 @@ async def test_q20_nganh_thieu_trinh_do_thi_dung_503_khong_ghi_truot(
     assert body["error_code"] == "CHOICE_TARGET_LEVEL_NOT_CONFIGURED", body
     assert (body.get("display_order"), body.get("gap_kind")) == (1, "degree_level_missing"), body
     assert await doc_lai_ho_so(pid) == ("reviewing", ["pending"])
+
+
+# ===========================================================================
+# G5 — từ nút thêm nhanh tới BẢN XEM TRƯỚC (Codex G5 rà tĩnh d4b7a69f P5)
+# ===========================================================================
+
+
+def _nut_them_nhanh(school_id: int, nam_lop: tuple) -> list:
+    """Dòng nút thêm nhanh sinh ra rồi chọn trường từ danh mục. Chép từ ``CAP_FE_NUT_THEM_NHANH_2022`` (nguồn:
+    ``frontend/src/app/(dashboard)/admissions/[id]/_components/tabs/AcademicHistoryTab.test.tsx``; bản Python ở
+    ``tests/unit/test_priority_kv_lien_cap_g5.py``) — chỉ đổi trường giả 42 của vitest thành trường của seed (danh mục KV3
+    phủ 2020–2024, KHÔNG có 2025)."""
+    return [
+        {
+            "school_id": school_id, "school_name": "THPT Chuyên Nguyễn Du", "level": "THPT",
+            "year_from": tu, "year_to": den, "grade_to": lop, "gpa": None, "graduation_type": "THPT",
+        }
+        for tu, den, lop in nam_lop
+    ]
+
+
+async def test_g5_nut_them_nhanh_2022_toi_xem_truoc_tra_dung_2022_2024(
+    client, manager_token_headers, seed_lead_dependencies,
+):
+    """Gõ 2022 ⇒ 2022→2023, 2023→2024, 2024→2025 ⇒ xem trước tra ĐÚNG khoá 2022, 2023, 2024 (danh mục không có 2025: nếu còn
+    tra năm sau tốt nghiệp thì ra ``catalog_gap_school``)."""
+    ho_so = await seed_cascade_profile(seed_lead_dependencies)
+    lich_su = _nut_them_nhanh(ho_so["seed"]["school_id"], ((2022, 2023, 10), (2023, 2024, 11), (2024, 2025, 12)))
+    r = await client.post(
+        f"/api/v2/admissions/{ho_so['profile_id']}/preview-priority-kv",
+        json={"academic_history": lich_su},
+        headers=manager_token_headers,
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert (body["kv_resolved"], body["rule_applied"]) == ("KV3", "longest_duration"), body
+    assert [e["counted_school_years"] for e in body["breakdown"]["entries"]] == [[2022], [2023], [2024]], body
+    assert body["breakdown"]["kv_totals"] == {"KV3": 3}, body
+
+
+async def test_g5_du_lieu_nut_cu_y_y_toi_xem_truoc_dung_co_nhan(
+    client, manager_token_headers, seed_lead_dependencies,
+):
+    """Dữ liệu nút CŨ (mỗi lớp một mục y→y) ⇒ xem trước DỪNG có nhãn, liệt kê cả 3 mục — cán bộ thấy trước khi nộp."""
+    ho_so = await seed_cascade_profile(seed_lead_dependencies)
+    lich_su = _nut_them_nhanh(ho_so["seed"]["school_id"], ((2022, 2022, 10), (2023, 2023, 11), (2024, 2024, 12)))
+    r = await client.post(
+        f"/api/v2/admissions/{ho_so['profile_id']}/preview-priority-kv",
+        json={"academic_history": lich_su},
+        headers=manager_token_headers,
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert (body["kv_resolved"], body["rule_applied"], body["reason"]) == (
+        None, "insufficient_data", "history_entries_inconsistent",
+    ), body
+    assert body["requires_manual_override"] is True, body
+    assert [(m["index"], m["case"]) for m in body["breakdown"]["entries"]] == [
+        (0, "zero_length_entry"), (1, "zero_length_entry"), (2, "zero_length_entry"),
+    ], body

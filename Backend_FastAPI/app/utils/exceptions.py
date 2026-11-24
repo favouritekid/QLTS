@@ -493,6 +493,20 @@ class InitialLeadStatusNotConfigured(ServiceUnavailableError):
     error_code = "INITIAL_LEAD_STATUS_NOT_CONFIGURED"
 
 
+class AuditTrailUnavailable(ServiceUnavailableError):
+    """Không ghi được vết từ chối BẮT BUỘC nên yêu cầu bị từ chối (HTTP 503) — N4-7 / owner 22-11 Q1 (phương án c).
+
+    Ca: Phê duyệt vào ngành chỉ tiêu 0 có xin vượt ⇒ phải ghi ĐÚNG MỘT vết ``quota_bypass_denied_closed`` ở phiên CSDL riêng;
+    ghi / commit vết ấy thất bại ⇒ KHÔNG trả lỗi nghiệp vụ "ngành đóng" như thể vết đã có. Hồ sơ chưa đổi; thử lại có ích (CSDL
+    chập chờn) ⇒ họ 503 fail-closed, không phải 500 (lỗi lập trình).
+
+    Mã lỗi riêng để log / giao diện phân biệt với mọi ca 503 khác (cùng lý do ``InitialLeadStatusNotConfigured``). Lô Phê
+    duyệt hiện câu này ở mục bị lỗi (lớp nằm trong ``_BULK_SAFE_DOMAIN_EXCEPTIONS`` của ``admission_service``)."""
+
+    detail = "Không ghi được nhật ký từ chối — hồ sơ chưa đổi, vui lòng thử lại."
+    error_code = "AUDIT_TRAIL_UNAVAILABLE"
+
+
 class AuthStateUnavailable(ServiceUnavailableError):
     """Auth state kept in Redis could not be verified, so the request is refused (HTTP 503).
 

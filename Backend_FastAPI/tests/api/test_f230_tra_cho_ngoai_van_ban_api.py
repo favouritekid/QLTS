@@ -23,6 +23,7 @@ phép so "trước / sau" của A sai (mất cảnh báo khi B trả chỗ; sai 
 * F9  — Trả về Nháp khi cấu hình cùng năm đang giữ khoá năm độc quyền ⇒ 409 "thử lại" NGAY, không chờ (bản không chờ).
 * F10 — Chốt ở ``transition()``: chuyển trạng thái chiếm chỗ mà chưa khoá ⇒ ``ServiceError`` (500), trạng thái không đổi.
 * F11 — Kiểm kê mã (đọc nguồn): đủ các đường, đúng thứ tự khoá, một lần khoá ô.
+* F11b — (gộp N4, 23-11) Phê duyệt đơn / lô: một lần khoá ô chặn mọi đường tới cổng chỉ tiêu (ô cổng không bị khoá trước).
 * F12 — Phê duyệt (ô cổng CAO, ô lead THẤP) ‖ Phê duyệt hàng loạt [thấp, cao]: MỘT lần khoá ô ⇒ không vòng chờ.
 * F14a / F14b — owner 22-11 (``…/pr-f230/QUYET-DINH-OWNER-F230-RUT-QUA-THU-2026-11-22.md``): ứng viên tự rút qua liên kết trong
   thư khi cấu hình cùng năm đang giữ khoá năm ⇒ 409 NGAY câu owner; hồ sơ, liên kết giữ nguyên, 0 thông báo; nhả khoá ⇒ CHÍNH
@@ -1062,6 +1063,29 @@ def test_f11_kiem_ke_ast_moi_duong_doi_so_cho_deu_khoa_dung_thu_tu():
         assert _bi_chan(ham_ts, x, _ten_la("check_quota_locked_for_transition")), (
             "chốt ở transition() phải chặn MỌI đường tới câu đặt .status",
             x.lineno,
+        )
+
+
+def test_f11b_phe_duyet_khoa_o_mot_lan_chan_moi_duong_toi_cong_chi_tieu():
+    """Gộp N4 × F230 (main 563361c8, 23-11 — ``logs-P5/cong-bo-ket-qua/gd2/n4/gop-main-563361c8/``): ở Phê duyệt đơn / lô, MỘT
+    lần khoá ô của F230 (``lock_quota_for_profiles`` / ``_lock_before_batch_approval``) phải chặn MỌI đường (theo luồng chạy) tới
+    cổng chỉ tiêu ``_assert_quota_or_bypass`` — nơi ADM-026 và chốt ngành đóng N4 khoá + đọc chỉ tiêu của ô cổng. Cổng đứng TRƯỚC
+    lần khoá ô ⇒ giao dịch khoá ô HAI lần (ô cổng trước, rồi hợp ô) ⇒ vòng chờ với lô. F11 không thấy (khoá ô vẫn chặn mọi đường
+    tới ``transition``); F12 không thấy (điểm dừng của F12 là lần gọi ĐẦU ``lock_quota_cells``, còn cổng khoá ô cổng bằng câu
+    ``FOR UPDATE`` riêng trong ``_resolve_quota_context``). Biến thể phá: G2 / G2-lô (``kn_f11b_n4.py`` của bàn giao trên)."""
+    pham_vi = _quet_app()
+    for khoa, khoa_o in (
+        ("services/admission_service.py:approve_profile", "lock_quota_for_profiles"),
+        ("services/admission_service.py:bulk_approve", "_lock_before_batch_approval"),
+    ):
+        ham, cac, _ = pham_vi[khoa]
+        cong = _goi(cac, "_assert_quota_or_bypass")
+        assert len(cong) == 1, (khoa, "phép đo hỏng: phải có ĐÚNG MỘT lời gọi cổng chỉ tiêu", len(cong))
+        assert len(_goi(cac, khoa_o)) == 1, (khoa, "phép đo hỏng: phải có ĐÚNG MỘT lần khoá ô", khoa_o)
+        assert _bi_chan(ham, cong[0], _ten_la(khoa_o)), (
+            khoa,
+            "khoá ô MỘT lần phải chặn MỌI đường tới cổng chỉ tiêu (_assert_quota_or_bypass)",
+            cong[0].lineno,
         )
 
 

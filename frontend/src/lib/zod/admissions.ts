@@ -371,13 +371,14 @@ export const academicRecordSchema = z
       .enum(VN_SCHOOL_LEVELS)
       .optional()
       .nullable(),
+    // Owner "điểm 1 và 2" việc 1: nút "Thêm trường" để trống hai ô năm ⇒ thiếu năm báo câu tiếng Việt.
     year_from: z
-      .number()
+      .number({ error: "Vui lòng nhập năm bắt đầu" })
       .int("Năm bắt đầu phải là số nguyên")
       .min(1900, "Năm bắt đầu phải từ 1900 trở lên")
       .max(2100, "Năm bắt đầu không được quá 2100"),
     year_to: z
-      .number()
+      .number({ error: "Vui lòng nhập năm kết thúc" })
       .int("Năm kết thúc phải là số nguyên")
       .min(1900, "Năm kết thúc phải từ 1900 trở lên")
       .max(2100, "Năm kết thúc không được quá 2100"),

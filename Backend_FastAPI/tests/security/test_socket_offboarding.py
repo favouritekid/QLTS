@@ -79,3 +79,24 @@ async def test_subscribe_handshake_returns_listening_pubsub(setup_test_database)
     finally:
         await pubsub.unsubscribe(sm.FORCE_DISCONNECT_CHANNEL)
         await pubsub.aclose()
+
+
+async def test_heartbeat_thread_refreshes_the_store_required_workers_reads(setup_test_database, monkeypatch):
+    """Lớp giả Redis của bộ test: luồng heartbeat phải làm mới ĐÚNG kho mà ``_required_workers`` đọc.
+
+    ``register_socket_worker`` ghi heartbeat (TTL ``_WORKER_HB_TTL``) qua ``redis_client`` (FakeRedis, ``_fake_server``);
+    luồng ``_heartbeat_thread_run`` dựng client bằng ``redis.Redis.from_url`` (classmethod). Nếu lớp giả chỉ chặn hàm
+    module ``redis.from_url`` thì luồng làm mới một Redis KHÁC ⇒ sau TTL worker bị coi là chết ⇒ mọi lệnh ngắt socket
+    strict trong một ca dài hơn TTL đỏ "No live socket workers" (nightly 23-11, test_q4 khoá hàng loạt). TTL thu nhỏ để
+    ca chạy ~3 s; luồng đọc hai hằng ở MỖI vòng nên monkeypatch có hiệu lực."""
+    monkeypatch.setattr(sm, "_WORKER_HB_TTL", 2)
+    monkeypatch.setattr(sm, "_WORKER_HB_REFRESH", 0.2)
+    await sm.register_socket_worker()
+    wid = sm._worker_id
+    sm.start_heartbeat_thread()
+    try:
+        await asyncio.sleep(3.0)  # > TTL: worker chỉ còn "sống" nếu luồng làm mới đúng kho
+        assert wid in await sm._required_workers(), "heartbeat của worker trong FakeRedis đã hết hạn — luồng ghi kho khác"
+    finally:
+        sm.stop_heartbeat_thread()
+        await sm.deregister_socket_worker()
