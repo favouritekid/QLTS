@@ -78,7 +78,20 @@ SO_API_MUTATION = 69
 # Tổng số chỗ chạm API mutation trong `app/`. Khoá con số này vì "0 chỗ hở" một
 # mình KHÔNG chứng minh được gì: một scanner mất khả năng nhìn thấy một cú pháp
 # đang tồn tại cũng cho 0. Hai con số đi cùng nhau mới nói được điều gì.
-SO_CHO_CHAM = 25
+#
+# 25 → 21 (PR-B, đo 23-11 bằng chính `quet_nguon` trên cây df4bf025 và cây PR-B —
+# log `gd1b/sua/pr-b/l8-6b938eb0/chan-doan-casbin-25-21.log`): bốn lời gọi bị GỠ CÓ
+# CHỦ Ý ở commit 68360cb5 (PR-B lượt 4, Codex lượt 3 điểm chặn 1 + lượt 4 C1a) — vai
+# Casbin ghi thẳng bảng `casbin_rule` TRONG giao dịch (`UserRepository.
+# lock_grouping_rows` / `delete_grouping_ids` / `add_grouping`), bộ nhớ enforcer nạp
+# lại SAU commit; scanner KHÔNG mù:
+#   @df4bf025 services/role_service.py:155  remove_grouping_policy  (gỡ vai)
+#   @df4bf025 services/role_service.py:165  add_grouping_policy     (gỡ vai)
+#   @df4bf025 services/user_service.py:828  remove_grouping_policy  (PUT đổi vai)
+#   @df4bf025 services/user_service.py:836  add_grouping_policy     (PUT đổi vai)
+# Đường ghi thẳng `casbin_rule` nằm NGOÀI tầm phép kiểm lock này — luật "ghi thẳng
+# thì phải nạp lại enforcer sau commit" do `test_ghi_thang_casbin_rule_phai_nap_lai_enforcer_sau_commit` canh.
+SO_CHO_CHAM = 21
 
 
 def _danh_muc():
@@ -540,3 +553,35 @@ def test_app_khong_con_goi_save_policy():
         "Có lời gọi `save_policy()` trong app. Nó GHI ĐÈ toàn bộ bảng "
         "`casbin_rule` từ model bộ nhớ:\n" + "\n".join("  " + g for g in goi)
     )
+
+
+
+# Hàm ghi THẲNG bảng ``casbin_rule`` (không qua enforcer) — PR-B lượt 4 (68360cb5). Sổ khoá cứng: thêm đường ghi thẳng mới
+# là quyết định thấy được.
+GHI_THANG_CASBIN_RULE = ("add_grouping", "delete_grouping_ids")
+NAP_LAI_SAU_COMMIT = "dong_bo_tu_nguon_ben_vung"
+SO_DUONG_GHI_THANG = {("services/user_service.py", "update_user"), ("services/role_service.py", "remove_role_from_users")}
+
+
+def _goi_ten(nut, ten) -> bool:
+    return any(isinstance(n, ast.Call) and _ten_ham(n.func) == ten for n in ast.walk(nut))
+
+
+@pytest.mark.unit
+def test_ghi_thang_casbin_rule_phai_nap_lai_enforcer_sau_commit():
+    """Ghi thẳng ``casbin_rule`` trong giao dịch thì bộ nhớ enforcer của worker CHƯA biết ⇒ hàm ấy phải trả callback sau
+    commit (hàm LỒNG bên trong) gọi ``dong_bo_tu_nguon_ben_vung`` (nạp lại dưới ``khoa_enforcer``). Gọi nạp lại ngay trong
+    thân chính (TRƯỚC commit) không tính: lúc ấy CSDL chưa có dòng mới. Phép kiểm lock ở trên không thấy đường này."""
+    thay, thieu = set(), []
+    for f in sorted(APP.rglob("*.py")):
+        rel = f.relative_to(APP).as_posix()
+        for nut in ast.walk(ast.parse(f.read_text(encoding="utf-8"))):
+            if not isinstance(nut, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if not any(_goi_ten(con, ten) for con in nut.body for ten in GHI_THANG_CASBIN_RULE):
+                continue
+            ham_long = [n for n in ast.walk(nut) if n is not nut and isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+            if not any(_goi_ten(h, NAP_LAI_SAU_COMMIT) for h in ham_long):
+                thieu.append((rel, nut.name))
+            thay.add((rel, nut.name))
+    assert (thay, thieu) == (SO_DUONG_GHI_THANG, []), (sorted(thay), thieu)

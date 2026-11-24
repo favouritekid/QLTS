@@ -535,11 +535,16 @@ async def remove_role_from_users(
     enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
 
     # Call service layer with injected dependencies (DI pattern)
+    from app.core.client_ip import get_client_ip
+    from app.services.document_transition import RequestMeta
+
     result, callback = await role_service.remove_role_from_users(
         db=db,
         enforcer=enforcer,
         user_ids=user_ids,
         role_to_remove=role_to_remove,
+        actor_id=current_admin.id,  # GĐ1b PR-B Q4: người thu hồi quyền duyệt chéo khi vai rời Cán bộ
+        request_meta=RequestMeta(get_client_ip(request), request.headers.get("user-agent")),
     )
     await db.commit()
     await callback()
@@ -785,10 +790,15 @@ async def delete_role_atomic(
     try:
         # Delegate to Service Layer (Refactoring Pattern A)
         # Service handles validation, logic, and atomic operations
+        from app.core.client_ip import get_client_ip
+        from app.services.document_transition import RequestMeta
+
         result, post_commit = await role_service.delete_role_atomic(
             db=db,
             role_name=role_name,
-            enforcer=enforcer
+            enforcer=enforcer,
+            actor_id=current_admin.id,  # PR-B lượt 3: đổi vai CSDL đi qua tự thu hồi Q4 (người thao tác)
+            request_meta=RequestMeta(get_client_ip(request), request.headers.get("user-agent")),
         )
 
         # Commit transaction

@@ -40,6 +40,13 @@ class UserRole(StrEnum):
     USER = "user"  # Basic user role with minimal permissions
 
 
+# Vai được phép GẮN vào một hồ sơ CTV qua ``user_id``. create_collaborator ĐỔI User.role của người đó thành 'collaborator',
+# mà Casbin lấy subject = role:{User.role} ⇒ gắn một tài khoản nhân sự là tước quyền của họ. MỘT nguồn cho cổng
+# ``deps.validate_collaborator_create`` VÀ bước khoá + đọc lại ngay trước khi ghi vai ở ``collaborator_service``
+# (``collaborator_link_target_allowed``).
+COLLABORATOR_LINKABLE_ROLES = frozenset({UserRole.USER, UserRole.COLLABORATOR})
+
+
 # Sentinel method dành riêng cho consultation do HỆ THỐNG tạo (SLA auto-close,
 # reopen). Cuộc 'system' là BẤT BIẾN (F1: không ai kể cả admin sửa/xóa/khôi phục)
 # và bị LOẠI khỏi metrics (B7/B8: count/last_consultation_at/ranking/effectiveness).

@@ -9,6 +9,8 @@ import { describe, it, expect } from "vitest";
 
 import {
   AUTH_STATE_UNAVAILABLE_ERROR_CODE,
+  COMBINED_KEY_CHANGE_AND_REVOKE_ERROR_CODE,
+  combinedKeyChangeAndRevokeDetail,
   isAuthStateUnavailable,
   t6PublishStopDetail,
 } from "./error-codes";
@@ -68,5 +70,30 @@ describe("t6PublishStopDetail — T6 dừng có nhãn ở MỌI status", () => {
   it("mã khác hoặc thân không phải JSON ⇒ null", () => {
     expect(t6PublishStopDetail({ status: 500, data: { error_code: "INTERNAL_ERROR", detail: "x" } })).toBeNull();
     expect(t6PublishStopDetail({ status: 503, data: NGINX_503_HTML })).toBeNull();
+  });
+});
+
+describe("combinedKeyChangeAndRevokeDetail — PR-B lượt 8, chặn lưu gộp", () => {
+  it("hằng là giá trị máy chủ gửi (CombinedKeyChangeAndRevokeError.error_code)", () => {
+    expect(COMBINED_KEY_CHANGE_AND_REVOKE_ERROR_CODE).toBe("COMBINED_KEY_CHANGE_AND_REVOKE");
+  });
+
+  it("409 + mã + detail ⇒ trả NGUYÊN detail của máy chủ", () => {
+    expect(
+      combinedKeyChangeAndRevokeDetail({
+        status: 409,
+        data: { error_code: "COMBINED_KEY_CHANGE_AND_REVOKE", detail: "câu máy chủ" },
+      }),
+    ).toBe("câu máy chủ");
+  });
+
+  it.each([
+    ["no response", undefined],
+    ["409 CONFLICT chung", { status: 409, data: { error_code: "CONFLICT", detail: "x" } }],
+    ["409 mã đúng nhưng không detail", { status: 409, data: { error_code: "COMBINED_KEY_CHANGE_AND_REVOKE" } }],
+    ["400 mang mã", { status: 400, data: { error_code: "COMBINED_KEY_CHANGE_AND_REVOKE", detail: "x" } }],
+    ["409 thân HTML", { status: 409, data: "<html>409</html>" }],
+  ])("null cho %s", (_ten, response) => {
+    expect(combinedKeyChangeAndRevokeDetail(response)).toBeNull();
   });
 });

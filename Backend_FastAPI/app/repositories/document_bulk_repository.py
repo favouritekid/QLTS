@@ -191,19 +191,22 @@ async def read_batch_state(db: AsyncSession, batch_id: UUID) -> Optional[Tuple[s
 
 
 async def lock_batch_row(db: AsyncSession, batch_id: UUID) -> Optional[Tuple[models.DocumentBulkBatch, bool]]:
-    """``FOR UPDATE`` dòng lô + cờ hết hạn so với ``clock_timestamp()`` (đọc SAU khi có khoá)."""
+    """``FOR UPDATE`` dòng lô + cờ hết hạn so với ``clock_timestamp()`` đọc SAU khi có khoá.
+
+    PR-B lượt 4 (Codex lượt 3 điểm chặn 4 — rà cùng khuôn): biểu thức hạn đặt TRONG câu khoá có thể được PostgreSQL tính
+    TRƯỚC lúc chờ khoá và trả nguyên giá trị ấy nếu dòng không bị sửa (giao dịch giữ khoá nhả mà không ghi) ⇒ bản xem trước
+    hết hạn trong lúc chờ vẫn bị coi là còn hạn. Đồng hồ CSDL đọc bằng câu RIÊNG sau khi có khoá."""
     row = (
         await db.execute(
-            select(
-                models.DocumentBulkBatch,
-                (models.DocumentBulkBatch.expires_at <= func.clock_timestamp()).label("expired"),
-            )
+            select(models.DocumentBulkBatch)
             .where(models.DocumentBulkBatch.batch_id == batch_id)
-            .with_for_update(of=models.DocumentBulkBatch)
+            .with_for_update()
             .execution_options(populate_existing=True)
         )
-    ).first()
-    return None if row is None else (row[0], bool(row[1]))
+    ).scalar_one_or_none()
+    if row is None:
+        return None
+    return row, row.expires_at <= await db_clock(db)
 
 
 async def db_clock(db: AsyncSession) -> datetime:
@@ -474,18 +477,23 @@ async def load_profiles_with_documents(db: AsyncSession, profile_ids: Sequence[i
 # Khoá theo thứ tự chung §4.5 cho MỘT hồ sơ của lô (sau dòng lô)
 # ---------------------------------------------------------------------------------------------------------------------
 async def lock_grant_share(db: AsyncSession, grant_id: int) -> Optional[Tuple[models.DocumentCrossReviewGrant, bool]]:
-    row = (
+    """Dòng quyền chéo ``FOR SHARE`` + ``still_valid`` = ``expires_at > clock_timestamp()`` đọc SAU khi có khoá.
+
+    PR-B lượt 4 (Codex lượt 3 điểm chặn 4): ``still_valid`` từng tính TRONG câu ``SELECT … FOR SHARE`` — PostgreSQL có thể
+    tính biểu thức ấy TRƯỚC lúc chờ khoá và trả lại nguyên giá trị nếu dòng không bị sửa (giao dịch giữ khoá nhả mà không
+    ghi) ⇒ quyền hết hạn TRONG lúc chờ vẫn được coi là còn hạn. Nay đồng hồ CSDL đọc bằng câu RIÊNG sau khi có khoá (dòng đã
+    khoá ⇒ ``expires_at`` đứng yên tới commit; đồng hồ là thời điểm quyết định)."""
+    grant = (
         await db.execute(
-            select(
-                models.DocumentCrossReviewGrant,
-                (models.DocumentCrossReviewGrant.expires_at > func.clock_timestamp()).label("still_valid"),
-            )
+            select(models.DocumentCrossReviewGrant)
             .where(models.DocumentCrossReviewGrant.id == grant_id)
-            .with_for_update(read=True, of=models.DocumentCrossReviewGrant)
+            .with_for_update(read=True)
             .execution_options(populate_existing=True)
         )
-    ).first()
-    return None if row is None else (row[0], bool(row[1]))
+    ).scalar_one_or_none()
+    if grant is None:
+        return None
+    return grant, grant.expires_at > await db_clock(db)
 
 
 async def lock_lead_share(db: AsyncSession, lead_id: int) -> Optional[models.Lead]:
@@ -523,36 +531,110 @@ async def lock_user_key_share(db: AsyncSession, user_id: int) -> Optional[Any]:
     (``user_deletion_policy.assert_user_deletable``) nhưng KHÔNG chặn ``UPDATE`` thường của dòng ``user`` (đăng nhập, đổi
     thông tin = ``FOR NO KEY UPDATE``).
 
-    Trả hàng ``(id, status)`` đọc DƯỚI khoá; ``None`` = dòng không còn (đã xoá). Chỉ chọn CỘT, không nạp thực thể: đối
-    tượng ``User`` của người gọi đang nằm trong phiên (``current_user``) — ``populate_existing`` trên thực thể sẽ làm hết
-    hạn quan hệ đã nạp của nó ⇒ đọc sau đó thành lazy-load ⇒ MissingGreenlet.
+    Trả hàng ``(id, status, role, unit_id)`` đọc DƯỚI khoá; ``None`` = dòng không còn (đã xoá). Chỉ chọn CỘT, không nạp
+    thực thể: đối tượng ``User`` của người gọi đang nằm trong phiên (``current_user``) — ``populate_existing`` trên thực thể
+    sẽ làm hết hạn quan hệ đã nạp của nó ⇒ đọc sau đó thành lazy-load ⇒ MissingGreenlet.
 
     Vì không chặn ``UPDATE`` thường, khoá này cũng KHÔNG giữ được VAI / TRẠNG THÁI: đổi vai, khoá tài khoản vẫn commit
-    được trong lúc khoá còn giữ. Đường nào quyết định GHI theo vai phải dùng ``lock_user_role_share``."""
+    được trong lúc khoá còn giữ. Đường nào quyết định GHI theo vai mà không giữ dòng quyền chéo phải dùng
+    ``lock_user_role_share`` (chốt lô, Admin cấp quyền chéo).
+
+    PR-B: duyệt chéo (lẻ / xem trước / §5.4) khoá người BẰNG khoá này, không ``FOR SHARE``: ``FOR KEY SHARE`` không xung
+    đột ``UPDATE "user"`` (đổi vai / khoá Q4 giữ ``FOR NO KEY UPDATE`` rồi chờ dòng quyền; giao lead giữ lead ``FOR UPDATE``
+    rồi ``UPDATE`` người được giao) ⇒ không vòng chờ. Đổi vai / khoá xếp hàng sau duyệt chéo ở DÒNG QUYỀN; vai đọc ở đây
+    được kiểm lại bằng vị từ chung (``cross_grant_authorizes``) trên dòng quyền đang giữ ``FOR SHARE``.
+
+    LUẬT (PR-B lượt 8, owner 23-11): KHÔNG đường nào được giữ dòng người ở mức khoá chặt (``FOR UPDATE`` — xung đột cả
+    khoá này) rồi đi chờ dòng quyền chéo. §5.4 giữ dòng quyền ``FOR SHARE`` rồi mới xin khoá này ⇒ đường vi phạm luật sẽ
+    vòng chờ với lô (``40P01``). Hiện trạng: Q4 giữ ``FOR NO KEY UPDATE`` (được); PUT ĐỔI cột khoá (email) giữ ``FOR
+    UPDATE`` (lượt 6) ⇒ nếu cùng lần lưu kéo theo thu hồi thì ``revoke_grants_on_account_change(target_locked_for_update=
+    True)`` trả 409 ``COMBINED_KEY_CHANGE_AND_REVOKE`` TRƯỚC khi khoá dòng quyền; K4 giữ ``FOR UPDATE`` nhưng không chạm
+    dòng quyền (quyền tham chiếu người bị xoá ⇒ 409 chỉ đọc). Đường mới giữ ``FOR UPDATE`` mà cần dòng quyền ⇒ phải khoá
+    dòng quyền TRƯỚC hoặc từ chối như trên."""
     return (
         await db.execute(
-            select(models.User.id, models.User.status)
+            select(models.User.id, models.User.status, models.User.role, models.User.unit_id)
             .where(models.User.id == user_id)
             .with_for_update(read=True, key_share=True)
         )
     ).first()
 
 
+async def lock_user_key_share_entity(db: AsyncSession, user_id: int) -> Optional[models.User]:
+    """Như :func:`lock_user_key_share` nhưng trả THỰC THỂ đọc lại (``populate_existing``) — cho lõi ``transition_document``
+    (luật ``DocumentActionPolicy`` cần đối tượng ``User``), cùng khuôn :func:`lock_user_share`."""
+    return (
+        await db.execute(
+            select(models.User)
+            .where(models.User.id == user_id)
+            .with_for_update(read=True, key_share=True)
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
+
+
 async def lock_user_role_share(db: AsyncSession, user_id: int) -> Optional[Any]:
     """Dòng người dùng ``FOR SHARE`` — chặn MỌI ``UPDATE`` / ``DELETE`` của dòng ấy tới hết giao dịch: đổi vai, khoá tài
     khoản (``FOR NO KEY UPDATE``) và K4 (``FOR UPDATE``) đều phải CHỜ. Vai + trạng thái đọc ở đây vì thế còn đúng tới lúc
-    commit — dùng cho đường quyết định GHI theo VAI hiện hành (chốt lô: Admin chốt lô của người khác; Codex 20-11).
+    commit. MỘT hàm cho hai đường quyết định GHI theo VAI hiện hành (ghép PR-A + PR-B, 21-11):
+    - chốt lô (PR-A, Codex 20-11): Admin chốt lô của người khác — người → lô, không giữ dòng quyền chéo;
+    - Admin CẤP quyền chéo (PR-B, Q4): đọc người được cấp dưới khoá — giữ khoá này không chờ dòng nào khác ngoài dòng
+      quyền mới chèn ⇒ không vòng chờ với đổi vai / khoá (người ``FOR NO KEY UPDATE`` → quyền ``FOR UPDATE``).
 
     Không xung đột với ``FOR SHARE`` / ``FOR KEY SHARE`` khác (§5.4, khoá khoá-ngoại khi ghi ``finalized_by_user_id``).
-    Trả hàng ``(id, status, role)`` đọc DƯỚI khoá; ``None`` = dòng không còn (đã xoá). Chỉ chọn CỘT, không nạp thực thể —
-    cùng lý do MissingGreenlet như ``lock_user_key_share``."""
+    Trả hàng ``(id, status, role, unit_id)`` đọc DƯỚI khoá; ``None`` = dòng không còn (đã xoá). Chỉ chọn CỘT, không nạp
+    thực thể — cùng lý do MissingGreenlet như ``lock_user_key_share``."""
     return (
         await db.execute(
-            select(models.User.id, models.User.status, models.User.role)
+            select(models.User.id, models.User.status, models.User.role, models.User.unit_id)
             .where(models.User.id == user_id)
             .with_for_update(read=True)
         )
     ).first()
+
+
+async def lock_user_no_key_update(db: AsyncSession, user_id: int) -> Optional[Any]:
+    """Dòng người dùng ``FOR NO KEY UPDATE`` — đúng khoá mà ``UPDATE "user"`` (đổi vai / trạng thái) sẽ lấy; lấy TRƯỚC khi
+    khoá dòng quyền chéo (thứ tự toàn cục người → quyền). Không xung đột ``FOR KEY SHARE`` (khoá ngoại, duyệt chéo), xung
+    đột ``FOR SHARE`` (cấp quyền chéo, chốt lô) ⇒ chờ giao dịch ấy commit. Trả hàng ``(id, role, status)`` đọc DƯỚI khoá
+    (``None`` = dòng không còn) — Q4 quyết thu hồi bằng giá trị này, không bằng bản đọc từ đầu yêu cầu."""
+    return (
+        await db.execute(
+            select(models.User.id, models.User.role, models.User.status)
+            .where(models.User.id == user_id)
+            .with_for_update(key_share=True)
+        )
+    ).first()
+
+
+async def lock_user_for_update(db: AsyncSession, user_id: int) -> Optional[Any]:
+    """Dòng người dùng ``FOR UPDATE`` — đúng khoá của ``DELETE`` (K4) và của ``UPDATE`` ĐỔI cột khoá (cột có chỉ mục duy
+    nhất dùng được cho khoá ngoại: ``username``, ``email`` — ``user_deletion_policy.USER_KEY_COLUMNS``). Xung đột MỌI khoá
+    dòng khác, kể cả ``FOR KEY SHARE`` của khoá ngoại. Trả hàng ``(id, role, status)`` đọc DƯỚI khoá; ``None`` = dòng không
+    còn. Chỉ ``user_deletion_policy.lock_users_in_id_order`` gọi (thứ tự khoá dòng ``user`` ở MỘT nơi)."""
+    return (
+        await db.execute(
+            select(models.User.id, models.User.role, models.User.status)
+            .where(models.User.id == user_id)
+            .with_for_update()
+        )
+    ).first()
+
+
+async def lock_leads_share(db: AsyncSession, lead_ids: Sequence[int]) -> Dict[int, models.Lead]:
+    """Lead ``FOR SHARE`` theo id TĂNG, đọc lại dưới khoá (``populate_existing``). Trả ``{id: Lead}`` các dòng còn."""
+    if not lead_ids:
+        return {}
+    rows = (
+        await db.execute(
+            select(models.Lead)
+            .where(models.Lead.id.in_(list(lead_ids)))
+            .order_by(models.Lead.id)
+            .with_for_update(read=True)
+            .execution_options(populate_existing=True)
+        )
+    ).scalars().all()
+    return {r.id: r for r in rows}
 
 
 async def lock_user_share(db: AsyncSession, user_id: int) -> Optional[models.User]:
@@ -577,14 +659,19 @@ async def list_batches(
     window_days: int,
     after: Optional[Tuple[datetime, UUID]],
     limit: int,
+    grant_unit_ids: Optional[Sequence[int]] = None,
 ) -> List[models.DocumentBulkBatch]:
-    """Thứ tự ổn định ``created_at DESC, batch_id DESC``; con trỏ = (created_at, batch_id) của dòng cuối trang trước."""
+    """Thứ tự ổn định ``created_at DESC, batch_id DESC``; con trỏ = (created_at, batch_id) của dòng cuối trang trước.
+    ``grant_unit_ids`` (lô chéo): chỉ lô tạo bằng quyền ghi đơn vị thuộc danh sách này."""
     t = models.DocumentBulkBatch
     conds = [t.created_at >= func.clock_timestamp() - literal_column(f"interval '{int(window_days)} days'")]
     if actor_user_id is not None:
         conds.append(t.actor_user_id == actor_user_id)
     if review_mode is not None:
         conds.append(t.review_mode == review_mode)
+    if grant_unit_ids is not None:
+        g = models.DocumentCrossReviewGrant
+        conds.append(t.grant_id.in_(select(g.id).where(g.unit_id.in_(list(grant_unit_ids)))))
     if after is not None:
         c_at, c_id = after
         conds.append(
@@ -639,6 +726,47 @@ async def list_grants(
     if unit_id is not None:
         q = q.where(g.unit_id == unit_id)
     return [(r[0], bool(r[1])) for r in (await db.execute(q.order_by(g.id.desc()).limit(500))).all()]
+
+
+async def grant_unit_id(db: AsyncSession, grant_id: int) -> Optional[int]:
+    """Đơn vị ghi trên một quyền chéo (đọc, không khoá) — đơn vị của lô chéo tạo bằng quyền ấy."""
+    return (
+        await db.execute(select(models.DocumentCrossReviewGrant.unit_id).where(models.DocumentCrossReviewGrant.id == grant_id))
+    ).scalar_one_or_none()
+
+
+async def own_grant_unit_id(db: AsyncSession, grant_id: int, grantee_user_id: int) -> Optional[int]:
+    """Đơn vị ghi trên quyền ``grant_id`` NẾU quyền ấy cấp cho ``grantee_user_id`` (ở mọi trạng thái — kể cả đã thu hồi /
+    hết hạn); quyền của người khác / không có ⇒ ``None``. Đọc, không khoá — chỉ để chọn 409 / 404 (owner câu 9)."""
+    g = models.DocumentCrossReviewGrant
+    return (
+        await db.execute(select(g.unit_id).where(g.id == grant_id, g.grantee_user_id == grantee_user_id))
+    ).scalar_one_or_none()
+
+
+async def lock_active_grants_of_user_for_update(db: AsyncSession, user_id: int) -> List[models.DocumentCrossReviewGrant]:
+    """Mọi quyền CHƯA thu hồi, CHƯA hết hạn (``clock_timestamp()``) của một người — ``FOR UPDATE`` theo id TĂNG (Q4).
+
+    PR-B lượt 4 (rà cùng khuôn Codex lượt 3 điểm chặn 4): khoá mọi quyền CHƯA thu hồi, rồi lọc hạn bằng đồng hồ CSDL đọc
+    SAU khi có khoá (câu riêng) — hạn đặt trong câu khoá có thể tính TRƯỚC lúc chờ."""
+    g = models.DocumentCrossReviewGrant
+    grants = list(
+        (
+            await db.execute(
+                select(g)
+                .where(g.grantee_user_id == user_id, g.revoked_at.is_(None))
+                .order_by(g.id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not grants:
+        return []
+    now = await db_clock(db)
+    return [x for x in grants if x.expires_at > now]
 
 
 async def lock_grant_for_update(db: AsyncSession, grant_id: int) -> Optional[models.DocumentCrossReviewGrant]:
