@@ -228,7 +228,7 @@ export function ReviewFloorsEditor({ sessionId, busy, draft, onDraftChange, onCl
         onError: (error) => {
           const v = describeReviewSessionError(error, "write")
           if (v.errorCode === "REVIEW_SESSION_STALE") {
-            onDraftChange((d) => ({ ...d, staleConflict: true, flaggedIds: [] }))
+            onDraftChange({ ...EMPTY_FLOOR_DRAFT, staleConflict: true })
             return
           }
           if (v.errorCode === "REVIEW_SESSION_NOT_DRAFT") {
