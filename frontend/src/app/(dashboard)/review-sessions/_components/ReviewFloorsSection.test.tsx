@@ -236,9 +236,10 @@ describe("M3 — soạn: nhóm / ô nhập theo CỜ máy chủ (FE không tự 
   })
 
   it("E3 cho soạn nhưng E10 (ảnh chụp mới hơn) không còn edit_floors ⇒ câu 'không còn sửa được', ô và nút Lưu khoá", async () => {
-    // Biến thể phá: cho lưu theo `available_actions` của E3 thay vì của E10 ⇒ nút Lưu mở ⇒ ĐỎ.
+    // Biến thể phá: cho lưu theo `available_actions` của E3, hoặc tự suy từ `session_status === "draft"` ⇒ nút Lưu mở ⇒ ĐỎ.
+    // Dữ liệu cố ý: trạng thái VẪN nháp mà máy chủ không trả `edit_floors` — giao diện theo cờ hành động, không theo trạng thái.
     mayChuE3([json(sessionGia())])
-    mayChuE10([json(floorCandidatesGia({ session_status: "cancelled", available_actions: [] }))])
+    mayChuE10([json(floorCandidatesGia({ session_status: "draft", available_actions: ["run_evaluate"] }))])
     await moChiTiet()
     await moSoan()
     expect(screen.getByTestId("san-khong-sua-duoc")).toHaveTextContent(FLOORS_NOT_EDITABLE)
