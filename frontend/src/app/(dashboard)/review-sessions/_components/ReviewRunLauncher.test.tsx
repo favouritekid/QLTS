@@ -115,7 +115,7 @@ const RUN_IN_PROGRESS_409 = { reason_code: "review_run_in_progress", detail: CAU
 const STALE_409 = {
   reason_code: "review_session_stale",
   current_version: 5,
-  detail: "Lần xét đã được sửa ở nơi khác sau khi bạn mở — hãy tải lại rồi làm lại.",
+  detail: "Lần xét đã được sửa ở nơi khác sau khi bạn mở.",
   error_code: "REVIEW_SESSION_STALE",
 }
 const CAU_NOT_DRAFT = "Lần xét không còn ở trạng thái nháp — không sửa điểm sàn, không chạy kiểm hồ sơ và không huỷ được nữa."

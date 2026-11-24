@@ -87,7 +87,9 @@ MESSAGES: Dict[str, str] = {
     REVIEW_SESSION_NOT_FOUND: "Không tìm thấy lần xét.",
     REVIEW_RUN_NOT_FOUND: "Không tìm thấy lượt kiểm hồ sơ của lần xét này.",
     REVIEW_QUOTA_TABLE_MISSING: "Năm {academic_year} chưa có bảng chỉ tiêu — tạo bảng chỉ tiêu năm trước khi tạo lần xét.",
-    REVIEW_SESSION_STALE: "Lần xét đã được sửa ở nơi khác sau khi bạn mở — hãy tải lại rồi làm lại.",
+    # Owner 25-11 (Q4): bỏ đuôi "hãy tải lại rồi làm lại" — màn điểm sàn ĐÃ tự tải lại và hiện bảng so; E5 / E6 giao diện
+    # dùng câu riêng (``CANCEL_STALE`` / ``RUN_STALE``). Một chỗ khai cho cả E4 / E5 / E6.
+    REVIEW_SESSION_STALE: "Lần xét đã được sửa ở nơi khác sau khi bạn mở.",
     REVIEW_SESSION_NOT_DRAFT: (
         "Lần xét không còn ở trạng thái nháp — không sửa điểm sàn, không chạy kiểm hồ sơ và không huỷ được nữa."
     ),

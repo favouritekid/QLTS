@@ -72,6 +72,18 @@ def test_moi_dong_hop_dong_5_dung_ma_va_than(may, i):
     assert {k: v for k, v in than.items() if k not in ("detail", "error_code")} == phan
 
 
+#: Owner 25-11 (Q4 — ``gd2\gd2b\giao-dien\QUYET-DINH-OWNER-CAU-CHU-GD2B-Q1-Q6-2026-11-25.md``): câu 409 "lần xét vừa được sửa ở nơi
+#: khác" BỎ đuôi "hãy tải lại rồi làm lại" (màn điểm sàn ĐÃ tự tải lại và hiện bảng so). Chép từ quyết định — KHÔNG đọc từ
+#: ``e.MESSAGES`` (đọc từ mã thì sửa chữ vẫn xanh).
+CAU_409_LAN_XET_VUA_SUA = "Lần xét đã được sửa ở nơi khác sau khi bạn mở."
+
+
+def test_409_lan_xet_vua_sua_cau_owner_q4_qua_handler(may):
+    i = next(k for k, c in enumerate(HOP_DONG_5) if c[0] == "phien_ban_cu")
+    r = may.get("/loi/%d" % i)
+    assert r.json()["detail"] == CAU_409_LAN_XET_VUA_SUA, r.text
+
+
 def test_409_hoc_vu_dang_co_san_chi_toi_hai_thao_tac_lam_duoc():
     """Đặc tả §4.3: câu báo nêu lần xét nháp số N năm Y và HAI thao tác làm được (bỏ khỏi danh sách sàn / huỷ lần xét nháp)."""
     d = e.AcademicInfoInReviewFloor(3, 2026).detail

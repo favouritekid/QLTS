@@ -99,7 +99,7 @@ const STALE_409 = json(
   {
     reason_code: "review_session_stale",
     current_version: 5,
-    detail: "Lần xét đã được sửa ở nơi khác sau khi bạn mở — hãy tải lại rồi làm lại.",
+    detail: "Lần xét đã được sửa ở nơi khác sau khi bạn mở.",
     error_code: "REVIEW_SESSION_STALE",
   },
   409,
@@ -376,7 +376,7 @@ describe("M3 — lỗi E4", () => {
     go(41, "16")
     fireEvent.click(screen.getByTestId("san-luu"))
     expect(await screen.findByTestId("san-loi")).toHaveTextContent(
-      "Lần xét đã được sửa ở nơi khác sau khi bạn mở — hãy tải lại rồi làm lại.",
+      "Lần xét đã được sửa ở nơi khác sau khi bạn mở.",
     )
     await waitFor(() => expect({ e3: e3.lan, e10: e10.lan }).toEqual({ e3: 2, e10: 2 }))
     expect(await screen.findByTestId("san-xung-dot")).toBeInTheDocument()
