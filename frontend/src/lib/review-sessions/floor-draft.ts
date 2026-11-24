@@ -72,7 +72,7 @@ export function buildFloorsPlan(items: readonly ReviewFloorCandidate[], override
   const droppedIds: number[] = []
   for (const item of items) {
     const id = item.offering_academic_info_id
-    if (!item.floor_accepted) {
+    if (item.is_deleted) {
       if (item.floor_score !== null) droppedIds.push(id)
       continue
     }
