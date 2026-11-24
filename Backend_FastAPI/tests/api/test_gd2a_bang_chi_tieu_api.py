@@ -4,6 +4,7 @@ khoá năm và cho khoá dòng bảng ``FOR SHARE`` của trigger (sửa chỉ t
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 from datetime import datetime
 
 import pytest
@@ -563,3 +564,75 @@ async def test_hai_phien_khoa_bang_truoc_thi_ghi_chi_tieu_cho_roi_bi_chan(admin_
         await _dong(s2, s1, viec)
     assert tuple(await _bang()) == ("locked", 2)
     assert (await _sql(doc, **ts)).scalar_one() == cu
+
+
+# ── Nợ N1: phản hồi kiểm TRƯỚC commit (rà hợp nhất 23-11, mục I1; khuôn C2 ``0f727a0a``) ──────────────────────────────────
+@asynccontextmanager
+async def _client_500():
+    """Client KHÔNG ném lại ngoại lệ của ứng dụng (``raise_app_exceptions=False``) — đo đúng mã 500 người gọi nhận (``client`` của
+    conftest ném lại ngoại lệ thay vì trả phản hồi). Bản riêng của tệp này vì ``tests/api/gd2b_lan_xet_tro_giup.client_500`` (GĐ2-B)
+    chưa có trên main; gộp GĐ2-B xong thì dùng bản ấy. Cùng ``fastapi_app`` mà ``client`` của conftest đã chạy lifespan (Casbin…)
+    ⇒ ca dùng helper này PHẢI xin cả fixture ``client``."""
+    from httpx import ASGITransport
+
+    from app.main import fastapi_app
+
+    async with AsyncClient(transport=ASGITransport(app=fastapi_app, raise_app_exceptions=False), base_url="http://test") as c:
+        yield c
+
+
+async def _anh_csdl() -> tuple:
+    """Ảnh CSDL của bảng chỉ tiêu năm ``NAM``, đọc từ phiên RIÊNG (không qua phiên của request): dòng bảng, nhóm, thành viên, chỉ
+    tiêu ngành của năm, số dòng vết của bảng chỉ tiêu."""
+    cau = (
+        "SELECT status, version, locked_by_user_id, locked_at, updated_at FROM admission_quota_table WHERE academic_year = :y",
+        "SELECT id, code, name, ceiling FROM admission_quota_group WHERE academic_year = :y ORDER BY id",
+        "SELECT group_id, offering_academic_info_id FROM admission_quota_group_member WHERE academic_year = :y ORDER BY 1, 2",
+        "SELECT id, annual_admission_quota, updated_by_user_id FROM offering_academic_info WHERE academic_year = :y ORDER BY id",
+        "SELECT count(*) FROM entity_audit_log WHERE entity_type = 'admission_quota_table' AND entity_id = :y",
+    )
+    anh = []
+    for c in cau:
+        anh.append(tuple(tuple(r) for r in (await _sql(c, y=NAM)).all()))
+    return tuple(anh)
+
+
+_DUONG_N1 = {"put": ("PUT", ""), "lock": ("POST", "/lock"), "unlock": ("POST", "/unlock")}
+
+
+@pytest.mark.parametrize("route", list(_DUONG_N1))
+async def test_n1_phan_hoi_lech_schema_500_khong_ghi_gi(
+    client: AsyncClient, admin_token_headers, hoc_vu, monkeypatch, route
+):
+    """Nợ N1: thân phản hồi lệch ``QuotaTableOut`` ⇒ người gọi nhận 500 VÀ CSDL KHÔNG đổi — không bảng / nhóm / chỉ tiêu mới (PUT),
+    bảng không bị khoá (lock), không bị mở khoá (unlock), không dòng vết. Thiếu phép kiểm trước ``commit`` ⇒ cùng 500 nhưng dữ
+    liệu ĐÃ ghi — mã 500 một mình không phân biệt hai bản, nên ca so ẢNH CSDL trước / sau (phiên riêng). Lệch giả lập ở ĐÚNG chỗ
+    dịch vụ dựng phản hồi (``get_quota_table`` cuối hàm ghi), SAU mọi câu ghi + vết; ``goi`` xác nhận dịch vụ đã chạy tới đó (một
+    lỗi khác nổ sớm hơn cũng cho 500 + CSDL không đổi mà không chứng minh gì)."""
+    from app.services import admission_quota_table_service as svc
+
+    h = admin_token_headers
+    if route != "put":
+        assert (await client.put(f"{P}/{NAM}", headers=h, json=await _gui(0, hoc_vu))).status_code == 200
+    if route == "unlock":
+        assert (await client.post(f"{P}/{NAM}/lock", headers=h, json=await _khoa_than(1))).status_code == 200
+    if route == "put":
+        than = await _gui(0, hoc_vu)
+    elif route == "lock":
+        than = await _khoa_than(1)
+    else:
+        than = {"version": 2, "reason": "Có văn bản điều chỉnh chỉ tiêu ngành"}
+    truoc = await _anh_csdl()
+    goi = []
+
+    async def _lech(db, academic_year, *_, **__):
+        goi.append(academic_year)
+        return {"academic_year": "khong-phai-so"}
+
+    monkeypatch.setattr(svc, "get_quota_table", _lech)
+    m, duoi = _DUONG_N1[route]
+    async with _client_500() as c:
+        r = await c.request(m, f"{P}/{NAM}{duoi}", headers=h, json=than)
+    assert r.status_code == 500, r.text
+    assert goi == [NAM], goi
+    assert await _anh_csdl() == truoc
