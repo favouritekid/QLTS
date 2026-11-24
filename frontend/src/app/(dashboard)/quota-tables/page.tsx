@@ -34,5 +34,5 @@ export default function QuotaTablesPage({ searchParams }: PageProps) {
 
 async function QuotaTablesFromUrl({ searchParams }: PageProps) {
   const year = readYearSearchParam((await searchParams).year)
-  return <QuotaTablesClient key={year ?? "nam-mac-dinh"} initialYear={year} />
+  return <QuotaTablesClient key={year ?? "nam-mac-dinh"} />
 }
