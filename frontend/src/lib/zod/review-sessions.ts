@@ -137,7 +137,7 @@ export const sessionSchema = z.object({
   academic_year: int,
   admission_round: admissionRoundRefSchema,
   seq_no: int,
-  status: z.string(),
+  status: z.enum(["draft", "cancelled"]),
   version: int,
   created_by_user_id: int,
   created_at: isoTime,
