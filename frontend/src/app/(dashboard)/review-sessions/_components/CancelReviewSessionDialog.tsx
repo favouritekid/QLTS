@@ -88,6 +88,7 @@ export function CancelReviewSessionDialog(props: Props) {
           toast.success(CANCEL_DONE)
         },
         onError: (error) => {
+          onReasonChange("")
           const v = describeReviewSessionError(error, "write")
           if (v.errorCode === "REVIEW_SESSION_NOT_DRAFT") {
             close()
