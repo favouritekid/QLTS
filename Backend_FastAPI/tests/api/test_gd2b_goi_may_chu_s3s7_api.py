@@ -3,7 +3,8 @@
 
 * **S3** — họ tên người thao tác (``created_by_full_name``, ``cancelled_by_full_name``, ``updated_by_full_name``,
   ``requested_by_full_name``) ở E1–E8, thay cho chỉ số id (thiết kế giao diện §4.3, KT-2);
-* **S7** — ``RowOut.unit_name`` ở E9 (thiết kế §4.4 S7; đính chính 1 §5 "E9: cột Đơn vị cần nguồn tên đơn vị").
+* **S7** — ``RowOut.unit_name`` ở E9 (thiết kế §4.4 S7; đính chính 1 §5 "E9: cột Đơn vị cần nguồn tên đơn vị");
+* **CORS** — ``Location`` của E6 nằm trong ``Access-Control-Expose-Headers`` (Codex FE-F3 F3-6; bàn giao FE-F3 §8 điểm 1).
 
 Nguồn hợp đồng: phụ lục ``gd2\\gd2b\\may-chu-s3s7\\PHU-LUC-HOP-DONG-S3-S7-2026-11-24.md`` (thêm trường phản hồi — loại "không phá"
 HĐ4 §1.8). Hai Admin GIẢ có họ tên KHÁC nhau (A = Admin của conftest, B = Admin thứ hai) để phân biệt "tên của người ĐÃ thao tác" với
@@ -187,3 +188,39 @@ async def test_s7_don_vi_ngung_hoat_dong_van_tra_ten(client: AsyncClient, admin_
     await sql("UPDATE organization_unit SET is_active = false WHERE id = :u", u=d["u1"])
     (dong,) = await _dong(client, h, sid, rid)
     assert (dong["unit_id"], dong["unit_name"]) == (d["u1"], DON_VI_1)
+
+
+# ══════════════════════ CORS — ``Location`` của E6 đọc được khi giao diện khác origin (Codex FE-F3 F3-6) ══════════════════════
+def _expose(r) -> set:
+    """Tập header (chữ thường) trong ``Access-Control-Expose-Headers`` của phản hồi."""
+    return {x.strip().lower() for x in r.headers.get("access-control-expose-headers", "").split(",") if x.strip()}
+
+
+def _origin_hop_le() -> str:
+    """Một origin NẰM trong danh sách CORS của ứng dụng ở môi trường test (đầu vào của ca, không phải kỳ vọng)."""
+    from app.main import _cors_origins
+
+    assert _cors_origins, "danh sách origin CORS của môi trường test rỗng"
+    return _cors_origins[0]
+
+
+async def test_cors_e6_khac_origin_expose_location(client: AsyncClient, admin_token_headers, nen):
+    """E6 gọi từ origin khác (dev :3000 → API :8000, stack diễn tập): trình duyệt chỉ cho mã giao diện đọc header có trong
+    ``Access-Control-Expose-Headers`` ⇒ ``Location`` của CHÍNH phản hồi 202 phải nằm trong danh sách ấy."""
+    h, d = admin_token_headers, nen
+    o = _origin_hop_le()
+    sid = await _tao_va_luu_san(client, h, d)
+    r = await client.post(f"{P}/{sid}/runs", headers={**h, "Origin": o}, json={"kind": "evaluate", "session_version": 2})
+    assert r.status_code == 202, r.text
+    assert r.headers.get("access-control-allow-origin") == o
+    assert r.headers.get("location") == "/api/admission-config/review-sessions/%d/runs/%d" % (sid, r.json()["id"])
+    assert "location" in _expose(r), r.headers.get("access-control-expose-headers")
+
+
+async def test_cors_van_expose_ba_header_cu(client: AsyncClient, admin_token_headers):
+    """Thêm ``Location`` không làm rơi ba header đã expose trước đó (tên tệp tải về, mã giấy báo nhập học, Set-Cookie)."""
+    r = await client.get(P, headers={**admin_token_headers, "Origin": _origin_hop_le()})
+    assert r.status_code == 200, r.text
+    assert {"set-cookie", "content-disposition", "x-enrollment-letter-id"} <= _expose(r), r.headers.get(
+        "access-control-expose-headers"
+    )

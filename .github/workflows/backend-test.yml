@@ -1551,7 +1551,7 @@ jobs:
           # huỷ ↔ dời năm, tạo ↔ tạo, lưu ↔ lưu), chạy kiểm qua API thật (E6–E9, BT45). Ngoài mọi tier ⇒ check vẫn xanh mà không
           # chạy (CLAUDE.md §11). `gd2b_lan_xet_tro_giup.py` là trợ giúp (không `test_`), import từ `test_gd2b_bt35_toan_luot_db.py`.
           # Gói máy chủ S3/S7 (24-11): `test_gd2b_goi_may_chu_s3s7_api.py` — họ tên người thao tác E1–E8 (S3), tên đơn vị dòng E9
-          # (S7). Ngoài mọi tier ⇒ check vẫn xanh mà không chạy (CLAUDE.md §11). WHOLE-FILE.
+          # (S7), CORS expose `Location` của E6. Ngoài mọi tier ⇒ check vẫn xanh mà không chạy (CLAUDE.md §11). WHOLE-FILE.
           - tier: Tier 5k — GĐ2-B lần xét nháp (đợt 1 + đợt 2)
             tests: >-
               tests/unit/test_gd2b_ddl_lockin.py
