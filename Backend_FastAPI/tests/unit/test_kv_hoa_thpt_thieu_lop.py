@@ -139,30 +139,44 @@ def test_nhom_thap_lop_la_nhom_cao_hai_muc_van_xep_theo_lop(monkeypatch, lop_d, 
         assert len(hoi) == 6  # chỉ tra các năm học, KHÔNG tra trường tốt nghiệp
 
 
-# ══════════ owner 24-11: lớp cuối THPT / GDTX NGOÀI 10–12 ⇒ dữ liệu lớp không hợp lệ ⇒ như ô lớp trống (cần xét tay) ══════════
-#: Owner 24-11 ``QUYET-DINH-OWNER-L3-THPT-LOP-NGOAI-10-12``: cùng luật với dòng THCS ngoài 6–9 và ô lớp trống (owner 23-11 (a)) —
-#: ``kv_entry_last_grade`` trả ``None`` ⇒ chốt chung ``_history_int``. Hai mục cùng ``2021→2023`` (hoà 2–2, cùng năm kết thúc): A (KV1)
-#: cấp ``cap`` lớp ``lop``, B (KV3) lớp 11. Biên 10 và 12 hợp lệ (so như số, như trước). Trước: 9 / 0 / âm thua lặng lẽ (B), 13 thắng
-#: lặng lẽ (A). Số thực ``12.0`` vốn đã không so được (đối chứng).
+# ══════════ owner 24-11: lớp cuối THPT / GDTX NGOÀI 10–12 ⇒ dữ liệu lớp không hợp lệ ⇒ cần xét tay (bước ĐẾM + bước hoà) ══════════
+#: Owner 24-11 ``QUYET-DINH-OWNER-L3-THPT-LOP-NGOAI-10-12`` (bước hoà) + ``QUYET-DINH-OWNER-L3-DINH-CHINH-TIEN-DE-THCS`` câu 3 (CẢ bước
+#: đếm): lớp cuối là SỐ NGUYÊN ngoài 10..12 ⇒ dừng có nhãn ``grade_to_out_of_range`` ở bước đếm (đường G5 ``insufficient_data`` /
+#: ``history_entries_inconsistent``), trước mọi phép tra. Dải là của ``kv_entry_last_grade`` (một nguồn với bước hoà). Hai mục cùng
+#: ``2021→2023`` (hoà 2–2, cùng năm kết thúc): A (KV1) cấp ``cap`` lớp ``lop``, B (KV3) lớp 11. Biên 10 và 12 hợp lệ (so như số, như
+#: trước). Số thực ``12.0`` không phải số nguyên ⇒ không dừng ở bước đếm, bước hoà cần xét tay (owner 23-11 (a), như chuỗi / bool).
 _BIEN_LOP_THPT = [
     (12, "THPT", ("truong", A, "KV1")),
     (10, "THPT", ("truong", B, "KV3")),
-    (9, "THPT", "xet_tay"),
-    (13, "THPT", "xet_tay"),
-    (0, "THPT", "xet_tay"),
-    (-1, "THPT", "xet_tay"),
-    (12.0, "THPT", "xet_tay"),
-    (9, "GDTX", "xet_tay"),
+    (9, "THPT", "dung_dem"),
+    (13, "THPT", "dung_dem"),
+    (0, "THPT", "dung_dem"),
+    (-1, "THPT", "dung_dem"),
+    (12.0, "THPT", "xet_tay_hoa"),
+    (9, "GDTX", "dung_dem"),
     (12, "GDTX", ("truong", A, "KV1")),
 ]
 _ID_BIEN_LOP_THPT = ["lop_12", "lop_10", "lop_9", "lop_13", "lop_0", "lop_am_1", "lop_12_so_thuc", "gdtx_lop_9", "gdtx_lop_12"]
 
 
+def _dung_o_buoc_dem(kv, meta, hoi, chi_so):
+    """Dừng có nhãn ở bước ĐẾM: ``insufficient_data`` / ``history_entries_inconsistent``, mục ``chi_so`` mang ``grade_to_out_of_range``,
+    KHÔNG một phép tra nào (không đếm, không chọn trường)."""
+    assert kv is None and hoi == []
+    assert (meta["rule_applied"], meta["reason"], meta["requires_manual_override"]) == (
+        "insufficient_data", "history_entries_inconsistent", True,
+    ), meta
+    assert [(e["index"], e["case"]) for e in meta["breakdown"]["entries"]] == [(i, "grade_to_out_of_range") for i in chi_so]
+
+
 @pytest.mark.parametrize("lop, cap, mong", _BIEN_LOP_THPT, ids=_ID_BIEN_LOP_THPT)
 def test_hoa_lop_cuoi_ngoai_10_12_thi_can_xet_tay(monkeypatch, lop, cap, mong):
     kv, meta, hoi = _chay(monkeypatch, [_m(A, 2021, 2023, lop, level=cap), _m(B, 2021, 2023, 11)])
+    if mong == "dung_dem":
+        _dung_o_buoc_dem(kv, meta, hoi, [0])
+        return
     assert meta["breakdown"]["kv_totals"] == {"KV1": 2, "KV3": 2}
-    if mong == "xet_tay":
+    if mong == "xet_tay_hoa":
         assert kv is None
         _can_xet_tay(meta, [A, B])
         assert len(hoi) == 4  # chỉ tra các năm học, KHÔNG tra trường tốt nghiệp
@@ -174,17 +188,33 @@ def test_hoa_lop_cuoi_ngoai_10_12_thi_can_xet_tay(monkeypatch, lop, cap, mong):
         assert hoi[-1] == (truong, 2022)
 
 
-@pytest.mark.parametrize("vi_tri", ["mot_minh_nhom_cao", "nhom_thap"])
-@pytest.mark.parametrize("lop", [9, 13, 0], ids=["lop_9", "lop_13", "lop_0"])
-def test_doi_chung_lop_ngoai_10_12_chi_can_o_nhom_tot_nghiep_tu_hai_muc(monkeypatch, lop, vi_tri):
-    """Như ô lớp trống: lớp ngoài 10–12 chỉ cản khi mục ấy ở nhóm năm kết thúc lớn nhất có từ 2 mục. A (KV1) ``2019→2021``, B (KV3)
-    ``2021→2023`` ⇒ hoà 2–2; nhóm năm lớn nhất (2023) chỉ có B ⇒ B là trường tốt nghiệp, tra 2022 ⇒ KV3 — dù lớp lạ nằm ở B (đứng một
-    mình) hay ở A (nhóm thấp). Không chặn ở mức dòng."""
-    lop_a, lop_b = (11, lop) if vi_tri == "mot_minh_nhom_cao" else (lop, 12)
-    kv, meta, hoi = _chay(monkeypatch, [_m(A, 2019, 2021, lop_a), _m(B, 2021, 2023, lop_b)])
-    assert (kv, meta["rule_applied"], meta["breakdown"]["graduation_school_id"]) == ("KV3", "tiebreak_graduation_school", B)
-    assert meta["breakdown"]["kv_totals"] == {"KV1": 2, "KV3": 2}
-    assert hoi[-1] == (B, 2022)
+#: Owner 24-11 đính chính câu 3 — dừng ở bước đếm BẤT KỂ hoà hay vị trí mục (thay đối chứng ``7ec8e5b1`` "chỉ cản ở nhóm tốt nghiệp
+#: ≥ 2 mục", owner đã đảo). (tên, lịch sử, chỉ số mục mang ``grade_to_out_of_range``).
+_LOP_NGOAI_DAI_O_BUOC_DEM = [
+    ("mot_muc_lop_9", [_m(A, 2020, 2023, 9)], [0]),
+    ("khong_hoa_lop_13_o_muc_hoc_lau", [_m(A, 2019, 2022, 13), _m(B, 2022, 2023, 12)], [0]),
+    ("hoa_mot_minh_nhom_cao_lop_0", [_m(A, 2019, 2021, 11), _m(B, 2021, 2023, 0)], [1]),
+    ("hoa_nhom_thap_lop_am", [_m(A, 2019, 2021, -1), _m(B, 2021, 2023, 12)], [0]),
+    ("hai_muc_gdtx_9_va_thpt_8", [_m(A, 2019, 2021, 9, level="GDTX"), _m(B, 2021, 2022, 8)], [0, 1]),
+]
+
+
+@pytest.mark.parametrize("lich_su, chi_so", [c[1:] for c in _LOP_NGOAI_DAI_O_BUOC_DEM], ids=[c[0] for c in _LOP_NGOAI_DAI_O_BUOC_DEM])
+def test_lop_ngoai_10_12_dung_o_buoc_dem_bat_ke_hoa(monkeypatch, lich_su, chi_so):
+    """Trước (``7ec8e5b1``): chỉ cản khi hoà và mục ở nhóm tốt nghiệp ≥ 2 mục ⇒ ``mot_muc_lop_9`` ra KV1, ``khong_hoa_lop_13…`` ra KV1,
+    hai ca hoà ra KV3 — lớp lạ góp đủ năm lặng lẽ. Nay: dừng ở bước đếm, liệt kê MỌI mục lệch."""
+    kv, meta, hoi = _chay(monkeypatch, lich_su)
+    _dung_o_buoc_dem(kv, meta, hoi, chi_so)
+
+
+@pytest.mark.parametrize(
+    "lop", [None, _KHONG_KHOA, "9", 9.0], ids=["null", "thieu_khoa", "chuoi_9", "so_thuc_9"],
+)
+def test_doi_chung_lop_thieu_hoac_sai_kieu_khong_dung_o_buoc_dem(monkeypatch, lop):
+    """Bước đếm chỉ dừng lớp là SỐ NGUYÊN ngoài 10..12. Lớp thiếu / null / chuỗi / số thực KHÔNG hoà ⇒ đếm như cũ (A 2 năm KV1 > B 1
+    năm KV3 ⇒ KV1 học lâu nhất); ở bước hoà chúng vẫn cần xét tay (owner 23-11 (a) — các ca hoà phía trên)."""
+    kv, meta, _ = _chay(monkeypatch, [_m(A, 2020, 2022, lop), _m(B, 2022, 2023, 12)])
+    assert (kv, meta["rule_applied"], meta["breakdown"]["kv_totals"]) == ("KV1", "longest_duration", {"KV1": 2, "KV3": 1})
 
 
 # ═══════════════════════════════ đối chứng: hành vi cũ không đổi ═══════════════════════════════

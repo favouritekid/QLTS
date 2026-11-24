@@ -240,9 +240,7 @@ def test_khong_tra_dong_thpt_cua_em_bo_hoc_thpt(monkeypatch):
 #: Owner 23-11 ``QUYET-DINH-OWNER-O-LOP-TRONG-CAN-XET-TAY``: lựa chọn (a) — lớp trống / null / sai kiểu ở nhóm tốt nghiệp khi hoà KV
 #: ⇒ cần xét tay, áp CHUNG THPT và THCS; "thiếu hẳn khoá" và "null" NHƯ NHAU. Trước đây nhánh THCS coi lớp trống = 0 (luật (b)).
 _KHONG_KHOA = object()
-#: (tên, lớp mục 2 theo (THPT, THCS), phán quyết mong đợi) — mục 1 luôn có lớp cuối hợp lệ (THPT 12 / THCS 9). Ba ca cuối: owner 24-11
-#: — lớp cuối NGOÀI dải của cấp (THPT / GDTX 10–12 ``QUYET-DINH-OWNER-L3-THPT-LOP-NGOAI-10-12``; THCS 6–9
-#: ``QUYET-DINH-OWNER-L3-DONG-THCS-LOP-NGOAI-6-9``) là dữ liệu lớp không hợp lệ ⇒ như ô trống ⇒ hai nhánh CÙNG cần xét tay.
+#: (tên, lớp mục 2 theo (THPT, THCS), phán quyết mong đợi) — mục 1 luôn có lớp cuối hợp lệ (THPT 12 / THCS 9).
 _LOP_HOA = [
     ("thieu_khoa", (_KHONG_KHOA, _KHONG_KHOA), "xet_tay"),
     ("null", (None, None), "xet_tay"),
@@ -250,10 +248,9 @@ _LOP_HOA = [
     ("bool", (True, True), "xet_tay"),
     ("so_thap_hon", (11, 8), "muc_1"),
     ("so_bang_nhau", (12, 9), "xet_tay"),
-    ("ngoai_dai_tren", (13, 10), "xet_tay"),
-    ("ngoai_dai_duoi", (9, 5), "xet_tay"),
-    ("lop_0", (0, 0), "xet_tay"),
 ]
+#: Lớp NGOÀI dải của cấp KHÔNG còn chung một đường bước hoà (owner 24-11 đính chính): THPT / GDTX số nguyên ngoài 10..12 ⇒ dừng ở BƯỚC
+#: ĐẾM (``test_kv_hoa_thpt_thieu_lop.py``); THCS lớp 10–12 / 0 ⇒ bước hoà (mục 1c); THCS lớp hợp lệ ≤ 5 ⇒ không phải dòng THCS (1e).
 
 
 def _dat_lop(muc, lop):
@@ -283,8 +280,8 @@ def _phan_quyet(kv, meta):
 def test_luat_hoa_mot_nguon_thpt_va_thcs_cung_phan_quyet(monkeypatch, ten, lop, mong, dao_thu_tu):
     """Hoà 2–2, hai mục CÙNG năm kết thúc; mục 2 mang lớp ``lop``. Nhánh THPT (CĐ, văn hoá THPT, ``2021→2023``) và nhánh THCS (trung
     cấp sau THCS, ``2018→2020``) cho CÙNG phán quyết (CLAUDE.md §7 — một luật, test khoá bằng nhau):
-    * lớp không so được (thiếu khoá / null / chuỗi / bool / ngoài dải của cấp — owner 24-11) hoặc hai lớp bằng nhau ⇒ cần xét tay —
-      THPT ``ambiguous_requires_manual``, THCS "KV chờ xác minh" ``thcs_tied_graduation_school`` — và KHÔNG tra trường tốt nghiệp;
+    * lớp không so được (thiếu khoá / null / chuỗi / bool) hoặc hai lớp bằng nhau ⇒ cần xét tay — THPT ``ambiguous_requires_manual``,
+      THCS "KV chờ xác minh" ``thcs_tied_graduation_school`` — và KHÔNG tra trường tốt nghiệp;
     * lớp mục 2 thấp hơn ⇒ mục 1 là trường tốt nghiệp (như cũ).
     Luật (b) cũ của nhánh THCS (lớp trống / lạ = 0) chọn mục 1 ở bốn ca lớp lạ ⇒ ĐỎ."""
     thpt = [_thpt(T1, 2021, 2023, 12), _thpt(T2, 2021, 2023, lop[0])]
@@ -353,8 +350,8 @@ def test_hoa_thcs_nhom_thap_lop_la_van_lay_truong_tot_nghiep(monkeypatch, lop_la
 # ═══════════════════════════════ 1c. Lớp cuối phần THCS ngoài 6–9 ở bước hoà (owner 24-11) ═══════════════════════════════
 #: Owner 24-11 ``QUYET-DINH-OWNER-L3-DONG-THCS-LOP-NGOAI-6-9``: dòng cấp THCS ghi lớp cuối NGOÀI 6–9 (schema cho 1..12) là dữ liệu lớp
 #: không hợp lệ ⇒ như ô lớp trống (owner 23-11 (a)) ⇒ cần xét tay ("KV chờ xác minh" ``thcs_tied_graduation_school``), không tự chọn
-#: KV. Phần mở rộng kỹ thuật (điều phối 24-11) "liên cấp kết thúc ở lớp 1–5 cũng không hợp lệ ở bước hoà" nay không còn tới được bước
-#: hoà: owner 24-11 chỉ đếm năm lớp 6–9 ⇒ mục ấy không phải dòng THCS (mục 1d).
+#: KV. Lớp hợp lệ 1–5 (liên cấp hay không) KHÔNG còn tới bước hoà: owner 24-11 chỉ đếm năm lớp 6–9 + đính chính câu 1 ⇒ dòng ấy không
+#: phải dòng THCS (mục 1d, 1e) — hai ca "lớp 5" cũ của mục này chuyển sang 1e. Dải 6..9 ở bước hoà còn bắt lớp 10–12 và lớp 0.
 def _cho_xac_minh_hoa(kv, meta, hoi, so_lan_tra_nam_hoc):
     assert kv is None
     _cho_xac_minh(meta, "thcs_tied_graduation_school")
@@ -363,22 +360,23 @@ def _cho_xac_minh_hoa(kv, meta, hoi, so_lan_tra_nam_hoc):
     assert sum(h[0] == "truong" for h in hoi) == so_lan_tra_nam_hoc
 
 
-@pytest.mark.parametrize("lop", [10, 11, 12, 5], ids=["lop_10", "lop_11", "lop_12", "lop_5"])
+@pytest.mark.parametrize("lop", [10, 11, 12], ids=["lop_10", "lop_11", "lop_12"])
 def test_hoa_dong_thcs_lop_ngoai_6_9_voi_lien_cap_thi_cho_xac_minh(monkeypatch, lop):
     """Rà đoàn 3 D'2 NỢ-1. Liên cấp T2 lớp 6 → hết lớp 10 ``2017→2021`` (phần THCS 2017–2019, KV2, kết thúc 2020, lớp cuối 9); dòng
     THCS T1 ``2017→2020`` (KV1) ghi lớp ``lop`` ⇒ hoà 3–3, CÙNG năm kết thúc 2020. Trước: lớp so như số ⇒ "lớp 10–12" thắng liên cấp
-    lặng lẽ (KV1), "lớp 5" thua (KV2). Nay: chờ xác minh."""
+    lặng lẽ (KV1). Nay: chờ xác minh. (Ca "lớp 5" cũ ⇒ mục 1e: dòng ấy không phải dòng THCS.)"""
     lich_su = [_thcs(T1, 2017, 2020, lop=lop), _thcs(T2, 2017, 2021, lop=10, level="THCS_THPT", trinh_do=None)]
     kv, meta, hoi = _chay(monkeypatch, _hs(academic_history=lich_su))
     assert meta["breakdown"]["kv_totals"] == {"KV1": 3, "KV2": 3}
     _cho_xac_minh_hoa(kv, meta, hoi, 6)
 
 
-#: (lớp của dòng T1, phán quyết mong đợi) — dòng T2 cùng năm luôn lớp 8. Biên 6 và 9 hợp lệ (so như số, như trước); 5 và 10–12 không.
+#: (lớp của dòng T1, phán quyết mong đợi) — dòng T2 cùng năm luôn lớp 8. Biên 6 và 9 hợp lệ (so như số, như trước); 0 và 10–12 không.
+#: (Ca "lớp 5" cũ ⇒ mục 1e.)
 _BIEN_LOP_THCS = [
     (9, ("truong", T1, "KV1")),
     (6, ("truong", T2, "KV2")),
-    (5, ("xet_tay", [T1, T2])),
+    (0, ("xet_tay", [T1, T2])),
     (10, ("xet_tay", [T1, T2])),
     (11, ("xet_tay", [T1, T2])),
     (12, ("xet_tay", [T1, T2])),
@@ -388,7 +386,7 @@ _BIEN_LOP_THCS = [
 @pytest.mark.parametrize("lop, mong", _BIEN_LOP_THCS, ids=[f"lop_{c[0]}" for c in _BIEN_LOP_THCS])
 def test_hoa_hai_dong_thcs_bien_lop_cuoi_6_9(monkeypatch, lop, mong):
     """Hai dòng THCS cùng ``2017→2020`` (T1 KV1, T2 KV2 lớp 8) ⇒ hoà 3–3, cùng năm kết thúc. Lớp 9 của T1 hợp lệ ⇒ T1 là trường tốt
-    nghiệp (không đổi so với trước); lớp 6 hợp lệ ⇒ T2 lớp 8 lớn hơn; lớp 5 / 10 / 11 / 12 ⇒ chờ xác minh."""
+    nghiệp (không đổi so với trước); lớp 6 hợp lệ ⇒ T2 lớp 8 lớn hơn; lớp 0 / 10 / 11 / 12 ⇒ chờ xác minh."""
     kv, meta, hoi = _chay(monkeypatch, _hs(academic_history=[_thcs(T1, 2017, 2020, lop=lop), _thcs(T2, 2017, 2020, lop=8)]))
     assert meta["breakdown"]["kv_totals"] == {"KV1": 3, "KV2": 3}
     assert _phan_quyet(kv, meta) == mong, meta
@@ -403,8 +401,8 @@ def test_hoa_hai_dong_thcs_bien_lop_cuoi_6_9(monkeypatch, lop, mong):
 #: Owner 24-11 ``QUYET-DINH-OWNER-L3-CHI-DEM-NAM-THCS-VA-THU-TU-3B`` mục 1 (Codex đoàn 3a A1 NỢ-2): khi đếm thời gian học để chọn KV
 #: cho trung cấp sau THCS, CHỈ tính các năm lớp 6–9. Dòng liên cấp đếm ngược từ lớp kết thúc (một năm một lớp — CÙNG phép tính với chỗ
 #: cắt lớp 10, ``kv_lien_cap_grade_start_year``): bỏ năm tiểu học ở đầu mục; mục kết thúc ở lớp ≤ 5 không có năm lớp 6–9 ⇒ KHÔNG phải
-#: dòng THCS (như mục liên cấp chỉ có năm THPT): không đếm, không tra cờ DTNT, không là ứng viên trường tốt nghiệp. Dòng cấp THCS (trường
-#: cấp THCS) giữ mọi năm. Thay hai ca cũ ``test_hoa_lien_cap_ket_thuc_lop_duoi_6_thi_cho_xac_minh`` (liên cấp ``2017→2020`` lớp 5 / 6
+#: dòng THCS (như mục liên cấp chỉ có năm THPT): không đếm, không tra cờ DTNT, không là ứng viên trường tốt nghiệp. Dòng KHÔNG ghi liên
+#: cấp: mục 1e (lớp ≤ 5 ⇒ như liên cấp; còn lại đủ mọi năm). Thay hai ca cũ ``test_hoa_lien_cap_ket_thuc_lop_duoi_6_thi_cho_xac_minh`` (liên cấp ``2017→2020`` lớp 5 / 6
 #: góp 3 năm "THCS" — tiền đề nay trái luật đếm).
 def test_vi_du_codex_lien_cap_het_lop_5_khong_dem_nam_tieu_hoc(monkeypatch):
     """Codex đoàn 3a A1 NỢ-2: liên cấp X (T1, KV1) ``2012→2017`` kết thúc lớp 5 + THCS Y (T2, KV2) ``2017→2021`` lớp 9. Trước: X góp 5
@@ -519,6 +517,110 @@ def test_lien_cap_bien_thieu_nam_hoac_lop_la_thi_dung_co_nhan(monkeypatch, dong,
     assert kv is None and hoi == []
     _cho_xac_minh(meta, "thcs_history_inconsistent")
     assert _ca_dung(meta) == [(1, ca)]
+
+
+# ═══════════ 1e. Dòng KHÔNG ghi liên cấp mà lớp cuối ≤ 5 ⇒ như liên cấp (owner 24-11 đính chính tiền đề THCS) ═══════════
+#: Owner 24-11 ``QUYET-DINH-OWNER-L3-DINH-CHINH-TIEN-DE-THCS`` (Codex gói nhỏ L3 G3(b): danh mục không có cấp tiểu học ⇒ trường
+#: TH&THCS mang cấp THCS; công cụ ghép 3b gắn được trường vào dòng gõ tay để trống ``level``):
+#: * câu 1 — dòng không ghi liên cấp mà lớp cuối ≤ 5 ⇒ như liên cấp: không góp năm THCS, không là trường tốt nghiệp THCS;
+#: * câu 2 — lưu ban (nhiều năm hơn số lớp) / không ghi lớp ⇒ tính đủ mọi năm thật học (như cũ).
+def _dong_khac_lop_9():
+    return _thcs(T2, 2017, 2021, lop=9)
+
+
+@pytest.mark.parametrize("level", ["THCS", None], ids=["cap_thcs", "level_trong_trinh_do_thcs"])
+def test_vi_du_codex_dong_khong_ghi_lien_cap_het_lop_5_khong_dem(monkeypatch, level):
+    """Ví dụ Codex G3(b): dòng X (T1, KV1) ``2012→2017`` lớp 5 KHÔNG ghi liên cấp — cấp THCS (trường TH&THCS trong danh mục) hoặc
+    ``level`` trống + trình độ THCS (dòng gõ tay được ghép trường) — + THCS Y (T2, KV2) ``2017→2021`` lớp 9. Trước: X góp 5 năm ⇒ KV1.
+    Nay: X không phải dòng THCS (không tra KV, không tra cờ DTNT) ⇒ KV2."""
+    kv, meta, hoi = _chay(monkeypatch, _hs(academic_history=[_thcs(T1, 2012, 2017, lop=5, level=level), _dong_khac_lop_9()]))
+    assert (kv, meta["rule_applied"], meta["breakdown"]["kv_totals"]) == ("KV2", "longest_duration", {"KV2": 4})
+    assert hoi == [("dtnt", T2), ("truong", T2, 2017), ("truong", T2, 2018), ("truong", T2, 2019), ("truong", T2, 2020)]
+
+
+@pytest.mark.parametrize(
+    "dong_kia",
+    [_thcs(T2, 2017, 2021, lop=10, level="THCS_THPT", trinh_do=None), _thcs(T2, 2017, 2020, lop=8)],
+    ids=["voi_lien_cap_het_lop_10", "voi_dong_thcs_lop_8"],
+)
+def test_dong_thcs_het_lop_5_khong_con_hoa_voi_dong_kia(monkeypatch, dong_kia):
+    """Thay hai ca "lớp 5" cũ của mục 1c (``…lop_ngoai_6_9_voi_lien_cap…[lop_5]``, ``…bien_lop_cuoi_6_9[lop_5]``): dòng THCS T1
+    ``2017→2020`` lớp 5 nay không phải dòng THCS ⇒ không còn hoà 3–3; chỉ dòng kia (KV2, 3 năm THCS) ⇒ KV2, T1 không được tra."""
+    kv, meta, hoi = _chay(monkeypatch, _hs(academic_history=[_thcs(T1, 2017, 2020, lop=5), dong_kia]))
+    assert (kv, meta["rule_applied"], meta["breakdown"]["kv_totals"]) == ("KV2", "longest_duration", {"KV2": 3})
+    assert all(h[1] != T1 for h in hoi)
+
+
+def test_dong_thcs_het_lop_5_dung_mot_minh_thi_khong_co_dong_thcs(monkeypatch):
+    kv, meta, hoi = _chay(monkeypatch, _hs(academic_history=[_thcs(T3, 2012, 2017, lop=5)]))
+    assert kv is None and hoi == []
+    _cho_xac_minh(meta, "thcs_history_missing")
+
+
+@pytest.mark.parametrize(
+    "dong",
+    [_thcs(D, 2012, 2017, lop=5), {**_go_tay(2012, 2017), "grade_to": 5}],
+    ids=["truong_dtnt", "go_tay_chua_co_truong"],
+)
+def test_dong_thcs_het_lop_5_khong_keo_ho_so_ve_cho_xac_minh(monkeypatch, dong):
+    """Dòng chỉ có năm tiểu học không được tra cờ DTNT / danh mục: trường PT DTNT, hay dòng gõ tay chưa có trường, mà lớp cuối 5 ⇒ bỏ
+    qua; THCS T2 ⇒ KV2 (trước: "chờ xác minh" ``thcs_school_dtnt`` / ``thcs_school_not_in_catalog`` vì một trường tiểu học)."""
+    kv, meta, hoi = _chay(monkeypatch, _hs(academic_history=[dong, _dong_khac_lop_9()]))
+    assert (kv, meta["rule_applied"]) == ("KV2", "longest_duration")
+    assert ("dtnt", D) not in hoi
+
+
+def test_dong_thcs_het_lop_5_khong_la_ung_vien_truong_tot_nghiep(monkeypatch):
+    """T1 (KV1) ``2015→2017`` và T3 (KV3) ``2017→2019`` lớp 9 ⇒ hoà 2–2; dòng cấp THCS T2 (KV2) ``2015→2020`` lớp 5 (dữ liệu chồng năm) có
+    năm kết thúc lớn nhất nhưng không phải dòng THCS ⇒ không là trường tốt nghiệp ⇒ T3 (2019) ⇒ KV3."""
+    lich_su = [_thcs(T1, 2015, 2017), _thcs(T3, 2017, 2019, lop=9), _thcs(T2, 2015, 2020, lop=5)]
+    kv, meta, hoi = _chay(monkeypatch, _hs(academic_history=lich_su))
+    assert (kv, meta["rule_applied"], meta["breakdown"]["kv_totals"]) == (
+        "KV3", "tiebreak_graduation_school", {"KV1": 2, "KV3": 2},
+    )
+    assert meta["breakdown"]["graduation_school_id"] == T3
+    assert all(h[1] != T2 for h in hoi)
+
+
+def test_dong_thcs_het_lop_5_y_y_bi_loai_nhu_lien_cap(monkeypatch):
+    """"Như liên cấp": dòng ``2017→2017`` lớp 5 bị loại (chỉ năm tiểu học) TRƯỚC phép kiểm 0 năm học — như liên cấp lớp ≤ 5 ``y→y``.
+    Trước: dừng ``zero_length_entry``. Còn T1 ``2018→2021`` ⇒ KV1."""
+    kv, meta, _ = _chay(monkeypatch, _hs(academic_history=[_thcs(T1, 2018, 2021), _thcs(T2, 2017, 2017, lop=5)]))
+    assert (kv, meta["rule_applied"], meta["breakdown"]["kv_totals"]) == ("KV1", "longest_duration", {"KV1": 3})
+
+
+@pytest.mark.parametrize(
+    "dong",
+    [_thcs(T2, None, 2017, lop=5), _thcs(T2, 2017, 2012, lop=5)],
+    ids=["thieu_nam", "nam_nguoc"],
+)
+def test_dong_thcs_het_lop_5_nam_hong_thi_dung_co_nhan(monkeypatch, dong):
+    """Năm thiếu / ngược ⇒ kiểm năm TRƯỚC khi loại dòng lớp ≤ 5 (như liên cấp) ⇒ dừng ``entry_years_invalid`` — không lặng lẽ bỏ."""
+    kv, meta, hoi = _chay(monkeypatch, _hs(academic_history=[_thcs(T1, 2018, 2021), dong]))
+    assert kv is None and hoi == []
+    _cho_xac_minh(meta, "thcs_history_inconsistent")
+    assert _ca_dung(meta) == [(1, "entry_years_invalid")]
+
+
+#: Câu 2 (giữ như cũ): dòng KHÔNG ghi liên cấp, lớp cuối ≥ 6 hoặc không ghi / không hợp lệ ⇒ đủ MỌI năm thật học — kể cả lưu ban, kể
+#: cả dòng ghi từ lớp 1 ở trường TH&THCS (không phân biệt được với lưu ban). (dòng T1 — KV1 —, năm đếm).
+_DEM_DU_NAM = [
+    (_thcs(T1, 2016, 2021, lop=9), list(range(2016, 2021))),
+    (_thcs(T1, 2012, 2021, lop=9), list(range(2012, 2021))),
+    (_thcs(T1, 2016, 2021), list(range(2016, 2021))),
+    (_thcs(T1, 2016, 2021, lop=6), list(range(2016, 2021))),
+    (_thcs(T1, 2016, 2021, lop=0), list(range(2016, 2021))),
+]
+
+
+@pytest.mark.parametrize(
+    "dong, nam_dem", _DEM_DU_NAM, ids=["luu_ban_lop_9", "tu_lop_1_den_9", "khong_ghi_lop", "bien_lop_6", "lop_0_khong_hop_le"],
+)
+def test_dong_thcs_luu_ban_hoac_khong_ghi_lop_dem_du_nam(monkeypatch, dong, nam_dem):
+    kv, meta, hoi = _chay(monkeypatch, _hs(academic_history=[dong]))
+    assert (kv, meta["rule_applied"], meta["breakdown"]["kv_totals"]) == ("KV1", "longest_duration", {"KV1": len(nam_dem)})
+    assert meta["breakdown"]["entries"][0]["counted_school_years"] == nam_dem
+    assert [h for h in hoi if h[0] == "truong"] == [("truong", T1, y) for y in nam_dem]
 
 
 # ═══════════════════════════════ 2. "KV chờ xác minh" — không tính được ═══════════════════════════════
