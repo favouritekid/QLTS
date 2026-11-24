@@ -73,7 +73,7 @@ def _route_lan_xet():
 
 
 def test_hd1_dung_9_route_cong_e10_dung_ma_thanh_cong():
-    assert set(_route_duoi_tien_to()) == set(ROUTE_HOP_DONG) | ROUTE_LUA_CHON_C2
+    assert set(_route_duoi_tien_to()) == set(CHIN_ROUTE) | ROUTE_LUA_CHON_C2
     routes = _route_lan_xet()
     assert set(routes) == set(ROUTE_HOP_DONG)
     for k, ma in ROUTE_HOP_DONG.items():
