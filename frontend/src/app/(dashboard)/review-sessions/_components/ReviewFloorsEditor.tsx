@@ -207,7 +207,7 @@ export function ReviewFloorsEditor({ sessionId, busy, draft, onDraftChange, onCl
   const plan = buildFloorsPlan(c.items, draft.overrides)
   const groups = groupFloorCandidates(c.items)
   const conflicts = draft.staleConflict ? floorDraftConflicts(c.items, draft.overrides) : []
-  const tooMany = plan.floors.length > FLOORS_MAX_ITEMS
+  const tooMany = plan.floors.length > FLOORS_MAX_ITEMS + 1
   const flagged = new Set(draft.flaggedIds)
   const locked = busy || q.isFetching || put.isPending
   const canSave = canEdit && !locked && plan.invalidIds.length === 0 && !tooMany
