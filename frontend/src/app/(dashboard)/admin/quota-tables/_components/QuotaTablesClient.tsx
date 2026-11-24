@@ -1,8 +1,10 @@
 "use client"
 
 /**
- * GĐ2-F1 — trang "Bảng chỉ tiêu năm" (chỉ Admin — máy chủ là chốt: không phải Admin ⇒ 403 ⇒ trang báo, không kiểm vai ở
- * đây). Năm chưa có bảng ⇒ 404 ⇒ cho tạo (PUT `version` 0). Nút Sửa / Khoá / Mở khoá theo `available_actions` của máy chủ.
+ * GĐ2-F1 — trang "Bảng chỉ tiêu năm". Máy chủ là chốt, không kiểm vai ở đây: GĐ2-C C2 mở GET cho Ban thư ký (Admin + Quản lý / Cán bộ
+ * được gán Thư ký Hội đồng); người chưa được gán ⇒ 404 thân chung của cổng ⇒ trang báo lỗi. Năm chưa có bảng ⇒ 404 mang mã riêng
+ * `quota_table_not_found` (rà hợp nhất 23-11 H4 — không suy từ mã HTTP) ⇒ báo "chưa có bảng"; nút tạo (PUT `version` 0) CHỈ khi
+ * thân 404 có `available_actions` chứa `create`. Nút Sửa / Khoá / Mở khoá theo `available_actions` của bảng.
  */
 import { useMemo, useState } from "react"
 
@@ -11,7 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { readApiError } from "@/lib/error-handler"
 import { useQuotaTable } from "@/lib/hooks/use-quota-tables"
 import { draftFromTable, memberLabel } from "@/lib/quota-tables/draft"
-import { describeQuotaTableError } from "@/lib/quota-tables/messages"
+import { describeQuotaTableError, isQuotaTableNotFound, serverAllows } from "@/lib/quota-tables/messages"
 import { parseYearAcademicInfos, type QuotaYearAcademicInfo } from "@/lib/zod/quota-tables"
 
 import { QuotaTableEditor, type MemberOption } from "./QuotaTableEditor"
@@ -46,7 +48,10 @@ export function QuotaTablesClient({ initialYear }: { initialYear?: number }) {
   const table = useQuotaTable(year)
 
   const err = table.error ? readApiError(table.error) : null
-  const noTable = err?.status === 404
+  // 404 "năm chưa có bảng" = mã riêng của máy chủ; 404 của cổng Thư ký (chưa được gán) KHÔNG có mã ấy ⇒ rơi vào khối lỗi.
+  const noTable = isQuotaTableNotFound(err)
+  // Nút "Tạo bảng" theo cờ máy chủ trong thân 404 — người xem không ghi được (Thư ký) ⇒ không nút.
+  const canCreate = noTable && serverAllows(err?.data?.available_actions, "create")
   const data = table.data ?? null
   // GĐ2-F1: năm chưa có bảng — máy chủ vẫn trả dấu chỉ tiêu trong thân 404 để tạo bảng (version 0) không đè chỉ tiêu ai vừa sửa.
   const noTableFingerprint =
@@ -111,7 +116,7 @@ export function QuotaTablesClient({ initialYear }: { initialYear?: number }) {
         </p>
       )}
 
-      {mode === "edit" && (noTable || data) && (
+      {mode === "edit" && (canCreate || data) && (
         <QuotaTableEditor
           year={year}
           version={data?.version ?? 0}
@@ -127,9 +132,11 @@ export function QuotaTablesClient({ initialYear }: { initialYear?: number }) {
       {mode === "view" && noTable && (
         <div className="space-y-3 rounded-md border border-dashed p-4" data-testid="chua-co-bang">
           <p className="text-sm">Năm {year} chưa có bảng chỉ tiêu.</p>
-          <Button onClick={() => setMode("edit")} data-testid="nut-tao-bang">
-            Tạo bảng chỉ tiêu năm {year}
-          </Button>
+          {canCreate && (
+            <Button onClick={() => setMode("edit")} data-testid="nut-tao-bang">
+              Tạo bảng chỉ tiêu năm {year}
+            </Button>
+          )}
         </div>
       )}
 

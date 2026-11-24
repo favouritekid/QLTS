@@ -338,6 +338,14 @@ export const navigationConfig: NavigationConfig = {
           roles: ["admin"],
         },
         {
+          // GĐ2-C C1 — Admin gán / thu hồi quyền "Thư ký Hội đồng". Chỉ Admin: máy chủ chặn mọi vai khác (Casbin +
+          // `require_review_secretary_admin` ⇒ 403); `roles` chỉ là bộ lọc thô của menu — trang tự báo khi máy chủ trả 403.
+          label: "Thư ký Hội đồng",
+          href: "/admin/review-secretaries",
+          icon: UserCheck,
+          roles: ["admin"],
+        },
+        {
           // Lần xét tuyển GĐ1 — văn bản Hội đồng. Mục HIỆN THEO CỜ máy chủ (F238): chỉ khi
           // `GET /api/admission-config/council-documents/quyen` trả ít nhất một cờ bật (quản lý
           // chưa gán đơn vị — mọi cờ tắt — không thấy mục). `roles` chỉ là bộ lọc thô để không hỏi

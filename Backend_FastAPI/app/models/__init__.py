@@ -85,6 +85,14 @@ from .admission_review import (  # noqa: E402
     AdmissionReviewSession,
 )
 from . import admission_review_ddl  # noqa: E402,F401
+# GĐ2-C C1: quyền "Thư ký Hội đồng" gán theo từng người + trigger "chỉ thu hồi, không xoá" (bản cho create_all(); bản thật:
+# migration gd2c20261122).
+from .admission_review_secretary import AdmissionReviewSecretaryGrant  # noqa: E402
+from . import admission_review_secretary_ddl  # noqa: E402,F401
+# GĐ2-C C2: lựa chọn của Ban thư ký (chỉ thêm, chỉ khi lần xét nháp) + trigger (bản cho create_all(); bản thật: migration
+# gd2cs20261122). Đăng ký SAU admission_review_ddl: hàm trigger gọi admission_review_assert_session_draft của GĐ2-B.
+from .admission_review_selection import AdmissionReviewSelection  # noqa: E402
+from . import admission_review_selection_ddl  # noqa: E402,F401
 
 # Admission Config Domain (Phase 1: Relational admission system)
 from .admission_config import (
@@ -276,6 +284,8 @@ __all__ = [
     "AdmissionReviewFloor",
     "AdmissionReviewRun",
     "AdmissionReviewRow",
+    "AdmissionReviewSecretaryGrant",  # GĐ2-C C1
+    "AdmissionReviewSelection",  # GĐ2-C C2
     "ProfileSubjectScore",
     "ProfileDocument",
     "DocumentAuditLog",  # Audit trail for document operations

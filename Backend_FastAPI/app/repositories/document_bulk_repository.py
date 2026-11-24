@@ -550,7 +550,14 @@ async def lock_user_key_share(db: AsyncSession, user_id: int) -> Optional[Any]:
     UPDATE`` (lượt 6) ⇒ nếu cùng lần lưu kéo theo thu hồi thì ``revoke_grants_on_account_change(target_locked_for_update=
     True)`` trả 409 ``COMBINED_KEY_CHANGE_AND_REVOKE`` TRƯỚC khi khoá dòng quyền; K4 giữ ``FOR UPDATE`` nhưng không chạm
     dòng quyền (quyền tham chiếu người bị xoá ⇒ 409 chỉ đọc). Đường mới giữ ``FOR UPDATE`` mà cần dòng quyền ⇒ phải khoá
-    dòng quyền TRƯỚC hoặc từ chối như trên."""
+    dòng quyền TRƯỚC hoặc từ chối như trên.
+
+    GĐ2-C C1 (gộp PR-B ``5effed10``, 23-11) — luật áp cho CẢ dòng quyền Thư ký (``admission_review_secretary_grant``):
+    tự thu hồi Thư ký nằm TRONG ``revoke_grants_on_account_change``, SAU phép chặn 409 (lý do duyệt chéo HOẶC lý do Thư ký);
+    cổng Thư ký giữ người gọi ``FOR SHARE`` (không phải mức chặt) rồi quyền ``FOR SHARE``; Admin thu hồi tay giữ Admin bấm
+    ``FOR KEY SHARE`` rồi dòng quyền ``FOR UPDATE`` và không xin dòng người nào sau đó; Admin gán giữ người được gán ``FOR
+    NO KEY UPDATE`` + Admin bấm ``FOR KEY SHARE`` rồi chèn dòng quyền; ô tìm ứng viên không khoá. Không đường C1 nào giữ dòng
+    người ``FOR UPDATE`` rồi chờ dòng quyền."""
     return (
         await db.execute(
             select(models.User.id, models.User.status, models.User.role, models.User.unit_id)
@@ -580,6 +587,8 @@ async def lock_user_role_share(db: AsyncSession, user_id: int) -> Optional[Any]:
     - chốt lô (PR-A, Codex 20-11): Admin chốt lô của người khác — người → lô, không giữ dòng quyền chéo;
     - Admin CẤP quyền chéo (PR-B, Q4): đọc người được cấp dưới khoá — giữ khoá này không chờ dòng nào khác ngoài dòng
       quyền mới chèn ⇒ không vòng chờ với đổi vai / khoá (người ``FOR NO KEY UPDATE`` → quyền ``FOR UPDATE``).
+    - GĐ2-C C1: cổng Thư ký Hội đồng (``review_secretary_service.require_secretary_access``) đọc vai / trạng thái CHÍNH người
+      gọi dưới khoá (Admin luôn là Thư ký — owner 22-11), rồi mới tới dòng quyền ``FOR SHARE`` (người → quyền).
 
     Không xung đột với ``FOR SHARE`` / ``FOR KEY SHARE`` khác (§5.4, khoá khoá-ngoại khi ghi ``finalized_by_user_id``).
     Trả hàng ``(id, status, role, unit_id)`` đọc DƯỚI khoá; ``None`` = dòng không còn (đã xoá). Chỉ chọn CỘT, không nạp

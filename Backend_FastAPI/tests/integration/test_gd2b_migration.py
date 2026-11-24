@@ -3,7 +3,8 @@
 trình con ⇒ đúng ``env.py`` AUTOCOMMIT). Khuôn + helper: ``test_gd2a_migration.py`` (BT38).
 
 CSDL trước nâng cấp = ``create_all()`` của model HIỆN TẠI rồi gỡ ĐÚNG phần GĐ2-B (``GO_GD2B`` của ``test_gd2a_migration.py`` — MỘT
-danh sách cho cả hai tệp) ⇒ ở ``gd2f20261119``, mọi thứ khác y như thật. Sau nâng cấp, so lược đồ phần GĐ2-B (cột, ràng buộc, chỉ mục,
+danh sách cho cả hai tệp; trước đó gỡ mọi phần nối SAU GĐ2-B — ``GO_SAU_GD2B``, từ nền tích hợp GĐ2-C C2 22-11) ⇒ ở ``gd2f20261119``,
+mọi thứ khác y như thật. Sau nâng cấp, so lược đồ phần GĐ2-B (cột, ràng buộc, chỉ mục,
 trigger, thân hàm của bốn bảng mới + ràng buộc của ``offering_admission_round``) với một CSDL dựng thẳng từ model: phép khoá
 "migration = model". Hạ cấp FAIL-CLOSED khi còn dữ liệu (đúng SQLSTATE ``QLC12``); cờ CHO PHÉP đúng chữ ``1`` mới xoá. Mỗi ca kiểm
 một bất biến.
@@ -16,7 +17,16 @@ import asyncpg
 import pytest
 import pytest_asyncio
 
-from tests.integration.test_gd2a_migration import GO_GD2B, GOC, _create_all, _phien_ban, _tao_db, _url, _xoa_db
+from tests.integration.test_gd2a_migration import (
+    GO_GD2B,
+    GO_SAU_GD2B,
+    GOC,
+    _create_all,
+    _phien_ban,
+    _tao_db,
+    _url,
+    _xoa_db,
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
@@ -59,7 +69,7 @@ async def csdl_gd2f():
         await _create_all(ten)
         k = await asyncpg.connect(_url(ten, "postgresql"))
         try:
-            for s in GO_GD2B:
+            for s in (*GO_SAU_GD2B, *GO_GD2B):
                 await k.execute(s)
             await k.execute(
                 "CREATE TABLE alembic_version (version_num varchar(32) NOT NULL, "

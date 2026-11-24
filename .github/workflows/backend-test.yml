@@ -1569,6 +1569,31 @@ jobs:
               tests/api/test_gd2b_lan_xet_api.py
               tests/api/test_gd2b_lan_xet_hai_phien_api.py
               tests/api/test_gd2b_chay_kiem_api.py
+          # GĐ2-C C1 (22-11): quyền "Thư ký Hội đồng" — bảng quyền + migration, route Admin gán / thu hồi, cổng
+          # `deps.require_review_secretary` (hai phiên, T17), tự thu hồi khi khoá / đổi vai, K4 (sổ + hai phiên). Lát RIÊNG, tên
+          # KHÁC `Tier 5k` của GĐ2-B (nhánh song song) để hai nhánh gộp không đè nhau. Ngoài mọi tier thì required check vẫn xanh
+          # mà không chạy (CLAUDE.md §11). Ghim WHOLE-FILE. `tests/api/gd2c_thu_ky_tro_giup.py` là trợ giúp, KHÔNG phải tệp test.
+          # Gộp PR-B 5effed10 (23-11): `test_gd2c_c1_thu_ky_chan_gop.py` — chặn lưu gộp email + khoá / hạ vai với người giữ
+          # quyền Thư ký (409 trước khi khoá dòng quyền Thư ký; hai phiên) + đổi vai riêng thu hồi cả hai quyền cùng giao dịch.
+          - tier: Tier 5l — GĐ2-C Thư ký Hội đồng (C1)
+            tests: >-
+              tests/unit/test_gd2c_c1_ddl_lockin.py
+              tests/integration/test_gd2c_c1_rang_buoc_db.py
+              tests/integration/test_gd2c_c1_migration.py
+              tests/api/test_gd2c_c1_thu_ky_api.py
+              tests/api/test_gd2c_c1_thu_ky_cong.py
+              tests/api/test_gd2c_c1_thu_ky_k4_hai_phien.py
+              tests/api/test_gd2c_c1_thu_ky_chan_gop.py
+          # GĐ2-C C2 (22-11): lựa chọn của Ban thư ký — bảng chỉ thêm + trigger "chỉ khi nháp" + migration gd2cs20261122 (dòng
+          # Casbin route Ban thư ký), route PUT / GET (cổng Thư ký), T9 SELECTION_STALE, cờ "đang ngừng" (hàm cho C4), K4, đóng
+          # băng, hai phiên (thứ tự khoá). Lát RIÊNG như 5k / 5l; ngoài mọi tier thì required check vẫn xanh mà không chạy
+          # (CLAUDE.md §11). Ghim WHOLE-FILE. Tệp cũ bị chạm nằm sẵn ở tier của chúng (5j, 5k, 5l, 4b, 5i).
+          - tier: Tier 5m — GĐ2-C lựa chọn của Ban thư ký (C2)
+            tests: >-
+              tests/unit/test_gd2c_c2_ddl_lockin.py
+              tests/integration/test_gd2c_c2_rang_buoc_db.py
+              tests/integration/test_gd2c_c2_migration.py
+              tests/api/test_gd2c_c2_lua_chon_api.py
 
     env:
       APP_ENV: test

@@ -559,8 +559,11 @@ def test_kiem_ke_dong_bang_co_du_4_route_ghi_khong_co_route_doc():
         ("POST", "/api/admission-config/review-sessions/{session_id}/cancel"),
         ("POST", "/api/admission-config/review-sessions/{session_id}/runs"),
     }
+    # GĐ2-C C2 (gộp 23-11): route ghi lựa chọn của Ban thư ký cùng tiền tố — kiểm kê đóng băng của nó ở
+    # ``tests/unit/test_gd2c_c2_ddl_lockin.py::test_dong_bang_co_route_ghi_va_module``. Gõ TAY: route ghi thứ sáu dưới tiền tố ⇒ đỏ.
+    ghi_c2 = {("PUT", "/api/admission-config/review-sessions/{session_id}/selections/{profile_id}")}
     co = {(m, p) for m, p in ADMISSION_WRITE_ROUTES if p.startswith("/api/admission-config/review-sessions")}
-    assert co == ghi
+    assert co == ghi | ghi_c2
 
 
 # ══════════════════════════════════════════ PATCH dời năm học vụ có sàn (BT32, N8, N8d) ══════════════════════════════════════════
