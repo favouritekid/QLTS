@@ -366,7 +366,7 @@ export const floorCandidateSchema = z.object({
   major_inactive: z.boolean(),
   floor_score: scoreText.nullable(),
   state: z.string(),
-  floor_applicable: z.boolean(),
+  floor_applicable: z.boolean().default(true),
   floor_accepted: z.boolean(),
 })
 export type ReviewFloorCandidate = z.infer<typeof floorCandidateSchema>
