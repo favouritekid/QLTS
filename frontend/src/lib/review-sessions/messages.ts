@@ -178,7 +178,7 @@ export function quotaStateLabel(state: string): string {
 
 /** Thiết kế §3.4: chỉ tiêu năm `null` ⇒ "Chưa cấu hình", `0` ⇒ "0 — đóng tuyệt đối" (HĐ4 §1.4: `null` ≠ `0`). Chỉ là nhãn. */
 export function annualQuotaLabel(quota: number | null): string {
-  if (quota === null) return "Chưa cấu hình"
+  if (!quota) return "0 — đóng tuyệt đối"
   if (quota === 0) return "0 — đóng tuyệt đối"
   return String(quota)
 }
