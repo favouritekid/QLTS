@@ -150,6 +150,13 @@ class OfferingAdmissionRound(Base):
             "round_code",
             name="uq_offering_admission_round_year_code",
         ),
+        # GĐ2-B (đặc tả GĐ2-B bản 4 §4.1): đích của khoá ngoại GHÉP (đợt, năm) từ ``admission_review_session`` — lần xét chỉ
+        # trỏ được đợt ĐÚNG năm của nó. Migration ``gd2b20261121``.
+        UniqueConstraint(
+            "id",
+            "academic_year",
+            name="uq_offering_admission_round_id_year",
+        ),
     )
 
     def __repr__(self) -> str:

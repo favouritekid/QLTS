@@ -164,6 +164,11 @@ BLOCK_REASONS: Dict[str, str] = {
     ),
     # F231
     "thieu_khu_vuc": "hồ sơ chưa có khu vực ưu tiên đã phân giải",
+    # L3 (owner 22-11) — câu chữ CHỜ owner duyệt
+    "khu_vuc_cho_xac_minh": (
+        "khu vực ưu tiên đang chờ xác minh (trường THCS chưa có trong danh mục hoặc cần xác minh "
+        "tay) — xác minh từ học bạ rồi chụp lại"
+    ),
     "khu_vuc_thu_cong_khong_hieu_luc": "khu vực ấn định thủ công không còn hiệu lực",
     "chua_co_muc_khu_vuc": (
         "chưa có mức điểm khu vực đang áp dụng cho năm học của hồ sơ"
@@ -291,9 +296,27 @@ def printed_area_score(k: CheckData) -> Optional[str]:
     return None
 
 
-def row_block_reason(k: CheckData) -> List[str]:
+#: Chế độ của :func:`row_block_reason`. ``council_set`` (MẶC ĐỊNH) = cổng bộ văn bản GĐ1 — mọi nơi gọi GĐ1 KHÔNG truyền
+#: ``mode`` (test AST ``tests/unit/test_gd2b_vi_tu_mot_nguon.py`` khoá). ``review`` = máy xét mới GĐ2-B (đặc tả GĐ2-B bản 4
+#: §6.2 E6): CHỈ ``admission_review_rules`` truyền, gọi cho TỪNG nguyện vọng đang xét.
+GATE_MODE_COUNCIL_SET = "council_set"
+GATE_MODE_REVIEW = "review"
+GATE_MODES = (GATE_MODE_COUNCIL_SET, GATE_MODE_REVIEW)
+#: Mã chỉ có nghĩa với bản in NV1 của GĐ1 (+ ``hoc_phi_khac_nganh_nv`` — lần xét thay bằng luật Q5 ``tuition_major_mismatch``):
+#: chế độ ``review`` KHÔNG sinh (§6.2 E6, bảng "bỏ").
+COUNCIL_SET_ONLY_CODES = ("nv1_thieu_cau_hinh", "nv_in_khac_nv1", "nhieu_nv_trung", "trung_nv_khac", "hoc_phi_khac_nganh_nv")
+
+
+def row_block_reason(k: CheckData, *, mode: str = GATE_MODE_COUNCIL_SET) -> List[str]:
     """Mã lý do CHẶN của một dòng (F229 + F231; F228 tính riêng theo trạng thái). Rỗng ⇒ dòng
-    qua được phần nguồn dữ liệu."""
+    qua được phần nguồn dữ liệu.
+
+    ``mode`` (GĐ2-B): mặc định ``council_set`` — hành vi GĐ1 KHÔNG đổi. ``review`` bỏ đúng các mã
+    :data:`COUNCIL_SET_ONLY_CODES`; mọi mã khác giữ nguyên chữ và điều kiện. Chế độ lạ ⇒ ``ValueError``
+    (không rơi về chế độ nào)."""
+    if mode not in GATE_MODES:
+        raise ValueError("Chế độ cổng không hợp lệ: %r" % (mode,))
+    review = mode == GATE_MODE_REVIEW
     out: List[str] = []
     ce = k.uses_choice_engine
     if not isinstance(ce, bool):
@@ -302,7 +325,7 @@ def row_block_reason(k: CheckData) -> List[str]:
         # Bộ máy nguyện vọng: in NV1 (owner 05-11).
         if k.so_nv == 0:
             out.append("nhieu_nv_khong_co_nv")
-        else:
+        elif not review:
             if k.nv_in_id is None:
                 out.append("nv1_thieu_cau_hinh")
             elif k.nv_in_id != k.nv1_id:
@@ -339,7 +362,7 @@ def row_block_reason(k: CheckData) -> List[str]:
         out.append("thieu_hoc_phi_hk1")
     elif k.hp_nganh_id is None:
         out.append("hoc_phi_chua_gan_nganh")
-    elif k.nv_in_nganh_id is not None and k.hp_nganh_id != k.nv_in_nganh_id:
+    elif not review and k.nv_in_nganh_id is not None and k.hp_nganh_id != k.nv_in_nganh_id:
         out.append("hoc_phi_khac_nganh_nv")
     # F231
     if k.kv_ly_do is not None:

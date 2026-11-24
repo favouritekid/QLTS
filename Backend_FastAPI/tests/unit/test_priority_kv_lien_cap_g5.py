@@ -75,6 +75,17 @@ def _chay(monkeypatch, lich_su, danh_muc=None, *, target_level=None, admission_t
     kv, meta = asyncio.run(
         ps.resolve_kv_for_profile(ho_so, db=None, target_level=target_level, admission_type=admission_type)
     )
+    # GĐ2-B (Codex GĐ2-B đợt 2 lượt 2 P4 / P5): MỌI ca dùng ``_chay`` chạy thêm qua đường LÔ — bản đồ tra dựng từ ĐÚNG khoá
+    # ``kv_lookup_keys`` (giá trị lấy từ cùng danh mục giả); kết quả phải BẰNG đường từng hồ sơ, không ``KvLookupNotLoaded``.
+    xa_k, truong_k = ps.kv_lookup_keys(ho_so, target_level=target_level, admission_type=admission_type)
+    lo = ps.decide_kv_for_profile(
+        ho_so,
+        commune_kv={k: None for k in xa_k},
+        school_kv={k: bang.get(k) for k in truong_k},
+        target_level=target_level,
+        admission_type=admission_type,
+    )
+    assert lo == (kv, meta), (lo, kv, meta)
     return kv, meta, hoi
 
 
@@ -106,6 +117,26 @@ def test_hoa_tra_truong_tot_nghiep_o_nam_hoc_cuoi(monkeypatch):
     assert hoi[-1] == (B, 2024) and (B, 2025) not in hoi, hoi
     # Codex G5 P1: kết quả chi tiết ghi năm thực sự đem tra (khoá năm học cuối), cạnh năm tốt nghiệp ``year_to`` như cũ.
     assert (meta["breakdown"]["graduation_year"], meta["breakdown"]["graduation_lookup_year"]) == (2025, 2024), meta
+
+
+def test_gd2b_hoa_voi_muc_thieu_year_from_hai_duong_bang_nhau(monkeypatch):
+    """Codex GĐ2-B lượt 2 P5 (ca bắt buộc): hoà 1–1 giữa A (KV1, ``2021→2022``) và B (KV3, ``2023→2024``); mục C THIẾU ``year_from``
+    bị bỏ khỏi phép đếm nhưng vẫn là ứng viên trường tốt nghiệp (``year_to`` lớn nhất) ⇒ tra C ở khoá năm học cuối 2024 ⇒ KV2.
+    ``kv_lookup_keys`` CŨ chỉ thêm ``(C, year_to)`` = ``(C, 2025)`` ⇒ đường lô ``KvLookupNotLoaded`` (``_chay`` so hai đường)."""
+    c = 3
+    bang = _danh_muc()
+    bang.update({(c, nam): "KV2" for nam in range(2010, 2031)})
+    muc_c = {"level": "THPT", "school_id": c, "year_from": None, "year_to": 2025, "grade_to": 12}
+    lich_su = [_thpt(A, 2021, 2022, 11), _thpt(B, 2023, 2024, 11), muc_c]
+    kv, meta, hoi = _chay(monkeypatch, lich_su, bang)
+    assert (kv, meta["rule_applied"]) == ("KV2", "tiebreak_graduation_school"), meta
+    assert hoi[-1] == (c, 2024) and (c, 2025) not in hoi, hoi
+    ho_so = SimpleNamespace(
+        id=1, academic_year=2026, cultural_education_level="graduated_thpt", vocational_qualification="none",
+        area_resolution_basis=None, permanent_commune_code=None, academic_history=lich_su,
+    )
+    _, truong = ps.kv_lookup_keys(ho_so)
+    assert (c, 2024) in truong and (c, 2025) not in truong, sorted(truong)
 
 
 def test_muc_0_nam_hoc_thi_dung_co_nhan(monkeypatch):

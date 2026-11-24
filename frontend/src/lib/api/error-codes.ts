@@ -116,12 +116,20 @@ export function combinedKeyChangeAndRevokeDetail(
  * chỉ tiêu 0 có xin vượt mà không ghi được vết từ chối bắt buộc ⇒ 503, hồ sơ
  * chưa đổi. Câu của máy chủ (owner 22-11 Q1) viết cho người dùng ⇒ hiện nguyên
  * câu ấy. Lô Phê duyệt KHÔNG đi đường này: câu ấy nằm ở mục lỗi của thân 200.
+ *
+ * `REVIEW_CONFIG_UNAVAILABLE` (GĐ2-B, `ReviewConfigUnavailable`): chạy kiểm hồ
+ * sơ của lần xét nháp (E6) bị từ chối vì cấu hình máy chủ thiếu / hỏng (chế độ
+ * cổng học phí, loại giấy xác nhận cư trú) ⇒ 503, không ghi gì. `detail` lấy
+ * theo `reason_code` từ câu máy chủ viết sẵn cho người dùng (không dữ liệu cá
+ * nhân, có lời dặn "Báo quản trị hệ thống") ⇒ hiện nguyên câu ấy (thiết kế
+ * giao diện GĐ2-B mục 3.5 bước 7).
  */
 export const USER_FACING_UNAVAILABLE_ERROR_CODES: ReadonlySet<string> = new Set([
   "SERVICE_UNAVAILABLE",
   "INITIAL_LEAD_STATUS_NOT_CONFIGURED",
   AUTH_STATE_UNAVAILABLE_ERROR_CODE,
   "AUDIT_TRAIL_UNAVAILABLE",
+  "REVIEW_CONFIG_UNAVAILABLE",
 ]);
 
 /**

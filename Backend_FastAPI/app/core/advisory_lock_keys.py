@@ -34,13 +34,16 @@ BULK_VERIFY_PREVIEW_NS = 711_170_002
 #: thao tác ghi bảng chỉ tiêu năm (GĐ2-A: sửa / khoá / mở khoá) và — từ GĐ2-C — khoá lần xét của cùng năm lấy khoá này
 #: TRƯỚC mọi khoá dòng ⇒ chạy lần lượt. Khoá thứ hai = năm (int4 dương).
 REVIEW_YEAR_NS = 711_170_003
+#: GĐ2-B — run "Kiểm hồ sơ" (đặc tả GĐ2-B bản 4 §9.1 bước 1): khoá GIAO DỊCH THỬ ``pg_try_advisory_xact_lock(ns, id lần xét)`` —
+#: bận ⇒ 409 ``REVIEW_RUN_IN_PROGRESS`` (hai lần bấm cùng lúc: một lần chạy). Khoá thứ hai = id lần xét (int4 dương).
+REVIEW_RUN_NS = 711_170_004
 
 #: Vùng hai-khoá đã có trước GĐ1b (để test so). Đổi / thêm vùng ở mã khác ⇒ cập nhật đây.
 EXISTING_INT_NAMESPACES = (815074,)
 EXISTING_HASHTEXT_NAMESPACES = ("council_document_set:dung", "invoice_number:INV")
 
 #: Mọi vùng do sổ này cấp.
-REGISTERED_NAMESPACES = (BULK_VERIFY_BATCH_NS, BULK_VERIFY_PREVIEW_NS, REVIEW_YEAR_NS)
+REGISTERED_NAMESPACES = (BULK_VERIFY_BATCH_NS, BULK_VERIFY_PREVIEW_NS, REVIEW_YEAR_NS, REVIEW_RUN_NS)
 
 
 def batch_lock_key(batch_id: UUID) -> int:

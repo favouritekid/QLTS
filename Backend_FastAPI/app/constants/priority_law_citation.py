@@ -53,6 +53,8 @@ RULE_LAW_CITATION: dict[str, Optional[str]] = {
     "not_resolved": None,
     # Ấn định tay KHÔNG chứng minh được xuất xứ (``priority_service._MANUAL_OVERRIDE_UNVERIFIED_RULE``) ⇒ không căn cứ.
     "manual_override_unverified": None,
+    # L3 (owner 22-11): "KV chờ xác minh" (``priority_service.KV_PENDING_VERIFICATION_RULE``) — chưa có KV ⇒ không căn cứ.
+    "kv_pending_verification": None,
 }
 
 
@@ -70,6 +72,7 @@ RULE_LAW_CITATION_TT76: dict[str, Optional[str]] = {
     "not_resolved": None,
     # Ấn định tay KHÔNG chứng minh được xuất xứ (``priority_service._MANUAL_OVERRIDE_UNVERIFIED_RULE``) ⇒ không căn cứ.
     "manual_override_unverified": None,
+    "kv_pending_verification": None,
 }
 
 #: Bảng căn cứ theo THÔNG TƯ ÁP DỤNG của hồ sơ (``app/constants/admission_circular.py``).

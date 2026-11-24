@@ -830,12 +830,29 @@ class PriorityKvUnresolved(BusinessRuleViolation):
         rule_applied: Optional[str],
         reason: Optional[str],
         context: Optional[Dict[str, Any]] = None,
+        pending_verification: Optional[str] = None,
     ):
-        super().__init__(
-            detail=(
+        # L3 (owner 22-11): nhãn riêng "KV chờ xác minh" — câu chữ CHỜ owner duyệt (bàn giao L3-a). ``pending_verification``:
+        # ``"thcs_history"`` (trung cấp sau THCS — tính được khi trường THCS có trong danh mục) | ``"manual"`` (sơ cấp, nhánh cũ —
+        # chỉ xác minh tay) | ``None`` (không phải chờ xác minh).
+        if pending_verification == "thcs_history":
+            detail = (
+                f"Khu vực ưu tiên đang chờ xác minh ({reason or 'không rõ'}). Cán bộ tra trường THCS của thí sinh từ học bạ, "
+                "báo Admin thêm trường vào danh mục trường (kèm xã và khu vực) rồi chọn lại trường trong lịch sử học; hoặc "
+                "Quản lý / Admin ấn định khu vực thủ công có minh chứng. Xong thì công bố lại."
+            )
+        elif pending_verification is not None:
+            detail = (
+                f"Khu vực ưu tiên đang chờ xác minh ({reason or 'không rõ'}). Quản lý / Admin xác minh từ học bạ và ấn định "
+                "khu vực thủ công có minh chứng, rồi công bố lại."
+            )
+        else:
+            detail = (
                 f"Chưa xác định được khu vực ưu tiên ({rule_applied or 'không rõ'}: {reason or 'không rõ'}). "
                 "Ấn định khu vực thủ công hoặc sửa khai báo quá trình học, rồi công bố lại."
-            ),
+            )
+        super().__init__(
+            detail=detail,
             context=context,
             public_payload={"rule_applied": rule_applied, "reason": reason},
         )

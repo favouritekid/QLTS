@@ -101,26 +101,28 @@ def test_has_thpt_history_thpt_missing_year_returns_false() -> None:
         # CĐ liên thông từ TC + cultural graduated_thpt → LICH_SU_THPT
         ("graduated_thpt", "trung_cap", "cao_dang", "lien_thong", "LICH_SU_THPT", "cd_lien_thong_post_thpt"),
         ("graduated_gdtx", "cao_dang", "cao_dang", "lien_thong", "LICH_SU_THPT", "cd_lien_thong_post_thpt"),
-        # TC chính quy + graduated_thcs → THUONG_TRU
-        ("graduated_thcs", "none", "trung_cap", "chinh_quy", "THUONG_TRU", "tc_chinh_quy_post_thcs"),
+        # L3 (owner 22-11): TC sau THCS → KV theo nơi học THCS (LICH_SU_THCS), sơ cấp → chờ xác minh. Hồ sơ CŨ (ảnh chụp
+        # theo hộ khẩu) giữ THUONG_TRU khi cờ tắt — ``test_l3_kv_cho_xac_minh.py``.
+        # TC chính quy + graduated_thcs → LICH_SU_THCS
+        ("graduated_thcs", "none", "trung_cap", "chinh_quy", "LICH_SU_THCS", "tc_chinh_quy_post_thcs"),
         # TC chính quy + cultural đủ THPT → LICH_SU_THPT
         ("graduated_thpt", "none", "trung_cap", "chinh_quy", "LICH_SU_THPT", "tc_chinh_quy_post_thpt"),
         ("completed_thpt", "so_cap", "trung_cap", "chinh_quy", "LICH_SU_THPT", "tc_chinh_quy_post_thpt"),
-        # TC liên thông từ SC/TC + cultural completed_thcs/graduated_thcs → THUONG_TRU
-        ("completed_thcs", "so_cap", "trung_cap", "lien_thong", "THUONG_TRU", "tc_lien_thong_post_thcs_with_voc"),
-        ("completed_thcs", "trung_cap", "trung_cap", "lien_thong", "THUONG_TRU", "tc_lien_thong_post_thcs_with_voc"),
-        ("graduated_thcs", "so_cap", "trung_cap", "lien_thong", "THUONG_TRU", "tc_lien_thong_post_thcs_with_voc"),
-        ("graduated_thcs", "trung_cap", "trung_cap", "lien_thong", "THUONG_TRU", "tc_lien_thong_post_thcs_with_voc"),
+        # TC liên thông từ SC/TC + cultural completed_thcs/graduated_thcs → LICH_SU_THCS (L3)
+        ("completed_thcs", "so_cap", "trung_cap", "lien_thong", "LICH_SU_THCS", "tc_lien_thong_post_thcs_with_voc"),
+        ("completed_thcs", "trung_cap", "trung_cap", "lien_thong", "LICH_SU_THCS", "tc_lien_thong_post_thcs_with_voc"),
+        ("graduated_thcs", "so_cap", "trung_cap", "lien_thong", "LICH_SU_THCS", "tc_lien_thong_post_thcs_with_voc"),
+        ("graduated_thcs", "trung_cap", "trung_cap", "lien_thong", "LICH_SU_THCS", "tc_lien_thong_post_thcs_with_voc"),
         # TC liên thông + cultural THPT → LICH_SU_THPT
         ("graduated_thpt", "so_cap", "trung_cap", "lien_thong", "LICH_SU_THPT", "tc_lien_thong_post_thpt"),
-        # TC chính quy + completed_thcs → THUONG_TRU (TT22 hoàn thành = đủ ĐK TC)
-        ("completed_thcs", "none", "trung_cap", "chinh_quy", "THUONG_TRU", "tc_chinh_quy_post_thcs"),
-        # SC chính quy → THUONG_TRU
-        ("graduated_thcs", "none", "so_cap", "chinh_quy", "THUONG_TRU", "sc_uses_commune"),
+        # TC chính quy + completed_thcs → LICH_SU_THCS (TT22 hoàn thành = đủ ĐK TC; L3)
+        ("completed_thcs", "none", "trung_cap", "chinh_quy", "LICH_SU_THCS", "tc_chinh_quy_post_thcs"),
+        # SC chính quy → chờ xác minh (L3 câu 5)
+        ("graduated_thcs", "none", "so_cap", "chinh_quy", "PENDING_VERIFICATION", "sc_kv_needs_verification"),
         # SC chính quy + cultural=None — yêu cầu nghiệp vụ #5: SC KHÔNG yêu
-        # cầu văn hóa. Engine phải vẫn THUONG_TRU (commune lookup), KHÔNG kẹt
-        # ở NOT_RESOLVED (reviewer fix-up 2026-05-21).
-        (None, "none", "so_cap", "chinh_quy", "THUONG_TRU", "sc_no_cultural_uses_commune"),
+        # cầu văn hóa. KHÔNG kẹt ở NOT_RESOLVED (reviewer fix-up 2026-05-21);
+        # L3 câu 5: chờ xác minh.
+        (None, "none", "so_cap", "chinh_quy", "PENDING_VERIFICATION", "sc_no_cultural_kv_needs_verification"),
     ],
 )
 def test_phase_e4_matrix_basis_resolution(
@@ -254,6 +256,11 @@ def _mock_db(commune_kv=None, school_kv_sequence=None):
     return db
 
 
+#: L3 (owner 22-11): ảnh chụp KV theo hộ khẩu của luật CŨ (trung cấp chính quy sau THCS) ⇒ "hồ sơ cũ" giữ nhánh THUONG_TRU khi cờ
+#: ``KV_L3_APPLY_TO_EXISTING_ENABLED`` tắt (mặc định) — các ca thường trú dưới đây là hồ sơ cũ.
+_ANH_CU_TC_SAU_THCS = {"basis": "THUONG_TRU", "basis_reason": "tc_chinh_quy_post_thcs_uses_commune"}
+
+
 def _profile_stub(**kwargs):
     defaults = {
         "id": 1,
@@ -271,10 +278,11 @@ def _profile_stub(**kwargs):
 
 @pytest.mark.asyncio
 async def test_resolve_thuong_tru_missing_commune_code_returns_address_not_normalized() -> None:
-    """TC chính quy + graduated_thcs + thiếu permanent_commune_code → fail-closed."""
+    """TC chính quy + graduated_thcs + thiếu permanent_commune_code → fail-closed (hồ sơ cũ, L3)."""
     profile = _profile_stub(
         cultural_education_level="graduated_thcs",
         permanent_commune_code=None,
+        priority_resolution_snapshot=_ANH_CU_TC_SAU_THCS,
     )
     db = _mock_db()
     kv, meta = await resolve_kv_for_profile(
@@ -289,10 +297,11 @@ async def test_resolve_thuong_tru_missing_commune_code_returns_address_not_norma
 
 @pytest.mark.asyncio
 async def test_resolve_thuong_tru_commune_not_in_catalog_returns_catalog_gap_commune() -> None:
-    """commune_code có nhưng vn_commune_area_map miss → catalog_gap_commune."""
+    """commune_code có nhưng vn_commune_area_map miss → catalog_gap_commune (hồ sơ cũ, L3)."""
     profile = _profile_stub(
         cultural_education_level="graduated_thcs",
         permanent_commune_code="UNKNOWN_CODE",
+        priority_resolution_snapshot=_ANH_CU_TC_SAU_THCS,
     )
     db = _mock_db(commune_kv=None)  # lookup miss
     kv, meta = await resolve_kv_for_profile(
@@ -342,10 +351,11 @@ async def test_resolve_commune_special_missing_code_returns_address_not_normaliz
 
 @pytest.mark.asyncio
 async def test_resolve_thuong_tru_happy_with_commune_in_catalog() -> None:
-    """TC chính quy + graduated_thcs + commune_code resolve OK."""
+    """TC chính quy + graduated_thcs + commune_code resolve OK (hồ sơ cũ, L3)."""
     profile = _profile_stub(
         cultural_education_level="graduated_thcs",
         permanent_commune_code="66_22255",
+        priority_resolution_snapshot=_ANH_CU_TC_SAU_THCS,
     )
     db = _mock_db(commune_kv="KV2-NT")
     kv, meta = await resolve_kv_for_profile(
@@ -360,10 +370,11 @@ async def test_resolve_thuong_tru_happy_with_commune_in_catalog() -> None:
 
 @pytest.mark.asyncio
 async def test_resolve_completed_thcs_tc_chinh_quy_uses_commune_lookup() -> None:
-    """TC chinh quy + completed_thcs + commune_code resolve OK (TT22)."""
+    """TC chinh quy + completed_thcs + commune_code resolve OK (TT22; hồ sơ cũ, L3)."""
     profile = _profile_stub(
         cultural_education_level="completed_thcs",
         permanent_commune_code="66_22255",
+        priority_resolution_snapshot=_ANH_CU_TC_SAU_THCS,
     )
     db = _mock_db(commune_kv="KV2-NT")
     kv, meta = await resolve_kv_for_profile(

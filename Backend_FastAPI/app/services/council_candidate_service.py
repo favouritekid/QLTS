@@ -128,6 +128,7 @@ async def _resolve_area(
     from app import models
     from app.services.priority_service import (
         RATE_TABLE_AREA,
+        kv_snapshot_pending_verification,
         kv_snapshot_resolved,
         priority_academic_year,
         select_open_priority_rates,
@@ -143,7 +144,15 @@ async def _resolve_area(
             if isinstance(snap, str):
                 snap = json.loads(snap)
             if not kv_snapshot_resolved(snap):
-                out.append(("thieu_khu_vuc", None))
+                # L3 (owner 22-11): "KV chờ xác minh" có mã riêng (bản GĐ2-B: ``area_check_rules.area_check`` — BT35 khoá bằng nhau).
+                out.append(
+                    (
+                        "khu_vuc_cho_xac_minh"
+                        if kv_snapshot_pending_verification(snap)
+                        else "thieu_khu_vuc",
+                        None,
+                    )
+                )
                 continue
             if session is None:
                 # Phiên ORM trên CHÍNH kết nối đang ở giao dịch chỉ đọc (không mở giao dịch
