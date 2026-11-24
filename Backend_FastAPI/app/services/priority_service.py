@@ -451,14 +451,13 @@ def _history_grade_in(value: Any, first: int, last: int) -> Optional[int]:
 
 def kv_thpt_grade(value: Any) -> Optional[int]:
     """Lớp thuộc cấp THPT — số nguyên 10..12 ⇒ chính nó, khác ⇒ ``None``. MỘT chỗ khai dải 10..12 (owner 24-11): bước đếm + bước hoà
-    nhánh THPT (:func:`kv_entry_last_grade`, :func:`kv_entry_problem`) và chốt "dòng THCS ghi lớp 10–12" ở bước đếm nhánh THCS
-    (:func:`kv_thcs_entry_case`)."""
+    nhánh THPT (:func:`kv_entry_last_grade`, :func:`kv_entry_problem`)."""
     return _history_grade_in(value, _THPT_FIRST_GRADE, _THPT_LAST_GRADE)
 
 
 def kv_thcs_grade(value: Any) -> Optional[int]:
-    """Lớp thuộc cấp THCS — số nguyên 6..9 ⇒ chính nó, khác ⇒ ``None``. MỘT chỗ khai dải 6..9 (bước hoà nhánh THCS —
-    :func:`kv_entry_thcs_last_grade`)."""
+    """Lớp thuộc cấp THCS — số nguyên 6..9 ⇒ chính nó, khác ⇒ ``None``. MỘT chỗ khai dải 6..9: chốt bước đếm nhánh THCS (dòng không ghi
+    liên cấp, lớp số nguyên ngoài dải — :func:`kv_thcs_entry_case`) và bước hoà nhánh THCS (:func:`kv_entry_thcs_last_grade`)."""
     return _history_grade_in(value, _THCS_FIRST_GRADE, _THPT_FIRST_GRADE - 1)
 
 
@@ -587,7 +586,8 @@ def kv_entry_thcs_last_grade(entry: dict) -> Optional[int]:
       hợp lệ ⇒ cùng đường ấy — trước đây "lớp 12" so như số nên thắng liên cấp đã cắt về 9 lặng lẽ (rà đoàn 3 D'2 NỢ-1). Dải 6..9 là
       :func:`_history_grade_in` — MỘT định nghĩa với dải 10..12 của nhánh THPT (:func:`kv_entry_last_grade`).
     Dòng kết thúc ở lớp hợp lệ 1–5 — liên cấp hay không — nay KHÔNG tới được bước hoà: không là dòng THCS (owner 24-11 chỉ đếm năm
-    THCS + đính chính câu 1 — :func:`kv_thcs_entry_case`); biên dưới 6 ở đây chỉ còn bắt lớp 0 / âm (lớp phòng thủ thêm)."""
+    THCS + đính chính câu 1 — :func:`kv_thcs_entry_case`); lớp SỐ NGUYÊN ngoài 6..9 của dòng không ghi liên cấp đã dừng ở bước đếm
+    (owner 24-11) ⇒ dải ở đây chỉ còn là lớp phòng thủ thêm (cùng :func:`kv_thcs_grade`); tới đây chỉ còn lớp thiếu / sai kiểu."""
     grade = entry.get("grade_to")
     if entry.get("level") == KV_LIEN_CAP_LEVEL and _history_int(grade):
         grade = min(grade, _THPT_FIRST_GRADE - 1)
@@ -762,12 +762,14 @@ def kv_thcs_entry_case(entry: Any) -> tuple[bool, Optional[str]]:
     nghiệp (như :func:`kv_lien_cap_without_thpt` ở nhánh THPT). Xét SAU phép kiểm năm (năm hỏng vẫn dừng có nhãn — không lặng lẽ bỏ).
     Dòng không ghi lớp / lưu ban (nhiều năm hơn số lớp) ⇒ đếm đủ mọi năm (câu 2 — không đổi).
 
-    Lớp cuối 10–12 (:func:`kv_thpt_grade`) ở dòng KHÔNG ghi liên cấp (cấp THCS, hoặc ``level`` trống + trình độ THCS) ⇒ DỪNG
-    :data:`KV_ENTRY_GRADE_OUT_OF_RANGE` ở bước đếm — owner 24-11 ``QUYET-DINH-OWNER-L3-THCS-LOP-10-12-VA-GO-DEM`` câu 1 (gõ nhầm, hoặc
-    trường liên cấp ghi SAI cấp), đối xứng THPT / GDTX ngoài 10–12 (:func:`kv_entry_problem`). Dòng GHI liên cấp lớp 10–12 KHÔNG dừng:
-    đó là mục hợp lệ "học lớp 6 → hết lớp 10–12 ở một trường", phần lớp 6–9 được đếm (owner 22-11 L3A câu 3, ``ca210d48``). Thứ tự:
-    sau phép kiểm năm và lớp ≤ 5, trước 0 năm học và trường (dòng gõ tay chưa có trường mà ghi lớp 12 ⇒ sửa lớp trước). Lớp 0 / âm /
-    ≥ 13 không thuộc câu này (owner chỉ nói 10–12) ⇒ như cũ: đếm đủ năm, bước hoà cần xét tay."""
+    Lớp cuối là SỐ NGUYÊN ngoài dải THCS (:func:`kv_thcs_grade` = ``None``; 1..5 đã bị loại ở trên ⇒ còn 0 / âm / 10–12 / ≥ 13) ở dòng
+    KHÔNG ghi liên cấp (cấp THCS, hoặc ``level`` trống + trình độ THCS) ⇒ DỪNG :data:`KV_ENTRY_GRADE_OUT_OF_RANGE` ở bước đếm — owner
+    24-11 ``QUYET-DINH-OWNER-L3-THCS-LOP-10-12-VA-GO-DEM`` câu 1 (lớp 10–12: gõ nhầm, hoặc trường liên cấp ghi SAI cấp) và
+    ``QUYET-DINH-OWNER-L3-THCS-LOP-VO-NGHIA`` (lớp 0 / âm / ≥ 13), đồng nhất THPT / GDTX ngoài 10..12 (:func:`kv_entry_problem`). Lớp sai
+    kiểu (chuỗi, số thực, bool) / thiếu ⇒ không dừng ở bước đếm (bước hoà cần xét tay). Dòng GHI liên cấp lớp 10–12 KHÔNG dừng: đó là
+    mục hợp lệ "học lớp 6 → hết lớp 10–12 ở một trường", phần lớp 6–9 được đếm (owner 22-11 L3A câu 3, ``ca210d48``); liên cấp lớp 0 /
+    ≥ 13 đã dừng ``lien_cap_missing_grade_to`` ở trên. Thứ tự: sau phép kiểm năm và lớp ≤ 5, trước 0 năm học và trường (dòng gõ tay chưa
+    có trường mà ghi lớp sai ⇒ sửa lớp trước)."""
     if not isinstance(entry, dict):
         return False, None
     level = _blank(entry.get("level"))
@@ -801,8 +803,10 @@ def kv_thcs_entry_case(entry: Any) -> tuple[bool, Optional[str]]:
     last_grade = _history_grade(entry.get("grade_to"))
     if last_grade is not None and last_grade < _THCS_FIRST_GRADE:
         return False, None  # chỉ có năm tiểu học (lớp ≤ 5) — liên cấp hay không (owner 24-11 đính chính câu 1)
-    if level != KV_LIEN_CAP_LEVEL and kv_thpt_grade(entry.get("grade_to")) is not None:
-        return True, KV_ENTRY_GRADE_OUT_OF_RANGE  # dòng THCS KHÔNG ghi liên cấp mà ghi lớp 10–12 (owner 24-11 THCS-LOP-10-12)
+    if level != KV_LIEN_CAP_LEVEL and _history_int(entry.get("grade_to")) and kv_thcs_grade(entry.get("grade_to")) is None:
+        # dòng THCS KHÔNG ghi liên cấp, lớp cuối SỐ NGUYÊN ngoài dải THCS (1..5 đã loại ở trên ⇒ còn 0 / âm / 10–12 / ≥ 13) — owner
+        # 24-11 THCS-LOP-10-12 + THCS-LOP-VO-NGHIA (đồng nhất THPT: mọi số nguyên ngoài dải của cấp dừng ở bước đếm)
+        return True, KV_ENTRY_GRADE_OUT_OF_RANGE
     if y_to == y_from:
         return True, KV_ENTRY_ZERO_LENGTH
     sid = entry.get("school_id")

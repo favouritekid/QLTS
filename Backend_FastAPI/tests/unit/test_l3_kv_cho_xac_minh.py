@@ -353,7 +353,8 @@ def test_hoa_thcs_nhom_thap_lop_la_van_lay_truong_tot_nghiep(monkeypatch, lop_la
 #: KV. Lớp hợp lệ 1–5 (liên cấp hay không) KHÔNG còn tới bước hoà: owner 24-11 chỉ đếm năm lớp 6–9 + đính chính câu 1 ⇒ dòng ấy không
 #: phải dòng THCS (mục 1d, 1e) — hai ca "lớp 5" cũ của mục này chuyển sang 1e. Owner 24-11 ``QUYET-DINH-OWNER-L3-THCS-LOP-10-12-VA-GO-DEM``:
 #: dòng THCS (không ghi liên cấp) lớp 10–12 nay DỪNG ở bước ĐẾM (``grade_to_out_of_range`` ⇒ "chờ xác minh" ``thcs_history_inconsistent``,
-#: 0 phép tra) — các ca lớp 10–12 dưới đây đổi mong đợi, giữ id. Dải 6..9 ở bước hoà còn bắt lớp 0 / 13 (mục 1f).
+#: 0 phép tra) — các ca lớp 10–12 dưới đây đổi mong đợi, giữ id. Owner 24-11 THCS-LOP-VO-NGHIA: lớp số nguyên 0 / âm / ≥ 13 cũng dừng
+#: ở bước đếm (ca ``lop_0`` dưới đây đổi mong đợi, giữ id; mục 1f). Dải 6..9 ở bước hoà chỉ còn là lớp phòng thủ thêm.
 def _dung_dem_thcs(kv, meta, hoi, chi_so):
     """Dừng ở bước ĐẾM nhánh THCS: "chờ xác minh" ``thcs_history_inconsistent``, dòng ``chi_so`` mang ``grade_to_out_of_range``, 0 phép
     tra (kể cả cờ DTNT)."""
@@ -381,11 +382,11 @@ def test_hoa_dong_thcs_lop_ngoai_6_9_voi_lien_cap_thi_cho_xac_minh(monkeypatch, 
 
 
 #: (lớp của dòng T1, phán quyết mong đợi) — dòng T2 cùng năm luôn lớp 8. Biên 6 và 9 hợp lệ (so như số, như trước); 0 không hợp lệ ở
-#: bước hoà; 10–12 dừng ở bước ĐẾM (owner 24-11 THCS-LOP-10-12). (Ca "lớp 5" cũ ⇒ mục 1e.)
+#: bước hoà; 0 / 10–12 dừng ở bước ĐẾM (owner 24-11 THCS-LOP-10-12, THCS-LOP-VO-NGHIA). (Ca "lớp 5" cũ ⇒ mục 1e.)
 _BIEN_LOP_THCS = [
     (9, ("truong", T1, "KV1")),
     (6, ("truong", T2, "KV2")),
-    (0, ("xet_tay", [T1, T2])),
+    (0, ("dung_dem", [0])),
     (10, ("dung_dem", [0])),
     (11, ("dung_dem", [0])),
     (12, ("dung_dem", [0])),
@@ -395,7 +396,7 @@ _BIEN_LOP_THCS = [
 @pytest.mark.parametrize("lop, mong", _BIEN_LOP_THCS, ids=[f"lop_{c[0]}" for c in _BIEN_LOP_THCS])
 def test_hoa_hai_dong_thcs_bien_lop_cuoi_6_9(monkeypatch, lop, mong):
     """Hai dòng THCS cùng ``2017→2020`` (T1 KV1, T2 KV2 lớp 8) ⇒ hoà 3–3, cùng năm kết thúc. Lớp 9 của T1 hợp lệ ⇒ T1 là trường tốt
-    nghiệp (không đổi so với trước); lớp 6 hợp lệ ⇒ T2 lớp 8 lớn hơn; lớp 0 ⇒ chờ xác minh ở bước hoà; lớp 10–12 ⇒ dừng ở bước đếm."""
+    nghiệp (không đổi so với trước); lớp 6 hợp lệ ⇒ T2 lớp 8 lớn hơn; lớp 0 / 10–12 ⇒ dừng ở bước đếm."""
     kv, meta, hoi = _chay(monkeypatch, _hs(academic_history=[_thcs(T1, 2017, 2020, lop=lop), _thcs(T2, 2017, 2020, lop=8)]))
     if mong[0] == "dung_dem":
         _dung_dem_thcs(kv, meta, hoi, mong[1])
@@ -615,19 +616,19 @@ def test_dong_thcs_het_lop_5_nam_hong_thi_dung_co_nhan(monkeypatch, dong):
     assert _ca_dung(meta) == [(1, "entry_years_invalid")]
 
 
-#: Câu 2 (giữ như cũ): dòng KHÔNG ghi liên cấp, lớp cuối ≥ 6 hoặc không ghi / không hợp lệ ⇒ đủ MỌI năm thật học — kể cả lưu ban, kể
-#: cả dòng ghi từ lớp 1 ở trường TH&THCS (không phân biệt được với lưu ban). (dòng T1 — KV1 —, năm đếm).
+#: Câu 2 (giữ như cũ): dòng KHÔNG ghi liên cấp, lớp cuối 6..9 hoặc không ghi ⇒ đủ MỌI năm thật học — kể cả lưu ban, kể cả dòng ghi từ
+#: lớp 1 ở trường TH&THCS (không phân biệt được với lưu ban). (dòng T1 — KV1 —, năm đếm). Ca ``lop_0_khong_hop_le`` cũ ⇒ mục 1f (owner
+#: 24-11 THCS-LOP-VO-NGHIA: lớp số nguyên 0 nay dừng ở bước đếm).
 _DEM_DU_NAM = [
     (_thcs(T1, 2016, 2021, lop=9), list(range(2016, 2021))),
     (_thcs(T1, 2012, 2021, lop=9), list(range(2012, 2021))),
     (_thcs(T1, 2016, 2021), list(range(2016, 2021))),
     (_thcs(T1, 2016, 2021, lop=6), list(range(2016, 2021))),
-    (_thcs(T1, 2016, 2021, lop=0), list(range(2016, 2021))),
 ]
 
 
 @pytest.mark.parametrize(
-    "dong, nam_dem", _DEM_DU_NAM, ids=["luu_ban_lop_9", "tu_lop_1_den_9", "khong_ghi_lop", "bien_lop_6", "lop_0_khong_hop_le"],
+    "dong, nam_dem", _DEM_DU_NAM, ids=["luu_ban_lop_9", "tu_lop_1_den_9", "khong_ghi_lop", "bien_lop_6"],
 )
 def test_dong_thcs_luu_ban_hoac_khong_ghi_lop_dem_du_nam(monkeypatch, dong, nam_dem):
     kv, meta, hoi = _chay(monkeypatch, _hs(academic_history=[dong]))
@@ -673,24 +674,44 @@ def test_cung_dong_ghi_lien_cap_lop_10_12_van_dem_phan_lop_6_9(monkeypatch, lop,
         (_thcs(T1, None, 2022, lop=12), "entry_years_invalid"),
         ({**_go_tay(2017, 2022), "grade_to": 12}, "grade_to_out_of_range"),
         (_thcs(T1, 2022, 2022, lop=12), "grade_to_out_of_range"),
+        ({**_go_tay(2017, 2022), "grade_to": 0}, "grade_to_out_of_range"),
+        (_thcs(T1, 2022, 2022, lop=-1), "grade_to_out_of_range"),
     ],
-    ids=["nam_hong_kiem_truoc", "go_tay_lop_truoc_truong", "y_y_lop_truoc_0_nam"],
+    ids=["nam_hong_kiem_truoc", "go_tay_lop_truoc_truong", "y_y_lop_truoc_0_nam", "go_tay_lop_0_truoc_truong", "y_y_lop_am_truoc_0_nam"],
 )
 def test_dong_thcs_lop_10_12_thu_tu_phep_kiem(monkeypatch, dong, ca):
-    """Thứ tự ở ``kv_thcs_entry_case``: năm hỏng ⇒ dừng năm TRƯỚC; lớp 10–12 xét TRƯỚC 0 năm học và trước "chưa có trường" (sửa lớp
-    trước) ⇒ lý do ``thcs_history_inconsistent``, không phải ``thcs_school_not_in_catalog``."""
+    """Thứ tự ở ``kv_thcs_entry_case``: năm hỏng ⇒ dừng năm TRƯỚC; lớp số nguyên ngoài 1..9 (10–12, và từ owner 24-11 THCS-LOP-VO-NGHIA
+    cả 0 / âm) xét TRƯỚC 0 năm học và trước "chưa có trường" (sửa lớp trước) ⇒ lý do ``thcs_history_inconsistent``, không phải
+    ``thcs_school_not_in_catalog``."""
     kv, meta, hoi = _chay(monkeypatch, _hs(academic_history=[dong, _thcs(T2, 2018, 2021)]))
     assert kv is None and hoi == []
     _cho_xac_minh(meta, "thcs_history_inconsistent")
     assert _ca_dung(meta) == [(0, ca)]
 
 
-def test_dong_thcs_lop_13_ngoai_cau_owner_dem_du_nam_hoa_can_xet_tay(monkeypatch):
-    """Owner chỉ nói 10–12. Lớp 13 (ngoài schema 1..12) ⇒ như cũ: bước đếm đếm đủ năm; bước hoà không so được ⇒ chờ xác minh. Khoá
-    hành vi hiện tại — câu hỏi mở cho owner (lớp 0 / âm / ≥ 13 ở dòng THCS)."""
-    kv, meta, hoi = _chay(monkeypatch, _hs(academic_history=[_thcs(T1, 2017, 2020, lop=13), _thcs(T2, 2017, 2020, lop=8)]))
-    assert meta["breakdown"]["kv_totals"] == {"KV1": 3, "KV2": 3}
-    _cho_xac_minh_hoa(kv, meta, hoi, 6)
+#: Owner 24-11 ``QUYET-DINH-OWNER-L3-THCS-LOP-VO-NGHIA``: dòng THCS KHÔNG ghi liên cấp, lớp cuối SỐ NGUYÊN 0 / âm / ≥ 13 ⇒ cũng dừng ở
+#: bước ĐẾM (đồng nhất THPT). Thay ca ``test_dong_thcs_lop_13_ngoai_cau_owner_dem_du_nam_hoa_can_xet_tay`` (45ba463a: lớp 13 đếm đủ năm,
+#: bước hoà chờ xác minh — tiền đề "owner chỉ nói 10–12" nay hết) và ca ``_DEM_DU_NAM[lop_0_khong_hop_le]`` (f1c9f6ca: lớp 0 đếm đủ năm).
+@pytest.mark.parametrize(
+    "level, lop",
+    [("THCS", 0), ("THCS", -1), ("THCS", 13), ("THCS", 99), (None, 0), (None, 13)],
+    ids=["cap_thcs_lop_0", "cap_thcs_lop_am_1", "cap_thcs_lop_13", "cap_thcs_lop_99", "level_trong_lop_0", "level_trong_lop_13"],
+)
+def test_dong_thcs_khong_ghi_lien_cap_lop_vo_nghia_dung_o_buoc_dem(monkeypatch, level, lop):
+    """Dòng T1 (KV1) ``2017→2022`` lớp ``lop`` + dòng THCS hợp lệ T2 ``2022→2023``: dừng ở bước đếm, không tra gì. Trước: T1 góp 5 năm
+    ⇒ KV1 lặng lẽ."""
+    lich_su = [_thcs(T1, 2017, 2022, lop=lop, level=level), _thcs(T2, 2022, 2023, lop=9)]
+    kv, meta, hoi = _chay(monkeypatch, _hs(academic_history=lich_su))
+    _dung_dem_thcs(kv, meta, hoi, [0])
+
+
+@pytest.mark.parametrize("lop", ["13", 13.0, True], ids=["chuoi_13", "so_thuc_13", "bool"])
+def test_doi_chung_dong_thcs_lop_sai_kieu_khong_dung_o_buoc_dem(monkeypatch, lop):
+    """Chỉ lớp SỐ NGUYÊN mới dừng ở bước đếm (đồng nhất THPT — ``_history_int``). Lớp sai kiểu ⇒ đếm đủ năm (5 năm KV1 > 1 năm KV2 ⇒
+    KV1); ở bước hoà mới cần xét tay (owner 23-11 (a))."""
+    lich_su = [_thcs(T1, 2017, 2022, lop=lop), _thcs(T2, 2022, 2023, lop=9)]
+    kv, meta, _ = _chay(monkeypatch, _hs(academic_history=lich_su))
+    assert (kv, meta["rule_applied"], meta["breakdown"]["kv_totals"]) == ("KV1", "longest_duration", {"KV1": 5, "KV2": 1})
 
 
 # ═══════════════════════════════ 2. "KV chờ xác minh" — không tính được ═══════════════════════════════
