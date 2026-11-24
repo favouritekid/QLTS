@@ -13,6 +13,8 @@ import {
   E9_BANG_DIEM_CHO_CUOI,
   E9_MAT_CAU_HINH_GIAY,
   E9_THIEU_GIAY,
+  floorCandidateGia,
+  floorCandidatesGia,
   floorGia,
   listItemGia,
   pageGia,
@@ -22,6 +24,7 @@ import {
 } from "@/test/mocks/review-sessions-data"
 
 import {
+  floorCandidatesSchema,
   reviewFloorsPutBodySchema,
   reviewRunCreateBodySchema,
   reviewSessionCancelBodySchema,
@@ -151,5 +154,65 @@ describe("thân gửi đi `.strict()` (máy chủ extra = forbid)", () => {
     expect(reviewRunCreateBodySchema.safeParse({ kind: "evaluate", session_version: 2 }).success).toBe(true)
     expect(reviewRunCreateBodySchema.safeParse({ kind: "lock", session_version: 2 }).success).toBe(false)
     expect(reviewRunCreateBodySchema.safeParse({ kind: "evaluate", session_version: 2, bypass_floor: true }).success).toBe(false)
+  })
+})
+
+describe("phụ lục HĐ4 E10 — FloorCandidatesOut (F2)", () => {
+  it("đọc đúng ví dụ §1.4: hai cờ máy chủ giữ nguyên; chỉ tiêu 0 ≠ null; điểm giữ CHUỖI; floor_score null giữ null", () => {
+    const e = floorCandidatesSchema.parse(
+      floorCandidatesGia({
+        items: [
+          floorCandidateGia(),
+          floorCandidateGia({
+            offering_academic_info_id: 44,
+            offering_id: 13,
+            annual_admission_quota: 0,
+            group_id: null,
+            group_code: null,
+            floor_score: null,
+            state: "quota_closed",
+            floor_applicable: false,
+            floor_accepted: true,
+          }),
+        ],
+        state_counts: { ok: 1, quota_closed: 1, quota_not_configured: 0, floor_missing: 0, group_missing: 0, deleted: 0 },
+      }),
+    )
+    expect(e.session_version).toBe(2)
+    expect(e.session_status).toBe("draft")
+    expect(e.available_actions).toEqual(["edit_floors", "run_evaluate", "cancel"])
+    expect(e.items[0].floor_score).toBe("15.00")
+    expect(e.items[0].floor_applicable).toBe(true)
+    expect(e.items[1].annual_admission_quota).toBe(0)
+    expect(e.items[1].floor_score).toBeNull()
+    expect(e.items[1].group_code).toBeNull()
+    expect(e.items[1].floor_applicable).toBe(false)
+    expect(e.items[1].floor_accepted).toBe(true)
+    expect(e.state_counts.quota_closed).toBe(1)
+  })
+
+  it("state / hành động / trạng thái lạ và trường lạ ⇒ parse được (mở rộng được — HĐ4 §1.8)", () => {
+    const e = floorCandidatesSchema.parse(
+      floorCandidatesGia({
+        session_status: "locked",
+        available_actions: ["lock"],
+        truong_moi: 1,
+        items: [floorCandidateGia({ state: "trang_thai_moi", truong_moi: true })],
+      }),
+    )
+    expect(e.items[0].state).toBe("trang_thai_moi")
+    expect(e.available_actions).toEqual(["lock"])
+    expect("truong_moi" in e).toBe(false)
+  })
+
+  it("điểm dạng SỐ, hoặc thiếu cờ floor_applicable / floor_accepted ⇒ lỗi hợp đồng (không tự bù cờ)", () => {
+    expect(floorCandidatesSchema.safeParse(floorCandidatesGia({ items: [floorCandidateGia({ floor_score: 15 })] })).success).toBe(false)
+    const thieuCo = (k: string) => {
+      const item = floorCandidateGia()
+      delete item[k]
+      return floorCandidatesSchema.safeParse(floorCandidatesGia({ items: [item] })).success
+    }
+    expect(thieuCo("floor_applicable")).toBe(false)
+    expect(thieuCo("floor_accepted")).toBe(false)
   })
 })

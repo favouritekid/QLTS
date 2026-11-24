@@ -1,6 +1,6 @@
 /**
  * GĐ2-B — schema của 9 API lần xét nháp (hợp đồng API GĐ2-B bản 4 `b877fba1…` §1–§4; máy chủ:
- * `Backend_FastAPI/app/schemas/admission_review.py`).
+ * `Backend_FastAPI/app/schemas/admission_review.py`) + E10 `floor-candidates` (phụ lục HĐ4 E10, máy chủ S1).
  *
  * Quy ước (thiết kế giao diện GĐ2-B §6.1, HĐ4 §1.8):
  *  - Thân REQUEST `.strict()` — máy chủ `extra = "forbid"` (khoá lạ ⇒ 422, kể cả mọi khoá kiểu "vượt chỉ tiêu").
@@ -342,6 +342,50 @@ export const rowPageSchema = z.object({
   tab_counts: countMap,
 })
 export type ReviewRowPage = z.infer<typeof rowPageSchema>
+
+// ───────────────────── E10 — học vụ cho màn nhập điểm sàn (phụ lục HĐ4 E10 §1.1, máy chủ S1 `FloorCandidatesOut`) ─────────────────────
+/**
+ * `FloorCandidateOut`. Ba cờ do MÁY CHỦ tính — giao diện KHÔNG suy luật (đính chính §3, đính chính 2):
+ *  - `state` = `quota_state` (HĐ4 §4.10, mở rộng được ⇒ `z.string()`; lạ ⇒ chữ máy chủ);
+ *  - `floor_applicable` = sàn CÓ tác dụng ở máy xét ⇒ nhóm "Cần nhập sàn" đọc CỜ này, không đọc `state`;
+ *  - `floor_accepted` = E4 nhận học vụ này (CÙNG vị từ `review_floor_bad_member`) ⇒ chỉ dòng này có ô nhập và được gửi.
+ * `floor_score` = mức ĐANG lưu ở CHÍNH lần xét này (`null` = chưa có sàn) — không có mức của lần xét khác (owner G10).
+ * `annual_admission_quota`: `null` = chưa cấu hình, `0` = đóng tuyệt đối (HĐ4 §1.4).
+ */
+export const floorCandidateSchema = z.object({
+  offering_academic_info_id: int,
+  offering_id: int.nullable(),
+  major_code: z.string().nullable(),
+  major_name: z.string().nullable(),
+  offering_type: z.string().nullable(),
+  annual_admission_quota: int.nullable(),
+  group_id: int.nullable(),
+  group_code: z.string().nullable(),
+  is_deleted: z.boolean(),
+  offering_inactive: z.boolean(),
+  major_inactive: z.boolean(),
+  floor_score: scoreText.nullable(),
+  state: z.string(),
+  floor_applicable: z.boolean(),
+  floor_accepted: z.boolean(),
+})
+export type ReviewFloorCandidate = z.infer<typeof floorCandidateSchema>
+
+/**
+ * `FloorCandidatesOut` — đọc trong MỘT ảnh chụp. `session_version` = `version` của lần xét CÙNG ảnh chụp với `items` ⇒ E4 gửi số
+ * này (phụ lục E10 §1.1). `available_actions` CÙNG hàm `session_actions` với E3 / cổng ghi ⇒ chỉ soạn sàn khi có `edit_floors`.
+ */
+export const floorCandidatesSchema = z.object({
+  session_id: int,
+  academic_year: int,
+  session_version: int,
+  session_status: z.string(),
+  available_actions: z.array(z.string()),
+  quota_table: quotaTableStateSchema,
+  items: z.array(floorCandidateSchema),
+  state_counts: countMap,
+})
+export type ReviewFloorCandidates = z.infer<typeof floorCandidatesSchema>
 
 // ───────────────────── đợt tuyển sinh cho hộp "Tạo lần xét" (route có sẵn `GET /api/v2/admin/years/{năm}/rounds`) ─────────────────────
 /** CHỈ phần hộp thoại cần (bỏ qua trường khác). Đợt nào được chọn do MÁY CHỦ quyết (owner G1) — giao diện chỉ hiện nhãn. */

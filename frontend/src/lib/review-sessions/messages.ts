@@ -3,11 +3,13 @@
  * → câu (trình bày): KHÔNG quyết nút nào hiện (máy chủ quyết qua `available_actions`), KHÔNG suy trạng thái. Giá trị lạ ⇒ hiện
  * chữ máy chủ (trạng thái, tab) hoặc bỏ qua (hành động) — HĐ4 §1.8. Không `console.*`.
  *
- * Nhãn câu: câu lấy từ Phụ lục A / câu máy chủ / câu có sẵn trong ứng dụng ghi nguồn ở chú thích; câu MỚI của đợt F0 / F1 ghi
- * `[ĐX]` — chờ owner duyệt cùng G8 (bàn giao F0 / F1 liệt kê đủ).
+ * Nhãn câu: câu lấy từ Phụ lục A / câu máy chủ / câu có sẵn trong ứng dụng ghi nguồn ở chú thích; câu MỚI của đợt F0 / F1 / F2 ghi
+ * `[ĐX]` — chờ owner duyệt cùng G8 (bàn giao từng đợt liệt kê đủ).
  */
 import { readApiError } from "@/lib/error-handler"
 import type { ReviewRoundOption } from "@/lib/zod/review-sessions"
+
+import type { FloorGroupKey } from "./floor-draft"
 
 // ═══════════════════════════════════════ nhãn ═══════════════════════════════════════
 /** Phụ lục A "Trạng thái lần xét" (`locked` / `signed` của GĐ2-C có sẵn nhãn). */
@@ -153,12 +155,117 @@ export function quotaTableLinkLabel(year: number): string {
 export function quotaTableHref(year: number): string {
   return `/quota-tables?year=${year}`
 }
-/** [ĐX] — nút của hành động có ở đợt giao diện sau (F2 "Sửa điểm sàn", F3 "Kiểm hồ sơ"). */
+/** [ĐX] — nút của hành động có ở đợt giao diện sau (F3 "Kiểm hồ sơ"; "Sửa điểm sàn" đã mở ở F2). */
 export const ACTION_NOT_YET = "Chức năng này có ở đợt giao diện sau."
 /** Thiết kế §7.1 (phác thảo M1: lượt kiểm gần nhất chưa có). [ĐX] */
 export const NO_RUN_YET = "Chưa chạy"
 /** [ĐX] */
 export const RELOADING = "Đang tải lại…"
+
+// ═══════════════════════════════════════ F2 — điểm sàn (M3) ═══════════════════════════════════════
+/** Phụ lục A "Trạng thái ngành ở chỉ tiêu tham khảo / màn sàn" — HĐ4 §4.10 (mở rộng được; lạ ⇒ chữ máy chủ). */
+export const QUOTA_STATE_LABEL: Record<string, string> = {
+  ok: "Có sàn",
+  floor_missing: "Thiếu sàn",
+  quota_closed: "Đóng tuyển (chỉ tiêu 0)",
+  quota_not_configured: "Chưa có chỉ tiêu",
+  group_missing: "Chưa thuộc nhóm",
+  deleted: "Đã xoá",
+}
+export function quotaStateLabel(state: string): string {
+  return QUOTA_STATE_LABEL[state] ?? state
+}
+
+/** Thiết kế §3.4: chỉ tiêu năm `null` ⇒ "Chưa cấu hình", `0` ⇒ "0 — đóng tuyệt đối" (HĐ4 §1.4: `null` ≠ `0`). Chỉ là nhãn. */
+export function annualQuotaLabel(quota: number | null): string {
+  if (quota === null) return "Chưa cấu hình"
+  if (quota === 0) return "0 — đóng tuyệt đối"
+  return String(quota)
+}
+
+/** Thiết kế §3.4 / §7.2: "<mã> — <tên ngành>" (nhãn HIỆN TẠI máy chủ trả; trống ⇒ "—"). */
+export function majorLabel(code: string | null, name: string | null): string {
+  return `${code ?? "—"} — ${name ?? "—"}`
+}
+
+/** Phụ lục HĐ4 E10 §1.1 "ánh xạ nhóm" + phác thảo §7.2; nhóm "khác" (trạng thái mới của máy chủ) [ĐX]. */
+export const FLOOR_GROUP_TITLE: Record<FloorGroupKey, string> = {
+  needs_floor: "Cần nhập sàn",
+  closed: "Không cần sàn — đã đóng (chỉ tiêu 0)",
+  not_reviewable: "Không xét được — chưa có chỉ tiêu / chưa thuộc nhóm / đã xoá",
+  other: "Trạng thái khác",
+}
+/** Phác thảo §7.2 — sau tiêu đề nhóm "Không xét được". */
+export const NOT_REVIEWABLE_HINT = "(sửa ở Bảng chỉ tiêu năm)"
+/** Phác thảo §7.2. */
+export const INACTIVE_LABEL = "Đang ngừng"
+/** Thiết kế §3.4 (`is_deleted`). */
+export const DELETED_LABEL = "Đã xoá"
+
+/** Tiêu đề thẻ (thiết kế §3.3 "Thẻ: Điểm sàn"). */
+export const FLOORS_SECTION_TITLE = "Điểm sàn"
+/** Owner G2 + phác thảo §7.2: MỘT dòng chung, không cột "ai sửa" từng dòng. */
+export function floorsLastSaved(user: string, at: string): string {
+  return `Danh sách điểm sàn lưu lần cuối bởi ${user} lúc ${at}`
+}
+/** [ĐX] — E3 `floors = []`. */
+export const FLOORS_EMPTY = "Chưa có điểm sàn nào."
+/** [ĐX] — E10 `items = []`. */
+export function floorCandidatesEmpty(year: number): string {
+  return `Năm ${year} chưa có học vụ nào.`
+}
+/** [ĐX] */
+export const FLOORS_LOADING = "Đang tải danh sách ngành…"
+/** [ĐX] — ô điểm sai dạng (kiểm DẠNG theo HĐ4 §1.4; máy chủ là chốt). */
+export const FLOOR_INPUT_INVALID = "Điểm chưa đúng dạng: từ 0 đến 999,99, tối đa 2 chữ số sau dấu phẩy."
+/** [ĐX] — dòng nhận sàn được nhưng máy chủ báo sàn không có tác dụng (`floor_applicable = false`, phụ lục E10 §1.1). */
+export const FLOOR_NOT_APPLICABLE_NOTE = "Sàn không có tác dụng ở ngành này."
+/** [ĐX] — dòng `floor_accepted = false` còn mức đang lưu (phụ lục E10 §1.1 "khi Lưu … phải bỏ ra"). */
+export function floorDroppedNote(score: string): string {
+  return `Đang lưu ${score} — học vụ không nhận điểm sàn được nữa, sẽ bỏ khi lưu.`
+}
+/** Phác thảo §7.2 "[ Lưu điểm sàn (12 ngành) ]". */
+export function floorsSaveLabel(count: number): string {
+  return `Lưu điểm sàn (${count} ngành)`
+}
+/** Phác thảo §7.2. */
+export const FLOORS_DISCARD = "Bỏ thay đổi"
+/** Thiết kế §3.4 — danh sách rỗng ⇒ hỏi lại. */
+export const FLOORS_CONFIRM_EMPTY = "Xoá hết điểm sàn của lần xét này?"
+/** [ĐX] */
+export const FLOORS_CONFIRM_EMPTY_NOTE = "Danh sách gửi đi rỗng — mọi điểm sàn đang lưu của lần xét này sẽ bị xoá."
+/** [ĐX] */
+export const FLOORS_CONFIRM_EMPTY_YES = "Xoá hết"
+/** [ĐX] */
+export const FLOORS_CONFIRM_EMPTY_NO = "Không"
+/** [ĐX] — thiết kế §3.4 "Trần 500 dòng (giới hạn kỹ thuật HĐ4) — quá ⇒ khoá nút Lưu, báo số dòng". */
+export function floorsTooMany(count: number, max: number): string {
+  return `Có ${count} dòng điểm sàn — quá giới hạn ${max} dòng của máy chủ; bớt dòng rồi lưu.`
+}
+/** Phác thảo §7.2 — 409 STALE. */
+export const FLOORS_STALE_TITLE = "Điểm sàn vừa được lưu ở nơi khác"
+/** [ĐX] — dòng người dùng không sửa đã lấy mức vừa lưu (bản soạn chỉ giữ ô đã gõ). */
+export const FLOORS_STALE_NOTE = "Dòng bạn không sửa đã lấy mức vừa lưu. Các dòng bạn đã sửa khác mức vừa lưu:"
+/** [ĐX] */
+export const FLOORS_STALE_NO_DIFF = "Không dòng nào bạn đã sửa khác mức vừa lưu."
+/** Phác thảo §7.2. */
+export const FLOORS_COL_MINE = "Bạn đang soạn"
+/** Phác thảo §7.2. */
+export const FLOORS_COL_SAVED = "Vừa lưu ở nơi khác"
+/** Phác thảo §7.2. */
+export const FLOORS_USE_NEW = "Dùng bản mới (bỏ thay đổi của tôi)"
+/** Phác thảo §7.2. */
+export const FLOORS_SAVE_MINE = "Lưu bản của tôi đè lên"
+/** [ĐX] — ô trống ở bảng so. */
+export const FLOOR_EMPTY_VALUE = "(trống)"
+/** [ĐX] — toast sau khi lưu thành công. */
+export const FLOORS_SAVED = "Đã lưu điểm sàn."
+/** Thiết kế §3.4 dòng 422. */
+export const FLOORS_INVALID_422 = "Điểm sàn chưa đúng dạng."
+/** [ĐX] — thiết kế §3.4 dòng 400 `bad_member` "gợi ý bỏ các dòng đó rồi lưu lại". */
+export const FLOORS_BAD_MEMBER_HINT = "Bỏ mức sàn ở các dòng tô đỏ rồi lưu lại."
+/** [ĐX] — E10 không còn `edit_floors` (lần xét vừa đổi trạng thái ở nơi khác). */
+export const FLOORS_NOT_EDITABLE = "Lần xét không còn sửa điểm sàn được."
 
 // ═══════════════════════════════════════ lỗi — MỘT hàm (thiết kế §5) ═══════════════════════════════════════
 /** §5 — đóng băng (503 + `code` hai tầng, `readApiError` nhận diện). */

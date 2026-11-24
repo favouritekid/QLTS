@@ -69,7 +69,10 @@ describe("màn lần xét — không kiểm vai, không đường /admin/quota-t
       "lib/hooks/use-review-sessions.ts",
       "lib/review-sessions/messages.ts",
       "lib/review-sessions/url.ts",
+      "lib/review-sessions/floor-draft.ts",
       `${TRANG}/page.tsx`,
+      `${TRANG}/_components/ReviewFloorsEditor.tsx`,
+      `${TRANG}/_components/ReviewFloorsSection.tsx`,
     ]) {
       expect(TEP, `thiếu trong danh sách quét: ${bat_buoc}`).toContain(bat_buoc)
     }

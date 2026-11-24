@@ -10,7 +10,8 @@
  *
  * Thiết kế §6.1 + đính chính 1 / 2 §1: SAU MỌI thao tác ghi (E1, E4, E5, E6, và ghi lựa chọn C2 — `use-review-selections.ts`
  * gọi CÙNG `refreshAfterReviewWrite`) — khi thao tác KẾT THÚC, BẤT KỂ kết quả (thành công,
- * 409, 502 / 504 chưa rõ) — làm mới E2 + E3 + E7 + E8 (`onSettled`, không `onSuccess`).
+ * 409, 502 / 504 chưa rõ) — làm mới E2 + E3 + E7 + E8 (`onSettled`, không `onSuccess`). Đợt F2: thêm E10 (`floor-candidates`
+ * mang `session_version` / `available_actions` / mức sàn ĐANG lưu) vào CÙNG hàm làm mới và CÙNG khuôn DC-1.
  *
  * Không tự tải lại khi quay lại cửa sổ (R6 — giới hạn `ADMIN_READ` theo IP); không tự thử lại (người dùng bấm "Tải lại").
  */
@@ -20,6 +21,7 @@ import {
   cancelReviewSession,
   createReviewRun,
   createReviewSession,
+  getReviewFloorCandidates,
   getReviewRun,
   getReviewSession,
   listReviewRounds,
@@ -55,6 +57,8 @@ export const reviewSessionKeys = {
   /** E9 */
   rows: (sessionId: number, runId: number, params: ReviewRowParams) =>
     [...reviewSessionKeys.session(sessionId), "rows", runId, params] as const,
+  /** E10 — học vụ cho màn nhập điểm sàn */
+  floorCandidates: (sessionId: number) => [...reviewSessionKeys.session(sessionId), "floor-candidates"] as const,
   /** đợt tuyển sinh của một năm (hộp "Tạo lần xét") */
   roundLists: () => [...reviewSessionKeys.all, "rounds"] as const,
   rounds: (academicYear: number) => [...reviewSessionKeys.roundLists(), academicYear] as const,
@@ -113,6 +117,20 @@ export function useReviewRun(sessionId: number, runId: number, enabled = true) {
 }
 
 /**
+ * E10 — học vụ của năm lần xét cho màn soạn điểm sàn (phụ lục HĐ4 E10). Mang `session_version`, `available_actions` và mức sàn ĐANG
+ * lưu (một ảnh chụp) ⇒ CÙNG khuôn DC-1 với E2 / E3 / E7 / E8: `staleTime 0`, `gcTime 0`, không `placeholderData`; tải lỗi ⇒ màn
+ * hiện LỖI, không vẽ dữ liệu cũ. Chỉ gọi khi đang soạn (`enabled`) — chế độ xem đọc `floors` của E3 (bớt một lần gọi `ADMIN_READ`).
+ */
+export function useReviewFloorCandidates(sessionId: number, enabled = true) {
+  return useQuery({
+    queryKey: reviewSessionKeys.floorCandidates(sessionId),
+    queryFn: ({ signal }) => getReviewFloorCandidates(sessionId, signal),
+    enabled,
+    ...FRESH_ONLY_QUERY_OPTIONS,
+  })
+}
+
+/**
  * E9 — dòng của lượt kiểm. KHÔNG mang `config_changed_since_run` (băng ấy đọc từ E8). Dòng của lượt đã xong là bất biến trừ
  * họ tên / đơn vị (HĐ4 §7) ⇒ giữ trang cũ khi lật trang cho bảng khỏi nháy (thiết kế §6.1). Đợt F4 chốt lại tuỳ chọn này.
  */
@@ -154,6 +172,7 @@ export function refreshAfterReviewWrite(queryClient: QueryClient, sessionId: num
   void queryClient.invalidateQueries({ queryKey: reviewSessionKeys.detail(sessionId) })
   void queryClient.invalidateQueries({ queryKey: reviewSessionKeys.runLists(sessionId) })
   void queryClient.invalidateQueries({ queryKey: reviewSessionKeys.runDetails(sessionId) })
+  void queryClient.invalidateQueries({ queryKey: reviewSessionKeys.floorCandidates(sessionId) })
 }
 
 /** E1. Đợt có thể vừa đổi (400 `review_round_invalid`) ⇒ làm mới cả danh sách đợt. */

@@ -266,6 +266,43 @@ export const E4_BAD_MEMBER_BODY: Obj = {
   error_code: "VALIDATION_ERROR",
 }
 
+/** E10 — một `FloorCandidateOut` (phụ lục HĐ4 E10 §1.4, dòng đầu: có sàn 15.00, cần sàn, E4 nhận). */
+export function floorCandidateGia(over: Obj = {}): Obj {
+  return {
+    offering_academic_info_id: 41,
+    offering_id: 12,
+    major_code: "<mã>",
+    major_name: "<tên ngành>",
+    offering_type: "<loại hình>",
+    annual_admission_quota: 30,
+    group_id: 5,
+    group_code: "N1",
+    is_deleted: false,
+    offering_inactive: false,
+    major_inactive: false,
+    floor_score: "15.00",
+    state: "ok",
+    floor_applicable: true,
+    floor_accepted: true,
+    ...over,
+  }
+}
+
+/** E10 — `FloorCandidatesOut` của lần xét 3 năm 2026 (phụ lục HĐ4 E10 §1.4). `items` mặc định: một dòng có sàn. */
+export function floorCandidatesGia(over: Obj = {}): Obj {
+  return {
+    session_id: 3,
+    academic_year: 2026,
+    session_version: 2,
+    session_status: "draft",
+    available_actions: ["edit_floors", "run_evaluate", "cancel"],
+    quota_table: { status: "locked", version: 2, quota_fingerprint: "a".repeat(64) },
+    items: [floorCandidateGia()],
+    state_counts: { ok: 1, quota_closed: 0, quota_not_configured: 0, floor_missing: 0, group_missing: 0, deleted: 0 },
+    ...over,
+  }
+}
+
 /** Đợt của một năm — hình `AdmissionRoundResponse` (route có sẵn). */
 export function roundGia(over: Obj = {}): Obj {
   return {

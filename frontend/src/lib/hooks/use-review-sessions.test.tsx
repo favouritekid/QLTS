@@ -11,6 +11,10 @@
  *    tác trên một lần xét — gồm cả ghi lựa chọn C2). Biến thể phá: chuyển làm mới từ `onSettled` sang `onSuccess` ⇒ các ca 409 /
  *    mất kết nối ĐỎ; bỏ `refreshAfterReviewWrite` khỏi hook lựa chọn C2 ⇒ ba ca "C2 …" ĐỎ.
  * 3. E6 tự đặt thời gian chờ > 60 s (KT-11). Biến thể phá: bỏ `timeout` ⇒ ĐỎ.
+ * 4. F2 — E10 (`floor-candidates`, mang `session_version` / `available_actions` / mức sàn ĐANG lưu) theo CÙNG khuôn: (a), (b), không
+ *    mượn dữ liệu khi đổi khoá; và được làm mới cùng E3 / E7 / E8 sau mọi thao tác ghi trên lần xét. Biến thể phá: hook E10 không dùng
+ *    `FRESH_ONLY_QUERY_OPTIONS` (rơi về mặc định 5 phút) ⇒ ca E10 (a) / (b) ĐỎ; bỏ dòng E10 ở `refreshAfterReviewWrite` ⇒ 12 ca
+ *    ma trận ĐỎ.
  */
 import type { ReactNode } from "react"
 import { QueryClientProvider, type QueryClient, type UseQueryResult } from "@tanstack/react-query"
@@ -24,6 +28,8 @@ import { server } from "@/test/mocks/server"
 import { appLikeQueryClient } from "@/test/review-sessions-render"
 import {
   RS,
+  floorCandidateGia,
+  floorCandidatesGia,
   listItemGia,
   luaChonGia,
   pageGia,
@@ -39,6 +45,7 @@ import {
   useCreateReviewRun,
   useCreateReviewSession,
   usePutReviewFloors,
+  useReviewFloorCandidates,
   useReviewRun,
   useReviewRuns,
   useReviewSession,
@@ -90,6 +97,14 @@ const CA_DC1: CaDc1[] = [
     url: `${RS}/3/runs/11`,
     than: (c) => runGia({ config_changed_since_run: c }),
     dung: () => useReviewRun(3, 11),
+  },
+  {
+    // F2: E10 không mang cờ "cấu hình đã đổi" nhưng mang version / hành động / mức sàn đang lưu ⇒ CÙNG khuôn (yêu cầu F2 điểm 1).
+    ten: "E10 học vụ nhập sàn",
+    url: `${RS}/3/floor-candidates`,
+    than: (c) =>
+      floorCandidatesGia({ session_version: c ? 3 : 2, items: [floorCandidateGia({ floor_score: c ? "16.00" : "15.00" })] }),
+    dung: () => useReviewFloorCandidates(3),
   },
 ]
 
@@ -153,6 +168,26 @@ describe("DC-1 — query mang config_changed_since_run không giữ bản cũ", 
     })
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
     rerender({ runId: 12 })
+    await waitFor(() => expect(result.current.isPending).toBe(true))
+    expect(result.current.data).toBeUndefined()
+    unmount()
+  })
+
+  it("E10 đổi lần xét khi lần gọi mới treo ⇒ không mượn học vụ / version của lần xét cũ (không placeholderData)", async () => {
+    server.use(
+      http.get(`${RS}/3/floor-candidates`, () => HttpResponse.json(floorCandidatesGia())),
+      http.get(`${RS}/4/floor-candidates`, async () => {
+        await delay("infinite")
+        return HttpResponse.json(floorCandidatesGia({ session_id: 4 }))
+      }),
+    )
+    const qc = appLikeClient()
+    const { result, rerender, unmount } = renderHook(({ id }: { id: number }) => useReviewFloorCandidates(id), {
+      wrapper: wrapperFor(qc),
+      initialProps: { id: 3 },
+    })
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    rerender({ id: 4 })
     await waitFor(() => expect(result.current.isPending).toBe(true))
     expect(result.current.data).toBeUndefined()
     unmount()
@@ -275,9 +310,9 @@ const KET_QUA: [string, (ca: CaGhi) => Response][] = [
 
 const MA_TRAN = CA_GHI.flatMap((ca) => KET_QUA.map(([kq, tra]) => ({ ten: `${ca.ten} — ${kq}`, ca, tra })))
 
-describe("làm mới E2 / E3 / E7 / E8 khi thao tác ghi KẾT THÚC, bất kể kết quả", () => {
+describe("làm mới E2 / E3 / E7 / E8 / E10 khi thao tác ghi KẾT THÚC, bất kể kết quả", () => {
   it.each(MA_TRAN)("$ten", async ({ ca, tra }) => {
-    const dem = { e2: 0, e3: 0, e7: 0, e8: 0 }
+    const dem = { e2: 0, e3: 0, e7: 0, e8: 0, e10: 0 }
     const ghi = ca.method === "put" ? http.put(ca.url, () => tra(ca)) : http.post(ca.url, () => tra(ca))
     server.use(
       ghi,
@@ -297,6 +332,10 @@ describe("làm mới E2 / E3 / E7 / E8 khi thao tác ghi KẾT THÚC, bất kể
         dem.e8 += 1
         return HttpResponse.json(runGia())
       }),
+      http.get(`${RS}/3/floor-candidates`, () => {
+        dem.e10 += 1
+        return HttpResponse.json(floorCandidatesGia())
+      }),
     )
     const qc = appLikeClient()
     const { result, unmount } = renderHook(
@@ -305,6 +344,7 @@ describe("làm mới E2 / E3 / E7 / E8 khi thao tác ghi KẾT THÚC, bất kể
         e3: useReviewSession(3),
         e7: useReviewRuns(3, { page: 1, page_size: 20 }),
         e8: useReviewRun(3, 11),
+        e10: useReviewFloorCandidates(3),
         tt: ca.dung(),
       }),
       { wrapper: wrapperFor(qc) },
@@ -312,14 +352,17 @@ describe("làm mới E2 / E3 / E7 / E8 khi thao tác ghi KẾT THÚC, bất kể
     await waitFor(() => {
       expect(result.current.e2.isSuccess && result.current.e3.isSuccess).toBe(true)
       expect(result.current.e7.isSuccess && result.current.e8.isSuccess).toBe(true)
+      expect(result.current.e10.isSuccess).toBe(true)
     })
-    expect(dem).toEqual({ e2: 1, e3: 1, e7: 1, e8: 1 })
+    expect(dem).toEqual({ e2: 1, e3: 1, e7: 1, e8: 1, e10: 1 })
 
     act(() => result.current.tt.goi())
     await waitFor(() => expect(result.current.tt.xong).toBe(true))
     await waitFor(() => expect(dem.e2).toBe(2))
     if (ca.theoLanXet) {
-      await waitFor(() => expect({ e3: dem.e3, e7: dem.e7, e8: dem.e8 }).toEqual({ e3: 2, e7: 2, e8: 2 }))
+      await waitFor(() =>
+        expect({ e3: dem.e3, e7: dem.e7, e8: dem.e8, e10: dem.e10 }).toEqual({ e3: 2, e7: 2, e8: 2, e10: 2 }),
+      )
     }
     unmount()
   })

@@ -11,6 +11,7 @@
  *   E7 GET  /review-sessions/{id}/runs                      — danh sách lượt kiểm (id ↓)
  *   E8 GET  /review-sessions/{id}/runs/{run_id}             — chi tiết lượt kiểm
  *   E9 GET  /review-sessions/{id}/runs/{run_id}/rows        — dòng kết quả (bốn tab, lọc, phân trang)
+ *   E10 GET /review-sessions/{id}/floor-candidates          — học vụ của năm cho màn nhập điểm sàn (phụ lục HĐ4 E10, máy chủ S1)
  *
  * Mọi thân gửi đi qua Zod `.strict()`; mọi phản hồi qua Zod (bỏ qua trường lạ). Không `console.*`.
  */
@@ -18,6 +19,7 @@ import { listRoundsByYear } from "@/lib/api/admission-rounds"
 import { api } from "@/lib/api/client"
 import { REVIEW_SESSIONS_PATH } from "@/lib/api/review-selections"
 import {
+  floorCandidatesSchema,
   reviewFloorsPutBodySchema,
   reviewRoundListSchema,
   reviewRunCreateBodySchema,
@@ -28,6 +30,7 @@ import {
   runSchema,
   sessionPageSchema,
   sessionSchema,
+  type ReviewFloorCandidates,
   type ReviewFloorsPutBody,
   type ReviewRoundList,
   type ReviewRowPage,
@@ -142,6 +145,13 @@ export async function listReviewRunRows(
 ): Promise<ReviewRowPage> {
   const res = await api.get(`${runsPath(sessionId)}/${runId}/rows`, { params: definedOnly(params), signal })
   return rowPageSchema.parse(res.data)
+}
+
+// ── E10 ──
+/** Không tham số truy vấn, không phân trang (phụ lục E10 §1). Đọc, không đóng băng; `no-store` ở máy chủ. */
+export async function getReviewFloorCandidates(sessionId: number, signal?: AbortSignal): Promise<ReviewFloorCandidates> {
+  const res = await api.get(`${sessionPath(sessionId)}/floor-candidates`, { signal })
+  return floorCandidatesSchema.parse(res.data)
 }
 
 // ── đợt tuyển sinh của một năm (route có sẵn, cùng hàm với trang Cấu hình tuyển sinh — một chỗ khai đường dẫn) ──

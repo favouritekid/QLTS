@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { formatDateTimeVN } from "@/lib/document-review/messages"
 import { useReviewSession } from "@/lib/hooks/use-review-sessions"
+import { EMPTY_FLOOR_DRAFT, type FloorDraft } from "@/lib/review-sessions/floor-draft"
 import {
   ACTION_NOT_YET,
   CANCELLED_FLOORS_NOTE,
@@ -31,6 +32,7 @@ import { REVIEW_SESSIONS_ROUTE } from "@/lib/review-sessions/url"
 import { CancelReviewSessionDialog } from "./CancelReviewSessionDialog"
 import { LatestRunSummary } from "./LatestRunSummary"
 import { ReviewErrorAlert } from "./ReviewErrorAlert"
+import { ReviewFloorsSection } from "./ReviewFloorsSection"
 
 function Banner({ testId, children }: { testId: string; children: string }) {
   return (
@@ -46,17 +48,22 @@ function Banner({ testId, children }: { testId: string; children: string }) {
  * tác ghi (hook lo, bất kể kết quả) và khi bấm "Tải lại". Tải lỗi (kể cả 429) ⇒ hiện LỖI, không vẽ dữ liệu cũ.
  *
  * Thanh nút CHỈ theo `available_actions` của máy chủ (`[]` ⇒ không nút; giá trị lạ bỏ qua) — không theo `status`, không theo vai.
- * Trong lúc E3 đang tải lại, nút ghi bị khoá để thao tác kế luôn dùng `version` mới nhất. F1 làm "Huỷ lần xét" (M7); "Sửa điểm
- * sàn" (F2) và "Kiểm hồ sơ" (F3) hiện theo cờ nhưng chưa bấm được ở bản này. Băng cảnh báo hiện NGUYÊN cờ máy chủ, không suy.
+ * Trong lúc E3 đang tải lại, nút ghi bị khoá để thao tác kế luôn dùng `version` mới nhất. F1 làm "Huỷ lần xét" (M7); F2 mở "Sửa
+ * điểm sàn" (M3 — soạn theo E10, lưu qua E4); "Kiểm hồ sơ" (F3) hiện theo cờ nhưng chưa bấm được ở bản này. Băng cảnh báo hiện
+ * NGUYÊN cờ máy chủ, không suy.
  *
  * Rà F01-4 (CHẶN): bản soạn lý do huỷ và cờ "đang huỷ" nằm Ở ĐÂY — TRƯỚC mọi nhánh dữ liệu / lỗi — nên sống qua lúc E3 tải lại lỗi
  * (nhánh lỗi tháo hộp huỷ). Tải lại thành công ⇒ hộp hiện lại (nếu máy chủ còn trả `cancel`) với NGUYÊN lý do đã gõ và `version` mới.
  * MỘT nguồn: hộp không giữ bản sao. Trang dựng thành phần này với `key` = id lần xét ⇒ bản soạn không mang sang lần xét khác.
+ * F2 dùng CÙNG khuôn cho bản soạn điểm sàn (`floorDraft`) và cờ "đang soạn" (`floorEditing`): E4 409 ⇒ E3 tải lại lỗi ⇒ nhánh lỗi
+ * tháo bộ soạn, bản soạn vẫn còn; tải lại thành công ⇒ bộ soạn hiện lại (nếu máy chủ còn trả `edit_floors`) với nguyên các ô đã gõ.
  */
 export function ReviewSessionDetailClient({ sessionId }: { sessionId: number }) {
   const q = useReviewSession(sessionId)
   const [cancelOpen, setCancelOpen] = useState(false)
   const [cancelReason, setCancelReason] = useState("")
+  const [floorEditing, setFloorEditing] = useState(false)
+  const [floorDraft, setFloorDraft] = useState<FloorDraft>(EMPTY_FLOOR_DRAFT)
 
   if (q.isError) {
     return (
@@ -88,7 +95,7 @@ export function ReviewSessionDetailClient({ sessionId }: { sessionId: number }) 
   const s = q.data
   const actions = knownSessionActions(s.available_actions)
   const busy = q.isFetching
-  const notYet = actions.some((a) => a !== "cancel")
+  const notYet = actions.includes("run_evaluate")
 
   return (
     <div className="space-y-4">
@@ -127,6 +134,16 @@ export function ReviewSessionDetailClient({ sessionId }: { sessionId: number }) 
             {actions.map((a) =>
               a === "cancel" ? (
                 <Button key={a} variant="destructive" disabled={busy} onClick={() => setCancelOpen(true)} data-testid="nut-cancel">
+                  {SESSION_ACTION_LABEL[a]}
+                </Button>
+              ) : a === "edit_floors" ? (
+                <Button
+                  key={a}
+                  variant="outline"
+                  disabled={busy || floorEditing}
+                  onClick={() => setFloorEditing(true)}
+                  data-testid="nut-edit_floors"
+                >
                   {SESSION_ACTION_LABEL[a]}
                 </Button>
               ) : (
@@ -169,6 +186,16 @@ export function ReviewSessionDetailClient({ sessionId }: { sessionId: number }) 
           </p>
         ) : null}
       </section>
+
+      <ReviewFloorsSection
+        sessionId={s.id}
+        floors={s.floors}
+        editing={floorEditing && actions.includes("edit_floors")}
+        busy={busy}
+        draft={floorDraft}
+        onDraftChange={setFloorDraft}
+        onCloseEditor={() => setFloorEditing(false)}
+      />
 
       <CancelReviewSessionDialog
         open={cancelOpen && actions.includes("cancel")}

@@ -149,10 +149,10 @@ describe("M2 — thanh nút CHỈ theo available_actions", () => {
     if (nut.length === 0) expect(screen.queryByTestId("thanh-nut")).toBeNull()
   })
 
-  it("'Sửa điểm sàn' / 'Kiểm hồ sơ' hiện theo cờ nhưng chưa bấm được ở F1; 'Huỷ lần xét' bấm được", async () => {
+  it("'Sửa điểm sàn' bấm được (F2); 'Kiểm hồ sơ' hiện theo cờ nhưng chưa bấm được (F3); 'Huỷ lần xét' bấm được", async () => {
     mayChuE3([json(sessionGia())])
     await moChiTiet()
-    expect(await screen.findByTestId("nut-edit_floors")).toBeDisabled()
+    expect(await screen.findByTestId("nut-edit_floors")).toBeEnabled()
     expect(screen.getByTestId("nut-run_evaluate")).toBeDisabled()
     expect(screen.getByTestId("nut-cancel")).toBeEnabled()
   })
@@ -167,8 +167,11 @@ describe("M2 — thanh nút CHỈ theo available_actions", () => {
     ])
     await moChiTiet()
     expect(await screen.findByTestId("nut-cancel")).toBeEnabled()
+    expect(screen.getByTestId("nut-edit_floors")).toBeEnabled()
     fireEvent.click(screen.getAllByTestId("lan-xet-tai-lai")[0])
     await waitFor(() => expect(screen.getByTestId("nut-cancel")).toBeDisabled())
+    // F2: "Sửa điểm sàn" cũng là nút ghi ⇒ cùng khoá (biến thể phá: bỏ `busy` khỏi `disabled` của nút ⇒ ĐỎ).
+    expect(screen.getByTestId("nut-edit_floors")).toBeDisabled()
     expect(screen.getByTestId("lan-xet-dang-tai-lai")).toBeInTheDocument()
   })
 })
