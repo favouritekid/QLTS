@@ -45,7 +45,7 @@ function FloorsView({ floors }: { floors: readonly ReviewFloor[] }) {
             <TableHead>Loại hình</TableHead>
             <TableHead>Nhóm</TableHead>
             <TableHead>Chỉ tiêu năm</TableHead>
-            <TableHead>Điểm sàn</TableHead>
+            <TableHead>Điểm sàn</TableHead><TableHead>Người sửa</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -64,7 +64,7 @@ function FloorsView({ floors }: { floors: readonly ReviewFloor[] }) {
               <TableCell data-testid={`san-xem-chi-tieu-${f.offering_academic_info_id}`}>
                 {annualQuotaLabel(f.annual_admission_quota)}
               </TableCell>
-              <TableCell data-testid={`san-xem-diem-${f.offering_academic_info_id}`}>{floorScoreDisplay(f.floor_score)}</TableCell>
+              <TableCell data-testid={`san-xem-diem-${f.offering_academic_info_id}`}>{floorScoreDisplay(f.floor_score)}</TableCell><TableCell>{userRef(f.updated_by_user_id)}</TableCell>
             </TableRow>
           ))}
         </TableBody>
