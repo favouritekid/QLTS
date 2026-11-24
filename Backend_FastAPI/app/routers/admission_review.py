@@ -64,6 +64,10 @@ async def put_quota_table(
     db: AsyncSession = Depends(database.get_db),
 ):
     out = await quota_table_service.replace_quota_table(db, academic_year, payload, actor_id=current_user.id)
+    # Nợ N1 (rà hợp nhất 23-11, mục I1): kiểm thân phản hồi theo ``QuotaTableOut`` TRƯỚC ``commit`` — MỘT helper với GĐ2-B
+    # (``response_checked_before_commit`` của tệp này). Lệch ⇒ nổ khi giao dịch CHƯA commit ⇒ không ghi gì; trước đây người gọi
+    # nhận 500 trong khi bảng ĐÃ ghi (dễ bấm lặp).
+    out = response_checked_before_commit(QuotaTableOut, out)
     await db.commit()
     return out
 
@@ -89,6 +93,8 @@ async def lock_quota_table(
         expected_quota_fingerprint=payload.quota_fingerprint,
         actor_id=current_user.id,
     )
+    # Nợ N1 (I1) — như PUT: kiểm phản hồi TRƯỚC commit, lệch ⇒ bảng KHÔNG bị khoá.
+    out = response_checked_before_commit(QuotaTableOut, out)
     await db.commit()
     return out
 
@@ -110,5 +116,17 @@ async def unlock_quota_table(
     out = await quota_table_service.unlock_quota_table(
         db, academic_year, expected_version=payload.version, reason=payload.reason, actor_id=current_user.id
     )
+    # Nợ N1 (I1) — như PUT: kiểm phản hồi TRƯỚC commit, lệch ⇒ bảng KHÔNG bị mở khoá.
+    out = response_checked_before_commit(QuotaTableOut, out)
     await db.commit()
+    return out
+
+
+def response_checked_before_commit(model, out):
+    """Kiểm thân phản hồi theo ``response_model`` của route TRƯỚC ``commit`` (rà hợp nhất 23-11, mục I1) — MỘT chỗ cho 4 route ghi
+    (E1, E4, E5, E6). FastAPI tự kiểm ``response_model`` SAU khi route trả về, tức SAU ``commit`` ⇒ thân lệch schema cho người gọi
+    500 trong khi lần xét / sàn / run ĐÃ ghi. Kiểm ở đây: lệch ⇒ ``ValidationError`` nổ khi giao dịch CHƯA commit ⇒ phiên của
+    ``database.get_db`` đóng = rollback, không ghi gì. Phép kiểm = phép FastAPI làm (``validate_python(…, from_attributes=True)``);
+    trả NGUYÊN ``out`` ⇒ đường thành công không đổi (FastAPI vẫn kiểm + tuần tự hoá như trước)."""
+    model.model_validate(out, from_attributes=True)
     return out
