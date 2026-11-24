@@ -425,7 +425,13 @@ class VnSchoolService:
                 raise DomainValidationError(
                     "Trường mã nội bộ (NB…) chỉ ở cấp THCS hoặc liên cấp THCS-THPT."
                 )
-            if not internal and data["level"] in NO_MOET_CODE_LEVELS:
+            # Chỉ chặn khi cấp ĐỔI sang THCS. Trường cấp THCS ĐÃ có mã Bộ (đường tạo trước đoàn 3b
+            # không chặn) vẫn sửa được DTNT / xã / tên… — form Admin luôn gửi kèm cấp (rà Codex 3b T3).
+            if (
+                not internal
+                and data["level"] in NO_MOET_CODE_LEVELS
+                and data["level"] != school.level
+            ):
                 raise DomainValidationError(
                     "Trường có mã Bộ không chuyển sang cấp THCS. Trường THCS dùng mã "
                     "nội bộ — tạo trường mới với ô mã để trống."

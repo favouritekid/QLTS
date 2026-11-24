@@ -9,6 +9,9 @@ import re
 import pytest
 from httpx import AsyncClient
 
+from app.database import AsyncSessionLocal
+from app.models.vn_school import VnSchool
+
 pytestmark = [pytest.mark.asyncio]
 
 BASE = "/api/v2/admin/vn-school"
@@ -134,3 +137,56 @@ async def test_cac_duong_moi_chi_admin(
     ):
         r = await getattr(client, method)(path, headers=h, **({"json": body} if body is not None else {}))
         assert r.status_code == 403, (path, r.status_code, r.text)
+
+
+# ---- Rà Codex đoàn 3b T3: trường cấp THCS ĐÃ có mã Bộ vẫn sửa được; chỉ chặn tạo mới / đổi cấp sang THCS ----
+
+
+async def _truong_thcs_co_ma_bo_cu() -> int:
+    """Dòng như production trước đoàn 3b: cấp THCS KÈM mã Bộ (đường tạo cũ không chặn). Đường tạo của 3b đã cấm
+    nên phải chèn thẳng — cách DUY NHẤT dựng lại trạng thái ấy."""
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            truong = VnSchool(
+                moet_school_code="040555", moet_province_code="048", name="THCS cũ có mã Bộ",
+                province="Tỉnh Thử", level="THCS", is_dtnt=False,
+            )
+            s.add(truong)
+            await s.flush()
+            return truong.id
+
+
+async def test_truong_thcs_co_ma_bo_san_sua_dtnt_kem_cap_khong_doi_200(
+    client: AsyncClient, admin_token_headers: dict, setup_test_database
+) -> None:
+    sid = await _truong_thcs_co_ma_bo_cu()
+    # Form sửa của trang Admin LUÔN gửi kèm cấp (SchoolTable.tsx) — ở đây cấp không đổi.
+    r = await client.patch(
+        f"{BASE}/schools/{sid}", json={"level": "THCS", "is_dtnt": True}, headers=admin_token_headers
+    )
+    assert r.status_code == 200, r.text
+    assert (r.json()["moet_school_code"], r.json()["level"], r.json()["is_dtnt"]) == ("040555", "THCS", True)
+
+
+async def test_truong_thpt_co_ma_bo_doi_sang_cap_thcs_van_400(
+    client: AsyncClient, admin_token_headers: dict, setup_test_database
+) -> None:
+    h = admin_token_headers
+    r = await client.post(
+        f"{BASE}/schools",
+        json={"moet_school_code": "040556", "moet_province_code": "048", "name": "THPT có mã Bộ",
+              "province": "Tỉnh Thử", "level": "THPT"},
+        headers=h,
+    )
+    assert r.status_code == 201, r.text
+    r = await client.patch(f"{BASE}/schools/{r.json()['id']}", json={"level": "THCS"}, headers=h)
+    assert r.status_code == 400, r.text
+
+
+async def test_tao_moi_truong_thcs_kem_ma_bo_van_400(
+    client: AsyncClient, admin_token_headers: dict, setup_test_database
+) -> None:
+    h = admin_token_headers
+    await _tao_xa(client, h)
+    r = await client.post(f"{BASE}/schools", json={**_thcs(), "moet_school_code": "040557"}, headers=h)
+    assert r.status_code == 400, r.text
