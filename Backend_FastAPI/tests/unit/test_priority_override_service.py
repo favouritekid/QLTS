@@ -134,7 +134,14 @@ async def test_version_conflict_raises_before_other_checks() -> None:
             actor=actor,
             expected_version=99,  # mismatch
         )
-    assert "version" in str(exc.value).lower()
+    # Owner 22-11 (QUYET-DINH-OWNER-THCS-CAU-409): câu nay là câu thao tác chung tiếng Việt, KHÔNG còn chữ "version";
+    # phép dò cũ ``"version" in str(exc)`` chỉ còn xanh nhờ chuỗi ``context`` (expected_version / current_version) —
+    # xanh vô nghĩa. Khoá đúng hợp đồng mới: lớp + mã riêng + số phiên bản hiện tại.
+    from app.utils.exceptions import ProfileVersionConflict
+
+    assert type(exc.value) is ProfileVersionConflict, type(exc.value).__name__
+    assert exc.value.error_code == "PROFILE_VERSION_CONFLICT" and exc.value.status_code == 409
+    assert exc.value.current_version == 5
     db.add.assert_not_called()
     db.flush.assert_not_awaited()
 

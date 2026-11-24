@@ -32,6 +32,7 @@ from sqlalchemy import select
 
 from app import models
 from app.database import AsyncSessionLocal
+from app.utils.exceptions import PROFILE_VERSION_CONFLICT_ACTION_DETAIL
 
 
 pytestmark = pytest.mark.asyncio
@@ -173,8 +174,18 @@ async def test_stale_version_approve_returns_409_not_400(
         f"Stale version + post-commit state must return 409 ConflictError; "
         f"got {response.status_code}: {response.text[:300]}"
     )
-    # Error message should suggest refresh — UX contract
-    assert "modified by another user" in response.text or "version" in response.text.lower()
+    # Owner 22-11 (QUYET-DINH-OWNER-THCS-CAU-409): câu tiếng Anh cũ "Profile was modified by another user…" thay bằng
+    # mã riêng + câu tiếng Việt trung tính (giao diện hiện nguyên câu). Hợp đồng UX "bảo tải lại" giữ nguyên.
+    _assert_xung_dot_phien_ban(response, stale_version + 1)
+
+
+def _assert_xung_dot_phien_ban(response, current_version: int) -> None:
+    """409 xung đột phiên bản hồ sơ: mã ``PROFILE_VERSION_CONFLICT`` + câu thao tác + số phiên bản hiện tại (đi qua router
+    — router gói ``ConflictError`` thành ``HTTPException`` sẽ làm mất mã)."""
+    body = response.json()
+    assert body.get("error_code") == "PROFILE_VERSION_CONFLICT", response.text[:300]
+    assert body.get("detail") == PROFILE_VERSION_CONFLICT_ACTION_DETAIL, response.text[:300]
+    assert body.get("current_version") == current_version, response.text[:300]
 
 
 async def test_stale_version_reject_returns_409_not_400(
@@ -201,6 +212,7 @@ async def test_stale_version_reject_returns_409_not_400(
         f"Stale version reject must return 409 ConflictError; "
         f"got {response.status_code}: {response.text[:300]}"
     )
+    _assert_xung_dot_phien_ban(response, stale_version + 1)
 
 
 async def test_stale_version_request_revision_returns_409_not_400(
@@ -227,3 +239,4 @@ async def test_stale_version_request_revision_returns_409_not_400(
         f"Stale version request-revision must return 409 ConflictError; "
         f"got {response.status_code}: {response.text[:300]}"
     )
+    _assert_xung_dot_phien_ban(response, stale_version + 1)

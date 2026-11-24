@@ -16,7 +16,9 @@ skipping.
 Three corners of the contract are pinned per endpoint:
 
 1. Missing ``version`` → 422 (Pydantic validation error).
-2. Stale ``version`` → 409 (ConflictError → router maps).
+2. Stale ``version`` → 409 ``ProfileVersionConflict`` (lớp con ConflictError,
+   mã ``PROFILE_VERSION_CONFLICT`` + ``current_version`` — owner 22-11,
+   QUYET-DINH-OWNER-THCS-CAU-409; router để lớp này đi qua handler toàn cục).
 3. Current ``version`` → 200 + ``profile.version`` increments by 1.
 """
 
@@ -30,9 +32,20 @@ from sqlalchemy import select
 
 from app import models
 from app.database import AsyncSessionLocal
+from app.utils.exceptions import PROFILE_VERSION_CONFLICT_ACTION_DETAIL
 
 
 pytestmark = pytest.mark.asyncio
+
+
+def _assert_xung_dot_phien_ban(response, current_version: int) -> None:
+    """409 lệch ``version`` (owner 22-11, QUYET-DINH-OWNER-THCS-CAU-409): mã riêng ``PROFILE_VERSION_CONFLICT`` để giao
+    diện hiện nguyên câu bảo tải lại + câu thao tác chung + số phiên bản HIỆN TẠI. Thay cho phép dò chữ tiếng Anh
+    "version" / "modified" trong câu cũ — sức kiểm giữ nguyên: lỗi phải nhận diện được là lệch phiên bản."""
+    body = response.json()
+    assert body.get("error_code") == "PROFILE_VERSION_CONFLICT", response.text[:300]
+    assert body.get("detail") == PROFILE_VERSION_CONFLICT_ACTION_DETAIL, response.text[:300]
+    assert body.get("current_version") == current_version, response.text[:300]
 
 
 async def _login(client: AsyncClient, user_info: dict) -> dict:
@@ -156,7 +169,7 @@ class TestOverrideRequiresVersion:
 
         # Send a version that's ≥ 1 (so Pydantic ``ge=1`` accepts it)
         # but mismatches ``profile.version`` so the service raises
-        # ConflictError → router maps to 409. We use ``+999`` rather
+        # ProfileVersionConflict → 409 (global handler). We use ``+999`` rather
         # than ``-1`` because the seeded ``version=1`` would underflow
         # past the Pydantic constraint and surface a 422 instead of
         # the 409 we want to assert here.
@@ -172,12 +185,9 @@ class TestOverrideRequiresVersion:
             f"Stale version must surface as 409 Conflict, got "
             f"{response.status_code}: {response.text[:300]}"
         )
-        # The error message should at least mention "version" or
-        # "modified" so an end client can show a meaningful refresh
-        # prompt.
-        body = response.json()
-        detail = (body.get("detail") or "").lower()
-        assert "version" in detail or "modified" in detail
+        # The error must identify a version mismatch so an end client can
+        # show a meaningful refresh prompt (mã riêng + câu bảo tải lại).
+        _assert_xung_dot_phien_ban(response, profile.version)
 
     async def test_current_version_succeeds_and_increments(
         self,
@@ -287,7 +297,7 @@ class TestFinalizeRequiresVersion:
 
         # See ``test_stale_version_returns_409`` on OverrideRequiresVersion
         # for why we use ``+999`` rather than ``-1``: any non-equal
-        # ``int >= 1`` triggers the service-layer ConflictError without
+        # ``int >= 1`` triggers the service-layer ProfileVersionConflict without
         # tripping Pydantic's ``ge=1`` constraint first.
         response = await client.post(
             f"/api/admissions/{profile.id}/finalize",
@@ -298,9 +308,7 @@ class TestFinalizeRequiresVersion:
             f"Stale version must surface as 409 Conflict, got "
             f"{response.status_code}: {response.text[:300]}"
         )
-        body = response.json()
-        detail = (body.get("detail") or "").lower()
-        assert "version" in detail or "modified" in detail
+        _assert_xung_dot_phien_ban(response, version_after_override)
 
     async def test_current_version_succeeds_and_increments(
         self,

@@ -11,6 +11,7 @@ import pytest_asyncio
 from sqlalchemy import select
 
 from app.database import AsyncSessionLocal
+from app.models.vn_locality import VnCommuneAreaMap
 from app.models.vn_school import VnSchool, VnSchoolKvAssignment
 from app.services.vn_school_service import VnSchoolService
 from app.utils.exceptions import (
@@ -191,7 +192,19 @@ async def test_list_schools_filter_pagination(db) -> None:
     s = VnSchoolService(db)
     for i in range(4):
         await s.create_school(_school(f"S04{i}", prov="048", level="THPT"))
-    await s.create_school(_school("S060", prov="040", level="THCS"))
+    # Trường THCS (owner 22-11): KHÔNG có mã Bộ — bỏ trống mã ⇒ máy sinh mã nội bộ
+    # NB…; bắt buộc mã xã còn hiệu lực trong bảng xã → KV.
+    db.add(
+        VnCommuneAreaMap(
+            commune_code="99060", province="Tỉnh Thử", district="",
+            ward="Xã Thử", area_code="KV1",
+        )
+    )
+    await db.flush()
+    thcs = _school("UNUSED", prov="040", level="THCS")
+    thcs.pop("moet_school_code")
+    thcs["commune_code"] = "99060"
+    await s.create_school(thcs)
     await db.flush()
     items, total = await s.list_schools(
         moet_province_code="048", page=1, page_size=2

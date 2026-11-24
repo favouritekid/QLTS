@@ -36,6 +36,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
+import { profileVersionConflictDetail } from "@/lib/api/error-codes"
 import { useChangeApplicableCircular } from "@/lib/hooks/use-applicable-circular"
 import type { AdmissionProfileResponse, ApplicableCircular } from "@/lib/zod/admissions"
 
@@ -235,7 +236,10 @@ export function ApplicableCircularDialog({
       const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
       const msg =
         status === 409
-          ? "Hồ sơ vừa được người khác cập nhật. Vui lòng đóng hộp thoại, tải lại và thử lại."
+          ? // Owner 22-11 (câu 409): có câu của máy chủ (PROFILE_VERSION_CONFLICT) thì hiện nguyên câu.
+            (profileVersionConflictDetail(
+              (err as { response?: { status?: number; data?: unknown } })?.response,
+            ) ?? "Hồ sơ vừa được người khác cập nhật. Vui lòng đóng hộp thoại, tải lại và thử lại.")
           : status === 403
             ? detail || "Bạn không có quyền đổi thông tư trên hồ sơ này."
             : status === 400 || status === 422

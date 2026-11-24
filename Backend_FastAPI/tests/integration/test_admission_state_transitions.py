@@ -453,7 +453,10 @@ class TestVersionChecking:
         Expected:
         - Request with correct version: 200 OK
         - Request with stale version: 409 Conflict
-        - Error message mentions version mismatch
+        - Error identifies the version mismatch: owner 22-11
+          (QUYET-DINH-OWNER-THCS-CAU-409) — mã ``PROFILE_VERSION_CONFLICT``
+          + câu thao tác chung tiếng Việt + ``current_version`` hiện tại
+          (thay cho câu tiếng Anh cũ chứa chữ "version").
         """
         unit_id = seed_lead_dependencies["unit_id"]
         lead_id = await create_test_lead(unit_id)
@@ -477,7 +480,14 @@ class TestVersionChecking:
         )
 
         assert response.status_code == 409, f"Should return 409 for stale version, got {response.status_code}: {response.text}"
-        assert "version" in response.json()["detail"].lower()
+        # Mã riêng (giao diện rẽ nhánh theo mã) + câu chung + số phiên bản HIỆN TẠI (2) — đi qua router thật: router gói
+        # ConflictError thành HTTPException sẽ làm mất cả mã lẫn current_version.
+        from app.utils.exceptions import PROFILE_VERSION_CONFLICT_ACTION_DETAIL
+
+        body = response.json()
+        assert body.get("error_code") == "PROFILE_VERSION_CONFLICT", response.text[:300]
+        assert body.get("detail") == PROFILE_VERSION_CONFLICT_ACTION_DETAIL, response.text[:300]
+        assert body.get("current_version") == 2, response.text[:300]
 
     async def test_reject_with_correct_version(
         self,

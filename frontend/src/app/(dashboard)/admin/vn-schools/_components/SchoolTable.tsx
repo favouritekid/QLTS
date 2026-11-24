@@ -3,6 +3,10 @@
  *
  * Ngừng (DELETE) = deactivate (is_active=false) — KHÔNG hard-delete (giữ KV
  * assignment). KV quản lý qua SchoolKvDialog (2 cấp: list + add/edit/delete).
+ *
+ * Trường THCS (owner 22-11): bỏ trống mã ⇒ BE sinh mã nội bộ NB + 6 số; bắt buộc
+ * chọn xã từ bảng xã → KV. Tạo xong trường nội bộ ⇒ mở luôn "Quản lý KV" để Admin
+ * xác nhận KV gợi ý theo xã (BE chép KV, hiệu lực từ năm 2000).
  */
 
 "use client"
@@ -11,6 +15,10 @@ import { useState } from "react"
 import { Layers, Pencil, Plus, Power } from "lucide-react"
 import { toast } from "sonner"
 
+import {
+  CommunePicker,
+  type CommunePickerValue,
+} from "@/components/admin/CommunePicker"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -82,6 +90,7 @@ interface FormState {
   ward: string
   level: VnSchoolLevel
   is_dtnt: boolean
+  commune: CommunePickerValue | null
 }
 
 const EMPTY: FormState = {
@@ -93,6 +102,16 @@ const EMPTY: FormState = {
   ward: "",
   level: "THPT",
   is_dtnt: false,
+  commune: null,
+}
+
+/** Gợi ý giao diện cho ô mã trường theo cấp. Luật thật ở BE (create_school). */
+function codeHint(level: VnSchoolLevel): string | null {
+  if (level === "THCS")
+    return "Trường THCS không có mã của Bộ — để trống, máy tự sinh mã nội bộ NB…"
+  if (level === "THCS_THPT")
+    return "Liên cấp: nhập mã Bộ nếu trường có trong danh mục Bộ; để trống thì máy sinh mã nội bộ NB… (khi đó bắt buộc chọn xã)."
+  return null
 }
 
 export function SchoolTable({ rows, isLoading }: SchoolTableProps) {
@@ -131,6 +150,14 @@ export function SchoolTable({ rows, isLoading }: SchoolTableProps) {
       ward: row.ward ?? "",
       level: row.level as VnSchoolLevel,
       is_dtnt: row.is_dtnt,
+      commune: row.commune_code
+        ? {
+            commune_code: row.commune_code,
+            ward: row.ward,
+            province: null,
+            area_code: null,
+          }
+        : null,
     })
     setFormError(null)
     setDialogOpen(true)
@@ -138,15 +165,19 @@ export function SchoolTable({ rows, isLoading }: SchoolTableProps) {
 
   const handleSubmit = async () => {
     setFormError(null)
+    // Chọn xã thì điền tên xã/phường theo bảng xã (một nguồn tên).
+    const ward = (form.commune?.ward ?? form.ward).trim()
+    let openKvAfterSave: SchoolResponse | null = null
     try {
       if (editId == null) {
         const parsed = schoolCreateSchema.safeParse({
-          moet_school_code: form.moet_school_code.trim(),
+          moet_school_code: form.moet_school_code.trim() || undefined,
           moet_province_code: form.moet_province_code.trim(),
+          commune_code: form.commune?.commune_code || undefined,
           name: form.name.trim(),
           province: form.province.trim(),
           district: form.district.trim() || undefined,
-          ward: form.ward.trim() || undefined,
+          ward: ward || undefined,
           level: form.level,
           is_dtnt: form.is_dtnt,
         })
@@ -154,14 +185,17 @@ export function SchoolTable({ rows, isLoading }: SchoolTableProps) {
           setFormError(parsed.error.issues[0]?.message ?? "Dữ liệu không hợp lệ")
           return
         }
-        await createMutation.mutateAsync(parsed.data)
-        toast.success(`Đã thêm trường ${parsed.data.moet_school_code}`)
+        const created = await createMutation.mutateAsync(parsed.data)
+        toast.success(`Đã thêm trường ${created.moet_school_code}`)
+        // Trường nội bộ: mở luôn "Quản lý KV" để xác nhận KV gợi ý theo xã.
+        if (created.is_internal_code) openKvAfterSave = created
       } else {
         const parsed = schoolUpdateSchema.safeParse({
+          commune_code: form.commune?.commune_code ?? null,
           name: form.name.trim(),
           province: form.province.trim(),
           district: form.district.trim() || undefined,
-          ward: form.ward.trim() || undefined,
+          ward: ward || undefined,
           level: form.level,
           is_dtnt: form.is_dtnt,
         })
@@ -173,6 +207,7 @@ export function SchoolTable({ rows, isLoading }: SchoolTableProps) {
         toast.success(`Đã cập nhật trường #${editId}`)
       }
       setDialogOpen(false)
+      if (openKvAfterSave) setKvSchool(openKvAfterSave)
     } catch (e) {
       setFormError(parseApiError(e, "Thao tác thất bại"))
     }
@@ -234,6 +269,20 @@ export function SchoolTable({ rows, isLoading }: SchoolTableProps) {
                 <TableRow key={row.id} data-testid={`school-row-${row.id}`}>
                   <TableCell className="font-mono text-xs">
                     {row.moet_school_code}/{row.moet_province_code}
+                    {row.is_internal_code && (
+                      <Badge
+                        variant="outline"
+                        className="ml-1 font-sans"
+                        title="Mã nội bộ do máy sinh (trường THCS không có mã của Bộ)"
+                      >
+                        Nội bộ
+                      </Badge>
+                    )}
+                    {row.commune_code && (
+                      <div className="text-muted-foreground font-sans">
+                        Xã {row.commune_code}
+                      </div>
+                    )}
                   </TableCell>
                   <TableCell>
                     {row.name}
@@ -311,7 +360,7 @@ export function SchoolTable({ rows, isLoading }: SchoolTableProps) {
             </DialogTitle>
             <DialogDescription>
               {editId == null
-                ? "Mã MOET (trường + tỉnh) phải chưa tồn tại."
+                ? "Mã MOET (trường + tỉnh) phải chưa tồn tại. Trường THCS: để trống mã, máy tự sinh mã nội bộ NB…"
                 : "Mã MOET không đổi được. Ngừng trường dùng nút Ngừng."}
             </DialogDescription>
           </DialogHeader>
@@ -322,11 +371,15 @@ export function SchoolTable({ rows, isLoading }: SchoolTableProps) {
                 <Input
                   id="s-code"
                   value={form.moet_school_code}
-                  disabled={editId != null}
+                  disabled={editId != null || form.level === "THCS"}
                   onChange={(e) =>
                     setForm((s) => ({ ...s, moet_school_code: e.target.value }))
                   }
-                  placeholder="VD: 040123"
+                  placeholder={
+                    editId == null && form.level === "THCS"
+                      ? "Máy tự sinh NB…"
+                      : "VD: 040123"
+                  }
                 />
               </div>
               <div className="grid gap-2">
@@ -386,7 +439,13 @@ export function SchoolTable({ rows, isLoading }: SchoolTableProps) {
                 <Select
                   value={form.level}
                   onValueChange={(v) =>
-                    setForm((s) => ({ ...s, level: v as VnSchoolLevel }))
+                    setForm((s) => ({
+                      ...s,
+                      level: v as VnSchoolLevel,
+                      // Cấp THCS không có mã Bộ: xoá mã đã gõ (khi tạo mới).
+                      moet_school_code:
+                        editId == null && v === "THCS" ? "" : s.moet_school_code,
+                    }))
                   }
                 >
                   <SelectTrigger id="s-level">
@@ -411,6 +470,36 @@ export function SchoolTable({ rows, isLoading }: SchoolTableProps) {
                 />
                 <Label htmlFor="s-dtnt">Trường DTNT</Label>
               </div>
+            </div>
+            {editId == null && codeHint(form.level) && (
+              <p className="text-muted-foreground text-xs">
+                {codeHint(form.level)}
+              </p>
+            )}
+            <div className="grid gap-2">
+              <Label htmlFor="s-commune">
+                Xã/phường nơi trường đặt (bảng xã → KV)
+              </Label>
+              <CommunePicker
+                id="s-commune"
+                value={form.commune}
+                onChange={(v) => setForm((s) => ({ ...s, commune: v }))}
+              />
+              {form.commune?.area_code ? (
+                <p className="text-xs" data-testid="school-kv-goi-y">
+                  KV gợi ý theo xã hiện tại:{" "}
+                  <span className="font-mono font-semibold">
+                    {form.commune.area_code}
+                  </span>
+                  . Với trường mã nội bộ, xác nhận KV này trong mục &quot;Quản lý
+                  KV&quot; sau khi lưu (áp dụng từ năm 2000, không năm kết thúc).
+                </p>
+              ) : (
+                <p className="text-muted-foreground text-xs">
+                  Bắt buộc với trường mã nội bộ (NB…). Chọn từ danh mục xã đang
+                  hiệu lực.
+                </p>
+              )}
             </div>
             {formError && (
               <p className="text-destructive text-sm" role="alert">

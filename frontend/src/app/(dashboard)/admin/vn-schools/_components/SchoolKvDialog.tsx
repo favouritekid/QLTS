@@ -39,17 +39,34 @@ import {
 
 import {
   useAddKvAssignment,
+  useConfirmKvFromCommune,
   useDeleteKvAssignment,
   useKvAssignments,
+  useKvSuggestion,
   useUpdateKvAssignment,
 } from "@/lib/hooks/useVnSchoolAdmin"
 import { parseApiError } from "@/lib/utils/api-errors"
 import {
+  KV_SOURCE_COMMUNE_CURRENT,
   kvAssignmentCreateSchema,
   kvAssignmentUpdateSchema,
   type KvAssignmentResponse,
   type SchoolResponse,
 } from "@/lib/zod/vn-school-admin"
+
+/** Lý do BE không gợi ý KV (reason) → câu cho Admin. */
+const SUGGESTION_REASON_TEXT: Record<string, string> = {
+  not_internal_school:
+    "Trường có mã của Bộ — KV theo danh mục của Bộ, không lấy từ xã.",
+  no_commune_code:
+    "Trường chưa có xã/phường. Sửa trường, chọn xã từ danh mục trước.",
+  commune_not_active:
+    "Xã của trường không còn dòng hiệu lực trong bảng xã → KV. Kiểm tra bảng xã hoặc chọn lại xã.",
+}
+
+const SOURCE_LABELS: Record<string, string> = {
+  [KV_SOURCE_COMMUNE_CURRENT]: "Chép từ xã",
+}
 
 const KV_OPTIONS = ["KV1", "KV2-NT", "KV2", "KV3"] as const
 
@@ -78,6 +95,15 @@ export function SchoolKvDialog({ school, onOpenChange }: Props) {
   const addMutation = useAddKvAssignment()
   const updateMutation = useUpdateKvAssignment()
   const deleteMutation = useDeleteKvAssignment()
+  const isInternal = school?.is_internal_code ?? false
+  const { data: suggestion, isLoading: suggestionLoading } = useKvSuggestion(
+    schoolId,
+    isInternal,
+  )
+  const confirmMutation = useConfirmKvFromCommune()
+  const hasOpenCommuneRow = (rows ?? []).some(
+    (r) => r.source === KV_SOURCE_COMMUNE_CURRENT && r.effective_to_year == null,
+  )
 
   // State khởi tạo mới mỗi lần component remount (SchoolTable truyền key=school.id
   // → đổi trường = remount = form sạch). Tránh setState đồng bộ trong useEffect
@@ -89,7 +115,25 @@ export function SchoolKvDialog({ school, onOpenChange }: Props) {
   const busy =
     addMutation.isPending ||
     updateMutation.isPending ||
-    deleteMutation.isPending
+    deleteMutation.isPending ||
+    confirmMutation.isPending
+
+  // Dòng đang sửa là dòng KV chép từ xã ⇒ chỉ sửa năm (BE chặn sửa KV / nguồn).
+  const editingCommuneRow =
+    editId != null &&
+    (rows ?? []).some(
+      (r) => r.id === editId && r.source === KV_SOURCE_COMMUNE_CURRENT,
+    )
+
+  const handleConfirmSuggestion = async () => {
+    if (schoolId == null) return
+    try {
+      const row = await confirmMutation.mutateAsync({ schoolId, data: {} })
+      toast.success(`Đã xác nhận KV ${row.kv_code} theo xã (từ năm ${row.effective_from_year})`)
+    } catch (e) {
+      toast.error(parseApiError(e, "Xác nhận KV gợi ý thất bại"))
+    }
+  }
 
   const startEdit = (a: KvAssignmentResponse) => {
     setEditId(a.id)
@@ -176,6 +220,52 @@ export function SchoolKvDialog({ school, onOpenChange }: Props) {
           </DialogDescription>
         </DialogHeader>
 
+        {isInternal && (
+          <div
+            className="space-y-2 rounded-md border border-info-300 bg-info-50 p-3 text-sm text-info-900"
+            data-testid="kv-goi-y-tu-xa"
+          >
+            <p className="font-medium">KV gợi ý theo xã (trường mã nội bộ)</p>
+            {suggestionLoading ? (
+              <p className="text-xs">Đang tải…</p>
+            ) : suggestion?.suggested_kv ? (
+              <>
+                <p>
+                  Xã {suggestion.commune_ward} ({suggestion.commune_code}
+                  {suggestion.commune_province ? `, ${suggestion.commune_province}` : ""})
+                  đang ở{" "}
+                  <span className="font-mono font-semibold">
+                    {suggestion.suggested_kv}
+                  </span>
+                  . Xác nhận ⇒ trường mang KV này từ năm 2000, không năm kết thúc
+                  (nguồn &quot;Chép từ xã&quot;).
+                </p>
+                <p className="text-xs">
+                  ⚠ Nếu xã này gộp từ nhiều xã cũ có KV khác nhau (sáp nhập 2025),
+                  ĐỪNG xác nhận — kiểm tra tay rồi nhập KV ở mục &quot;Thêm phân loại
+                  KV&quot; bên dưới.
+                </p>
+                <div className="flex justify-end">
+                  <Button
+                    size="sm"
+                    onClick={handleConfirmSuggestion}
+                    disabled={busy || hasOpenCommuneRow}
+                  >
+                    {hasOpenCommuneRow
+                      ? "Đã xác nhận KV theo xã"
+                      : `Xác nhận KV ${suggestion.suggested_kv}`}
+                  </Button>
+                </div>
+              </>
+            ) : (
+              <p className="text-xs">
+                {SUGGESTION_REASON_TEXT[suggestion?.reason ?? ""] ??
+                  "Không có KV gợi ý."}
+              </p>
+            )}
+          </div>
+        )}
+
         <div className="rounded-md border">
           <Table>
             <TableHeader>
@@ -210,7 +300,7 @@ export function SchoolKvDialog({ school, onOpenChange }: Props) {
                       {a.effective_from_year}–{a.effective_to_year ?? "nay"}
                     </TableCell>
                     <TableCell className="text-muted-foreground text-xs">
-                      {a.source}
+                      {SOURCE_LABELS[a.source] ?? a.source}
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-1">
@@ -252,6 +342,7 @@ export function SchoolKvDialog({ school, onOpenChange }: Props) {
               <Select
                 value={form.kv_code}
                 onValueChange={(v) => setForm((s) => ({ ...s, kv_code: v }))}
+                disabled={editingCommuneRow}
               >
                 <SelectTrigger id="kv-code">
                   <SelectValue />
@@ -293,6 +384,7 @@ export function SchoolKvDialog({ school, onOpenChange }: Props) {
               <Label htmlFor="kv-source">Nguồn</Label>
               <Input
                 id="kv-source"
+                disabled={editingCommuneRow}
                 value={form.source}
                 onChange={(e) =>
                   setForm((s) => ({ ...s, source: e.target.value }))

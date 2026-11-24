@@ -377,9 +377,17 @@ export const navigationConfig: NavigationConfig = {
         },
         {
           // PR-B — quản lý danh mục trường (vn_school) + KV theo năm. Admin-only.
-          label: "Trường THPT",
+          // 22-11: thêm trường THCS mã nội bộ NB… ⇒ không còn chỉ THPT.
+          label: "Danh mục trường",
           href: "/admin/vn-schools",
           icon: School,
+          roles: ["admin"],
+        },
+        {
+          // GĐ2 L3 (owner 22-11) — ghép tên trường THCS gõ tay với danh mục. Admin-only.
+          label: "Ghép trường THCS",
+          href: "/admin/thcs-school-mapping",
+          icon: ArrowLeftRight,
           roles: ["admin"],
         },
         {

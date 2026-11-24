@@ -64,6 +64,8 @@ describe("handleApiError", () => {
     it.each([
       ["COUNCIL_DECISION_LOCKS_PROFILE", "Hồ sơ đã có tên trong Quyết định đã ký (hoặc mang dấu đã trúng tuyển theo Quyết định cũ) — không chuyển sang 'rejected'. Muốn đổi, ghi nhận văn bản điều chỉnh / huỷ trước."],
       ["CAU_HINH_DA_DUOC_QUYET_DINH_DUNG", "Dòng cấu hình ngành – năm học (hoặc đường xét) này đã được Quyết định đã ký dùng tới — không sửa năm học / ngành, không xoá. Năm học mới hãy tạo dòng cấu hình mới."],
+      // Owner 22-11 (ghép trường THCS câu 1): lưu form hồ sơ nháp bằng bản cũ sau khi Admin áp ghép.
+      ["PROFILE_VERSION_CONFLICT", "Hồ sơ vừa được cập nhật ở nơi khác sau khi bạn mở (người dùng khác, hoặc Admin áp ghép trường THCS vào lịch sử học). Bản bạn đang sửa đã cũ nên CHƯA được lưu. Tải lại trang hồ sơ rồi nhập lại phần vừa sửa."],
     ])("review max PR #724 (R8): 409 %s hiện NGUYÊN câu tiếng Việt của máy chủ", (ma, detail) => {
       handleApiError(createAxiosError(409, { detail, error_code: ma }), { context: "từ chối hồ sơ" })
 
