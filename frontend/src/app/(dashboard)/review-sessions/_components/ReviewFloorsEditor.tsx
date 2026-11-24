@@ -231,7 +231,7 @@ export function ReviewFloorsEditor({ sessionId, busy, draft, onDraftChange, onCl
             onDraftChange((d) => ({ ...d, staleConflict: true, flaggedIds: [] }))
             return
           }
-          if (v.errorCode === "REVIEW_SESSION_NOT_DRAFT") {
+          if (v.reasonCode === "REVIEW_SESSION_NOT_DRAFT") {
             onClose()
             toast.error(v.message)
             return
