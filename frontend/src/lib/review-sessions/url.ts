@@ -40,3 +40,14 @@ export function reviewSessionListHref(filters: ReviewSessionListFilters): string
 export function reviewSessionHref(sessionId: number): string {
   return `${REVIEW_SESSIONS_ROUTE}/${sessionId}`
 }
+
+/** M5 — một lượt kiểm (thiết kế §3 `/review-sessions/{id}/runs/{runId}`); đường dẫn lấy từ `id` máy chủ trả. */
+export function reviewRunHref(sessionId: number, runId: number): string {
+  return `${reviewSessionHref(sessionId)}/runs/${runId}`
+}
+
+/**
+ * Id trên URL — số nguyên dương, tối đa 9 chữ số (trong miền `int4` của máy chủ). CÙNG mẫu `[sessionId]/page.tsx` (F1, giữ
+ * nguyên tệp ấy để không chạm neo biến thể F0 / F1 — NỢ: gộp về hằng này khi tệp F1 được sửa lần tới).
+ */
+export const REVIEW_ID_PARAM_PATTERN = /^[1-9][0-9]{0,8}$/

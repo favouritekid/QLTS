@@ -1,6 +1,7 @@
 "use client"
 
 import Link from "next/link"
+import { useRouter } from "next/navigation"
 import { useState } from "react"
 import { AlertTriangle, Loader2, RefreshCw } from "lucide-react"
 
@@ -8,10 +9,10 @@ import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { formatDateTimeVN } from "@/lib/document-review/messages"
+import { useReviewRunTracker } from "@/lib/hooks/use-review-run-tracker"
 import { useReviewSession } from "@/lib/hooks/use-review-sessions"
 import { EMPTY_FLOOR_DRAFT, type FloorDraft } from "@/lib/review-sessions/floor-draft"
 import {
-  ACTION_NOT_YET,
   CANCELLED_FLOORS_NOTE,
   CONFIG_CHANGED_BANNER,
   NO_DONE_RUN,
@@ -20,6 +21,7 @@ import {
   SESSION_ACTION_LABEL,
   describeReviewSessionError,
   knownSessionActions,
+  latestDoneRunLink,
   quotaTableDraftBanner,
   quotaTableHref,
   quotaTableLinkLabel,
@@ -27,12 +29,15 @@ import {
   sessionStatusLabel,
   userRef,
 } from "@/lib/review-sessions/messages"
-import { REVIEW_SESSIONS_ROUTE } from "@/lib/review-sessions/url"
+import { isBusyPhase } from "@/lib/review-sessions/run-tracking"
+import { REVIEW_SESSIONS_ROUTE, reviewRunHref } from "@/lib/review-sessions/url"
 
 import { CancelReviewSessionDialog } from "./CancelReviewSessionDialog"
 import { LatestRunSummary } from "./LatestRunSummary"
 import { ReviewErrorAlert } from "./ReviewErrorAlert"
 import { ReviewFloorsSection } from "./ReviewFloorsSection"
+import { ReviewRunTrackerBand } from "./ReviewRunTrackerBand"
+import { ReviewRunsSection } from "./ReviewRunsSection"
 
 function Banner({ testId, children }: { testId: string; children: string }) {
   return (
@@ -49,8 +54,11 @@ function Banner({ testId, children }: { testId: string; children: string }) {
  *
  * Thanh nút CHỈ theo `available_actions` của máy chủ (`[]` ⇒ không nút; giá trị lạ bỏ qua) — không theo `status`, không theo vai.
  * Trong lúc E3 đang tải lại, nút ghi bị khoá để thao tác kế luôn dùng `version` mới nhất. F1 làm "Huỷ lần xét" (M7); F2 mở "Sửa
- * điểm sàn" (M3 — soạn theo E10, lưu qua E4); "Kiểm hồ sơ" (F3) hiện theo cờ nhưng chưa bấm được ở bản này. Băng cảnh báo hiện
- * NGUYÊN cờ máy chủ, không suy.
+ * điểm sàn" (M3 — soạn theo E10, lưu qua E4); F3 mở "Kiểm hồ sơ" (M4 — E6 rồi theo dõi lượt qua E7 / E8, `useReviewRunTracker`) và
+ * danh sách lượt kiểm (E7, chỉ tải khi mở). Băng cảnh báo hiện NGUYÊN cờ máy chủ, không suy.
+ *
+ * F3 — việc theo dõi lượt kiểm (pha + hẹn hỏi lại) cũng nằm Ở ĐÂY, TRƯỚC mọi nhánh dữ liệu / lỗi (khuôn F01-4): E6 xong ⇒ E3 tải
+ * lại; nếu E3 lỗi (vd 429) thì nhánh lỗi vẫn vẽ băng theo dõi và việc theo dõi KHÔNG dừng. Lượt của lần bấm này `done` ⇒ mở M5.
  *
  * Rà F01-4 (CHẶN): bản soạn lý do huỷ và cờ "đang huỷ" nằm Ở ĐÂY — TRƯỚC mọi nhánh dữ liệu / lỗi — nên sống qua lúc E3 tải lại lỗi
  * (nhánh lỗi tháo hộp huỷ). Tải lại thành công ⇒ hộp hiện lại (nếu máy chủ còn trả `cancel`) với NGUYÊN lý do đã gõ và `version` mới.
@@ -64,11 +72,15 @@ export function ReviewSessionDetailClient({ sessionId }: { sessionId: number }) 
   const [cancelReason, setCancelReason] = useState("")
   const [floorEditing, setFloorEditing] = useState(false)
   const [floorDraft, setFloorDraft] = useState<FloorDraft>(EMPTY_FLOOR_DRAFT)
+  const router = useRouter()
+  const tracker = useReviewRunTracker(sessionId, (runId) => router.push(reviewRunHref(sessionId, runId)))
+  const trackerBand = <ReviewRunTrackerBand sessionId={sessionId} phase={tracker.phase} onRetry={tracker.retry} />
 
   if (q.isError) {
     return (
       <div className="space-y-3">
         <ReviewErrorAlert testId="lan-xet-loi" message={describeReviewSessionError(q.error, "read").message} />
+        {trackerBand}
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" onClick={() => void q.refetch()} disabled={q.isFetching} data-testid="lan-xet-tai-lai">
             <RefreshCw className="mr-1 h-4 w-4" />
@@ -95,7 +107,7 @@ export function ReviewSessionDetailClient({ sessionId }: { sessionId: number }) 
   const s = q.data
   const actions = knownSessionActions(s.available_actions)
   const busy = q.isFetching
-  const notYet = actions.includes("run_evaluate")
+  const runBusy = isBusyPhase(tracker.phase)
 
   return (
     <div className="space-y-4">
@@ -147,7 +159,15 @@ export function ReviewSessionDetailClient({ sessionId }: { sessionId: number }) 
                   {SESSION_ACTION_LABEL[a]}
                 </Button>
               ) : (
-                <Button key={a} variant="outline" disabled title={ACTION_NOT_YET} data-testid={`nut-${a}`}>
+                // "Kiểm hồ sơ": gửi `version` của E3 đang xem + mốc `latest_run.id` (tra E7 khi mất kết nối). Khoá khi E3 đang tải lại
+                // hoặc đang gửi / theo dõi (không bấm lại — HĐ4 E6). Lượt kết thúc / lỗi ⇒ mở lại; máy chủ là chốt (409 / 503).
+                <Button
+                  key={a}
+                  variant="outline"
+                  disabled={busy || runBusy}
+                  onClick={() => tracker.start(s.version, s.latest_run?.id ?? null)}
+                  data-testid={`nut-${a}`}
+                >
                   {SESSION_ACTION_LABEL[a]}
                 </Button>
               ),
@@ -164,7 +184,7 @@ export function ReviewSessionDetailClient({ sessionId }: { sessionId: number }) 
           </span>
         ) : null}
       </div>
-      {notYet ? <p className="text-xs text-muted-foreground">{ACTION_NOT_YET}</p> : null}
+      {trackerBand}
 
       {s.latest_run?.config_changed_since_run ? <Banner testId="bang-cau-hinh-doi">{CONFIG_CHANGED_BANNER}</Banner> : null}
       {s.quota_table.status === "draft" ? (
@@ -184,7 +204,11 @@ export function ReviewSessionDetailClient({ sessionId }: { sessionId: number }) 
           <p className="text-muted-foreground" data-testid="lan-xet-chua-luot-xong">
             {NO_DONE_RUN}
           </p>
-        ) : null}
+        ) : (
+          <Link href={reviewRunHref(s.id, s.latest_done_run_id)} className="underline" data-testid="lan-xet-xem-ket-qua">
+            {latestDoneRunLink(s.latest_done_run_id)}
+          </Link>
+        )}
       </section>
 
       <ReviewFloorsSection
@@ -196,6 +220,8 @@ export function ReviewSessionDetailClient({ sessionId }: { sessionId: number }) 
         onDraftChange={setFloorDraft}
         onCloseEditor={() => setFloorEditing(false)}
       />
+
+      <ReviewRunsSection sessionId={s.id} />
 
       <CancelReviewSessionDialog
         open={cancelOpen && actions.includes("cancel")}

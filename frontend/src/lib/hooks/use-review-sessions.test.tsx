@@ -23,7 +23,7 @@ import { delay, http, HttpResponse } from "msw"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { api } from "@/lib/api/client"
-import { REVIEW_RUN_TIMEOUT_MS, createReviewRun } from "@/lib/api/review-sessions"
+import { REVIEW_RUN_TIMEOUT_MS, createReviewRun, reviewRunLocationPath } from "@/lib/api/review-sessions"
 import { server } from "@/test/mocks/server"
 import { appLikeQueryClient } from "@/test/review-sessions-render"
 import {
@@ -370,7 +370,7 @@ describe("làm mới E2 / E3 / E7 / E8 / E10 khi thao tác ghi KẾT THÚC, bấ
 
 describe("E6 — thời gian chờ riêng > 60 s (nginx cắt 60 s)", () => {
   it("createReviewRun gửi đúng thân + timeout riêng", async () => {
-    const spy = vi.spyOn(api, "post").mockResolvedValue({ data: runGia({ id: 12 }) } as never)
+    const spy = vi.spyOn(api, "post").mockResolvedValue({ data: runGia({ id: 12 }), headers: {} } as never)
     await createReviewRun(3, { kind: "evaluate", session_version: 2 })
     expect(spy).toHaveBeenCalledWith(
       "/api/admission-config/review-sessions/3/runs",
@@ -378,5 +378,31 @@ describe("E6 — thời gian chờ riêng > 60 s (nginx cắt 60 s)", () => {
       { timeout: REVIEW_RUN_TIMEOUT_MS },
     )
     expect(REVIEW_RUN_TIMEOUT_MS).toBeGreaterThan(60_000)
+  })
+})
+
+describe("E6 — 202 + Location (HĐ4 E6, HĐ5)", () => {
+  it("202 kèm Location ⇒ trả thân RunOut + đúng chuỗi Location (để đối chiếu); đường dẫn E8 cùng một chỗ khai", async () => {
+    const duong = "/api/admission-config/review-sessions/3/runs/12"
+    server.use(
+      http.post(`${RS}/3/runs`, () =>
+        HttpResponse.json(runGia({ id: 12, status: "queued", summary: null, quota_view: null }), {
+          status: 202,
+          headers: { Location: duong },
+        }),
+      ),
+    )
+    const kq = await createReviewRun(3, { kind: "evaluate", session_version: 2 })
+    expect(kq.run.id).toBe(12)
+    expect(kq.run.status).toBe("queued")
+    expect(kq.location).toBe(duong)
+    expect(reviewRunLocationPath(3, 12)).toBe(duong)
+  })
+
+  it("202 KHÔNG có Location (vd trình duyệt giấu vì CORS) ⇒ location null, vẫn dùng thân", async () => {
+    server.use(http.post(`${RS}/3/runs`, () => HttpResponse.json(runGia({ id: 12 }), { status: 202 })))
+    const kq = await createReviewRun(3, { kind: "evaluate", session_version: 2 })
+    expect(kq.run.id).toBe(12)
+    expect(kq.location).toBeNull()
   })
 })

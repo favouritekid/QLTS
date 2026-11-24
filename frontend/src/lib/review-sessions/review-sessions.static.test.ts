@@ -38,6 +38,7 @@ const TEP = [
   "lib/zod/review-sessions.ts",
   "lib/api/review-sessions.ts",
   "lib/hooks/use-review-sessions.ts",
+  "lib/hooks/use-review-run-tracker.ts",
   ...tepTrongThuMuc("lib/review-sessions"),
   ...tepTrongThuMuc(TRANG),
 ]
@@ -73,6 +74,14 @@ describe("màn lần xét — không kiểm vai, không đường /admin/quota-t
       `${TRANG}/page.tsx`,
       `${TRANG}/_components/ReviewFloorsEditor.tsx`,
       `${TRANG}/_components/ReviewFloorsSection.tsx`,
+      // F3
+      "lib/hooks/use-review-run-tracker.ts",
+      "lib/review-sessions/run-tracking.ts",
+      `${TRANG}/[sessionId]/runs/[runId]/page.tsx`,
+      `${TRANG}/_components/ReviewRunTrackerBand.tsx`,
+      `${TRANG}/_components/ReviewRunsSection.tsx`,
+      `${TRANG}/_components/ReviewRunDetailClient.tsx`,
+      `${TRANG}/_components/ReviewRunReference.tsx`,
     ]) {
       expect(TEP, `thiếu trong danh sách quét: ${bat_buoc}`).toContain(bat_buoc)
     }

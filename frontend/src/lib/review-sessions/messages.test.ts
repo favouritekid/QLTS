@@ -24,9 +24,14 @@ import {
   UNAUTHORIZED_MESSAGE,
   WRITE_UNCERTAIN_MESSAGE,
   describeReviewSessionError,
+  durationLabel,
+  feeGateModeLabel,
   knownSessionActions,
   quotaTableHref,
   roundStateLabel,
+  runFailedMessage,
+  runRunningFor,
+  runWarningLabel,
   sessionStatusLabel,
   tabCountEntries,
   type ReviewErrorKind,
@@ -307,5 +312,31 @@ describe("nhãn — giá trị lạ hiện chữ máy chủ / bị bỏ qua (HĐ
 
   it("liên kết bảng chỉ tiêu: `/quota-tables?year=<năm>` — KHÔNG `/admin/quota-tables` (chuyển hướng làm mất năm)", () => {
     expect(quotaTableHref(2027)).toBe("/quota-tables?year=2027")
+  })
+})
+
+// ═══════════════════════ F3 — nhãn lượt kiểm (chỉ trình bày số / mã máy chủ trả) ═══════════════════════
+describe("F3 — nhãn lượt kiểm", () => {
+  it.each<[number | null, string]>([
+    [null, "—"],
+    [14_000, "14 giây"],
+    [60_000, "1 phút"],
+    [125_000, "2 phút 5 giây"],
+  ])("thời lượng %j ⇒ %j (null KHÔNG thành 0)", (ms, ky_vong) => {
+    expect(durationLabel(ms)).toBe(ky_vong)
+  })
+
+  it("cảnh báo / cổng học phí: mã biết ⇒ câu Phụ lục A; mã lạ ⇒ câu chung có mã / chữ máy chủ", () => {
+    expect(runWarningLabel("quota_table_not_locked")).toBe("Bảng chỉ tiêu năm chưa khoá lúc chạy")
+    expect(runWarningLabel("canh_bao_moi")).toBe("Cảnh báo khác (mã: canh_bao_moi)")
+    expect(feeGateModeLabel("semester_hk1")).toBe("Cho phép đã đóng một phần học phí học kỳ 1")
+    expect(feeGateModeLabel("che_do_moi")).toBe("che_do_moi")
+  })
+
+  it("'Đang chạy {n} phút' chỉ khi đã theo dõi ≥ 1 phút; lượt hỏng hiện mã máy chủ (không mã ⇒ không bịa)", () => {
+    expect(runRunningFor(59_999)).toBeNull()
+    expect(runRunningFor(125_000)).toBe("Đang chạy 2 phút")
+    expect(runFailedMessage("engine_crash")).toBe("Lượt kiểm hỏng — mã: engine_crash.")
+    expect(runFailedMessage(null)).toBe("Lượt kiểm hỏng.")
   })
 })

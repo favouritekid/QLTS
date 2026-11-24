@@ -155,8 +155,6 @@ export function quotaTableLinkLabel(year: number): string {
 export function quotaTableHref(year: number): string {
   return `/quota-tables?year=${year}`
 }
-/** [ĐX] — nút của hành động có ở đợt giao diện sau (F3 "Kiểm hồ sơ"; "Sửa điểm sàn" đã mở ở F2). */
-export const ACTION_NOT_YET = "Chức năng này có ở đợt giao diện sau."
 /** Thiết kế §7.1 (phác thảo M1: lượt kiểm gần nhất chưa có). [ĐX] */
 export const NO_RUN_YET = "Chưa chạy"
 /** [ĐX] */
@@ -266,6 +264,154 @@ export const FLOORS_INVALID_422 = "Điểm sàn chưa đúng dạng."
 export const FLOORS_BAD_MEMBER_HINT = "Bỏ mức sàn ở các dòng tô đỏ rồi lưu lại."
 /** [ĐX] — E10 không còn `edit_floors` (lần xét vừa đổi trạng thái ở nơi khác). */
 export const FLOORS_NOT_EDITABLE = "Lần xét không còn sửa điểm sàn được."
+
+// ═══════════════════════════════════════ F3 — "Kiểm hồ sơ" + theo dõi lượt (M4) ═══════════════════════════════════════
+/** Thiết kế §3.5 bước 1. */
+export const RUN_SUBMITTING = "Đang kiểm hồ sơ — có thể mất tới một phút, đừng đóng trang."
+/** Thiết kế §3.5 bước 3. */
+export const RUN_UNCERTAIN_CHECKING = "Chưa rõ lượt kiểm đã chạy hay chưa — đang kiểm tra…"
+/** Thiết kế §3.5 bước 3. */
+export const RUN_NO_NEW = "Chưa có lượt kiểm mới. Có thể bấm lại."
+/** Thiết kế §3.5 bước 5 (409 `REVIEW_SESSION_STALE` ở E6). */
+export const RUN_STALE = "Lần xét vừa được sửa ở nơi khác — đã tải bản mới, bấm lại \"Kiểm hồ sơ\" nếu vẫn muốn chạy."
+/** Đính chính 1 §5 "F3": 409 `REVIEW_RUN_IN_PROGRESS`, theo dõi tới trần mà lượt ấy chưa xong. */
+export const RUN_OTHER_CEILING = "Lượt của người khác chưa xong — thử lại sau."
+/** [ĐX] — dưới câu `detail` của 409 `REVIEW_RUN_IN_PROGRESS`. */
+export const RUN_OTHER_WAITING = "Đang chờ lượt kiểm ấy xong — tự kiểm tra lại, không cần bấm lại."
+/** [ĐX] */
+export const RUN_CHECK_AGAIN = "Kiểm tra lại"
+/** [ĐX] */
+export const RUN_VIEW_RESULT = "Xem kết quả"
+/** [ĐX] — sau câu "Lượt kiểm hỏng — mã: …". */
+export const RUN_FAILED_HINT = "Có thể bấm lại \"Kiểm hồ sơ\"."
+/** [ĐX] — 202 có `Location` không khớp `id` trong thân (lỗi hợp đồng — không theo dõi theo một trong hai số mâu thuẫn). */
+export const RUN_LOCATION_MISMATCH =
+  "Máy chủ trả đường dẫn lượt kiểm (Location) không khớp mã lượt trong phản hồi — không theo dõi tiếp. Báo quản trị hệ thống; xem danh sách lượt kiểm để biết trạng thái."
+/** Thiết kế §3.5 bước 7 — liên kết khi 503 `PRIORITY_RATE_NOT_CONFIGURED`. */
+export const PRIORITY_CONFIG_LABEL = "Cấu hình Ưu tiên"
+/** Trang có sẵn (Admin) — thiết kế §3.5 bước 7. */
+export const PRIORITY_CONFIG_HREF = "/admin/priority-config"
+/** [ĐX] — `missing_codes` của 503 `PRIORITY_RATE_NOT_CONFIGURED` (HĐ4 §5). */
+export function priorityMissingCodes(codes: readonly string[]): string {
+  return `Mã còn thiếu: ${codes.join(", ")}`
+}
+
+/** [ĐX] — dòng trạng thái của lượt đang theo dõi (nhãn trạng thái Phụ lục A; lạ ⇒ chữ máy chủ). */
+export function runTrackingLabel(runId: number, status: string | null): string {
+  return status === null ? `Lượt kiểm #${runId} — đang kiểm tra trạng thái…` : `Lượt kiểm #${runId} — ${runStatusLabel(status)}`
+}
+
+/** [ĐX] Thời lượng: "14 giây", "2 phút 5 giây"; `null` ⇒ "—". Chỉ TRÌNH BÀY số máy chủ trả (`duration_ms`) hoặc thời gian chờ. */
+export function durationLabel(ms: number | null): string {
+  if (ms === null) return "—"
+  const totalSeconds = Math.round(ms / 1000)
+  if (totalSeconds < 60) return `${totalSeconds} giây`
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  return seconds === 0 ? `${minutes} phút` : `${minutes} phút ${seconds} giây`
+}
+
+/** Thiết kế §3.5 bước 2: "Đang chạy {n} phút" khi đã theo dõi quá một phút (dưới một phút ⇒ `null`, không hiện). */
+export function runRunningFor(elapsedMs: number): string | null {
+  return elapsedMs >= 60_000 ? `Đang chạy ${Math.floor(elapsedMs / 60_000)} phút` : null
+}
+
+/** [ĐX] — lượt của lần bấm này quá trần theo dõi: DỪNG tự hỏi, KHÔNG kết luận "kẹt" (ngưỡng kẹt là việc máy chủ / Admin). */
+export function runOwnCeiling(runId: number, elapsedMs: number): string {
+  return `Lượt kiểm #${runId} vẫn chưa xong sau ${durationLabel(elapsedMs)} theo dõi — đã ngừng tự kiểm tra để không chạm giới hạn truy cập. Bấm "${RUN_CHECK_AGAIN}" để xem trạng thái mới.`
+}
+
+/** Thiết kế §3.5 bước 2 — "Lượt kiểm hỏng — mã: …" (`error_code` máy chủ; `null` ⇒ không mã). */
+export function runFailedMessage(errorCode: string | null): string {
+  return errorCode === null ? "Lượt kiểm hỏng." : `Lượt kiểm hỏng — mã: ${errorCode}.`
+}
+
+/** [ĐX] */
+export function runDoneMessage(runId: number): string {
+  return `Lượt kiểm #${runId} — Xong.`
+}
+
+/** [ĐX] — 409 `REVIEW_RUN_IN_PROGRESS`: lượt mới hơn mốc đã kết thúc. */
+export function runOtherDone(runId: number, status: string): string {
+  return `Lượt kiểm #${runId} đang chạy trước đó đã kết thúc — ${runStatusLabel(status)}. Bấm "Kiểm hồ sơ" nếu vẫn muốn chạy lượt mới.`
+}
+
+/** Câu lỗi E6: 409 STALE ⇒ câu thiết kế §3.5 bước 5 (giao diện ĐÃ tự tải lại); còn lại ⇒ câu `describeReviewSessionError`. */
+export function runSubmitErrorMessage(error: ReviewErrorView): string {
+  return error.errorCode === "REVIEW_SESSION_STALE" ? RUN_STALE : error.message
+}
+
+/** Thiết kế §3.3 thẻ "Lượt kiểm hồ sơ". */
+export const RUNS_SECTION_TITLE = "Lượt kiểm hồ sơ"
+/** [ĐX] — danh sách lượt CHỈ tải khi mở (bớt một lần gọi `ADMIN_READ` mỗi lần vào trang — R6). */
+export const RUNS_SHOW = "Xem các lượt kiểm"
+/** [ĐX] */
+export const RUNS_HIDE = "Ẩn danh sách lượt kiểm"
+/** [ĐX] */
+export const RUNS_EMPTY = "Chưa có lượt kiểm nào."
+/** [ĐX] */
+export const RUNS_LOADING = "Đang tải danh sách lượt kiểm…"
+/** [ĐX] — liên kết M2 → M5 của `latest_done_run_id` (thiết kế §3.3 thẻ "Kết quả"). */
+export function latestDoneRunLink(runId: number): string {
+  return `Xem kết quả lượt kiểm xong gần nhất (#${runId})`
+}
+
+// ═══════════════════════════════════════ F3 — lượt kiểm M5: đầu trang + hai thẻ tham khảo ═══════════════════════════════════════
+/** Phụ lục A "Câu khác". */
+export const OLD_RUN_NOTE = "Đây là lượt cũ — chỉ để xem."
+/** [ĐX] — băng `config_changed_since_run` ở M5 (thiết kế §3.6 "như M2"). */
+export const RUN_CONFIG_CHANGED_BANNER =
+  "Điểm sàn hoặc bảng chỉ tiêu đã đổi sau lượt kiểm này — kết quả đang xem có thể không còn đúng. Bấm \"Kiểm hồ sơ\" ở trang lần xét để có kết quả mới."
+/** [ĐX] — lượt chưa kết thúc (`queued` / `running` / lạ). */
+export const RUN_NOT_DONE_NOTE = "Lượt kiểm chưa xong — chưa có kết quả. Bấm \"Tải lại\" để xem trạng thái mới."
+/** [ĐX] — `summary` / `quota_view` = `null` (HĐ4 §3.3: `null` khi chưa `done`). */
+export const RUN_NO_SUMMARY = "Chưa có (lượt chưa xong)."
+/** [ĐX] — thẻ "Kết quả" (bốn tab) thuộc đợt F4. */
+export const RUN_RESULTS_NEXT_PHASE = "Danh sách từng hồ sơ theo bốn nhóm có ở đợt giao diện sau."
+/** [ĐX] */
+export const RUN_FLOORS_USED_EMPTY = "Lượt kiểm này không dùng điểm sàn nào."
+/** [ĐX] — học vụ của `inputs.floors` không có trong `quota_view.majors` của cùng lượt. */
+export function academicInfoRef(id: number): string {
+  return `Học vụ #${id}`
+}
+/** Thiết kế §3.6 — ba thẻ con. */
+export const RUN_VIEW_TABS = [
+  { key: "ket-qua", label: "Kết quả" },
+  { key: "chi-tieu", label: "Chỉ tiêu tham khảo" },
+  { key: "diem-san", label: "Điểm sàn đã dùng" },
+] as const
+export type RunViewTab = (typeof RUN_VIEW_TABS)[number]["key"]
+
+/** Phụ lục A "Cảnh báo lượt kiểm" — HĐ4 §4.11 (mở rộng được; lạ ⇒ câu chung có mã). */
+export const RUN_WARNING_LABEL: Record<string, string> = {
+  quota_table_not_locked: "Bảng chỉ tiêu năm chưa khoá lúc chạy",
+  group_ceiling_would_exceed: "Có nhóm ngành sẽ vượt trần nếu nhận hết số máy đề xuất (chỉ cảnh báo)",
+  quota_closed_present:
+    "Có ngành chỉ tiêu 0 — chưa dùng để xét thật khi bản sửa nút \"Phê duyệt\" cũ chưa lên production",
+}
+export function runWarningLabel(code: string): string {
+  return RUN_WARNING_LABEL[code] ?? `Cảnh báo khác (mã: ${code})`
+}
+
+/** Phụ lục A "Cổng học phí lúc chạy" (`inputs.fee_gate_mode`; lạ ⇒ chữ máy chủ). */
+export const FEE_GATE_MODE_LABEL: Record<string, string> = {
+  legacy: "Phải đóng đủ (hoặc được miễn) học phí học kỳ 1",
+  semester_hk1: "Cho phép đã đóng một phần học phí học kỳ 1",
+}
+export function feeGateModeLabel(mode: string): string {
+  return FEE_GATE_MODE_LABEL[mode] ?? mode
+}
+
+/** Phụ lục A "Cờ" — hai cờ ngừng ở chỉ tiêu tham khảo. */
+export const OFFERING_INACTIVE_LABEL = "Loại hình đang ngừng"
+/** Phụ lục A "Cờ". */
+export const MAJOR_INACTIVE_LABEL = "Ngành đang ngừng"
+/** Thiết kế §3.6 — `would_exceed` (CHỈ cảnh báo — QĐB:25). */
+export const WOULD_EXCEED_LABEL = "Sẽ vượt trần"
+/** Thiết kế §3.6 — cùng câu trang bảng chỉ tiêu (`QuotaTableView.tsx`). Chỉ hiện số máy chủ trả, không cộng. */
+export function usedBreakdown(publish: number, approved: number): string {
+  return `theo công bố ${publish}, theo “Phê duyệt” cũ ${approved}`
+}
 
 // ═══════════════════════════════════════ lỗi — MỘT hàm (thiết kế §5) ═══════════════════════════════════════
 /** §5 — đóng băng (503 + `code` hai tầng, `readApiError` nhận diện). */

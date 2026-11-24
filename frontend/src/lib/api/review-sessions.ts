@@ -118,10 +118,30 @@ export async function cancelReviewSession(sessionId: number, body: ReviewSession
 }
 
 // ── E6 ──
-export async function createReviewRun(sessionId: number, body: ReviewRunCreateBody): Promise<ReviewRun> {
+/** E6 — 202 Accepted: thân `RunOut` + header `Location` (HĐ4 E6, HĐ5). */
+export interface ReviewRunCreated {
+  run: ReviewRun
+  /**
+   * Header `Location` — CHỈ để đối chiếu (thiết kế §3.5 bước 2: đường dẫn lấy từ `id` trong thân). `null` khi không đọc được:
+   * máy chủ không gửi, hoặc trình duyệt giấu vì CORS không `expose` header này (máy chủ hiện chỉ expose `Set-Cookie`,
+   * `Content-Disposition`, `X-Enrollment-Letter-Id` — `app/main.py`).
+   */
+  location: string | null
+}
+
+/** Đường dẫn E8 của một lượt — CÙNG chỗ khai đường dẫn với E7 / E8 (đối chiếu `Location` của 202). */
+export function reviewRunLocationPath(sessionId: number, runId: number): string {
+  return `${runsPath(sessionId)}/${runId}`
+}
+
+export async function createReviewRun(sessionId: number, body: ReviewRunCreateBody): Promise<ReviewRunCreated> {
   const data = reviewRunCreateBodySchema.parse(body)
   const res = await api.post(runsPath(sessionId), data, { timeout: REVIEW_RUN_TIMEOUT_MS })
-  return runSchema.parse(res.data)
+  const location: unknown = res.headers["location"]
+  return {
+    run: runSchema.parse(res.data),
+    location: typeof location === "string" && location.length > 0 ? location : null,
+  }
 }
 
 // ── E7 ──
@@ -132,7 +152,7 @@ export async function listReviewRuns(sessionId: number, params: ReviewPageParams
 
 // ── E8 ──
 export async function getReviewRun(sessionId: number, runId: number, signal?: AbortSignal): Promise<ReviewRun> {
-  const res = await api.get(`${runsPath(sessionId)}/${runId}`, { signal })
+  const res = await api.get(reviewRunLocationPath(sessionId, runId), { signal })
   return runSchema.parse(res.data)
 }
 
