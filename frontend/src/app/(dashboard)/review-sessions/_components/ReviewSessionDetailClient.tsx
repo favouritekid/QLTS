@@ -140,7 +140,7 @@ export function ReviewSessionDetailClient({ sessionId }: { sessionId: number }) 
                 <Button
                   key={a}
                   variant="outline"
-                  disabled={busy || floorEditing}
+                  disabled={floorEditing}
                   onClick={() => setFloorEditing(true)}
                   data-testid="nut-edit_floors"
                 >
