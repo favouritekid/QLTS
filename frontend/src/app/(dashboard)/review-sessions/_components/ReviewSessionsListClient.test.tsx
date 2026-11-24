@@ -21,6 +21,7 @@ import {
 } from "@/lib/review-sessions/messages"
 import type { PageSearchParams } from "@/lib/utils/search-params"
 import { server } from "@/test/mocks/server"
+import { chanRequestRo } from "@/test/review-sessions-msw"
 import { RS, listItemGia, pageGia, runSummaryGia } from "@/test/mocks/review-sessions-data"
 import { renderApp } from "@/test/review-sessions-render"
 import { resolveServerTree } from "@/test/server-component"
@@ -51,6 +52,9 @@ function mayChuE2(tra: (lan: number) => Response): URL[] {
   )
   return urls
 }
+
+// Chặn request rò (đối chiếu CI F4; quyết định điều phối 25-11): request không handler ⇒ in lỗi MSW, KHÔNG ra mạng, ca ĐỎ.
+chanRequestRo()
 
 describe("M1 — bộ lọc trên URL ⇒ đúng tham số E2", () => {
   it("?nam=2026&trang-thai=cancelled&trang=2 ⇒ academic_year, status, page, page_size gửi đúng", async () => {

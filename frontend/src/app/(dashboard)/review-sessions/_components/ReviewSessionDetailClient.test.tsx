@@ -34,6 +34,7 @@ import {
   quotaTableDraftBanner,
 } from "@/lib/review-sessions/messages"
 import { server } from "@/test/mocks/server"
+import { chanRequestRo } from "@/test/review-sessions-msw"
 import { RS, runSummaryGia, sessionDaHuyGia, sessionGia } from "@/test/mocks/review-sessions-data"
 import { renderApp } from "@/test/review-sessions-render"
 import { resolveServerTree } from "@/test/server-component"
@@ -73,6 +74,9 @@ function mayChuE3(chuoi: (() => Response | Promise<Response>)[]): { lan: number 
 }
 
 const json = (body: Record<string, unknown>, status = 200) => () => HttpResponse.json(body, { status })
+
+// Chặn request rò (đối chiếu CI F4; quyết định điều phối 25-11): request không handler ⇒ in lỗi MSW, KHÔNG ra mạng, ca ĐỎ.
+chanRequestRo()
 
 describe("M2 — trang chi tiết: id trên URL", () => {
   it.each(["abc", "0", "__placeholder__", "1234567890", "-3"])("id %j ⇒ 404 của Next (không gọi máy chủ)", async (id) => {

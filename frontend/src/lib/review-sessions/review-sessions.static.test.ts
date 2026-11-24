@@ -138,3 +138,48 @@ describe("màn lần xét — nơi đặt (ngoài /admin) và mục menu", () =>
     expect(muc?.href).toBe("/review-sessions")
   })
 })
+
+// ───────────── test lần xét dùng máy chủ giả MSW phải chặn request rò (đối chiếu CI F4; quyết định điều phối 25-11) ─────────────
+/** Mọi tệp test F0–F4 dùng MSW (đo `git diff --name-only bdbb7774^ 987334fd` ∩ có `@/test/mocks/server`). */
+const TEST_MSW_LAN_XET = [
+  "app/(dashboard)/quota-tables/_components/QuotaTablesPage.test.tsx",
+  `${TRANG}/_components/CreateReviewSessionDialog.test.tsx`,
+  `${TRANG}/_components/ReviewFloorsSection.test.tsx`,
+  `${TRANG}/_components/ReviewRunDetailClient.test.tsx`,
+  `${TRANG}/_components/ReviewRunLauncher.test.tsx`,
+  `${TRANG}/_components/ReviewRunResults.test.tsx`,
+  `${TRANG}/_components/ReviewSessionDetailClient.test.tsx`,
+  `${TRANG}/_components/ReviewSessionsListClient.test.tsx`,
+  "hooks/academic-info-review-floor-409.test.tsx",
+  "lib/hooks/use-review-sessions.test.tsx",
+]
+
+/** Tệp test (`*.test.ts(x)`) dưới `rel` có dùng máy chủ giả MSW. */
+function tepTestDungMsw(rel: string): string[] {
+  const out: string[] = []
+  const di = (d: string) => {
+    for (const e of fs.readdirSync(path.join(SRC, d), { withFileTypes: true })) {
+      const p = `${d}/${e.name}`
+      if (e.isDirectory()) di(p)
+      else if (/\.test\.tsx?$/.test(e.name) && fs.readFileSync(path.join(SRC, p), "utf8").includes("@/test/mocks/server")) out.push(p)
+    }
+  }
+  di(rel)
+  return out
+}
+
+describe("test lần xét dùng MSW — chặn request rò (không nới lại thành 'warn')", () => {
+  it.each(TEST_MSW_LAN_XET)("%s gọi chanRequestRo() ở cấp tệp và KHÔNG tự đặt onUnhandledRequest", (t) => {
+    // Biến thể phá: bỏ lời gọi `chanRequestRo()` ở một tệp ⇒ ĐỎ đúng tệp ấy.
+    const src = fs.readFileSync(path.join(SRC, t), "utf8")
+    expect(src).toContain('import { chanRequestRo } from "@/test/review-sessions-msw"')
+    expect(src).toMatch(/^chanRequestRo\(\)/m)
+    expect(src).not.toMatch(/onUnhandledRequest/)
+  })
+
+  it("mọi tệp test dùng MSW dưới thư mục màn lần xét / lib lần xét đều nằm trong danh sách (tệp mới không lọt)", () => {
+    const tim = [...tepTestDungMsw(TRANG), ...tepTestDungMsw("lib/review-sessions")]
+    expect(tim.length).toBeGreaterThan(0)
+    for (const t of tim) expect(TEST_MSW_LAN_XET, `tệp test MSW mới chưa chặn request rò: ${t}`).toContain(t)
+  })
+})

@@ -21,6 +21,7 @@ import { RATE_LIMITED_MESSAGE, RUN_CONFIG_CHANGED_BANNER } from "@/lib/review-se
 import { DOCUMENT_CONFIG_UNKNOWN, PROFILE_GONE, profileStatusLabel } from "@/lib/review-sessions/row-labels"
 import type { PageSearchParams } from "@/lib/utils/search-params"
 import { server } from "@/test/mocks/server"
+import { chanRequestRo } from "@/test/review-sessions-msw"
 import {
   E9_BANG_DIEM_CHO_CUOI,
   E9_MAT_CAU_HINH_GIAY,
@@ -116,6 +117,9 @@ const optionTexts = (testId: string) =>
   within(screen.getByTestId(testId))
     .getAllByRole("option")
     .map((o) => o.textContent)
+
+// Chặn request rò (đối chiếu CI F4; quyết định điều phối 25-11): request không handler ⇒ in lỗi MSW, KHÔNG ra mạng, ca ĐỎ.
+chanRequestRo()
 
 describe("F4 — bốn tab: số máy chủ, tab mặc định, cột, thứ tự", () => {
   it("mặc định: tab đầu tiên máy chủ trả (auto) được gửi; cột tab 'Đạt'; thứ tự dòng NGUYÊN máy chủ; ô đúng nhãn; có 'Tải lúc HH:MM'", async () => {

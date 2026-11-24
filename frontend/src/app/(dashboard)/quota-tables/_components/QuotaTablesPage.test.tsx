@@ -24,6 +24,7 @@ import { API, renderWithClient } from "@/components/document-review/test-helpers
 import { QUOTA_TABLE_NO_ACCESS_MESSAGE } from "@/lib/quota-tables/messages"
 import type { PageSearchParams } from "@/lib/utils/search-params"
 import { server } from "@/test/mocks/server"
+import { chanRequestRo } from "@/test/review-sessions-msw"
 import { resolveServerTree } from "@/test/server-component"
 
 import AdminQuotaTablesRedirect from "../../admin/quota-tables/page"
@@ -73,6 +74,9 @@ afterEach(() => server.resetHandlers())
 async function moTrang(sp: PageSearchParams = {}) {
   return renderWithClient(<>{await resolveServerTree(QuotaTablesPage({ searchParams: Promise.resolve(sp) }))}</>)
 }
+
+// Chặn request rò (đối chiếu CI F4; quyết định điều phối 25-11): request không handler ⇒ in lỗi MSW, KHÔNG ra mạng, ca ĐỎ.
+chanRequestRo()
 
 describe("KT-6 — trang /quota-tables (ngoài /admin)", () => {
   it("Thư ký là cán bộ (máy chủ 200, cờ rỗng) ⇒ thấy bảng, KHÔNG nút sửa / khoá / mở khoá", async () => {

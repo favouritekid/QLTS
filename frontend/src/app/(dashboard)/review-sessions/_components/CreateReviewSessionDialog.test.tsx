@@ -17,6 +17,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { CREATE_UNCERTAIN, FORBIDDEN_MESSAGE, FROZEN_MESSAGE } from "@/lib/review-sessions/messages"
 import { server } from "@/test/mocks/server"
+import { chanRequestRo } from "@/test/review-sessions-msw"
 import { API, RS, listItemGia, pageGia, roundGia, sessionGia } from "@/test/mocks/review-sessions-data"
 import { renderApp } from "@/test/review-sessions-render"
 import { resolveServerTree } from "@/test/server-component"
@@ -79,6 +80,9 @@ async function chonDotVaTao(id: string) {
   await waitFor(() => expect(screen.getByTestId("tao-xac-nhan")).toBeEnabled())
   fireEvent.click(screen.getByTestId("tao-xac-nhan"))
 }
+
+// Chặn request rò (đối chiếu CI F4; quyết định điều phối 25-11): request không handler ⇒ in lỗi MSW, KHÔNG ra mạng, ca ĐỎ.
+chanRequestRo()
 
 describe("M1 — tạo lần xét (E1)", () => {
   it("đợt hiện kèm nhãn tình trạng; đợt Đang hoạt động / Tạm dừng chọn được (G1); 201 ⇒ sang chi tiết", async () => {

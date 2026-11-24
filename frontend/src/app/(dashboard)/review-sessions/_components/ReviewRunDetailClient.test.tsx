@@ -13,7 +13,7 @@
  */
 import { fireEvent, screen } from "@testing-library/react"
 import { http, HttpResponse } from "msw"
-import { describe, expect, it, vi } from "vitest"
+import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { formatDateTimeVN } from "@/lib/document-review/messages"
 import {
@@ -26,6 +26,7 @@ import {
   runFailedMessage,
 } from "@/lib/review-sessions/messages"
 import { server } from "@/test/mocks/server"
+import { chanRequestRo } from "@/test/review-sessions-msw"
 import { RS, runGia, sessionGia } from "@/test/mocks/review-sessions-data"
 import { renderApp } from "@/test/review-sessions-render"
 import { resolveServerTree } from "@/test/server-component"
@@ -156,6 +157,22 @@ const QUOTA_VIEW = {
     },
   ],
 }
+
+// Chặn request rò (đối chiếu CI F4; quyết định điều phối 25-11): request không handler ⇒ in lỗi MSW, KHÔNG ra mạng, ca ĐỎ.
+chanRequestRo()
+
+/**
+ * F4: thẻ "Kết quả" (mặc định) của M5 gọi E9 khi lượt `done` — handler MẶC ĐỊNH (trang rỗng) cho mọi ca của tệp này. Thiếu nó, E9 là
+ * request rò: đối chiếu CI F4 đo được request đi ra mạng thật rồi worker sập ở chính tệp này. Ca nào cần dòng E9 cụ thể thì tự
+ * `server.use` (đặt sau ⇒ được ưu tiên).
+ */
+beforeEach(() => {
+  server.use(
+    http.get(`${RS}/3/runs/:runId/rows`, () =>
+      HttpResponse.json({ items: [], total: 0, page: 1, page_size: 50, total_pages: 0, tab_counts: { auto: 0 } }),
+    ),
+  )
+})
 
 describe("M5 — trang lượt kiểm: id trên URL", () => {
   it.each<[string, string]>([

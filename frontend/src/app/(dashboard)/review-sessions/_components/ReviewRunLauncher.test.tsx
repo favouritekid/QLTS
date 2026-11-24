@@ -41,6 +41,7 @@ import {
 import { pollsUntilCeiling, type RunPollPlan } from "@/lib/review-sessions/run-tracking"
 import { useAuthStore } from "@/lib/stores/auth.store"
 import { server } from "@/test/mocks/server"
+import { chanRequestRo } from "@/test/review-sessions-msw"
 import { RS, pageGia, runGia, runSummaryGia, sessionDaHuyGia, sessionGia } from "@/test/mocks/review-sessions-data"
 import { renderApp } from "@/test/review-sessions-render"
 import { resolveServerTree } from "@/test/server-component"
@@ -133,6 +134,9 @@ async function bamKiem() {
 }
 
 // ═══════════════════════════════════════ 202 + theo dõi lượt của mình ═══════════════════════════════════════
+// Chặn request rò (đối chiếu CI F4; quyết định điều phối 25-11): request không handler ⇒ in lỗi MSW, KHÔNG ra mạng, ca ĐỎ.
+chanRequestRo()
+
 describe("M4 — 202 và theo dõi lượt (HĐ5: queued / running)", () => {
   it("202 done, Location khớp ⇒ gửi {kind, session_version = version E3}; mở M5 theo id; KHÔNG hỏi E7 / E8; E3 làm mới", async () => {
     const e3 = mayChuE3([json(sessionGia({ version: 7 }))])

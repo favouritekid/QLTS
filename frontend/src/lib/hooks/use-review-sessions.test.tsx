@@ -30,6 +30,7 @@ import {
   type ReviewRowParams,
 } from "@/lib/api/review-sessions"
 import { server } from "@/test/mocks/server"
+import { chanRequestRo } from "@/test/review-sessions-msw"
 import { appLikeQueryClient } from "@/test/review-sessions-render"
 import {
   E9_BANG_DIEM_CHO_CUOI,
@@ -116,6 +117,9 @@ const CA_DC1: CaDc1[] = [
     dung: () => useReviewFloorCandidates(3),
   },
 ]
+
+// Chặn request rò (đối chiếu CI F4; quyết định điều phối 25-11): request không handler ⇒ in lỗi MSW, KHÔNG ra mạng, ca ĐỎ.
+chanRequestRo()
 
 describe("DC-1 — query mang config_changed_since_run không giữ bản cũ", () => {
   it.each(CA_DC1)(
