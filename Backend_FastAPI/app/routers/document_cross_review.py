@@ -1,7 +1,9 @@
 """GĐ1b — duyệt chéo tạm thời (đặc tả bản 3.6 §6; hợp đồng API GĐ1b bản 4 §2.2).
 
 Đường RIÊNG, phản hồi HẸP — KHÔNG nới ``GET`` hồ sơ chung. Quyền ở ``app/core/deps.py``: Admin cấp / thu hồi; Cán bộ có quyền
-còn hiệu lực dùng hàng đợi / duyệt / từ chối / lô chéo (không có ⇒ 404 cùng thân); ``eligibility`` cho mọi người đã đăng nhập.
+còn hiệu lực dùng hàng đợi / duyệt / từ chối / lô chéo; ``eligibility`` cho mọi người đã đăng nhập. Owner Q1 (20-11): trên 8 API
+thực hiện duyệt chéo, kiểm VAI trước khi tra hồ sơ / lô — vai khác Cán bộ ⇒ 403; Cán bộ thiếu quyền cho đúng thao tác / ngoài
+phạm vi / hồ sơ hay lô không tồn tại ⇒ 404 cùng thân.
 Đăng ký chính thức (``fastapi_app.include_router(document_cross_review.router, prefix="/api")``) + Casbin: Claude khi tích hợp.
 """
 
@@ -119,7 +121,7 @@ async def _cross_action(request: Request, db: AsyncSession, actor_id: int, actio
 @router.post("/verify", response_model=CrossReviewActionResponse)
 async def cross_review_verify(
     request: Request,
-    body: CrossReviewActionRequest = Depends(deps.get_cross_review_action_target),
+    body: CrossReviewActionRequest = Depends(deps.get_cross_review_verify_target),
     current_user: models.User = Depends(deps.require_cross_reviewer),
     db: AsyncSession = Depends(database.get_db),
 ):
@@ -129,7 +131,7 @@ async def cross_review_verify(
 @router.post("/reject", response_model=CrossReviewActionResponse)
 async def cross_review_reject(
     request: Request,
-    body: CrossReviewActionRequest = Depends(deps.get_cross_review_action_target),
+    body: CrossReviewActionRequest = Depends(deps.get_cross_review_reject_target),
     current_user: models.User = Depends(deps.require_cross_reviewer),
     db: AsyncSession = Depends(database.get_db),
 ):
@@ -142,7 +144,7 @@ async def preview_cross_bulk_verify(
     request: Request,
     body: CrossBulkVerifyPreviewRequest,
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = Depends(deps.require_cross_reviewer),
+    current_user: models.User = Depends(deps.require_cross_verifier),
 ):
     result = await bulk_service.preview_batch(
         db,
@@ -163,7 +165,7 @@ async def execute_cross_bulk_verify(
     request: Request,
     body: BulkVerifyExecuteRequest,
     batch: models.DocumentBulkBatch = Depends(deps.get_cross_bulk_batch_for_execute),
-    current_user: models.User = Depends(deps.require_cross_reviewer),
+    current_user: models.User = Depends(deps.require_cross_verifier),
     db: AsyncSession = Depends(database.get_db),
 ):
     batch_id, actor_id = batch.batch_id, current_user.id
@@ -227,6 +229,7 @@ async def finalize_cross_bulk_verify_batch(
         viewer_role=viewer_role,
         reason=body.reason,
         request_meta=_meta(request),
+        cross_route=True,
     )
     await db.commit()
     return result

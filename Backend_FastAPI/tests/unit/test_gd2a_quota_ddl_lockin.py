@@ -81,3 +81,44 @@ def test_vung_khoa_nam_da_dang_ky():
     from app.core import advisory_lock_keys as keys
 
     assert keys.REVIEW_YEAR_NS in keys.REGISTERED_NAMESPACES
+
+
+# ── Nợ N1 (rà hợp nhất 23-11, mục I1): ba route ghi bảng chỉ tiêu kiểm phản hồi TRƯỚC commit ─────────────────────────────
+@pytest.mark.parametrize("ten", ["put_quota_table", "lock_quota_table", "unlock_quota_table"])
+def test_route_ghi_bang_chi_tieu_kiem_phan_hoi_truoc_commit(ten):
+    """Nợ N1 (khuôn C2 ``0f727a0a``): ba route ghi bảng chỉ tiêu (PUT / khoá / mở khoá) gọi ``response_checked_before_commit`` —
+    hàm của chính ``app.routers.admission_review`` (MỘT helper với GĐ2-B) — với ĐÚNG ``response_model`` của route, một lần, TRƯỚC
+    ``db.commit()``. Hành vi (thân lệch ⇒ 500 VÀ CSDL không đổi):
+    ``tests/api/test_gd2a_bang_chi_tieu_api.py::test_n1_phan_hoi_lech_schema_500_khong_ghi_gi``."""
+    import ast
+    import inspect
+
+    from fastapi.routing import APIRoute
+
+    from app.main import fastapi_app
+    from app.routers import admission_review as r
+
+    ham = getattr(r, ten)
+    goi = [n for n in ast.walk(ast.parse(inspect.getsource(ham))) if isinstance(n, ast.Call)]
+    kiem = [n for n in goi if isinstance(n.func, ast.Name) and n.func.id == "response_checked_before_commit"]
+    commit = [n for n in goi if isinstance(n.func, ast.Attribute) and n.func.attr == "commit"]
+    assert len(kiem) == 1 and len(commit) == 1, (ten, len(kiem), len(commit))
+    assert (kiem[0].lineno, kiem[0].col_offset) < (commit[0].lineno, commit[0].col_offset), ten
+    route = next(x for x in fastapi_app.routes if isinstance(x, APIRoute) and x.endpoint is ham)
+    assert isinstance(kiem[0].args[0], ast.Name) and kiem[0].args[0].id == route.response_model.__name__, ten
+
+
+def test_helper_kiem_phan_hoi_truoc_commit_mot_dinh_nghia_trong_app():
+    """CLAUDE.md §7 (một nguồn): ``response_checked_before_commit`` được ĐỊNH NGHĨA đúng một lần trong ``app/`` — ở
+    ``app/routers/admission_review.py`` (bản trùng byte GĐ2-B L4 ``53b3b6ec``; route khác IMPORT từ đó). Gộp GĐ2-B mà giữ cả hai
+    bản (hoặc chép helper sang router khác) ⇒ đỏ."""
+    import ast
+
+    app_dir = GOC / "app"
+    noi = sorted(
+        "%s:%d" % (p.relative_to(app_dir).as_posix(), n.lineno)
+        for p in app_dir.rglob("*.py")
+        for n in ast.walk(ast.parse(p.read_text(encoding="utf-8")))
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == "response_checked_before_commit"
+    )
+    assert [x.split(":")[0] for x in noi] == ["routers/admission_review.py"], noi

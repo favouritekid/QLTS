@@ -57,7 +57,8 @@ async def test_xem_truoc_tao_lo_previewed_dung_dong_muc_va_phien_ban(
         (p["id"], p["docs"][k].id, p["docs"][k].row_version) for p in (p1, p2) for k in "AB"
     )
     assert sorted((i["profile_id"], i["document_row_id"], i["expected_row_version"]) for i in body["items"]) == mong
-    assert body["counts"] == {"profiles": 2, "documents": 4, "required": 4, "optional": 0}
+    # PR-B (owner Q3): thêm ``own_assigned_excluded`` (M — chỉ lô chéo khác 0).
+    assert body["counts"] == {"profiles": 2, "documents": 4, "required": 4, "optional": 0, "own_assigned_excluded": 0}
     lo = await dong_lo(body["batch_id"])
     assert lo["status"] == "previewed" and lo["actor_user_id"] == manager_user_in_db["id"] and lo["review_mode"] == "batch"
     muc = await dong_muc(body["batch_id"])

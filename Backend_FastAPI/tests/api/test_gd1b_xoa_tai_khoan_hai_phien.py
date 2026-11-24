@@ -15,6 +15,14 @@ nhập lại trên cùng thiết bị thu hồi phiên cũ); "bị chặn" đo b
 
 Kiểm ngược (bản chép ngoài kho): trả route về thứ tự cũ (ghi nhật ký trước) ⇒ ca 1 đỏ vì 500 ``ForeignKeyViolationError``,
 ca 2 và ca 3 đỏ vì 500 ``DeadlockDetectedError``; ca 4 (nhật ký) XANH ở cả bản cũ lẫn bản mới — dữ liệu lưu y hệt.
+
+PR-B lượt 5 (owner 22-11 "K4 ↔ K4", ``gd1b/sua/QUYET-DINH-OWNER-PR-B-K4-K4-2026-11-22.md``): K4 từng loại người bấm khỏi
+tập khoá; nhật ký router ghi SAU K4 lấy ``FOR KEY SHARE`` trên dòng người bấm khi ĐÃ giữ người bị xoá.
+
+- ca 5 — Admin A xoá U (không phải admin) trong lúc Admin B xoá lô {A, U}, id A < U: B giữ A chờ U, A giữ U chờ A ⇒ bế tắc
+  ``40P01`` ⇒ 500. Nay K4 khoá người bấm ``FOR KEY SHARE`` cùng thứ tự id tăng (``lock_users_in_id_order``) ⇒ B chờ A.
+- ca 6 — K4 nay ĐỌC tập cần khoá rồi mới khoá (hai bước): một admin được kích hoạt giữa hai bước ⇒ phép kiểm "admin đang hoạt
+  động ⊆ tập đã khoá" (có từ trước) phải từ chối 409 ``ConflictError``, không xoá.
 """
 from __future__ import annotations
 
@@ -235,3 +243,72 @@ async def test_nhat_ky_xoa_tai_khoan_luu_du_cot_nhu_truoc(client, admin_user_in_
             "user_agent": ua,
         }
     ]
+
+
+# --------------------------------------------------------------------------------------------------------------------
+# Ca 5 — K4 ↔ K4 (owner 22-11): A xoá U (không phải admin), dừng NGAY SAU K4 (đã giữ U ``FOR UPDATE`` + A ``FOR KEY SHARE``);
+# B xoá lô {A, U}, id A < U ⇒ B chờ ĐÚNG lệnh của A; A 200; B không 500; 0 lỗi CSDL. Bản cũ: 40P01.
+# --------------------------------------------------------------------------------------------------------------------
+async def test_admin_xoa_tai_khoan_trong_luc_admin_khac_xoa_lo_gom_nguoi_bam_khong_be_tac(client, monkeypatch, admin_user_in_db):
+    from app.services import user_deletion_policy
+
+    a = await _admin_dang_nhap_duoc("f1_k4k4_a")
+    u = await _tao_nguoi("f1_k4k4_u")
+    assert a["id"] < u, "tiền đề: người bấm A có id NHỎ hơn người bị xoá U (K4 của B khoá A trước U)"
+    ca, ha = await dang_nhap(a)
+    cb, hb = await dang_nhap(admin_user_in_db)
+    diem = Diem()
+    boc(monkeypatch, user_deletion_policy, "assert_user_deletable", diem)  # chỉ lần gọi ĐẦU (lệnh của A) dừng
+    try:
+        with PidTheoNhan() as ghi, _LoiCsdl() as loi:
+            ta = asyncio.create_task(goi("A", lambda: ca.delete(AdminURLs.USER_DETAIL(u), headers=ha)))
+            tb = None
+            try:
+                await asyncio.wait_for(diem.toi.wait(), 30)
+                xoa_lo = {"action": "delete", "user_ids": [a["id"], u]}
+                tb = asyncio.create_task(goi("B", lambda: cb.post(AdminURLs.BULK_ACTION, headers=hb, json=xoa_lo)))
+                tt = await bi_chan_boi(tb, ghi)
+            finally:
+                diem.di.set()
+                if tb is None:  # A không tới điểm dừng: vẫn chờ A xong để không bỏ lại tác vụ treo
+                    await asyncio.gather(ta, return_exceptions=True)
+            ra, rb = await asyncio.gather(ta, tb)
+    finally:
+        await ca.aclose()
+        await cb.aclose()
+    assert tt == "chan", f"lệnh xoá lô (B) phải CHỜ lệnh xoá của A đang giữ khoá ({tt})"
+    assert (ra.status_code, rb.status_code < 500, loi.loi) == (200, True, {}), (ra.text, rb.status_code, rb.text)
+
+
+# --------------------------------------------------------------------------------------------------------------------
+# Ca 6 — K4 hai bước (đọc tập → khoá): admin được kích hoạt GIỮA hai bước ⇒ 409 "Danh sách quản trị viên vừa thay đổi",
+# admin bị xoá vẫn còn.
+# --------------------------------------------------------------------------------------------------------------------
+async def test_tap_admin_doi_giua_luc_doc_va_luc_khoa_k4_tu_choi_409_khong_xoa(client, monkeypatch, admin_user_in_db):
+    from app.services import user_deletion_policy
+
+    t = await _tao_nguoi("f1_tap_t", role="admin")
+    n = await _tao_nguoi("f1_tap_n", role="admin")
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            await s.execute(text("UPDATE \"user\" SET status = 'inactive' WHERE id = :n"), {"n": n})
+    assert n not in await _admin_dang_hoat_dong(), "tiền đề: N chưa hoạt động"
+    c, h = await dang_nhap(admin_user_in_db)
+    diem = Diem()
+    # K4 đã ĐỌC tập cần khoá (bước 2a), CHƯA khoá dòng nào (bước 2b) — lần gọi ĐẦU là của lệnh xoá.
+    boc(monkeypatch, user_deletion_policy, "lock_users_in_id_order", diem, truoc=True)
+    try:
+        viec = asyncio.create_task(c.delete(AdminURLs.USER_DETAIL(t), headers=h))
+        await asyncio.wait_for(diem.toi.wait(), 30)
+        async with AsyncSessionLocal() as s:
+            async with s.begin():
+                await s.execute(text("UPDATE \"user\" SET status = 'active' WHERE id = :n"), {"n": n})
+        diem.di.set()
+        r = await asyncio.wait_for(viec, 30)
+    finally:
+        diem.di.set()
+        await c.aclose()
+    # Status TRƯỚC (CLAUDE.md §3 — đỏ phải đỏ đúng lý do): bỏ phép kiểm ⇒ lệnh xoá thành công, thân ``null`` ⇒ đọc
+    # ``detail`` trước sẽ vỡ ``AttributeError`` thay vì báo "không phải 409".
+    assert r.status_code == 409, (r.status_code, r.text)
+    assert (r.json().get("detail"), await _con(t)) == ("Danh sách quản trị viên vừa thay đổi — hãy thử lại.", True), r.text

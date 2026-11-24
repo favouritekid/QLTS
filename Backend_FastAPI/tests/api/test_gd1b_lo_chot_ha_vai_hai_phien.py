@@ -208,8 +208,14 @@ async def test_chot_dang_giu_khoa_nguoi_thi_ha_vai_cho_roi_chot_200_co_nhat_ky(
     finally:
         await cf.aclose()
         await cr.aclose()
-    # Bất biến: khoá dòng người của lượt chốt giữ VAI ổn định ⇒ lệnh hạ vai (câu UPDATE dòng ``user``) phải CHỜ.
-    assert tt == "chan" and (cau or "").lstrip().upper().startswith('UPDATE "USER"'), (
+    # Bất biến: khoá dòng người của lượt chốt giữ VAI ổn định ⇒ lệnh hạ vai phải CHỜ ở câu GHI-KHOÁ dòng ``user``. Từ PR-B
+    # (Q4 tự thu hồi), đường đổi vai khoá dòng người ``FOR NO KEY UPDATE`` (``repo.lock_user_no_key_update``) TRƯỚC câu
+    # ``UPDATE "user"`` — cùng loại khoá dòng mà ``UPDATE`` lấy, nên cả hai câu đều là "chờ đúng lý do".
+    cau_r = " ".join((cau or "").split()).upper()
+    cho_dung_cau = cau_r.startswith('UPDATE "USER"') or (
+        cau_r.startswith("SELECT") and 'FROM "USER"' in cau_r and cau_r.endswith("FOR NO KEY UPDATE")
+    )
+    assert tt == "chan" and cho_dung_cau, (
         f"hạ vai (R) phải CHỜ khoá dòng người mà lượt chốt (F) đang giữ — đo: {tt}; câu cuối của R: {cau!r}"
     )
     assert rf.status_code == 200 and rf.json()["finalized_now"] is True, (rf.status_code, rf.text)

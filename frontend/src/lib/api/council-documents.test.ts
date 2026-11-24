@@ -481,6 +481,14 @@ describe("describeCouncilDocumentError — câu cho người dùng", () => {
     expect(m.detail).toBeUndefined()
   })
 
+  it("503 họ fail-closed ⇒ câu cố định + câu máy chủ viết cho người dùng; 503 HTTP_503 ⇒ chỉ câu cố định", async () => {
+    // Codex N4 (22-11) Q1, rà cùng khuôn (CLAUDE.md §6): cùng nguồn `userFacingUnavailableDetail` với toast `handleApiError`.
+    const a = await loiTu(503, { detail: "Dịch vụ tạm thời chưa sẵn sàng.", error_code: "SERVICE_UNAVAILABLE" })
+    expect([a.title, a.detail]).toEqual(["Hệ thống tạm thời không phục vụ — thử lại sau.", "Dịch vụ tạm thời chưa sẵn sàng."])
+    const b = await loiTu(503, { detail: "Celery service unavailable", error_code: "HTTP_503" })
+    expect([b.title, b.detail]).toEqual(["Hệ thống tạm thời không phục vụ — thử lại sau.", undefined])
+  })
+
   it("mất mạng: câu kết nối", async () => {
     server.use(http.post(`${API}${P}/sets`, () => HttpResponse.error()))
     try {

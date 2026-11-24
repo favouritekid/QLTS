@@ -14,6 +14,7 @@
 import axios from "axios"
 
 import { api } from "@/lib/api/client"
+import { userFacingUnavailableDetail } from "@/lib/api/error-codes"
 import { readApiError } from "@/lib/error-handler"
 import {
   councilBlockedRowsSchema,
@@ -545,7 +546,13 @@ export function describeCouncilDocumentError(error: unknown): CouncilErrorMessag
             "Tuyển sinh đang tạm đóng băng — thao tác ghi bị chặn, cả chọn / kiểm trước hồ sơ để dựng bộ. Xem / tải vẫn được.",
         }
       }
-      return { status, title: "Hệ thống tạm thời không phục vụ — thử lại sau." }
+      // Họ 503 fail-closed: thêm câu máy chủ viết cho người dùng (cùng nguồn với toast `handleApiError`); mã khác /
+      // không mã (nginx, `HTTP_503`) ⇒ chỉ câu cố định.
+      return {
+        status,
+        title: "Hệ thống tạm thời không phục vụ — thử lại sau.",
+        detail: userFacingUnavailableDetail({ status, data: e.data }) ?? undefined,
+      }
     default:
       if (status >= 500) {
         return { status, title: "Lỗi hệ thống — thử lại sau hoặc báo quản trị viên." }
