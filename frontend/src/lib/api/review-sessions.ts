@@ -117,7 +117,7 @@ export async function cancelReviewSession(sessionId: number, body: ReviewSession
 // ── E6 ──
 export async function createReviewRun(sessionId: number, body: ReviewRunCreateBody): Promise<ReviewRun> {
   const data = reviewRunCreateBodySchema.parse(body)
-  const res = await api.post(runsPath(sessionId), data, { timeout: REVIEW_RUN_TIMEOUT_MS })
+  const res = await api.post(runsPath(sessionId), data)
   return runSchema.parse(res.data)
 }
 
