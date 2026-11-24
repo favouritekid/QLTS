@@ -769,7 +769,7 @@ export function useUpdateOfferingAcademicInfo() {
       const detail = error.response?.data?.detail;
       const message =
         typeof detail === "string"
-          ? detail
+          ? error.message
           : Array.isArray(detail)
             ? detail.map((e) => e.msg).join(", ")
             : "Cập nhật thông tin tuyển sinh thất bại";
