@@ -32,5 +32,5 @@ async function SessionDetail({ params }: PageProps) {
     notFound()
   }
   // `key` = id: đổi sang lần xét khác ⇒ dựng mới thành phần (bản soạn lý do huỷ của lần xét trước không mang sang — rà F01-4).
-  return <ReviewSessionDetailClient key={sessionId} sessionId={Number(sessionId)} />
+  return <ReviewSessionDetailClient sessionId={Number(sessionId)} />
 }
