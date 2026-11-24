@@ -1605,6 +1605,8 @@ jobs:
           # CI 23-11 (N5): 3 tệp cũ khác ngoài mọi tier cũng khoá tên lớp `ConflictError` / chữ "version" của câu cũ
           # (đỏ ở nightly, không lát PR nào chạy) — sửa sang hợp đồng mới ⇒ phân loại WHOLE vào đây. Hai tệp cùng đợt
           # sửa đã có lát riêng: `test_admission_confirm_lock.py` (Tier 2a), `test_admission_state_transitions.py` (Tier 4s).
+          # Đoàn 3b (rà đoàn 3 J''3): `test_migration_go_sau_phu_du.py` — tĩnh, không CSDL: mọi revision nối sau gd2f20261119
+          # có danh sách gỡ, mỗi `GO_SAU_*` phủ đủ các revision sau nó, fixture của từng test migration gỡ đúng thứ tự.
           - tier: Tier 5n — GĐ2 danh mục THCS + công cụ ghép
             tests: >-
               tests/unit/test_vn_school_thcs_noi_bo_ddl.py
@@ -1620,6 +1622,7 @@ jobs:
               tests/integration/test_admission_version_lock_required.py
               tests/integration/test_race_condition_probe.py
               tests/unit/test_priority_override_service.py
+              tests/unit/test_migration_go_sau_phu_du.py
 
     env:
       APP_ENV: test
