@@ -17,7 +17,7 @@ import type { ReviewFloor, ReviewFloorCandidate, ReviewFloorIn } from "@/lib/zod
 
 // ═══════════════════════════════════════ dạng điểm ═══════════════════════════════════════
 /** Ô nhập: 1–3 chữ số phần nguyên, tối đa 2 chữ số thập phân, dấu chấm HOẶC phẩy; chỉ chữ số ASCII (như máy chủ). */
-export const FLOOR_INPUT_PATTERN = /^([0-9]{1,3})(?:[.,]([0-9]{1,2}))?$/
+export const FLOOR_INPUT_PATTERN = /^([0-9]{1,4})(?:[.,]([0-9]{1,2}))?$/
 
 export type FloorInput = { kind: "empty" } | { kind: "ok"; value: string } | { kind: "invalid" }
 
