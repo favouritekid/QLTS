@@ -104,6 +104,7 @@ describe("userFacingUnavailableDetail — 503 họ fail-closed", () => {
     ["SERVICE_UNAVAILABLE"],
     ["INITIAL_LEAD_STATUS_NOT_CONFIGURED"],
     ["AUTH_STATE_UNAVAILABLE"],
+    ["AUDIT_TRAIL_UNAVAILABLE"],
     ["PRIORITY_RATE_NOT_CONFIGURED"],
     ["CHOICE_TARGET_LEVEL_NOT_CONFIGURED"],
   ])("503 + %s + detail ⇒ trả detail", (code) => {

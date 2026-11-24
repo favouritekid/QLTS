@@ -109,13 +109,19 @@ export function combinedKeyChangeAndRevokeDetail(
  * của `T6_PUBLISH_STOP_ERROR_CODES`, hoặc ở tập loại trừ `LOAI_TRU_503` của
  * chính test ấy (mỗi mã kèm lý do; vd `BULK_VERIFY_*`: luồng lô duyệt giấy có
  * câu riêng ở `document-review/messages.ts`, không qua `handleApiError`). Lớp
- * 503 mới ở backend (vd `AUDIT_TRAIL_UNAVAILABLE` của N4 khi lên main) mà chưa
- * phân loại ⇒ ĐỎ; mã ở tập này mà họ 503 backend không có ⇒ cũng ĐỎ.
+ * 503 mới ở backend mà chưa phân loại ⇒ ĐỎ; mã ở tập này mà họ 503 backend
+ * không có ⇒ cũng ĐỎ.
+ *
+ * `AUDIT_TRAIL_UNAVAILABLE` (N4, `AuditTrailUnavailable`): Phê duyệt vào ngành
+ * chỉ tiêu 0 có xin vượt mà không ghi được vết từ chối bắt buộc ⇒ 503, hồ sơ
+ * chưa đổi. Câu của máy chủ (owner 22-11 Q1) viết cho người dùng ⇒ hiện nguyên
+ * câu ấy. Lô Phê duyệt KHÔNG đi đường này: câu ấy nằm ở mục lỗi của thân 200.
  */
 export const USER_FACING_UNAVAILABLE_ERROR_CODES: ReadonlySet<string> = new Set([
   "SERVICE_UNAVAILABLE",
   "INITIAL_LEAD_STATUS_NOT_CONFIGURED",
   AUTH_STATE_UNAVAILABLE_ERROR_CODE,
+  "AUDIT_TRAIL_UNAVAILABLE",
 ]);
 
 /**
