@@ -164,7 +164,7 @@ function CreateReviewSessionForm({ defaultYear, onClose }: { defaultYear: number
           >
             <option value="">— Chọn đợt —</option>
             {roundItems.map((r) => (
-              <option key={r.id} value={String(r.id)} disabled={!roundSelectable(r)}>
+              <option key={r.id} value={String(r.id)}>
                 {`${r.round_name} (${r.round_code}) — ${roundStateLabel(r)}`}
               </option>
             ))}
