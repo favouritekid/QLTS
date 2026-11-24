@@ -419,6 +419,8 @@ def verified_object_codes(profile: Any) -> list[str]:
 #:   kết thúc)"): ``grade_to − 9`` năm học cuối của mục; ``grade_to`` ≤ 9 ⇒ chỉ năm THCS ⇒ bỏ qua cả mục; THIẾU / sai ``grade_to`` ⇒
 #:   DỪNG có nhãn, không tự xác định KV (owner 22-11, như THPT thiếu lớp — Q16(a)).
 KV_LIEN_CAP_LEVEL = "THCS_THPT"
+#: Lớp đầu của cấp THCS — lớp cuối phần THCS hợp lệ là 6..9 (:func:`kv_entry_thcs_last_grade`, owner 24-11).
+_THCS_FIRST_GRADE = 6
 _THPT_FIRST_GRADE = 10
 _THPT_LAST_GRADE = 12
 #: Mã ca DỪNG của một mục (``breakdown.entries[].case``) — hồ sơ ra ``insufficient_data`` / ``history_entries_inconsistent``.
@@ -525,16 +527,22 @@ def kv_entry_thcs_last_school_year(entry: dict) -> int:
     return kv_entry_thcs_end_year(entry) - 1
 
 
-def kv_entry_thcs_last_grade(entry: dict) -> Any:
+def kv_entry_thcs_last_grade(entry: dict) -> Optional[int]:
     """L3: lớp cuối của PHẦN THCS — khoá thứ hai của bước hoà nhánh THCS (:func:`kv_graduation_pick`, CÙNG luật với THPT). Liên cấp
     lớp kết thúc ≥ 10 ⇒ 9 (phần THCS dừng ở lớp 9; lớp kết thúc hợp lệ đã được :func:`kv_thcs_entry_case` bảo đảm); dòng khác ⇒
-    ``grade_to`` NGUYÊN giá trị (thiếu khoá ⇒ ``None``). So được hay không do :func:`_history_int` ở bước hoà quyết — owner 23-11
-    ``QUYET-DINH-OWNER-O-LOP-TRONG-CAN-XET-TAY`` (a): lớp trống / null / sai kiểu ở nhóm tốt nghiệp ⇒ cần xét tay, KHÔNG coi là 0
-    (khoá cũ ``_history_grade(...) or 0`` — luật (b) — đã bỏ)."""
+    ``grade_to``. Lớp cuối phần THCS KHÔNG phải số nguyên 6..9 ⇒ ``None`` (dữ liệu lớp không hợp lệ). So được hay không do
+    :func:`_history_int` ở bước hoà quyết (MỘT chỗ, chung THPT) — ``None`` ⇒ như ô lớp trống:
+    * owner 23-11 ``QUYET-DINH-OWNER-O-LOP-TRONG-CAN-XET-TAY`` (a): lớp trống / null / sai kiểu ở nhóm tốt nghiệp ⇒ cần xét tay, KHÔNG
+      coi là 0 (khoá cũ ``_history_grade(...) or 0`` — luật (b) — đã bỏ);
+    * owner 24-11 ``QUYET-DINH-OWNER-L3-DONG-THCS-LOP-NGOAI-6-9``: dòng THCS ghi lớp ngoài 6–9 (schema cho 1..12) là dữ liệu lớp không
+      hợp lệ ⇒ cùng đường ấy — trước đây "lớp 12" so như số nên thắng liên cấp đã cắt về 9 lặng lẽ (rà đoàn 3 D'2 NỢ-1). Phần mở
+      rộng kỹ thuật (điều phối 24-11, một định nghĩa): liên cấp kết thúc ở lớp 1–5 (lớp cuối phần THCS < 6) cũng không hợp lệ."""
     grade = entry.get("grade_to")
     if entry.get("level") == KV_LIEN_CAP_LEVEL and _history_int(grade):
-        return min(grade, _THPT_FIRST_GRADE - 1)
-    return grade
+        grade = min(grade, _THPT_FIRST_GRADE - 1)
+    if _history_int(grade) and _THCS_FIRST_GRADE <= grade <= _THPT_FIRST_GRADE - 1:
+        return grade
+    return None
 
 
 def kv_last_school_year(entry: dict) -> Any:
@@ -1291,8 +1299,8 @@ def _kv_thcs_history_steps(
     """Nhánh ``LICH_SU_THCS`` (L3): KV theo các dòng THCS có trường trong danh mục — khu vực học lâu nhất (cùng vòng đếm với THPT),
     hoà ⇒ KV trường tốt nghiệp lớp 9 (MỘT luật hoà với THPT — :func:`kv_graduation_pick`) tra ở năm học lớp 9
     (:func:`kv_entry_thcs_last_school_year`). MỌI ca không tính được ⇒ "KV chờ xác minh" (:data:`KV_PENDING_VERIFICATION_RULE`,
-    ``requires_manual_override``), ``reason`` nói đúng việc cán bộ cần làm — kể cả lớp trống / sai kiểu ở nhóm tốt nghiệp khi hoà (owner
-    23-11 (a))."""
+    ``requires_manual_override``), ``reason`` nói đúng việc cán bộ cần làm — kể cả lớp trống / sai kiểu (owner 23-11 (a)) hoặc lớp cuối
+    phần THCS ngoài 6–9 (owner 24-11) ở nhóm tốt nghiệp khi hoà."""
     pathway = KV_PATHWAY_THCS_HISTORY
 
     def _pending(reason: str, breakdown: dict[str, Any]) -> tuple[None, dict[str, Any]]:
@@ -1344,7 +1352,8 @@ def _kv_thcs_history_steps(
         return winners[0], meta_base(rule_applied="longest_duration", pathway=pathway, breakdown=breakdown_base)
 
     # Bước hoà: MỘT luật với nhánh THPT (:func:`kv_graduation_pick`) trên phần THCS — năm kết thúc phần THCS, lớp cuối phần THCS
-    # (liên cấp ⇒ 9). Owner 23-11 (a): lớp trống / null / sai kiểu ở nhóm tốt nghiệp ⇒ KHÔNG coi là 0 mà "KV chờ xác minh" — cùng
+    # (liên cấp ⇒ 9). Owner 23-11 (a): lớp trống / null / sai kiểu — và owner 24-11: lớp cuối phần THCS ngoài 6–9
+    # (:func:`kv_entry_thcs_last_grade` ⇒ ``None``) — ở nhóm tốt nghiệp ⇒ KHÔNG coi là 0 / so như số mà "KV chờ xác minh" — cùng
     # đường với hai dòng ngang nhau cả năm lẫn lớp (``thcs_tied_graduation_school``; cổng nộp cho qua, T6 dừng có nhãn, F231
     # ``khu_vuc_cho_xac_minh``), như THPT dùng chung đường M1 cho hai ca ấy.
     grad_entry, undecided = kv_graduation_pick(entries, kv_entry_thcs_end_year, kv_entry_thcs_last_grade)

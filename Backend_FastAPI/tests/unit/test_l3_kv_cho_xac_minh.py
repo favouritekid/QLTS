@@ -345,6 +345,69 @@ def test_hoa_thcs_nhom_thap_lop_la_van_lay_truong_tot_nghiep(monkeypatch, lop_la
     assert hoi[-1] == ("truong", T3, 2019)
 
 
+# ═══════════════════════════════ 1c. Lớp cuối phần THCS ngoài 6–9 ở bước hoà (owner 24-11) ═══════════════════════════════
+#: Owner 24-11 ``QUYET-DINH-OWNER-L3-DONG-THCS-LOP-NGOAI-6-9``: dòng cấp THCS ghi lớp cuối NGOÀI 6–9 (schema cho 1..12) là dữ liệu lớp
+#: không hợp lệ ⇒ như ô lớp trống (owner 23-11 (a)) ⇒ cần xét tay ("KV chờ xác minh" ``thcs_tied_graduation_school``), không tự chọn
+#: KV. Phần mở rộng kỹ thuật (điều phối 24-11, một định nghĩa): liên cấp kết thúc ở lớp 1–5 cũng không hợp lệ.
+def _cho_xac_minh_hoa(kv, meta, hoi, so_lan_tra_nam_hoc):
+    assert kv is None
+    _cho_xac_minh(meta, "thcs_tied_graduation_school")
+    assert sorted(meta["breakdown"]["tied_entries"]) == [T1, T2]
+    # Chỉ tra các năm học, KHÔNG tra trường tốt nghiệp.
+    assert sum(h[0] == "truong" for h in hoi) == so_lan_tra_nam_hoc
+
+
+@pytest.mark.parametrize("lop", [10, 11, 12, 5], ids=["lop_10", "lop_11", "lop_12", "lop_5"])
+def test_hoa_dong_thcs_lop_ngoai_6_9_voi_lien_cap_thi_cho_xac_minh(monkeypatch, lop):
+    """Rà đoàn 3 D'2 NỢ-1. Liên cấp T2 lớp 6 → hết lớp 10 ``2017→2021`` (phần THCS 2017–2019, KV2, kết thúc 2020, lớp cuối 9); dòng
+    THCS T1 ``2017→2020`` (KV1) ghi lớp ``lop`` ⇒ hoà 3–3, CÙNG năm kết thúc 2020. Trước: lớp so như số ⇒ "lớp 10–12" thắng liên cấp
+    lặng lẽ (KV1), "lớp 5" thua (KV2). Nay: chờ xác minh."""
+    lich_su = [_thcs(T1, 2017, 2020, lop=lop), _thcs(T2, 2017, 2021, lop=10, level="THCS_THPT", trinh_do=None)]
+    kv, meta, hoi = _chay(monkeypatch, _hs(academic_history=lich_su))
+    assert meta["breakdown"]["kv_totals"] == {"KV1": 3, "KV2": 3}
+    _cho_xac_minh_hoa(kv, meta, hoi, 6)
+
+
+#: (lớp của dòng T1, phán quyết mong đợi) — dòng T2 cùng năm luôn lớp 8. Biên 6 và 9 hợp lệ (so như số, như trước); 5 và 10–12 không.
+_BIEN_LOP_THCS = [
+    (9, ("truong", T1, "KV1")),
+    (6, ("truong", T2, "KV2")),
+    (5, ("xet_tay", [T1, T2])),
+    (10, ("xet_tay", [T1, T2])),
+    (11, ("xet_tay", [T1, T2])),
+    (12, ("xet_tay", [T1, T2])),
+]
+
+
+@pytest.mark.parametrize("lop, mong", _BIEN_LOP_THCS, ids=[f"lop_{c[0]}" for c in _BIEN_LOP_THCS])
+def test_hoa_hai_dong_thcs_bien_lop_cuoi_6_9(monkeypatch, lop, mong):
+    """Hai dòng THCS cùng ``2017→2020`` (T1 KV1, T2 KV2 lớp 8) ⇒ hoà 3–3, cùng năm kết thúc. Lớp 9 của T1 hợp lệ ⇒ T1 là trường tốt
+    nghiệp (không đổi so với trước); lớp 6 hợp lệ ⇒ T2 lớp 8 lớn hơn; lớp 5 / 10 / 11 / 12 ⇒ chờ xác minh."""
+    kv, meta, hoi = _chay(monkeypatch, _hs(academic_history=[_thcs(T1, 2017, 2020, lop=lop), _thcs(T2, 2017, 2020, lop=8)]))
+    assert meta["breakdown"]["kv_totals"] == {"KV1": 3, "KV2": 3}
+    assert _phan_quyet(kv, meta) == mong, meta
+    if mong[0] == "xet_tay":
+        _cho_xac_minh_hoa(kv, meta, hoi, 6)
+    else:
+        assert (meta["breakdown"]["graduation_year"], meta["breakdown"]["graduation_lookup_year"]) == (2020, 2019)
+        assert hoi[-1] == ("truong", mong[1], 2019)
+
+
+@pytest.mark.parametrize("lop_lien_cap, mong", [(5, "xet_tay"), (6, "dong_thcs")], ids=["lien_cap_het_lop_5", "lien_cap_het_lop_6"])
+def test_hoa_lien_cap_ket_thuc_lop_duoi_6_thi_cho_xac_minh(monkeypatch, lop_lien_cap, mong):
+    """Phần mở rộng kỹ thuật (điều phối 24-11): liên cấp T2 ``2017→2020`` kết thúc lớp ``lop_lien_cap`` (≤ 9 ⇒ cả mục là THCS, KV2,
+    3 năm) và dòng THCS T1 ``2017→2020`` lớp 8 (KV1) ⇒ hoà 3–3, cùng năm kết thúc. Lớp cuối phần THCS 5 ⇒ không hợp lệ ⇒ chờ xác minh
+    (trước: so như số ⇒ T1 thắng lặng lẽ); lớp 6 hợp lệ ⇒ T1 lớp 8 là trường tốt nghiệp."""
+    lich_su = [_thcs(T1, 2017, 2020, lop=8), _thcs(T2, 2017, 2020, lop=lop_lien_cap, level="THCS_THPT", trinh_do=None)]
+    kv, meta, hoi = _chay(monkeypatch, _hs(academic_history=lich_su))
+    assert meta["breakdown"]["kv_totals"] == {"KV1": 3, "KV2": 3}
+    if mong == "xet_tay":
+        _cho_xac_minh_hoa(kv, meta, hoi, 6)
+    else:
+        assert (kv, meta["rule_applied"], meta["breakdown"]["graduation_school_id"]) == ("KV1", "tiebreak_graduation_school", T1)
+        assert hoi[-1] == ("truong", T1, 2019)
+
+
 # ═══════════════════════════════ 2. "KV chờ xác minh" — không tính được ═══════════════════════════════
 def test_truong_chua_co_trong_danh_muc_go_tay_thi_cho_xac_minh(monkeypatch):
     kv, meta, hoi = _chay(monkeypatch, _hs(academic_history=[_go_tay(2018, 2020), _go_tay(2020, 2022)]))
