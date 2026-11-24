@@ -58,9 +58,23 @@ GO_GD2C_C2 = (
     "DROP TABLE admission_review_selection",
     "DROP FUNCTION admission_review_selection_guard()",
 )
+#: Danh mục THCS — bảng ghép tên trường (``thcsmap20261122``, nối SAU ``thcsnb20261122``). Bảng có khoá ngoại vào
+#: ``vn_school`` ⇒ gỡ TRƯỚC phần mã nội bộ. ``test_thcs_mapping_migration.py`` gỡ đúng bảng này.
+GO_THCS_MAP = ("DROP TABLE thcs_school_name_mapping",)
+#: Danh mục THCS — mã nội bộ ``NB`` (``thcsnb20261122``; đoàn 3b nối THẲNG sau ``gd2cs20261122``, trước đó sau
+#: ``gd2f20261119``): chỉ mục + CHECK trên ``vn_school`` + sequence. ``test_thcs_danh_muc_migration.py`` dùng ĐÚNG danh sách này.
+GO_THCS_NB = (
+    "DROP INDEX uq_vn_school_internal_code",
+    "ALTER TABLE vn_school DROP CONSTRAINT ck_vn_school_internal_code_format",
+    "DROP SEQUENCE vn_school_internal_code_seq",
+)
+#: Mọi phần nối SAU C2 (mới tới cũ) — đoàn 3b: danh mục THCS. ``test_gd2c_c2_migration.py`` dựng CSDL "ở ``gd2c20261122``"
+#: bằng ``(*GO_SAU_GD2C_C2, *GO_GD2C_C2)``. ``tests/unit/test_migration_go_sau_phu_du.py`` khoá: mỗi ``GO_SAU_*`` = ghép
+#: ĐÚNG các danh sách gỡ của MỌI revision nối sau nó (migration mới nối sau head mà chưa có danh sách gỡ ⇒ ĐỎ).
+GO_SAU_GD2C_C2 = (*GO_THCS_MAP, *GO_THCS_NB)
 #: Mọi phần nối SAU C1 (mới tới cũ) — ``test_gd2c_c1_migration.py`` dựng CSDL "ở ``gd2b20261121``" bằng
 #: ``(*GO_SAU_GD2C_C1, *GO_GD2C_C1)``.
-GO_SAU_GD2C_C1 = (*GO_GD2C_C2,)
+GO_SAU_GD2C_C1 = (*GO_SAU_GD2C_C2, *GO_GD2C_C2)
 #: MỌI phần nối SAU GĐ2-B, xếp từ MỚI tới cũ (gỡ ngược chuỗi Alembic). Lượt nâng tới ``head`` ở
 #: :func:`test_nang_cap_luoc_do_khop_model_va_trigger_song` chạy lại mọi migration sau GĐ2-A ⇒ CSDL trước nâng cấp KHÔNG được còn
 #: phần nào của chúng (``CREATE TABLE`` trùng ⇒ đỏ). Migration mới nối sau head ⇒ thêm phần gỡ của nó vào ĐẦU bộ này.

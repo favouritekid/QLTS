@@ -1,7 +1,7 @@
 """Danh mục THCS — mã nội bộ ``NB`` + 6 số cho trường THCS (owner 22-11, đề xuất danh mục THCS Phần A1).
 
 Revision ID: thcsnb20261122
-Revises: gd2f20261119
+Revises: gd2cs20261122
 Create Date: 2026-11-22
 
 Căn cứ: ``logs-P5/cong-bo-ket-qua/gd2/l3/QUYET-DINH-OWNER-DE-XUAT-THCS-4-CAU-2026-11-22.md`` (mặc định điều phối chọn,
@@ -48,7 +48,9 @@ from sqlalchemy.exc import DBAPIError
 from alembic import op
 
 revision: str = "thcsnb20261122"
-down_revision: Union[str, None] = "gd2f20261119"
+# Đoàn 3b (24-11, rà đoàn 3 J''3): nối THẲNG sau GĐ2-C C2 ``gd2cs20261122`` (nhánh THCS trước đó nối sau ``gd2f20261119``) —
+# một head, KHÔNG revision merge. Không đổi câu nâng / hạ nào.
+down_revision: Union[str, None] = "gd2cs20261122"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

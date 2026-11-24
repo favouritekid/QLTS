@@ -2,9 +2,10 @@
 """GĐ2-C C2 — migration ``gd2cs20261122`` trên PostgreSQL THẬT (CSDL dùng một lần), nâng / hạ qua ĐÚNG ``alembic`` (tiến trình
 con ⇒ đúng ``env.py`` AUTOCOMMIT). Khuôn + helper: ``test_gd2a_migration.py`` / ``test_gd2c_c1_migration.py``.
 
-CSDL trước nâng cấp = ``create_all()`` của model HIỆN TẠI rồi gỡ ĐÚNG phần C2 (``GO_GD2C_C2`` của ``test_gd2a_migration.py`` — MỘT
-danh sách) ⇒ ở ``gd2c20261122``, mọi thứ khác y như thật. Sau nâng cấp, so lược đồ phần C2 (cột, ràng buộc, chỉ mục, trigger, thân
-hàm) với CSDL dựng thẳng từ model: phép khoá "migration = model". Dòng Casbin của route Ban thư ký có mặt ĐÚNG bộ. Hạ cấp
+CSDL trước nâng cấp = ``create_all()`` của model HIỆN TẠI rồi gỡ mọi phần nối SAU C2 (``GO_SAU_GD2C_C2`` — đoàn 3b: danh mục
+THCS) và ĐÚNG phần C2 (``GO_GD2C_C2`` của ``test_gd2a_migration.py`` — MỘT danh sách) ⇒ ở ``gd2c20261122``, mọi thứ khác y
+như thật. Sau nâng cấp, so lược đồ phần C2 (cột, ràng buộc, chỉ mục, trigger, thân hàm) với CSDL dựng thẳng từ model:
+phép khoá "migration = model". Dòng Casbin của route Ban thư ký có mặt ĐÚNG bộ. Hạ cấp
 FAIL-CLOSED khi còn lựa chọn (đúng lớp lỗi ``GD2CC2DataPresent``); cờ CHO PHÉP đúng chữ ``1`` mới xoá; rỗng ⇒ hạ được (gỡ cả dòng
 Casbin) và nâng lại được. Mỗi ca kiểm một bất biến.
 """
@@ -17,7 +18,16 @@ import asyncpg
 import pytest
 import pytest_asyncio
 
-from tests.integration.test_gd2a_migration import GO_GD2C_C2, GOC, _create_all, _phien_ban, _tao_db, _url, _xoa_db
+from tests.integration.test_gd2a_migration import (
+    GO_GD2C_C2,
+    GO_SAU_GD2C_C2,
+    GOC,
+    _create_all,
+    _phien_ban,
+    _tao_db,
+    _url,
+    _xoa_db,
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
@@ -94,13 +104,14 @@ async def _casbin(k):
 
 @pytest_asyncio.fixture
 async def csdl_truoc():
-    """CSDL ở phiên bản ``gd2c20261122``: lược đồ model hiện tại trừ phần C2."""
+    """CSDL ở phiên bản ``gd2c20261122``: lược đồ model hiện tại trừ phần C2 và mọi phần nối SAU C2 (đoàn 3b: danh mục THCS
+    — ``GO_SAU_GD2C_C2``, gỡ trước)."""
     ten = await _tao_db()
     try:
         await _create_all(ten)
         k = await asyncpg.connect(_url(ten, "postgresql"))
         try:
-            for s in GO_GD2C_C2:
+            for s in (*GO_SAU_GD2C_C2, *GO_GD2C_C2):
                 await k.execute(s)
             await k.execute(
                 "CREATE TABLE alembic_version (version_num varchar(32) NOT NULL, "

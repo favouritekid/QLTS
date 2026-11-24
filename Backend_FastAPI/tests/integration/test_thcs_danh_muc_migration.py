@@ -13,6 +13,8 @@ import pytest
 import pytest_asyncio
 
 from tests.integration.test_gd2a_migration import (
+    GO_THCS_MAP,
+    GO_THCS_NB,
     GOC,
     _alembic,
     _create_all,
@@ -24,15 +26,12 @@ from tests.integration.test_gd2a_migration import (
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
-TRUOC = "gd2f20261119"
+#: Đoàn 3b (24-11, rà đoàn 3 J''3): ``thcsnb20261122`` nối THẲNG sau GĐ2-C C2 (trước đó sau ``gd2f20261119``).
+TRUOC = "gd2cs20261122"
 NB = "thcsnb20261122"
-GO_NB = (
-    # Bảng ghép (``thcsmap20261122``, nối SAU revision này) cũng gỡ — ``upgrade head`` sẽ tạo lại.
-    "DROP TABLE thcs_school_name_mapping",
-    "DROP INDEX uq_vn_school_internal_code",
-    "ALTER TABLE vn_school DROP CONSTRAINT ck_vn_school_internal_code_format",
-    "DROP SEQUENCE vn_school_internal_code_seq",
-)
+#: MỘT danh sách với ``test_gd2a_migration.py``: bảng ghép (``thcsmap20261122``, nối SAU revision này) gỡ trước —
+#: ``upgrade head`` sẽ tạo lại — rồi đúng phần mã nội bộ.
+GO_NB = (*GO_THCS_MAP, *GO_THCS_NB)
 
 
 async def _luoc_do_nb(k):
@@ -53,7 +52,7 @@ async def _luoc_do_nb(k):
 
 @pytest_asyncio.fixture
 async def csdl_truoc_nb():
-    """CSDL ở phiên bản ``gd2f20261119``: lược đồ model hiện tại trừ phần mã nội bộ."""
+    """CSDL ở phiên bản ``gd2cs20261122``: lược đồ model hiện tại trừ phần mã nội bộ (và bảng ghép nối sau)."""
     ten = await _tao_db()
     try:
         await _create_all(ten)

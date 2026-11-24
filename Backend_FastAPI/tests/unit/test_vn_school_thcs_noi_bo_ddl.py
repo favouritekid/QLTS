@@ -110,7 +110,8 @@ def test_vi_tu_sql_noi_bo_va_phu_dinh_dung_mot_bieu_thuc():
 
 def test_migration_noi_dung_dung_cho_revision():
     mig = _migration()
-    assert (mig.revision, mig.down_revision) == ("thcsnb20261122", "gd2f20261119")
+    # Đoàn 3b (24-11): nối thẳng sau GĐ2-C C2 (trước đó sau ``gd2f20261119``).
+    assert (mig.revision, mig.down_revision) == ("thcsnb20261122", "gd2cs20261122")
 
 
 def test_chuoi_check_va_chi_muc_model_bang_migration():
