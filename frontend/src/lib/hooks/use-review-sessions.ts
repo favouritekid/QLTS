@@ -8,7 +8,8 @@
  * lỗi (kể cả 429) thì màn hiện LỖI, không vẽ dữ liệu cũ (thành phần đọc `isError` TRƯỚC `data`). Khuôn:
  * `hooks/admin/useCouncilDocuments.ts:319-336`.
  *
- * Thiết kế §6.1 + đính chính 2 §1: SAU MỌI thao tác ghi (E1, E4, E5, E6) — khi thao tác KẾT THÚC, BẤT KỂ kết quả (thành công,
+ * Thiết kế §6.1 + đính chính 1 / 2 §1: SAU MỌI thao tác ghi (E1, E4, E5, E6, và ghi lựa chọn C2 — `use-review-selections.ts`
+ * gọi CÙNG `refreshAfterReviewWrite`) — khi thao tác KẾT THÚC, BẤT KỂ kết quả (thành công,
  * 409, 502 / 504 chưa rõ) — làm mới E2 + E3 + E7 + E8 (`onSettled`, không `onSuccess`).
  *
  * Không tự tải lại khi quay lại cửa sổ (R6 — giới hạn `ADMIN_READ` theo IP); không tự thử lại (người dùng bấm "Tải lại").

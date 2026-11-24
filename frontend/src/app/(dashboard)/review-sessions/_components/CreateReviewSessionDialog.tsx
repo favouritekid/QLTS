@@ -25,6 +25,7 @@ import {
   roundStateLabel,
 } from "@/lib/review-sessions/messages"
 import { reviewSessionHref } from "@/lib/review-sessions/url"
+import type { ReviewRoundOption } from "@/lib/zod/review-sessions"
 
 import { ReviewErrorAlert } from "./ReviewErrorAlert"
 import { yearOptions } from "./years"
@@ -85,7 +86,7 @@ function CreateReviewSessionForm({ defaultYear, onClose }: { defaultYear: number
   const rounds = useReviewRounds(year)
   const create = useCreateReviewSession()
 
-  const roundItems = rounds.isError ? [] : (rounds.data?.items ?? [])
+  const roundItems: ReviewRoundOption[] = rounds.isError ? [] : (rounds.data?.items ?? [])
   // Đợt đã chọn phải còn trong danh sách MỚI NHẤT (sau 400 `review_round_invalid` danh sách được tải lại).
   const roundSelected = roundItems.some((r) => String(r.id) === roundId)
   const canSubmit = roundSelected && !create.isPending && !rounds.isFetching

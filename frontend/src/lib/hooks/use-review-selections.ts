@@ -6,6 +6,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import axios from "axios"
 
 import { getReviewSelectionHistory, listReviewSelections, putReviewSelection } from "@/lib/api/review-selections"
+import { refreshAfterReviewWrite } from "@/lib/hooks/use-review-sessions"
 import type { SelectionPutBody } from "@/lib/zod/review-selections"
 
 export const reviewSelectionKeys = {
@@ -47,6 +48,11 @@ export function usePutReviewSelection(sessionId: number) {
       putReviewSelection(sessionId, profileId, body),
     retry: false,
     gcTime: 0,
-    onSettled: () => void queryClient.invalidateQueries({ queryKey: reviewSelectionKeys.session(sessionId) }),
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: reviewSelectionKeys.session(sessionId) })
+      // GĐ2-B đính chính 1 §1 + đính chính 2 §1: ghi lựa chọn cũng là một thao tác ghi trên lần xét ⇒ làm mới E2 / E3 / E7 / E8
+      // (MỘT hàm chung với E1 / E4 / E5 / E6), khi thao tác kết thúc bất kể kết quả.
+      refreshAfterReviewWrite(queryClient, sessionId)
+    },
   })
 }

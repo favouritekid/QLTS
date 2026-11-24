@@ -287,3 +287,24 @@ export function roundGia(over: Obj = {}): Obj {
     ...over,
   }
 }
+
+/** Lựa chọn của Ban thư ký (GĐ2-C C2 — `SelectionView`) — cho ca "ghi lựa chọn cũng làm mới lần xét". */
+export function luaChonGia(over: Obj = {}): Obj {
+  return {
+    id: 1,
+    session_id: 3,
+    profile_id: 1001,
+    kind: "consider_next_choice",
+    choice_id: 5002,
+    based_on_run_id: 11,
+    based_on_row_hash: "c".repeat(64),
+    decided_by_user_id: 1,
+    decided_by_username: null,
+    decided_by_full_name: null,
+    decided_at: "2026-11-24T03:00:00Z",
+    note: null,
+    supersedes_id: null,
+    is_stale: false,
+    ...over,
+  }
+}

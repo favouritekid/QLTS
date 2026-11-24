@@ -154,11 +154,13 @@ describe("M1 — tạo lần xét (E1)", () => {
     expect(await screen.findByTestId("tao-loi")).toHaveTextContent(FROZEN_MESSAGE)
   })
 
-  it.each([
+  const CHUA_RO: [string, () => Response][] = [
     ["mất kết nối", () => HttpResponse.error()],
     ["500", () => HttpResponse.json({ detail: "x", error_code: "INTERNAL_ERROR" }, { status: 500 })],
     ["504", () => new HttpResponse("gateway timeout", { status: 504 })],
-  ])("%s ⇒ 'Chưa rõ đã tạo hay chưa …' + danh sách lần xét được tải lại", async (_ten, tra) => {
+  ]
+
+  it.each(CHUA_RO)("%s ⇒ 'Chưa rõ đã tạo hay chưa …' + danh sách lần xét được tải lại", async (_ten, tra) => {
     const dem = mayChu(tra)
     await moHop()
     expect(dem.e2).toBe(1)

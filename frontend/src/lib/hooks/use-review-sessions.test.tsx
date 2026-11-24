@@ -8,7 +8,8 @@
  *    c. E8 (và E2) đổi khoá (lượt khác / trang khác) khi lần gọi mới treo ⇒ KHÔNG mượn dữ liệu khoá cũ. Biến thể phá: thêm
  *       `placeholderData: keepPreviousData` ⇒ ĐỎ.
  * 2. Làm mới sau MỌI thao tác ghi khi thao tác KẾT THÚC, BẤT KỂ kết quả (thành công / 409 / mất kết nối): E2 (+ E3, E7, E8 với thao
- *    tác trên một lần xét). Biến thể phá: chuyển làm mới từ `onSettled` sang `onSuccess` ⇒ các ca 409 / mất kết nối ĐỎ.
+ *    tác trên một lần xét — gồm cả ghi lựa chọn C2). Biến thể phá: chuyển làm mới từ `onSettled` sang `onSuccess` ⇒ các ca 409 /
+ *    mất kết nối ĐỎ; bỏ `refreshAfterReviewWrite` khỏi hook lựa chọn C2 ⇒ ba ca "C2 …" ĐỎ.
  * 3. E6 tự đặt thời gian chờ > 60 s (KT-11). Biến thể phá: bỏ `timeout` ⇒ ĐỎ.
  */
 import type { ReactNode } from "react"
@@ -24,11 +25,14 @@ import { appLikeQueryClient } from "@/test/review-sessions-render"
 import {
   RS,
   listItemGia,
+  luaChonGia,
   pageGia,
   runGia,
   runSummaryGia,
   sessionGia,
 } from "@/test/mocks/review-sessions-data"
+
+import { usePutReviewSelection } from "./use-review-selections"
 
 import {
   useCancelReviewSession,
@@ -233,6 +237,25 @@ const CA_GHI: CaGhi[] = [
     dung: () => {
       const m = useCreateReviewRun(3)
       return { goi: () => m.mutate({ kind: "evaluate", session_version: 2 }), xong: m.isSuccess || m.isError }
+    },
+  },
+  {
+    // Nhánh anh em (CLAUDE.md §6): ghi lựa chọn của Ban thư ký (C2) cũng là thao tác ghi trên lần xét (đính chính 1 §1).
+    ten: "C2 ghi lựa chọn của Ban thư ký",
+    method: "put",
+    url: `${RS}/3/selections/1001`,
+    theoLanXet: true,
+    thanhCong: () => HttpResponse.json(luaChonGia()),
+    dung: () => {
+      const m = usePutReviewSelection(3)
+      return {
+        goi: () =>
+          m.mutate({
+            profileId: 1001,
+            body: { kind: "consider_next_choice", based_on_row_hash: "c".repeat(64), supersedes_id: null, note: null },
+          }),
+        xong: m.isSuccess || m.isError,
+      }
     },
   },
 ]

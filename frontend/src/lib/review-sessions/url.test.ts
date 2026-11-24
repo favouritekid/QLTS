@@ -13,17 +13,30 @@ import { readPageSearchParam, readYearSearchParam } from "@/lib/utils/search-par
 
 import { readReviewSessionListFilters, reviewSessionHref, reviewSessionListHref } from "./url"
 
+type CaSo = [string, number | undefined]
+
+const CA_NAM: CaSo[] = [
+  ["2027", 2027],
+  ["abc", undefined],
+  ["20271", undefined],
+  ["202", undefined],
+  [" 2027", undefined],
+  ["2027 ", undefined],
+  ["٢٠٢٧", undefined], // chữ số không phải ASCII
+  ["", undefined],
+]
+
+const CA_TRANG: CaSo[] = [
+  ["1", 1],
+  ["12", 12],
+  ["0", undefined],
+  ["-1", undefined],
+  ["1.5", undefined],
+  ["abc", undefined],
+]
+
 describe("readYearSearchParam — chỉ ^\\d{4}$", () => {
-  it.each([
-    ["2027", 2027],
-    ["abc", undefined],
-    ["20271", undefined],
-    ["202", undefined],
-    [" 2027", undefined],
-    ["2027 ", undefined],
-    ["٢٠٢٧", undefined], // chữ số không phải ASCII
-    ["", undefined],
-  ] as const)("%j ⇒ %j", (v, mong) => {
+  it.each(CA_NAM)("%j ⇒ %j", (v, mong) => {
     expect(readYearSearchParam(v)).toBe(mong)
   })
 
@@ -37,14 +50,7 @@ describe("readYearSearchParam — chỉ ^\\d{4}$", () => {
 })
 
 describe("readPageSearchParam", () => {
-  it.each([
-    ["1", 1],
-    ["12", 12],
-    ["0", undefined],
-    ["-1", undefined],
-    ["1.5", undefined],
-    ["abc", undefined],
-  ] as const)("%j ⇒ %j", (v, mong) => {
+  it.each(CA_TRANG)("%j ⇒ %j", (v, mong) => {
     expect(readPageSearchParam(v)).toBe(mong)
   })
 })
