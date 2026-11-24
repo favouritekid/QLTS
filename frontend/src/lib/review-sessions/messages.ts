@@ -264,7 +264,7 @@ export function describeReviewSessionError(error: unknown, op: "read" | "write" 
 
   if (!e.isAxios) return { ...base, kind: "bad_response", message: BAD_RESPONSE_MESSAGE }
   if (e.frozen) return { ...base, kind: "frozen", message: FROZEN_MESSAGE }
-  if (!e.hasResponse || e.status === 502 || e.status === 504) {
+  if (!e.hasResponse) {
     return op === "write"
       ? { ...base, kind: "uncertain", message: WRITE_UNCERTAIN_MESSAGE }
       : { ...base, kind: "network", message: READ_NETWORK_MESSAGE }
