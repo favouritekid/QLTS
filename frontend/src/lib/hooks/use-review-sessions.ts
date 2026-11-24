@@ -172,7 +172,6 @@ export function refreshAfterReviewWrite(queryClient: QueryClient, sessionId: num
   void queryClient.invalidateQueries({ queryKey: reviewSessionKeys.detail(sessionId) })
   void queryClient.invalidateQueries({ queryKey: reviewSessionKeys.runLists(sessionId) })
   void queryClient.invalidateQueries({ queryKey: reviewSessionKeys.runDetails(sessionId) })
-  void queryClient.invalidateQueries({ queryKey: reviewSessionKeys.floorCandidates(sessionId) })
 }
 
 /** E1. Đợt có thể vừa đổi (400 `review_round_invalid`) ⇒ làm mới cả danh sách đợt. */
