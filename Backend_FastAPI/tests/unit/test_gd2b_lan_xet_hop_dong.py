@@ -117,29 +117,31 @@ def test_hd1_ghim_ten_truong_request_va_khoa_la_bi_cam():
 def test_hd1_ghim_ten_truong_phan_hoi():
     from app.schemas import admission_review as s
 
+    # Phụ lục S3/S7 (24-11, loại "thêm trường phản hồi — không phá" HĐ4 §1.8): ``*_by_full_name`` (S3) và ``RowOut.unit_name`` (S7).
     ky_vong = {
         s.SessionOut: {
-            "id", "academic_year", "admission_round", "seq_no", "status", "version", "created_by_user_id", "created_at",
-            "updated_at", "cancelled_by_user_id", "cancelled_at", "cancel_reason", "quota_table", "floors", "latest_run",
-            "latest_done_run_id", "available_actions",
+            "id", "academic_year", "admission_round", "seq_no", "status", "version", "created_by_user_id",
+            "created_by_full_name", "created_at", "updated_at", "cancelled_by_user_id", "cancelled_by_full_name",
+            "cancelled_at", "cancel_reason", "quota_table", "floors", "latest_run", "latest_done_run_id", "available_actions",
         },
         s.AdmissionRoundRefOut: {"id", "round_code", "round_name"},
         s.QuotaTableStateOut: {"status", "version", "quota_fingerprint"},
         s.FloorOut: {
             "offering_academic_info_id", "floor_score", "major_code", "major_name", "offering_type", "annual_admission_quota",
-            "group_code", "is_deleted", "updated_by_user_id", "updated_at",
+            "group_code", "is_deleted", "updated_by_user_id", "updated_by_full_name", "updated_at",
         },
         s.SessionListItemOut: {
-            "id", "academic_year", "admission_round", "seq_no", "status", "version", "created_by_user_id", "created_at",
-            "floor_count", "latest_run",
+            "id", "academic_year", "admission_round", "seq_no", "status", "version", "created_by_user_id",
+            "created_by_full_name", "created_at", "floor_count", "latest_run",
         },
         s.RunSummaryOut: {
-            "id", "kind", "status", "rule_version", "requested_by_user_id", "requested_at", "finished_at", "duration_ms",
-            "tab_counts", "config_changed_since_run",
+            "id", "kind", "status", "rule_version", "requested_by_user_id", "requested_by_full_name", "requested_at",
+            "finished_at", "duration_ms", "tab_counts", "config_changed_since_run",
         },
         s.RunOut: {
-            "id", "session_id", "kind", "status", "rule_version", "requested_by_user_id", "requested_at", "started_at",
-            "finished_at", "duration_ms", "error_code", "inputs", "summary", "quota_view", "config_changed_since_run",
+            "id", "session_id", "kind", "status", "rule_version", "requested_by_user_id", "requested_by_full_name",
+            "requested_at", "started_at", "finished_at", "duration_ms", "error_code", "inputs", "summary", "quota_view",
+            "config_changed_since_run",
         },
         s.RunInputsOut: {"academic_year", "session_version", "floors", "quota_table", "fee_gate_mode", "snapshot_at"},
         s.RunSummaryCountsOut: {"rows_total", "pool_total", "tab_counts", "reason_counts", "flag_counts", "warnings"},
@@ -154,7 +156,7 @@ def test_hd1_ghim_ten_truong_phan_hoi():
             "remaining_after_auto", "would_exceed",
         },
         s.RowOut: {
-            "profile_id", "full_name", "unit_id", "profile_status", "tab", "reason_codes", "flags", "decision_hints",
+            "profile_id", "full_name", "unit_id", "unit_name", "profile_status", "tab", "reason_codes", "flags", "decision_hints",
             "document_gaps", "considered_choice", "review_total", "score_parts", "floor_score", "rank_in_major", "within_seats",
             "ethnic_priority_state", "per_choice", "prior_year_findings", "row_hash",
         },
