@@ -65,6 +65,20 @@ const BANG_HD4_5: Dong[] = [
     message: D("đợt"),
   },
   {
+    // Phụ lục HĐ4 E10 §2 (S1, owner G1 (c)) — thiếu mã này trong bộ nhận diện ⇒ "Có lỗi (mã: VALIDATION_ERROR)." (rà F01-5).
+    ten: "400 review_round_archived (E1, phụ lục S1 — đợt đã lưu trữ)",
+    loi: loi(400, {
+      reason_code: "review_round_archived",
+      admission_round_id: 9,
+      detail:
+        "Đợt tuyển sinh này đã lưu trữ — không tạo lần xét trên đợt đã lưu trữ. Khôi phục đợt hoặc chọn đợt khác rồi làm lại.",
+      error_code: "VALIDATION_ERROR",
+    }),
+    kind: "known",
+    message:
+      "Đợt tuyển sinh này đã lưu trữ — không tạo lần xét trên đợt đã lưu trữ. Khôi phục đợt hoặc chọn đợt khác rồi làm lại.",
+  },
+  {
     ten: "400 review_floor_duplicate (E4)",
     loi: loi(400, {
       reason_code: "review_floor_duplicate",

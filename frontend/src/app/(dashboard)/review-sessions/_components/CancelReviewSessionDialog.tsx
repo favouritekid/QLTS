@@ -1,6 +1,5 @@
 "use client"
 
-import { useState } from "react"
 import { Loader2 } from "lucide-react"
 import { toast } from "sonner"
 
@@ -39,6 +38,12 @@ interface Props {
   academicYear: number
   /** E3 đang tải lại ⇒ khoá nút (thao tác kế phải dùng `version` mới) */
   busy: boolean
+  /**
+   * Bản soạn lý do — do màn cha GIỮ (ngoài nhánh dữ liệu / lỗi của E3), hộp chỉ hiện và sửa. Rà F01-4: E5 409 ⇒ E3 tải lại lỗi ⇒
+   * nhánh lỗi tháo hộp; nếu bản soạn nằm trong hộp thì lý do đã gõ mất, kể cả khi tải lại sau đó thành công.
+   */
+  reason: string
+  onReasonChange: (reason: string) => void
 }
 
 /**
@@ -59,10 +64,11 @@ function cancelErrorText(error: unknown): string {
  *  - 409 `REVIEW_SESSION_STALE` ⇒ GIỮ lý do đã gõ, hộp vẫn mở; bấm lại sẽ gửi `version` mới.
  *  - 409 `REVIEW_SESSION_NOT_DRAFT` ⇒ đóng hộp, báo câu máy chủ (lần xét có thể đã huỷ ở nơi khác).
  *  - Mất kết nối ⇒ "chưa rõ đã ghi"; E3 tải lại cho biết — đã huỷ thì máy chủ thôi trả `cancel` và hộp tự đóng.
+ * Lý do đã gõ sống qua mọi nhánh trên (kể cả khi E3 tải lại lỗi làm màn tạm tháo hộp) vì bản soạn ở màn cha; chỉ xoá khi huỷ THÀNH CÔNG.
  */
-export function CancelReviewSessionDialog({ open, onOpenChange, sessionId, version, seqNo, academicYear, busy }: Props) {
+export function CancelReviewSessionDialog(props: Props) {
+  const { open, onOpenChange, sessionId, version, seqNo, academicYear, busy, reason, onReasonChange } = props
   const cancel = useCancelReviewSession(sessionId)
-  const [reason, setReason] = useState("")
   const length = codePointLength(reason.trim())
   const reasonOk = length >= 1 && length <= CANCEL_REASON_MAX_LENGTH
   const canSubmit = reasonOk && !cancel.isPending && !busy
@@ -77,7 +83,7 @@ export function CancelReviewSessionDialog({ open, onOpenChange, sessionId, versi
       { version, reason: reason.trim() },
       {
         onSuccess: () => {
-          setReason("")
+          onReasonChange("")
           close()
           toast.success(CANCEL_DONE)
         },
@@ -116,7 +122,7 @@ export function CancelReviewSessionDialog({ open, onOpenChange, sessionId, versi
             data-testid="huy-ly-do"
             value={reason}
             disabled={cancel.isPending}
-            onChange={(e) => setReason(e.target.value)}
+            onChange={(e) => onReasonChange(e.target.value)}
           />
           <p className="text-xs text-muted-foreground" data-testid="huy-ly-do-dem">
             {CANCEL_REASON_HINT} ({length}/{CANCEL_REASON_MAX_LENGTH})

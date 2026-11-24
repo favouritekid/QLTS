@@ -48,10 +48,15 @@ function Banner({ testId, children }: { testId: string; children: string }) {
  * Thanh nút CHỈ theo `available_actions` của máy chủ (`[]` ⇒ không nút; giá trị lạ bỏ qua) — không theo `status`, không theo vai.
  * Trong lúc E3 đang tải lại, nút ghi bị khoá để thao tác kế luôn dùng `version` mới nhất. F1 làm "Huỷ lần xét" (M7); "Sửa điểm
  * sàn" (F2) và "Kiểm hồ sơ" (F3) hiện theo cờ nhưng chưa bấm được ở bản này. Băng cảnh báo hiện NGUYÊN cờ máy chủ, không suy.
+ *
+ * Rà F01-4 (CHẶN): bản soạn lý do huỷ và cờ "đang huỷ" nằm Ở ĐÂY — TRƯỚC mọi nhánh dữ liệu / lỗi — nên sống qua lúc E3 tải lại lỗi
+ * (nhánh lỗi tháo hộp huỷ). Tải lại thành công ⇒ hộp hiện lại (nếu máy chủ còn trả `cancel`) với NGUYÊN lý do đã gõ và `version` mới.
+ * MỘT nguồn: hộp không giữ bản sao. Trang dựng thành phần này với `key` = id lần xét ⇒ bản soạn không mang sang lần xét khác.
  */
 export function ReviewSessionDetailClient({ sessionId }: { sessionId: number }) {
   const q = useReviewSession(sessionId)
   const [cancelOpen, setCancelOpen] = useState(false)
+  const [cancelReason, setCancelReason] = useState("")
 
   if (q.isError) {
     return (
@@ -173,6 +178,8 @@ export function ReviewSessionDetailClient({ sessionId }: { sessionId: number }) 
         seqNo={s.seq_no}
         academicYear={s.academic_year}
         busy={busy}
+        reason={cancelReason}
+        onReasonChange={setCancelReason}
       />
     </div>
   )

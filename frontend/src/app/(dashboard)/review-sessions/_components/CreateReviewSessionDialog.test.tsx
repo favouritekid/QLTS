@@ -129,11 +129,12 @@ describe("M1 — tạo lần xét (E1)", () => {
   })
 
   it("400 review_round_invalid ⇒ câu máy chủ, TẢI LẠI danh sách đợt, giữ hộp", async () => {
+    // Đợt 7 vừa bị xoá / chuyển năm ở nơi khác sau khi hộp tải danh sách đợt.
     const dem = mayChu(() =>
       HttpResponse.json(
         {
           reason_code: "review_round_invalid",
-          admission_round_id: 9,
+          admission_round_id: 7,
           detail: "Đợt tuyển sinh không tồn tại hoặc không thuộc năm của lần xét.",
           error_code: "VALIDATION_ERROR",
         },
@@ -141,10 +142,29 @@ describe("M1 — tạo lần xét (E1)", () => {
       ),
     )
     await moHop()
-    await chonDotVaTao("9")
+    await chonDotVaTao("7")
     expect(await screen.findByTestId("tao-loi")).toHaveTextContent("Đợt tuyển sinh không tồn tại hoặc không thuộc năm của lần xét.")
     await waitFor(() => expect(dem.dot[2026]).toBe(2))
     expect(screen.getByTestId("hop-tao-lan-xet")).toBeInTheDocument()
+  })
+
+  it("rà F01-5 — 400 review_round_archived (đợt đã lưu trữ, S1) ⇒ câu máy chủ nguyên văn, không câu 'Có lỗi (mã: …)'; tải lại đợt, giữ hộp", async () => {
+    const CAU_S1 =
+      "Đợt tuyển sinh này đã lưu trữ — không tạo lần xét trên đợt đã lưu trữ. Khôi phục đợt hoặc chọn đợt khác rồi làm lại."
+    const dem = mayChu(() =>
+      HttpResponse.json(
+        { reason_code: "review_round_archived", admission_round_id: 9, detail: CAU_S1, error_code: "VALIDATION_ERROR" },
+        { status: 400 },
+      ),
+    )
+    await moHop()
+    await chonDotVaTao("9")
+    const loi = await screen.findByTestId("tao-loi")
+    expect(loi).toHaveTextContent(CAU_S1)
+    expect(loi).not.toHaveTextContent("Có lỗi (mã:")
+    await waitFor(() => expect(dem.dot[2026]).toBe(2))
+    expect(screen.getByTestId("hop-tao-lan-xet")).toBeInTheDocument()
+    expect(dem.than).toEqual([{ academic_year: 2026, admission_round_id: 9 }])
   })
 
   it("503 đóng băng ⇒ câu đóng băng", async () => {

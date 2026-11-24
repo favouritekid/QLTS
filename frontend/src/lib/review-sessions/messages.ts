@@ -205,9 +205,13 @@ export const REVIEW_KNOWN_ERROR_CODES: ReadonlySet<string> = new Set([
   "ACADEMIC_INFO_IN_REVIEW_FLOOR",
 ])
 
-/** `reason_code` của HĐ4 §5 (máy chủ `admission_review_errors.py`). */
+/**
+ * `reason_code` của HĐ4 §5 (máy chủ `admission_review_errors.py`) + phụ lục HĐ4 E10 §2 (S1, owner G1 (c)): `review_round_archived`
+ * (400 `VALIDATION_ERROR` {`admission_round_id`} — đợt đã lưu trữ). Câu hiện là `detail` NGUYÊN VĂN của máy chủ (một nguồn câu).
+ */
 export const REVIEW_KNOWN_REASON_CODES: ReadonlySet<string> = new Set([
   "review_round_invalid",
+  "review_round_archived",
   "review_floor_duplicate",
   "review_floor_bad_member",
   "review_session_not_found",

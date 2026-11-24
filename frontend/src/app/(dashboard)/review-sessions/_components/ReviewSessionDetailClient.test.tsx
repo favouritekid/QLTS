@@ -13,6 +13,7 @@
  *    (đã huỷ thì hộp tự đóng vì máy chủ thôi trả `cancel`).
  * Dữ liệu giả.
  */
+import { QueryClientProvider } from "@tanstack/react-query"
 import { fireEvent, screen, waitFor } from "@testing-library/react"
 import { delay, http, HttpResponse } from "msw"
 import { toast } from "sonner"
@@ -27,6 +28,7 @@ import {
   FROZEN_MESSAGE,
   NO_DONE_RUN,
   RATE_LIMITED_MESSAGE,
+  READ_NETWORK_MESSAGE,
   SESSION_NOT_FOUND_MESSAGE,
   WRITE_UNCERTAIN_MESSAGE,
   quotaTableDraftBanner,
@@ -338,5 +340,81 @@ describe("M7 — huỷ lần xét", () => {
     fireEvent.click(screen.getByTestId("huy-xac-nhan"))
     await waitFor(() => expect(screen.queryByTestId("hop-huy-lan-xet")).toBeNull())
     expect(screen.getByTestId("lan-xet-trang-thai")).toHaveTextContent("Đã huỷ")
+  })
+})
+
+// ═══════════════════════ rà F01-4 (CHẶN) — bản soạn lý do huỷ sống qua nhánh lỗi / tải lại ═══════════════════════
+describe("rà F01-4 — lý do huỷ đã gõ không mất khi E3 tải lại lỗi", () => {
+  it("gõ lý do → E5 409 STALE → E3 tải lại lỗi 429 → tải lại lỗi mạng → tải lại thành công ⇒ mở hộp huỷ, lý do còn NGUYÊN, gửi version mới", async () => {
+    // Biến thể phá V19: bản soạn nằm trong hộp (state của hộp) ⇒ nhánh lỗi tháo hộp ⇒ lý do mất ⇒ ĐỎ ở `toHaveValue`.
+    // Biến thể phá V14: xoá lý do khi E5 lỗi ⇒ ĐỎ cùng chỗ.
+    const dem = mayChuE3([
+      json(sessionGia({ version: 2 })),
+      json({ detail: "Rate limit exceeded" }, 429),
+      () => HttpResponse.error(),
+      json(sessionGia({ version: 5 })),
+    ])
+    let lan = 0
+    const than = mayChuHuy(() => {
+      lan += 1
+      return lan === 1
+        ? HttpResponse.json(
+            { reason_code: "review_session_stale", current_version: 5, detail: "x", error_code: "REVIEW_SESSION_STALE" },
+            { status: 409 },
+          )
+        : HttpResponse.json(sessionDaHuyGia({ version: 6 }))
+    })
+    await moChiTiet()
+    await moHopHuy()
+    goLyDo("lý do huỷ")
+    fireEvent.click(screen.getByTestId("huy-xac-nhan"))
+
+    // E5 409 ⇒ làm mới E3 ⇒ 429 ⇒ nhánh lỗi THÁO màn (và hộp huỷ).
+    expect(await screen.findByTestId("lan-xet-loi")).toHaveTextContent(RATE_LIMITED_MESSAGE)
+    expect(screen.queryByTestId("hop-huy-lan-xet")).toBeNull()
+    expect(screen.queryByTestId("huy-ly-do")).toBeNull()
+    expect(dem.lan).toBe(2)
+
+    // Tải lại ⇒ lỗi mạng (vẫn nhánh lỗi).
+    await waitFor(() => expect(screen.getByTestId("lan-xet-tai-lai")).toBeEnabled())
+    fireEvent.click(screen.getByTestId("lan-xet-tai-lai"))
+    await waitFor(() => expect(screen.getByTestId("lan-xet-loi")).toHaveTextContent(READ_NETWORK_MESSAGE))
+    expect(dem.lan).toBe(3)
+
+    // Tải lại ⇒ thành công (version 5).
+    await waitFor(() => expect(screen.getByTestId("lan-xet-tai-lai")).toBeEnabled())
+    fireEvent.click(screen.getByTestId("lan-xet-tai-lai"))
+    expect(await screen.findByTestId("lan-xet-tieu-de")).toBeInTheDocument()
+    expect(dem.lan).toBe(4)
+
+    // Mở hộp huỷ: lý do còn nguyên.
+    fireEvent.click(screen.getByTestId("nut-cancel"))
+    expect(await screen.findByTestId("hop-huy-lan-xet")).toBeInTheDocument()
+    expect(screen.getByTestId("huy-ly-do")).toHaveValue("lý do huỷ")
+
+    // Gửi lại dùng version MỚI + đúng lý do đã gõ.
+    await waitFor(() => expect(screen.getByTestId("huy-xac-nhan")).toBeEnabled())
+    fireEvent.click(screen.getByTestId("huy-xac-nhan"))
+    await waitFor(() => expect(than).toHaveLength(2))
+    expect(than[1]).toEqual({ version: 5, reason: "lý do huỷ" })
+  })
+
+  it("đổi sang lần xét KHÁC ⇒ không mang bản soạn của lần xét trước (trang dựng thành phần với `key` = id)", async () => {
+    // Biến thể phá V20: bỏ `key` ở `[sessionId]/page.tsx` ⇒ React giữ state ⇒ lý do của lần xét 3 hiện ở lần xét 4 ⇒ ĐỎ.
+    server.use(
+      http.get(`${RS}/3`, () => HttpResponse.json(sessionGia())),
+      http.get(`${RS}/4`, () => HttpResponse.json(sessionGia({ id: 4, seq_no: 4 }))),
+    )
+    const cay = (id: string) => resolveServerTree(ReviewSessionDetailPage({ params: Promise.resolve({ sessionId: id }) }))
+    const { queryClient, rerender } = renderApp(await cay("3"))
+    await moHopHuy()
+    goLyDo("lý do của lần xét 3")
+    fireEvent.click(screen.getByRole("button", { name: "Đóng" }))
+    await waitFor(() => expect(screen.queryByTestId("hop-huy-lan-xet")).toBeNull())
+
+    rerender(<QueryClientProvider client={queryClient}>{await cay("4")}</QueryClientProvider>)
+    expect(await screen.findByTestId("lan-xet-tieu-de")).toHaveTextContent("Lần xét số 4")
+    await moHopHuy()
+    expect(screen.getByTestId("huy-ly-do")).toHaveValue("")
   })
 })

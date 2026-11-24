@@ -31,5 +31,6 @@ async function SessionDetail({ params }: PageProps) {
   if (!/^[1-9][0-9]{0,8}$/.test(sessionId)) {
     notFound()
   }
-  return <ReviewSessionDetailClient sessionId={Number(sessionId)} />
+  // `key` = id: đổi sang lần xét khác ⇒ dựng mới thành phần (bản soạn lý do huỷ của lần xét trước không mang sang — rà F01-4).
+  return <ReviewSessionDetailClient key={sessionId} sessionId={Number(sessionId)} />
 }
