@@ -264,6 +264,11 @@ describe("handleApiError", () => {
       ["AUTH_STATE_UNAVAILABLE", "Hệ thống xác thực tạm thời không sẵn sàng. Vui lòng thử lại sau."],
       // N4 `AuditTrailUnavailable.detail` — câu máy chủ, owner 22-11 Q1 (Phê duyệt đơn đi qua handleApiError).
       ["AUDIT_TRAIL_UNAVAILABLE", "Không ghi được nhật ký từ chối — hồ sơ chưa đổi, vui lòng thử lại."],
+      // GĐ2-B `ReviewConfigUnavailable` — câu máy chủ `MESSAGES[FEE_GATE_MODE_INVALID]` (admission_review_errors.py).
+      [
+        "REVIEW_CONFIG_UNAVAILABLE",
+        "Cấu hình chế độ cổng học phí trên máy chủ không hợp lệ — không chạy kiểm hồ sơ. Báo quản trị hệ thống.",
+      ],
       ["PRIORITY_RATE_NOT_CONFIGURED", "Chưa có mức điểm ưu tiên đang áp dụng."],
     ])("503 %s có detail ⇒ hiện NGUYÊN detail của máy chủ", (ma, detail) => {
       handleApiError(createAxiosError(503, { detail, error_code: ma }), { context: "phê duyệt hồ sơ" })
