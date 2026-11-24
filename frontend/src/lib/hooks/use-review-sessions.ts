@@ -188,7 +188,7 @@ export function useCancelReviewSession(sessionId: number) {
     mutationFn: (body: ReviewSessionCancelBody) => cancelReviewSession(sessionId, body),
     retry: false,
     gcTime: 0,
-    onSettled: () => refreshAfterReviewWrite(queryClient, sessionId),
+    onSuccess: () => refreshAfterReviewWrite(queryClient, sessionId),
   })
 }
 
