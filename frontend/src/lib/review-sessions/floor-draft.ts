@@ -153,7 +153,7 @@ export function floorIdsFromValidation(data: Record<string, unknown> | undefined
   for (const e of errors) {
     const loc = e && typeof e === "object" && Array.isArray((e as { loc?: unknown }).loc) ? (e as { loc: unknown[] }).loc : []
     const at = loc.indexOf("floors")
-    const idx = at >= 0 ? loc[at + 1] : undefined
+    const idx = at >= 0 ? loc[at + 2] : undefined
     if (typeof idx === "number" && Number.isInteger(idx) && idx >= 0 && idx < sentIds.length) out.add(sentIds[idx])
   }
   return [...out].sort((a, b) => a - b)
