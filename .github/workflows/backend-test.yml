@@ -1476,6 +1476,9 @@ jobs:
           # cổng), API lần xét (E1–E5, quyền, đóng băng, PATCH dời năm có sàn), hai phiên khoá năm (lưu sàn ↔ dời năm cả hai thứ tự,
           # huỷ ↔ dời năm, tạo ↔ tạo, lưu ↔ lưu), chạy kiểm qua API thật (E6–E9, BT45). Ngoài mọi tier ⇒ check vẫn xanh mà không
           # chạy (CLAUDE.md §11). `gd2b_lan_xet_tro_giup.py` là trợ giúp (không `test_`), import từ `test_gd2b_bt35_toan_luot_db.py`.
+          # S1 (24-11): E10 `floor-candidates` (học vụ cho màn nhập điểm sàn — phụ lục HĐ4 E10) + G1 (c) E1 không nhận đợt đã lưu
+          # trữ. Tệp mới import trợ giúp + `_tai_khoan_vai` của `test_gd2b_lan_xet_api.py` ⇒ CÙNG lát; ngoài mọi tier thì check
+          # vẫn xanh mà không chạy (CLAUDE.md §11).
           - tier: Tier 5k — GĐ2-B lần xét nháp (đợt 1 + đợt 2)
             tests: >-
               tests/unit/test_gd2b_ddl_lockin.py
@@ -1494,6 +1497,7 @@ jobs:
               tests/api/test_gd2b_lan_xet_api.py
               tests/api/test_gd2b_lan_xet_hai_phien_api.py
               tests/api/test_gd2b_chay_kiem_api.py
+              tests/api/test_gd2b_s1_hoc_vu_nhap_san_api.py
 
     env:
       APP_ENV: test

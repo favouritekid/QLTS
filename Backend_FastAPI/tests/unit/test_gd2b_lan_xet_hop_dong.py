@@ -38,6 +38,9 @@ CHIN_ROUTE = {
     ("GET", P + "/{session_id}/runs/{run_id}"): 200,
     ("GET", P + "/{session_id}/runs/{run_id}/rows"): 200,
 }
+#: Phụ lục HĐ4 E10 (S1, 24-11) — route thứ mười, chỉ đọc. Gõ TAY. Ca riêng của E10: ``tests/api/test_gd2b_s1_hoc_vu_nhap_san_api.py``.
+E10_ROUTE = {("GET", P + "/{session_id}/floor-candidates"): 200}
+ROUTE_HOP_DONG = {**CHIN_ROUTE, **E10_ROUTE}
 
 
 def _route_lan_xet():
@@ -51,10 +54,10 @@ def _route_lan_xet():
     return out
 
 
-def test_hd1_dung_9_route_dung_ma_thanh_cong():
+def test_hd1_dung_9_route_cong_e10_dung_ma_thanh_cong():
     routes = _route_lan_xet()
-    assert set(routes) == set(CHIN_ROUTE)
-    for k, ma in CHIN_ROUTE.items():
+    assert set(routes) == set(ROUTE_HOP_DONG)
+    for k, ma in ROUTE_HOP_DONG.items():
         assert (routes[k].status_code or 200) == ma, k
 
 
@@ -174,7 +177,7 @@ def test_hd10_khong_truong_hay_tham_so_vuot_chi_tieu():
 
     tai_lieu = fastapi_app.openapi()
     cam = ("bypass", "override", "force", "vuot")
-    for (m, duong) in CHIN_ROUTE:
+    for (m, duong) in ROUTE_HOP_DONG:
         op = tai_lieu["paths"][duong][m.lower()]
         for p in op.get("parameters", []):
             assert not any(c in p["name"].lower() for c in cam), (m, duong, p["name"])

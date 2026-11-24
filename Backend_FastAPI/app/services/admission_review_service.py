@@ -71,6 +71,20 @@ def require_session_action(status: str, action: str) -> None:
         raise errors.review_session_not_draft(status)
 
 
+def floor_member_accepted(academic_info: Any, academic_year: int) -> bool:
+    """Vị từ thành viên điểm sàn của E4: học vụ (có hàng) ĐÚNG năm của lần xét VÀ chưa xoá mềm. Sai ⇒ học vụ vào
+    ``review_floor_bad_member``. MỘT nguồn cho E4 (:func:`replace_floors`) và cờ ``floor_accepted`` của E10 (phụ lục HĐ4 E10 —
+    "E4 nhận được"; đính chính thiết kế giao diện 24-11 §3). Đọc ``academic_year`` + ``is_deleted`` — có ở hàng của
+    ``review_repo.read_academic_info_years`` lẫn ``admission_review_rules.AcademicInfoFacts``."""
+    return int(academic_info.academic_year) == int(academic_year) and not academic_info.is_deleted
+
+
+def round_accepts_new_session(admission_round: Any) -> bool:
+    """E1 — đợt nhận lần xét mới ⇔ CHƯA lưu trữ (``archived_at`` trống). Đợt Ngừng (``is_active = false``) VẪN chọn được (owner G1
+    24-11, ``QUYET-DINH-OWNER-GIAO-DIEN-GD2-B-CON-LAI-VA-THU-KY-2026-11-24.md`` §1; đính chính thiết kế giao diện §5 "G1 (c)")."""
+    return admission_round.archived_at is None
+
+
 # ── tiện ích ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 def _page(items: List[Dict[str, Any]], total: int, page: int, page_size: int) -> Dict[str, Any]:
     """Trang (hợp đồng §1.6): ``total_pages`` = trần(total / page_size); trang vượt cuối ⇒ ``items`` rỗng."""
@@ -271,13 +285,16 @@ async def _locked_session(db: AsyncSession, session_id: int) -> Tuple[int, model
 async def create_session(
     db: AsyncSession, *, academic_year: int, admission_round_id: int, actor_user_id: int
 ) -> Tuple[Dict[str, Any], Optional[Callable[[], Awaitable[None]]]]:
-    """E1 — tạo lần xét ``draft`` / ``version`` 1. Lỗi (thứ tự): 400 ``review_round_invalid`` (đợt không có / khác năm) → 409
+    """E1 — tạo lần xét ``draft`` / ``version`` 1. Lỗi (thứ tự): 400 ``review_round_invalid`` (đợt không có / khác năm) → 400
+    ``review_round_archived`` (đợt đã lưu trữ — :func:`round_accepts_new_session`; phụ lục HĐ4 E10 §G1) → 409
     ``REVIEW_QUOTA_TABLE_MISSING`` (năm chưa có bảng chỉ tiêu). Đợt sai VÀ chưa có bảng ⇒ 400 trước (phụ lục K1–K4, điểm 4)."""
     year = int(academic_year)
     await lock_review_year(db, year)
     rnd = (await review_repo.read_rounds(db, [admission_round_id])).get(int(admission_round_id))
     if rnd is None or int(rnd.academic_year) != year:
         raise errors.review_round_invalid(admission_round_id)
+    if not round_accepts_new_session(rnd):
+        raise errors.review_round_archived(admission_round_id)
     if await review_repo.read_quota_table_state(db, year) is None:
         raise errors.review_quota_table_missing(year)
     seq_no = await review_repo.max_seq_no(db, year) + 1
@@ -367,7 +384,7 @@ async def replace_floors(
     hop_le = {
         int(r.id)
         for r in await review_repo.read_academic_info_years(db, sorted(gui))
-        if int(r.academic_year) == year and not r.is_deleted
+        if floor_member_accepted(r, year)
     }
     sai = gui - hop_le
     if sai:

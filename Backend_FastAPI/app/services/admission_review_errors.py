@@ -46,6 +46,7 @@ __all__ = [
     "review_floor_bad_member",
     "review_floor_duplicate",
     "review_quota_table_missing",
+    "review_round_archived",
     "review_round_invalid",
     "review_run_in_progress",
     "review_run_not_done",
@@ -57,6 +58,8 @@ __all__ = [
 
 # ── Mã lý do (``reason_code``) — hợp đồng §5 ───────────────────────────────────────────────────────────────────────────
 REVIEW_ROUND_INVALID = "review_round_invalid"
+#: Phụ lục HĐ4 E10 §G1 (owner G1 24-11): E1 không nhận đợt đã lưu trữ (đợt Ngừng vẫn nhận).
+REVIEW_ROUND_ARCHIVED = "review_round_archived"
 REVIEW_FLOOR_DUPLICATE = "review_floor_duplicate"
 REVIEW_FLOOR_BAD_MEMBER = "review_floor_bad_member"
 REVIEW_SESSION_NOT_FOUND = "review_session_not_found"
@@ -75,6 +78,10 @@ ERROR_CODE_ACADEMIC_INFO_IN_REVIEW_FLOOR = "ACADEMIC_INFO_IN_REVIEW_FLOOR"
 #: Câu báo (tiếng Việt, không dữ liệu cá nhân) theo mã lý do. Câu có ``{…}`` được điền bằng số công khai ở hàm dựng lỗi.
 MESSAGES: Dict[str, str] = {
     REVIEW_ROUND_INVALID: "Đợt tuyển sinh không tồn tại hoặc không thuộc năm của lần xét.",
+    # [ĐX] — câu đề xuất, chờ owner duyệt cùng câu chữ giao diện (G8).
+    REVIEW_ROUND_ARCHIVED: (
+        "Đợt tuyển sinh này đã lưu trữ — không tạo lần xét trên đợt đã lưu trữ. Khôi phục đợt hoặc chọn đợt khác rồi làm lại."
+    ),
     REVIEW_FLOOR_DUPLICATE: "Một học vụ xuất hiện nhiều lần trong danh sách điểm sàn — mỗi học vụ chỉ nhập một mức.",
     REVIEW_FLOOR_BAD_MEMBER: "Có học vụ không thuộc năm {academic_year} (không tồn tại, đã xoá, hoặc khác năm).",
     REVIEW_SESSION_NOT_FOUND: "Không tìm thấy lần xét.",
@@ -170,6 +177,12 @@ class AcademicInfoInReviewFloor(ConflictError):
 def review_round_invalid(admission_round_id: int) -> ReviewValidationError:
     """400 — E1: đợt không có / khác năm."""
     return ReviewValidationError(REVIEW_ROUND_INVALID, {"admission_round_id": int(admission_round_id)})
+
+
+def review_round_archived(admission_round_id: int) -> ReviewValidationError:
+    """400 — E1: đợt đã lưu trữ (phụ lục HĐ4 E10 §G1). Kiểm SAU ``review_round_invalid`` (đợt khác năm VÀ đã lưu trữ ⇒
+    ``review_round_invalid``), TRƯỚC ``REVIEW_QUOTA_TABLE_MISSING``."""
+    return ReviewValidationError(REVIEW_ROUND_ARCHIVED, {"admission_round_id": int(admission_round_id)})
 
 
 def review_floor_duplicate(offering_academic_info_ids: Iterable[int]) -> ReviewValidationError:

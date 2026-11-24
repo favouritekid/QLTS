@@ -133,6 +133,64 @@ def _profile_check(k: dict, fig: dict, *, duplicate: bool, area: Tuple[Optional[
     )
 
 
+# ── dữ kiện học vụ / sàn / bảng chỉ tiêu — DÙNG CHUNG cho run (:func:`load_run_facts`) và E10 (:func:`load_floor_candidate_facts`) ──
+#: Bộ đếm rỗng — học vụ không có trong kết quả đếm (và E10, vốn không đếm).
+NO_USAGE: Mapping[str, int] = {"publish_count": 0, "approved_count": 0, "used": 0}
+
+
+async def read_floors(conn: AsyncConnection, session_id: int) -> Dict[int, Decimal]:
+    """Điểm sàn ĐANG lưu của lần xét: {id học vụ: mức}."""
+    return {int(r.offering_academic_info_id): Decimal(r.floor_score) for r in await review_repo.list_floors(conn, session_id)}
+
+
+async def read_group_of(conn: AsyncConnection, academic_year: int) -> Dict[int, int]:
+    """{id học vụ: id nhóm} của bảng chỉ tiêu năm; một học vụ thuộc hai nhóm ⇒ ``ReviewInputError`` (dữ kiện tự mâu thuẫn)."""
+    group_of: Dict[int, int] = {}
+    for gid, ai_id in await load_repo.read_group_members(conn, academic_year):
+        if ai_id in group_of and group_of[ai_id] != gid:
+            raise rules.ReviewInputError("Học vụ %s thuộc hai nhóm." % ai_id)
+        group_of[ai_id] = gid
+    return group_of
+
+
+def academic_info_facts(
+    r: Any, *, group_of: Mapping[int, int], counts: Mapping[int, Mapping[str, int]]
+) -> rules.AcademicInfoFacts:
+    """MỘT hàng của ``load_repo.read_academic_infos`` ⇒ ``AcademicInfoFacts`` (cờ Ngừng của loại hình / ngành: ``False`` từ CSDL ⇒
+    Ngừng; nối trái vắng ⇒ không Ngừng). ``counts`` vắng học vụ ⇒ :data:`NO_USAGE`."""
+    used = counts.get(int(r.id), NO_USAGE)
+    return rules.AcademicInfoFacts(
+        offering_academic_info_id=int(r.id),
+        academic_year=int(r.academic_year),
+        offering_id=r.offering_id,
+        annual_quota=r.annual_admission_quota,
+        group_id=group_of.get(int(r.id)),
+        is_deleted=bool(r.is_deleted),
+        offering_inactive=r.offering_active is False,
+        major_inactive=r.major_active is False,
+        used_publish=used["publish_count"],
+        used_approved=used["approved_count"],
+        used=used["used"],
+        major_code=r.major_code,
+        major_name=r.major_name,
+        offering_type=r.offering_type,
+    )
+
+
+def quota_table_input(table: Any, ai_rows: Sequence[Any], academic_year: int) -> Dict[str, Any]:
+    """``{status, version, quota_fingerprint}`` của bảng chỉ tiêu năm — dấu băm từ CHÍNH các hàng học vụ ĐÚNG năm đã đọc trong ảnh
+    chụp (``quota_fingerprint_of`` — một hàm băm với GET bảng chỉ tiêu)."""
+    return {
+        "status": table.status,
+        "version": int(table.version),
+        "quota_fingerprint": quota_fingerprint_of(
+            (int(r.id), r.annual_admission_quota, bool(r.is_deleted))
+            for r in ai_rows
+            if int(r.academic_year) == int(academic_year)
+        ),
+    }
+
+
 async def load_run_facts(
     conn: AsyncConnection,
     *,
@@ -151,16 +209,12 @@ async def load_run_facts(
         raise errors.review_session_stale(int(s.version))
     year = int(s.academic_year)
 
-    floors = {int(r.offering_academic_info_id): Decimal(r.floor_score) for r in await review_repo.list_floors(conn, session_id)}
+    floors = await read_floors(conn, session_id)
     table = await load_repo.read_quota_table(conn, year)
     if table is None:
         raise errors.review_quota_table_missing(year)
     group_rows = await load_repo.read_groups(conn, year)
-    group_of: Dict[int, int] = {}
-    for gid, ai_id in await load_repo.read_group_members(conn, year):
-        if ai_id in group_of and group_of[ai_id] != gid:
-            raise rules.ReviewInputError("Học vụ %s thuộc hai nhóm." % ai_id)
-        group_of[ai_id] = gid
+    group_of = await read_group_of(conn, year)
 
     orm = AsyncSession(bind=conn)
     try:
@@ -342,25 +396,7 @@ async def load_run_facts(
         # ca này chỉ có khi CSDL bị sửa tay.
         raise rules.ReviewInputError("Mức đối tượng đang mở không nhất quán.") from exc
 
-    academic_infos: Dict[int, rules.AcademicInfoFacts] = {}
-    for r in ai_rows:
-        used = counts.get(int(r.id), {"publish_count": 0, "approved_count": 0, "used": 0})
-        academic_infos[int(r.id)] = rules.AcademicInfoFacts(
-            offering_academic_info_id=int(r.id),
-            academic_year=int(r.academic_year),
-            offering_id=r.offering_id,
-            annual_quota=r.annual_admission_quota,
-            group_id=group_of.get(int(r.id)),
-            is_deleted=bool(r.is_deleted),
-            offering_inactive=r.offering_active is False,
-            major_inactive=r.major_active is False,
-            used_publish=used["publish_count"],
-            used_approved=used["approved_count"],
-            used=used["used"],
-            major_code=r.major_code,
-            major_name=r.major_name,
-            offering_type=r.offering_type,
-        )
+    academic_infos = {int(r.id): academic_info_facts(r, group_of=group_of, counts=counts) for r in ai_rows}
     groups = tuple(
         rules.GroupFacts(
             group_id=int(g.id),
@@ -383,11 +419,51 @@ async def load_run_facts(
         object_rates=object_rates,
         other_draft_auto_profile_ids=other_auto,
     )
-    quota_table = {
-        "status": table.status,
-        "version": int(table.version),
-        "quota_fingerprint": quota_fingerprint_of(
-            (int(r.id), r.annual_admission_quota, bool(r.is_deleted)) for r in ai_rows if int(r.academic_year) == year
-        ),
-    }
+    quota_table = quota_table_input(table, ai_rows, year)
     return LoadedRun(int(session_id), int(s.version), year, run, tuple(facts), quota_table)
+
+
+@dataclass(frozen=True)
+class LoadedFloorCandidates:
+    """Kết quả :func:`load_floor_candidate_facts` — mọi trường đọc trong CÙNG một ảnh chụp."""
+
+    session_id: int
+    session_version: int
+    session_status: str
+    academic_year: int
+    floors: Dict[int, Decimal]
+    academic_infos: Dict[int, rules.AcademicInfoFacts]
+    group_codes: Dict[int, str]
+    quota_table: Dict[str, Any]
+
+
+async def load_floor_candidate_facts(conn: AsyncConnection, *, session_id: int) -> LoadedFloorCandidates:
+    """E10 (phụ lục HĐ4 E10; đính chính thiết kế giao diện 24-11 §3) — dữ kiện học vụ cho màn nhập điểm sàn, đọc trên ``conn`` (kết
+    nối ĐANG ở giao dịch ``REPEATABLE READ READ ONLY`` — nơi gọi mở). Dùng CHÍNH các câu đọc + hàm dựng của :func:`load_run_facts`:
+    ``read_session``, :func:`read_floors`, ``read_quota_table``, ``read_groups``, :func:`read_group_of`, ``read_academic_infos``
+    (mọi học vụ của năm, KỂ CẢ đã xoá mềm), :func:`academic_info_facts`, :func:`quota_table_input`. Khác run: không đếm chỗ đã dùng,
+    không đọc học vụ năm khác do nguyện vọng trỏ tới (``quota_view`` bỏ chúng), không đòi ``draft`` / ``version`` (chỉ đọc).
+
+    Lần xét không có ⇒ 404 ``review_session_not_found``. Lần xét luôn có bảng chỉ tiêu của năm (khoá ngoại RESTRICT) ⇒ thiếu bảng là
+    dữ liệu hỏng ⇒ ``RuntimeError`` (500 — cùng cách ``admission_review_service.quota_table_state`` của E3)."""
+    s = await load_repo.read_session(conn, session_id)
+    if s is None:
+        raise errors.review_session_not_found()
+    year = int(s.academic_year)
+    floors = await read_floors(conn, session_id)
+    table = await load_repo.read_quota_table(conn, year)
+    if table is None:
+        raise RuntimeError("Năm %d của lần xét không có bảng chỉ tiêu (khoá ngoại bị vượt)." % year)
+    group_codes = {int(g.id): g.code for g in await load_repo.read_groups(conn, year)}
+    group_of = await read_group_of(conn, year)
+    ai_rows = await load_repo.read_academic_infos(conn, year, ())
+    return LoadedFloorCandidates(
+        session_id=int(s.id),
+        session_version=int(s.version),
+        session_status=s.status,
+        academic_year=year,
+        floors=floors,
+        academic_infos={int(r.id): academic_info_facts(r, group_of=group_of, counts={}) for r in ai_rows},
+        group_codes=group_codes,
+        quota_table=quota_table_input(table, ai_rows, year),
+    )

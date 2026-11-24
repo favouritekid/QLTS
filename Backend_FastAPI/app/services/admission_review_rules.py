@@ -150,6 +150,15 @@ QUOTA_STATE_NOT_CONFIGURED = "quota_not_configured"
 QUOTA_STATE_FLOOR_MISSING = "floor_missing"
 QUOTA_STATE_GROUP_MISSING = "group_missing"
 QUOTA_STATE_DELETED = "deleted"
+#: Mọi giá trị :func:`quota_state` trả (hợp đồng §4.10) — khoá của ``state_counts`` ở E10 (phụ lục HĐ4 E10).
+QUOTA_STATES: Tuple[str, ...] = (
+    QUOTA_STATE_OK,
+    QUOTA_STATE_CLOSED,
+    QUOTA_STATE_NOT_CONFIGURED,
+    QUOTA_STATE_FLOOR_MISSING,
+    QUOTA_STATE_GROUP_MISSING,
+    QUOTA_STATE_DELETED,
+)
 
 WARNING_QUOTA_TABLE_NOT_LOCKED = "quota_table_not_locked"
 WARNING_GROUP_CEILING_WOULD_EXCEED = "group_ceiling_would_exceed"
@@ -1379,19 +1388,33 @@ def quota_state(ai: AcademicInfoFacts, has_floor: bool) -> str:
     return QUOTA_STATE_OK
 
 
+def floor_applicable(ai: AcademicInfoFacts) -> bool:
+    """Điểm sàn CÓ tác dụng ở học vụ ⇔ :func:`quota_state` đi tới bước sàn (xoá, trống, 0, nhóm đều qua) — tức học vụ ở
+    ``ok`` / ``floor_missing``. Suy THẲNG từ :func:`quota_state` (gọi với ``has_floor=True``) ⇒ đổi thứ tự / thêm bước ở đó là đổi
+    luôn cờ này; không viết lại điều kiện (CLAUDE.md §7). Cờ ``floor_applicable`` của E10 (phụ lục HĐ4 E10) — giao diện xếp nhóm
+    "Cần nhập sàn" theo cờ này, không tự suy luật."""
+    return quota_state(ai, True) == QUOTA_STATE_OK
+
+
+def quota_view_academic_info_ids(academic_infos: Mapping[int, AcademicInfoFacts], academic_year: int) -> List[int]:
+    """Id học vụ của ``quota_view``: ĐÚNG năm lần xét (kể cả đã xoá mềm — ``quota_state`` = ``deleted``), sắp tăng. Bộ nạp đọc thêm
+    học vụ NĂM KHÁC mà nguyện vọng trỏ tới — chúng KHÔNG vào ``quota_view``. MỘT nguồn tập học vụ cho :func:`build_quota_view` và E10
+    (``admission_review_floor_candidate_service``)."""
+    return [i for i in sorted(academic_infos) if academic_infos[i].academic_year == academic_year]
+
+
 def build_quota_view(rows: Sequence[ReviewRow], run: RunFacts) -> Dict[str, Any]:
-    """Bảng chỉ tiêu THAM KHẢO của run (hợp đồng §3.3 ``QuotaView``) — JSON thuần. Chỉ học vụ của ĐÚNG năm lần xét. ``floor_score``
-    là GIÁ TRỊ lúc chạy (P4). Nhóm: ``remaining_after_auto`` có thể âm, ``would_exceed`` chỉ là cảnh báo (QĐB:25)."""
+    """Bảng chỉ tiêu THAM KHẢO của run (hợp đồng §3.3 ``QuotaView``) — JSON thuần. Chỉ học vụ của ĐÚNG năm lần xét
+    (:func:`quota_view_academic_info_ids`). ``floor_score`` là GIÁ TRỊ lúc chạy (P4). Nhóm: ``remaining_after_auto`` có thể âm,
+    ``would_exceed`` chỉ là cảnh báo (QĐB:25)."""
     placed: Dict[int, Counter] = {}
     for r in rows:
         if r.considered is not None:
             placed.setdefault(r.considered.offering_academic_info_id, Counter())[r.tab] += 1
     groups_by_id = {g.group_id: g for g in run.groups}
     majors = []
-    for ai_id in sorted(run.academic_infos):
+    for ai_id in quota_view_academic_info_ids(run.academic_infos, run.academic_year):
         ai = run.academic_infos[ai_id]
-        if ai.academic_year != run.academic_year:
-            continue
         counts = placed.get(ai_id, Counter())
         floor = run.floors.get(ai_id)
         group = groups_by_id.get(ai.group_id) if ai.group_id is not None else None

@@ -54,6 +54,10 @@ from ..schemas.admission_review import (
 from ..services import admission_review_run_service as review_run_service
 from ..services import admission_review_service as review_service
 
+# ── S1 (E10 floor-candidates, phụ lục HĐ4 E10) — KHỐI THÊM RIÊNG (khuôn khối L4 ở trên: không sửa dòng import có sẵn). ──
+from ..schemas.admission_review import FloorCandidatesOut
+from ..services import admission_review_floor_candidate_service as floor_candidate_service
+
 log = structlog.get_logger(__name__)
 
 #: Tiền tố (dưới ``/api``) — dùng chung tiền tố đã đóng băng của cấu hình tuyển sinh.
@@ -220,6 +224,28 @@ async def list_review_sessions(
     return await review_service.list_sessions(
         db, academic_year=academic_year, status=status, page=page, page_size=page_size
     )
+
+
+# S1 — E10 (phụ lục HĐ4 E10). Khai TRƯỚC route ``/{session_id}`` (E3): hôm nay hai mẫu không giao nhau (khác số đoạn), nhưng route
+# bắt-tất ``/{session_id}/…`` thêm sau này sẽ không che được E10 (test ``test_e10_route_khop_dau_tien``). Quyền / giới hạn / no-store
+# theo khuôn E3, E7–E9; không đóng băng (đọc). Đọc MỘT ảnh chụp trên kết nối riêng của ``engine`` (khuôn E6) ⇒ không cần ``db``.
+@router.get(
+    REVIEW_SESSIONS_PATH + "/{session_id}/floor-candidates",
+    response_model=FloorCandidatesOut,
+    tags=[REVIEW_TAG],
+    summary="E10 — học vụ của năm cho màn nhập điểm sàn: trạng thái theo luật máy xét, cờ cần sàn / E4 nhận (một ảnh chụp)",
+)
+@limiter.limit(RateLimits.ADMIN_READ)
+async def get_review_floor_candidates(
+    request: Request,
+    response: Response,
+    session_id: int = Path(..., ge=1),
+    current_user: models.User = deps.CasbinAuth,
+    _admin: models.User = Depends(deps.require_review_admin),
+):
+    out = await floor_candidate_service.get_floor_candidates(database.engine, session_id)
+    response.headers["Cache-Control"] = NO_STORE
+    return out
 
 
 @router.get(
