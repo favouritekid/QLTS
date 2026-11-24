@@ -160,15 +160,15 @@ describe("M4 — 202 và theo dõi lượt (HĐ5: queued / running)", () => {
     expect(push).not.toHaveBeenCalled()
   })
 
-  it("202 queued ⇒ băng 'Đang chờ chạy' → E8 'Đang chạy' → E8 done ⇒ mở M5; nút khoá khi theo dõi; DỪNG hỏi; làm mới khi xong", async () => {
-    // Biến thể phá: không làm mới khi lượt xong qua một lần hỏi lại ⇒ E3 dừng ở 2 lần ⇒ ĐỎ.
+  it("202 queued ⇒ băng 'Đang chờ chạy' → E8 'Đang chạy' → E8 done ⇒ mở M5; DỪNG hỏi; làm mới khi xong", async () => {
+    // Biến thể phá: không làm mới khi lượt xong qua một lần hỏi lại ⇒ E3 dừng ở 2 lần ⇒ ĐỎ. (Khoá nút khi theo dõi: ca "409 …
+    // nút khoá trong lúc chờ" và "đang gửi E6" — ở đây E3 cũng đang tải lại nên phép kiểm nút không tất định.)
     const e3 = mayChuE3([json(sessionGia())])
     mayChuE6([tao(chay("queued"))])
     const e8 = mayChuE8(12, [json(chay("running")), json(runGia({ id: 12 }))])
     await moChiTiet()
     await bamKiem()
     expect(await screen.findByTestId("kiem-trang-thai-luot")).toHaveTextContent(runTrackingLabel(12, "queued"))
-    expect(screen.getByTestId("nut-run_evaluate")).toBeDisabled()
     await waitFor(() => expect(screen.getByTestId("kiem-trang-thai-luot")).toHaveTextContent(runTrackingLabel(12, "running")))
     await waitFor(() => expect(push).toHaveBeenCalledWith(M5_12))
     expect(e8.lan).toBe(2)

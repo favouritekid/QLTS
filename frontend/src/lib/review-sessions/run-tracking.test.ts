@@ -61,7 +61,8 @@ describe("nhịp hỏi lại — giãn dần, có trần, không đốt giới h
   it("trần tính theo LỊCH chờ: chuỗi pha cho đúng pollsUntilCeiling lần hỏi rồi DỪNG (pha 'ceiling')", () => {
     let p: RunTrackPhase = phaseAfterCreated(luot({ id: 12, status: "running" }), null, KE_HOACH_NHO)
     let lan = 0
-    while (p.kind === "polling") {
+    // Chặn vòng: biến thể "bỏ trần" không được treo cả tiến trình test (vòng đồng bộ — hết giờ của vitest không cắt được).
+    while (p.kind === "polling" && lan < 1000) {
       p = phaseAfterRunPoll(p, luot({ id: 12, status: "running" }), KE_HOACH_NHO)
       lan += 1
     }
@@ -154,7 +155,7 @@ describe("chuyển pha", () => {
     expect(tiep.attempt).toBe(1)
     let p: RunTrackPhase = cho
     let lan = 0
-    while (p.kind === "polling") {
+    while (p.kind === "polling" && lan < 1000) {
       p = phaseAfterListPoll(p, trang([runSummaryGia({ id: 11 })]), KE_HOACH_NHO)
       lan += 1
     }
