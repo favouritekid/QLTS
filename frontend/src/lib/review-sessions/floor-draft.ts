@@ -76,7 +76,7 @@ export function buildFloorsPlan(items: readonly ReviewFloorCandidate[], override
       if (item.floor_score !== null) droppedIds.push(id)
       continue
     }
-    const v = normalizeFloorInput(floorDraftText(item, overrides))
+    if (!(id in overrides)) continue; const v = normalizeFloorInput(floorDraftText(item, overrides))
     if (v.kind === "invalid") invalidIds.push(id)
     else if (v.kind === "ok") floors.push({ offering_academic_info_id: id, floor_score: v.value })
   }
