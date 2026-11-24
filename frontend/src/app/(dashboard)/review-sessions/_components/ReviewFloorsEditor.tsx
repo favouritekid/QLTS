@@ -1,5 +1,6 @@
 "use client"
 
+import { useQueryClient } from "@tanstack/react-query"
 import { useState, type Dispatch, type SetStateAction } from "react"
 import { Loader2, RefreshCw } from "lucide-react"
 import { toast } from "sonner"
@@ -17,7 +18,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { usePutReviewFloors, useReviewFloorCandidates } from "@/lib/hooks/use-review-sessions"
+import { reviewSessionKeys, usePutReviewFloors, useReviewFloorCandidates } from "@/lib/hooks/use-review-sessions"
 import {
   EMPTY_FLOOR_DRAFT,
   buildFloorsPlan,
@@ -65,7 +66,7 @@ import {
   majorLabel,
   quotaStateLabel,
 } from "@/lib/review-sessions/messages"
-import { FLOORS_MAX_ITEMS, type ReviewFloorCandidate, type ReviewFloorIn } from "@/lib/zod/review-sessions"
+import { FLOORS_MAX_ITEMS, type ReviewFloorCandidate, type ReviewFloorIn, type ReviewSession } from "@/lib/zod/review-sessions"
 
 import { ReviewErrorAlert } from "./ReviewErrorAlert"
 
@@ -169,6 +170,7 @@ function FloorRow(props: {
 export function ReviewFloorsEditor({ sessionId, busy, draft, onDraftChange, onClose }: Props) {
   const q = useReviewFloorCandidates(sessionId)
   const put = usePutReviewFloors(sessionId)
+  const queryClient = useQueryClient()
   const [confirmEmpty, setConfirmEmpty] = useState(false)
 
   const discard = () => {
@@ -218,7 +220,7 @@ export function ReviewFloorsEditor({ sessionId, busy, draft, onDraftChange, onCl
   const send = (floors: ReviewFloorIn[]) => {
     const sentIds = floors.map((f) => f.offering_academic_info_id)
     put.mutate(
-      { version: c.session_version, floors },
+      { version: queryClient.getQueryData<ReviewSession>(reviewSessionKeys.detail(sessionId))?.version ?? c.session_version, floors },
       {
         onSuccess: () => {
           onDraftChange(EMPTY_FLOOR_DRAFT)
