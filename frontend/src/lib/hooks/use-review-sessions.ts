@@ -66,7 +66,7 @@ export const reviewSessionKeys = {
  */
 export const FRESH_ONLY_QUERY_OPTIONS = {
   staleTime: 0,
-  gcTime: 0,
+  gcTime: 1000,
   retry: false,
   refetchOnWindowFocus: false,
 } as const
