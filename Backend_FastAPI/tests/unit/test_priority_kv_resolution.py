@@ -213,22 +213,25 @@ async def test_resolve_kv_commune_fallback_thcs_only():
 
 @pytest.mark.asyncio
 async def test_resolve_kv_thpt_tied_then_tiebreak_graduation():
-    """Row 1: 2 schools tied 2 years each → tiebreak by graduation school."""
+    """Row 1: 2 schools tied 2 years each → tiebreak by graduation school.
+
+    G5 (owner 22-11 — khoá năm học = năm BẮT ĐẦU, mục ``a→b`` gồm ``b − a`` năm học): dữ liệu đổi sang ``2020→2022`` /
+    ``2022→2024`` để vẫn là "2 năm mỗi trường" (bản cũ ``2020→2021`` / ``2022→2023`` nay chỉ còn 1 năm mỗi trường)."""
     profile = _mock_profile(
         cultural_education_level="graduated_thpt",
         academic_history=[
-            {"school_id": 100, "level": "THPT", "year_from": 2020, "year_to": 2021, "grade_to": 11},
-            {"school_id": 200, "level": "THPT", "year_from": 2022, "year_to": 2023, "grade_to": 12},
+            {"school_id": 100, "level": "THPT", "year_from": 2020, "year_to": 2022, "grade_to": 11},
+            {"school_id": 200, "level": "THPT", "year_from": 2022, "year_to": 2024, "grade_to": 12},
         ],
     )
     # 4 year lookups + 1 graduation lookup = 5 KV calls
     db = _mock_db(school_kv_sequence=[
-        "KV1", "KV1",  # school 100 → 2 years KV1
-        "KV3", "KV3",  # school 200 → 2 years KV3
-        "KV3",         # graduation lookup (school 200, year 2023)
+        "KV1", "KV1",  # school 100 → khoá 2020, 2021 → 2 years KV1
+        "KV3", "KV3",  # school 200 → khoá 2022, 2023 → 2 years KV3
+        "KV3",         # graduation lookup (school 200, năm học cuối — khoá 2023)
     ])
     kv, meta = await resolve_kv_for_profile(profile, db)
-    # School 200 is graduation (year_to=2023 > 2021, grade_to=12 > 11)
+    # School 200 is graduation (year_to=2024 > 2022, grade_to=12 > 11)
     assert kv == "KV3"
     assert meta["pathway"] == "lich_su_thpt"
     assert meta["rule_applied"] == "tiebreak_graduation_school"
@@ -237,12 +240,15 @@ async def test_resolve_kv_thpt_tied_then_tiebreak_graduation():
 
 @pytest.mark.asyncio
 async def test_resolve_kv_thpt_clear_longest_winner():
-    """Single KV dominates → longest_duration (no tiebreak)."""
+    """Single KV dominates → longest_duration (no tiebreak).
+
+    G5 (owner 22-11): ``2023→2023`` nay là mục 0 năm học ⇒ DỪNG (Q15(b)) ⇒ đổi dữ liệu sang ``2019→2022`` (3 năm) + ``2022→2023``
+    (1 năm) để giữ nguyên ý ca."""
     profile = _mock_profile(
         cultural_education_level="graduated_thpt",
         academic_history=[
-            {"school_id": 100, "level": "THPT", "year_from": 2020, "year_to": 2022, "grade_to": 11},  # 3 years
-            {"school_id": 200, "level": "THPT", "year_from": 2023, "year_to": 2023, "grade_to": 12},  # 1 year
+            {"school_id": 100, "level": "THPT", "year_from": 2019, "year_to": 2022, "grade_to": 11},  # 3 years
+            {"school_id": 200, "level": "THPT", "year_from": 2022, "year_to": 2023, "grade_to": 12},  # 1 year
         ],
     )
     db = _mock_db(school_kv_sequence=[
@@ -257,12 +263,14 @@ async def test_resolve_kv_thpt_clear_longest_winner():
 
 @pytest.mark.asyncio
 async def test_resolve_kv_m1_ambiguous_tied_graduation():
-    """M1 edge: 2 schools tied year_to + grade_to → require manual."""
+    """M1 edge: 2 schools tied year_to + grade_to → require manual.
+
+    G5 (owner 22-11): ``2021→2023`` nay 2 năm học ⇒ đổi sang ``2020→2023`` (3 năm) để khớp chuỗi 3 + 3 lần tra."""
     profile = _mock_profile(
         cultural_education_level="graduated_thpt",
         academic_history=[
-            {"school_id": 100, "level": "THPT", "year_from": 2021, "year_to": 2023, "grade_to": 12},
-            {"school_id": 200, "level": "THPT", "year_from": 2021, "year_to": 2023, "grade_to": 12},
+            {"school_id": 100, "level": "THPT", "year_from": 2020, "year_to": 2023, "grade_to": 12},
+            {"school_id": 200, "level": "THPT", "year_from": 2020, "year_to": 2023, "grade_to": 12},
         ],
     )
     db = _mock_db(school_kv_sequence=[
@@ -305,6 +313,8 @@ async def test_resolve_kv_thpt_accepts_thcs_thpt_lien_cap():
     Bug fix (Q9 #07 Phase D.4 audit): engine filter previously hard-coded
     level=='THPT' which excluded THCS_THPT liên cấp candidates. Both
     standalone THPT + THCS_THPT now accepted for THPT basis.
+
+    G5 (owner 22-11): ``2020→2022`` nay 2 năm học ⇒ đổi sang ``2020→2023`` lớp 12 (vào trường liên cấp ở lớp 10) để vẫn 3 năm.
     """
     profile = _mock_profile(
         cultural_education_level="graduated_thpt",
@@ -313,7 +323,7 @@ async def test_resolve_kv_thpt_accepts_thcs_thpt_lien_cap():
                 "school_id": 100,
                 "level": "THCS_THPT",  # ← liên cấp
                 "year_from": 2020,
-                "year_to": 2022,
+                "year_to": 2023,
                 "grade_to": 12,
             },
         ],
@@ -424,6 +434,8 @@ async def test_resolve_kv_pre_2025_history_hits_before_entry():
     Simulates Buôn Ma Thuột Mã 002 (effective 2000-2024 KV1).
     Engine lookup_kv_for_school_year(school_id=132, year=2020/2021/2022)
     → all hit before-row → KV1 dominates.
+
+    G5 (owner 22-11): ba năm học 2020–2021, 2021–2022, 2022–2023 ghi là mục ``2020→2023`` (tốt nghiệp 2023), khoá 2020, 2021, 2022.
     """
     profile = _mock_profile(
         cultural_education_level="graduated_thpt",
@@ -432,7 +444,7 @@ async def test_resolve_kv_pre_2025_history_hits_before_entry():
                 "school_id": 132,
                 "level": "THPT",
                 "year_from": 2020,
-                "year_to": 2022,
+                "year_to": 2023,
                 "grade_to": 12,
             },
         ],
@@ -449,6 +461,8 @@ async def test_resolve_kv_post_2025_history_hits_after_entry():
     """Candidate học 2025-2027 tại THPT Buôn Ma Thuột Mã 090 → KV2.
 
     Simulates Buôn Ma Thuột Mã 090 (effective 2025-now KV2).
+
+    G5 (owner 22-11): ba năm học từ 2025–2026 ghi là ``2025→2028``, khoá 2025, 2026, 2027.
     """
     profile = _mock_profile(
         cultural_education_level="graduated_thpt",
@@ -457,7 +471,7 @@ async def test_resolve_kv_post_2025_history_hits_after_entry():
                 "school_id": 162,
                 "level": "THPT",
                 "year_from": 2025,
-                "year_to": 2027,
+                "year_to": 2028,
                 "grade_to": 12,
             },
         ],
@@ -473,7 +487,10 @@ async def test_resolve_kv_cross_period_max_duration_wins():
     """TT 05/2021 rule: candidate học 2-trường cross-period 2023-2026.
 
     2 năm pre-2025 KV1 + 2 năm post-2025 KV2 → tied → tiebreak graduation
-    school (year_to=2026 grade=12 wins).
+    school (year_to=2027 grade=12 wins).
+
+    G5 (owner 22-11 — khoá năm bắt đầu): hai năm học mỗi trường ghi là ``2023→2025`` / ``2025→2027`` (bản cũ ``2023→2024`` /
+    ``2025→2026`` nay chỉ 1 năm mỗi trường).
     """
     profile = _mock_profile(
         cultural_education_level="graduated_thpt",
@@ -482,21 +499,21 @@ async def test_resolve_kv_cross_period_max_duration_wins():
                 "school_id": 132,
                 "level": "THPT",
                 "year_from": 2023,
-                "year_to": 2024,
+                "year_to": 2025,
                 "grade_to": 11,
             },
             {
                 "school_id": 162,
                 "level": "THPT",
                 "year_from": 2025,
-                "year_to": 2026,
+                "year_to": 2027,
                 "grade_to": 12,
             },
         ],
     )
-    # 2023, 2024 from school 132 → KV1
-    # 2025, 2026 from school 162 → KV2
-    # +1 graduation lookup for tiebreak (school 162, year 2026)
+    # khoá 2023, 2024 from school 132 → KV1
+    # khoá 2025, 2026 from school 162 → KV2
+    # +1 graduation lookup for tiebreak (school 162, năm học cuối — khoá 2026)
     db = _mock_db(school_kv_sequence=["KV1", "KV1", "KV2", "KV2", "KV2"])
     kv, meta = await resolve_kv_for_profile(profile, db)
     assert kv == "KV2"
