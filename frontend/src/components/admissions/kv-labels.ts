@@ -28,6 +28,9 @@ export const PATHWAY_LABEL_VI: Record<string, string> = {
   commune_special: "Theo nơi thường trú (trường hợp đặc biệt)",
   manual: "Cán bộ ấn định thủ công",
   not_resolved: "Chưa xác định được",
+  // L3 (owner 22-11) — câu chữ CHỜ owner duyệt. BE: `priority_service.KV_PATHWAY_*`.
+  lich_su_thcs: "Theo nơi học THCS (trường THCS trong danh mục)",
+  cho_xac_minh: "Chờ xác minh",
 }
 
 /** Rule applied enum → Vietnamese display label. */
@@ -37,6 +40,8 @@ export const RULE_LABEL_VI: Record<string, string> = {
   ambiguous_requires_manual: "Cần cán bộ xem xét (2 lựa chọn ngang nhau)",
   commune_lookup: "Tra cứu theo mã xã/phường nơi thường trú",
   manual_override: "Cán bộ ấn định thủ công",
+  // L3 (owner 22-11) — BE `priority_service.KV_PENDING_VERIFICATION_RULE`; câu chữ CHỜ owner duyệt.
+  kv_pending_verification: "KV chờ xác minh",
 }
 
 /** Failure reason → Vietnamese hint shown to candidate. */
@@ -47,6 +52,20 @@ export const REASON_VI: Record<string, string> = {
   fallback_no_commune: "Chưa khai mã xã/phường nơi thường trú",
   special_case_no_commune: "Trường hợp đặc biệt nhưng chưa khai mã xã/phường",
   no_kv_lookup_succeeded: "Không tìm thấy KV cho các trường trong lịch sử (data MOET chưa đủ)",
+  // L3 (owner 22-11) — BE `priority_service.KV_PENDING_REASON_*`; câu chữ CHỜ owner duyệt.
+  kv_basis_needs_manual_verification:
+    "Khu vực cần xác minh từ học bạ và ấn định thủ công (sơ cấp / hồ sơ không rõ trình độ)",
+  thcs_history_missing: "Chưa khai lịch sử học THCS — thêm các năm THCS theo học bạ",
+  thcs_school_not_in_catalog:
+    "Trường THCS chưa có trong danh mục — báo Admin thêm trường, rồi chọn lại trường trong lịch sử học",
+  thcs_history_inconsistent:
+    "Dòng lịch sử học THCS chưa hợp lệ (0 năm học, năm ngược, thiếu lớp, chọn nhầm cấp trường…) — sửa theo học bạ",
+  thcs_school_kv_missing:
+    "Trường THCS chưa có khu vực cho đủ các năm học — báo Admin bổ sung khu vực của trường",
+  thcs_tied_graduation_school:
+    "Hai trường THCS ngang nhau về thời gian học và năm tốt nghiệp — cần cán bộ xác minh",
+  thcs_school_dtnt:
+    "Trường PT dân tộc nội trú — xác minh khu vực theo hộ khẩu và ấn định thủ công",
 }
 
 /**

@@ -1382,6 +1382,7 @@ jobs:
               tests/unit/test_priority_kv_resolution.py
               tests/unit/test_priority_kv_phase_e4_matrix.py
               tests/unit/test_priority_kv_lien_cap_g5.py
+              tests/unit/test_l3_kv_cho_xac_minh.py
               tests/unit/test_kv_hoa_thpt_thieu_lop.py
               tests/unit/test_status_history_runtime_writer.py
               tests/unit/test_upload_image_verify.py
@@ -1535,6 +1536,39 @@ jobs:
               tests/integration/test_gd2f_trigger_luat_b_migration.py
               tests/api/test_phe_duyet_nganh_chi_tieu_0_api.py
               tests/services/test_admission_quota.py
+          # GĐ2-B đợt 1 — lần xét nháp: L1 nền dữ liệu (4 bảng + trigger + migration gd2b20261121 + repository + mã lỗi) và L2 luật
+          # thuần (E1–E7, ưu tiên v2, xét NV, xếp Q1, row_hash), sửa sau Codex B1–B3. Lát RIÊNG như 5j; ngoài mọi tier thì required
+          # check vẫn xanh mà không chạy (CLAUDE.md §11). `test_gd2b_repository_db.py` import hàm dựng dữ liệu của
+          # `test_gd2b_rang_buoc_db.py` ⇒ CÙNG lát. Đo máy dev 21-11 (L1): ràng buộc + repository ~171 s, migration ~46 s, đơn vị < 3 s.
+          # Lượt 3 (22-11): `test_vn_school_admin_service.py` vào lát này — nó canh KV hiện hành trên ô chọn trường dùng CHUNG thứ tự
+          # `school_kv_pick_order_sql` với resolver / đường lô (B-P1 của đợt 2); trước đó tệp không nằm trong tier nào (chỉ chạy đêm)
+          # nên cổng PR không thấy (CLAUDE.md §11). Không có tier `vn_school*` nào khác để ghép.
+          # L3 (owner 22-11): `test_l3_truong_thcs_db.py` — Admin thêm trường THCS + KV qua `VnSchoolService` ⇒ hồ sơ trung cấp sau
+          # THCS tính ra KV, hai đường (từng hồ sơ / lô của bộ nạp này) bằng nhau trên CSDL thật; cùng lát với tệp vn_school ở trên.
+          # Ca đơn vị `test_l3_kv_cho_xac_minh.py` ở Tier 5 cạnh `test_priority_kv_lien_cap_g5.py`.
+          # Đợt 2 L3a + L4 (22-11): 9 API lần xét nháp (E1–E9) — hợp đồng không CSDL (ghim route / trường / quyền / điểm sàn / một
+          # cổng), API lần xét (E1–E5, quyền, đóng băng, PATCH dời năm có sàn), hai phiên khoá năm (lưu sàn ↔ dời năm cả hai thứ tự,
+          # huỷ ↔ dời năm, tạo ↔ tạo, lưu ↔ lưu), chạy kiểm qua API thật (E6–E9, BT45). Ngoài mọi tier ⇒ check vẫn xanh mà không
+          # chạy (CLAUDE.md §11). `gd2b_lan_xet_tro_giup.py` là trợ giúp (không `test_`), import từ `test_gd2b_bt35_toan_luot_db.py`.
+          - tier: Tier 5k — GĐ2-B lần xét nháp (đợt 1 + đợt 2)
+            tests: >-
+              tests/unit/test_gd2b_ddl_lockin.py
+              tests/unit/test_gd2b_ma_loi.py
+              tests/unit/test_gd2b_luat_thuan.py
+              tests/unit/test_gd2b_vi_tu_mot_nguon.py
+              tests/unit/test_gd2b_kv_lo_mot_nguon.py
+              tests/integration/test_gd2b_migration.py
+              tests/integration/test_gd2b_rang_buoc_db.py
+              tests/integration/test_gd2b_repository_db.py
+              tests/integration/test_gd2b_bt35_toan_luot_db.py
+              tests/integration/test_gd2b_bo_dem_mot_cau_db.py
+              tests/api/test_gd2b_kv_truong_chong_khoang_api.py
+              tests/unit/test_vn_school_admin_service.py
+              tests/integration/test_l3_truong_thcs_db.py
+              tests/unit/test_gd2b_lan_xet_hop_dong.py
+              tests/api/test_gd2b_lan_xet_api.py
+              tests/api/test_gd2b_lan_xet_hai_phien_api.py
+              tests/api/test_gd2b_chay_kiem_api.py
 
     env:
       APP_ENV: test

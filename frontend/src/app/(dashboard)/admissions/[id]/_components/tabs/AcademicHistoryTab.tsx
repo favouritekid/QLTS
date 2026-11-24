@@ -71,7 +71,8 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
   // 2024→2025 ⇒ tốt nghiệp 2025). KHÔNG tự lấy năm nay. Các dòng sinh ra vẫn sửa
   // được (lưu ban, chuyển trường); officer điền trường + GPA. Trình độ
   // (graduation_type) gán cho MỌI lớp = cấp học. Engine KV cần dòng THPT có
-  // school_id; dòng THCS chỉ lưu hồ sơ.
+  // school_id; L3 (owner 22-11): trung cấp sau THCS tính KV từ dòng THCS
+  // (trình độ THCS) có school_id — dòng gõ tay ⇒ "KV chờ xác minh" (backend).
   const thptStartYear = parseBandStartYear(GRADE_BANDS.THPT, thptStartText)
   const thcsStartYear = parseBandStartYear(GRADE_BANDS.THCS, thcsStartText)
 

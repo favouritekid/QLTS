@@ -76,6 +76,15 @@ from .admission_quota_table import (  # noqa: E402
     AdmissionQuotaTable,
 )
 from . import admission_quota_ddl  # noqa: E402,F401
+# GĐ2-B: lần xét nháp, điểm sàn, lượt chạy kiểm hồ sơ, dòng kết quả + trigger bất biến (bản cho create_all(); bản thật:
+# migration gd2b20261121).
+from .admission_review import (  # noqa: E402
+    AdmissionReviewFloor,
+    AdmissionReviewRow,
+    AdmissionReviewRun,
+    AdmissionReviewSession,
+)
+from . import admission_review_ddl  # noqa: E402,F401
 
 # Admission Config Domain (Phase 1: Relational admission system)
 from .admission_config import (
@@ -263,6 +272,10 @@ __all__ = [
     "AdmissionQuotaTable",
     "AdmissionQuotaGroup",
     "AdmissionQuotaGroupMember",
+    "AdmissionReviewSession",
+    "AdmissionReviewFloor",
+    "AdmissionReviewRun",
+    "AdmissionReviewRow",
     "ProfileSubjectScore",
     "ProfileDocument",
     "DocumentAuditLog",  # Audit trail for document operations

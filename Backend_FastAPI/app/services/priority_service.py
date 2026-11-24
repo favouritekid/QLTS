@@ -37,10 +37,10 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Callable, Generator, Iterable, Mapping, NamedTuple, Optional, Sequence
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -186,6 +186,35 @@ def kv_snapshot_resolved(snapshot: Optional[dict]) -> bool:
     return s.get("rule_applied") in KV_SUCCESS_RULE_APPLIED and s.get("kv_resolved") is not None
 
 
+#: L3 (owner 22-11, ``logs-P5/cong-bo-ket-qua/gd2/l3/QUYET-DINH-OWNER-L3-5-CAU-2026-11-22.md`` +
+#: ``…/QUYET-DINH-OWNER-L3-TRUONG-THCS-VAO-DANH-MUC-2026-11-22.md``): "KV chờ xác minh" — thí sinh trung cấp xét sau THCS chưa
+#: tính được KV từ trường THCS trong danh mục, thí sinh sơ cấp, và nhánh cũ không truyền trình độ. NGOÀI whitelist ⇒ CHƯA phân
+#: giải (T6 dừng có nhãn, không 0 điểm; bản in GĐ1 / máy xét GĐ2-B chặn ``khu_vuc_cho_xac_minh``); RIÊNG cổng nộp cho qua.
+KV_PENDING_VERIFICATION_RULE = "kv_pending_verification"
+
+
+def kv_snapshot_pending_verification(snapshot: Optional[dict]) -> bool:
+    """Ảnh chụp mang "KV chờ xác minh" (L3) — MỘT vị từ cho cổng nộp, T6, bản in GĐ1 và máy xét GĐ2-B."""
+    s = snapshot if isinstance(snapshot, dict) else {}
+    return s.get("rule_applied") == KV_PENDING_VERIFICATION_RULE
+
+
+def kv_pending_verification_kind(snapshot: Optional[dict]) -> Optional[str]:
+    """Loại "KV chờ xác minh" cho câu dừng T6: ``"thcs_history"`` — trung cấp sau THCS, tính được khi trường THCS có trong danh mục;
+    ``"manual"`` — chỉ xác minh tay (sơ cấp, nhánh cũ, trường PT DTNT); ``None`` — không phải chờ xác minh."""
+    if not kv_snapshot_pending_verification(snapshot):
+        return None
+    if snapshot.get("pathway") == KV_PATHWAY_THCS_HISTORY and snapshot.get("reason") != KV_PENDING_REASON_THCS_DTNT:
+        return "thcs_history"
+    return "manual"
+
+
+def kv_snapshot_blocks_submit(snapshot: Optional[dict]) -> bool:
+    """Cổng nộp (T1): chặn khi KV chưa phân giải, TRỪ "KV chờ xác minh" (owner L3: "vẫn tiếp nhận bình thường"). Mọi mã khác
+    ngoài whitelist vẫn chặn như cũ — vị từ riêng, không nới ``kv_snapshot_resolved`` (T6 / bản in vẫn coi là chưa phân giải)."""
+    return not kv_snapshot_resolved(snapshot) and not kv_snapshot_pending_verification(snapshot)
+
+
 def priority_academic_year(profile: Any) -> int:
     """Năm tuyển sinh của hồ sơ — nguồn năm DUY NHẤT để tra mức (owner Q10(a)).
 
@@ -217,7 +246,6 @@ async def select_open_priority_rates(
       bừa một hàng.
     """
     from app.models.priority_config import PriorityAreaConfig, PriorityObjectConfig
-    from app.utils.exceptions import PriorityRateNotConfigured
 
     if table == RATE_TABLE_AREA:
         model, cot_ma = PriorityAreaConfig, PriorityAreaConfig.area_code
@@ -235,8 +263,27 @@ async def select_open_priority_rates(
         model.effective_to.is_(None),
     )
     rows = (await db.execute(stmt)).all()
+    return pick_open_priority_rates(rows, table=table, academic_year=academic_year, codes=can)
+
+
+def pick_open_priority_rates(
+    rows: Iterable[Sequence[Any]],
+    *,
+    table: str,
+    academic_year: int,
+    codes: list[str],
+) -> dict[str, Decimal]:
+    """Phần QUYẾT ĐỊNH của :func:`select_open_priority_rates` — hàm THUẦN trên các hàng ``(mã, điểm)`` ĐANG MỞ của
+    ``academic_year`` đã đọc (GĐ2-B đợt 2: máy xét đọc MỌI hàng mở của năm bằng MỘT câu rồi gọi chính hàm này cho từng mã —
+    một nguồn luật với T6 / bản in). Hàng của mã KHÔNG thuộc ``codes`` bị bỏ qua (câu đọc theo năm có thể trả thêm mã khác).
+    Hai hàng mở cùng mã ⇒ ``RuntimeError``; mã thiếu ⇒ ``PriorityRateNotConfigured`` liệt kê MỌI mã thiếu."""
+    from app.utils.exceptions import PriorityRateNotConfigured
+
+    can = list(dict.fromkeys(codes))
     muc: dict[str, Decimal] = {}
     for ma, diem in rows:
+        if ma not in can:
+            continue
         if ma in muc:
             raise RuntimeError(
                 f"{table}: hơn một hàng ĐANG MỞ cho mã {ma!r} năm {academic_year} — dữ liệu mức không nhất quán."
@@ -276,6 +323,8 @@ async def _resolve_area_bonus(
             rule_applied=snapshot.get("rule_applied"),
             reason=snapshot.get("reason"),
             context={"profile_id": getattr(profile, "id", None)},
+            # L3: nhãn riêng "KV chờ xác minh" (cùng ``error_code`` — tập mã dừng T6 của FE không đổi).
+            pending_verification=kv_pending_verification_kind(snapshot),
         )
     area_code = snapshot["kv_resolved"]
     muc = await select_open_priority_rates(
@@ -304,14 +353,7 @@ async def _resolve_object_bonus(
 
     Returns ``(bonus_points, meta_dict)``.
     """
-    codes = getattr(profile, "priority_object_codes", None) or []
-    evidence = getattr(profile, "priority_object_evidence", None) or {}
-
-    verified_codes = [
-        c
-        for c in codes
-        if isinstance(evidence.get(c), dict) and evidence[c].get("status") == "verified"
-    ]
+    verified_codes = verified_object_codes(profile)
     meta: dict[str, Any] = {
         "verified_codes": verified_codes,
         "object_max_code": None,
@@ -330,6 +372,19 @@ async def _resolve_object_bonus(
     meta["object_max_code"] = best_code
     meta["object_rate"] = str(best_rate)
     return best_rate, meta
+
+
+def verified_object_codes(profile: Any) -> list[str]:
+    """Mã đối tượng ưu tiên có minh chứng ``verified`` (``priority_object_evidence[mã]["status"]``), theo thứ tự khai trong
+    ``priority_object_codes`` — vị từ của :func:`_resolve_object_bonus` (T6), tách thành hàm thuần để máy xét GĐ2-B (đặc tả
+    bản 4 §6.4 "các diện khác") dùng CHUNG, không chép. Chỉ đọc cột của hồ sơ."""
+    codes = getattr(profile, "priority_object_codes", None) or []
+    evidence = getattr(profile, "priority_object_evidence", None) or {}
+    return [
+        c
+        for c in codes
+        if isinstance(evidence.get(c), dict) and evidence[c].get("status") == "verified"
+    ]
 
 
 # =============================================================================
@@ -424,20 +479,62 @@ def kv_entry_problem(entry: dict) -> Optional[str]:
     return None
 
 
+def kv_lien_cap_split_year(entry: dict) -> int:
+    """MỘT chỗ CẮT mục liên cấp (``THCS_THPT``) thành phần THCS và phần THPT — khoá năm bắt đầu của năm học lớp 10 đầu tiên trong mục:
+    lớp kết thúc ``g`` hợp lệ ⇒ ``min(year_to, max(year_from, year_to − (g − 9)))`` (``g`` ≤ 9 ⇒ ``year_to``: cả mục là THCS). Phần THPT
+    = ``split .. year_to − 1`` (:func:`kv_entry_school_years`, G5); phần THCS = ``year_from .. split − 1``
+    (:func:`kv_entry_thcs_school_years`, L3 — owner 22-11 ``QUYET-DINH-OWNER-L3A-5-CAU`` câu 3: "cắt như G5 cắt phần THPT"). Chỉ gọi
+    khi năm là số nguyên và lớp kết thúc hợp lệ."""
+    y_from, y_to = entry["year_from"], entry["year_to"]
+    grade = _history_grade(entry.get("grade_to"))
+    return min(y_to, max(y_from, y_to - (grade - (_THPT_FIRST_GRADE - 1))))
+
+
 def kv_entry_school_years(entry: dict) -> range:
-    """Khoá năm học (NĂM BẮT ĐẦU) được tra của một mục đếm được: ``range(năm học đầu, year_to)``.
+    """Khoá năm học (NĂM BẮT ĐẦU) được tra của một mục đếm được ở nhánh THPT: ``range(năm học đầu, year_to)``.
 
     * THPT / GDTX: ``year_from .. year_to − 1``.
-    * liên cấp lớp kết thúc ``g`` ∈ 10..12: ``g − 9`` năm học cuối — ``max(year_from, year_to − (g − 9)) .. year_to − 1`` (mục ngắn
-      thì không sớm hơn năm vào học). Vd lớp 6 → hết lớp 10 ``2017→2022`` ⇒ chỉ 2021; lớp 6–12 ``2016→2023`` ⇒ 2020, 2021, 2022 —
-      ĐÚNG như mục THPT ``2020→2023``.
-    Chỉ gọi sau :func:`kv_entry_problem` = ``None`` và đã loại :func:`kv_lien_cap_without_thpt`."""
+    * liên cấp lớp kết thúc ``g`` ∈ 10..12: ``g − 9`` năm học cuối — ``kv_lien_cap_split_year .. year_to − 1`` (mục ngắn thì không
+      sớm hơn năm vào học). Vd lớp 6 → hết lớp 10 ``2017→2022`` ⇒ chỉ 2021; lớp 6–12 ``2016→2023`` ⇒ 2020, 2021, 2022 — ĐÚNG như mục
+      THPT ``2020→2023``.
+    Chỉ gọi sau :func:`kv_entry_problem` = ``None`` và đã loại :func:`kv_lien_cap_without_thpt`. Nhánh THCS dùng
+    :func:`kv_entry_thcs_school_years` (CÙNG chỗ cắt)."""
     y_from, y_to = entry["year_from"], entry["year_to"]
     first = y_from
     if entry.get("level") == KV_LIEN_CAP_LEVEL:
-        grade = _history_grade(entry.get("grade_to"))
-        first = max(y_from, y_to - (grade - (_THPT_FIRST_GRADE - 1)))
+        first = kv_lien_cap_split_year(entry)
     return range(first, y_to)
+
+
+def kv_entry_thcs_end_year(entry: dict) -> int:
+    """L3: năm KẾT THÚC phần THCS của một dòng THCS đếm được (như ``year_to`` của dòng THCS thường) — liên cấp ⇒ chỗ cắt
+    :func:`kv_lien_cap_split_year`; dòng khác ⇒ ``year_to``."""
+    if entry.get("level") == KV_LIEN_CAP_LEVEL:
+        return kv_lien_cap_split_year(entry)
+    return entry["year_to"]
+
+
+def kv_entry_thcs_school_years(entry: dict) -> range:
+    """L3: khoá năm học (năm bắt đầu) của phần THCS — ``year_from .. kv_entry_thcs_end_year − 1``. CÙNG quy ước khoá với G5 (owner L3
+    câu 4: "đếm năm học như G5"); liên cấp lớp 6 → 10 ``2017→2022`` ⇒ 2017, 2018, 2019, 2020 (năm 2021 là lớp 10, thuộc phần THPT)."""
+    return range(entry["year_from"], kv_entry_thcs_end_year(entry))
+
+
+def kv_entry_thcs_last_school_year(entry: dict) -> int:
+    """L3: khoá năm học CUỐI của phần THCS (năm học lớp 9 / năm cuối ở trường) — khoá tra trường tốt nghiệp THCS ở bước hoà."""
+    return kv_entry_thcs_end_year(entry) - 1
+
+
+def kv_entry_thcs_last_grade(entry: dict) -> Any:
+    """L3: lớp cuối của PHẦN THCS — khoá thứ hai của bước hoà nhánh THCS (:func:`kv_graduation_pick`, CÙNG luật với THPT). Liên cấp
+    lớp kết thúc ≥ 10 ⇒ 9 (phần THCS dừng ở lớp 9; lớp kết thúc hợp lệ đã được :func:`kv_thcs_entry_case` bảo đảm); dòng khác ⇒
+    ``grade_to`` NGUYÊN giá trị (thiếu khoá ⇒ ``None``). So được hay không do :func:`_history_int` ở bước hoà quyết — owner 23-11
+    ``QUYET-DINH-OWNER-O-LOP-TRONG-CAN-XET-TAY`` (a): lớp trống / null / sai kiểu ở nhóm tốt nghiệp ⇒ cần xét tay, KHÔNG coi là 0
+    (khoá cũ ``_history_grade(...) or 0`` — luật (b) — đã bỏ)."""
+    grade = entry.get("grade_to")
+    if entry.get("level") == KV_LIEN_CAP_LEVEL and _history_int(grade):
+        return min(grade, _THPT_FIRST_GRADE - 1)
+    return grade
 
 
 def kv_last_school_year(entry: dict) -> Any:
@@ -447,35 +544,91 @@ def kv_last_school_year(entry: dict) -> Any:
     return y_to - 1 if _history_int(y_to) else y_to
 
 
-def kv_graduation_year_group(entries: list) -> list[tuple[int, dict]]:
-    """Nhóm ứng viên trường tốt nghiệp ở bước hoà: ``(chỉ số trong entries, mục)`` của các mục có ``year_to`` LỚN NHẤT.
-
-    Trường tốt nghiệp luôn thuộc nhóm này vì khoá xếp đầu tiên của bước hoà là ``year_to``. Bước hoà chỉ xếp TRONG nhóm (rà hợp nhất
-    23-11 mục B-H1): xếp cả các nhóm thấp hơn không đổi kết quả, nhưng bắt hai mục cùng ``year_to`` ở nhóm thấp so lớp với nhau ⇒
-    ``TypeError`` khi một mục có lớp ``null`` / chuỗi. Chỉ gọi khi MỌI ``year_to`` là số nguyên (:func:`_history_int`) — vế đầu
-    của :func:`kv_graduation_candidates_unclear`."""
-    latest = max(e["year_to"] for e in entries)
-    return [(i, e) for i, e in enumerate(entries) if e["year_to"] == latest]
+# ── Bước hoà (trường tốt nghiệp) — MỘT luật cho nhánh THPT và nhánh THCS (L3) ──
+# Owner 23-11 ``QUYET-DINH-OWNER-O-LOP-TRONG-CAN-XET-TAY`` (a) + rà hợp nhất 23-11 J1c / Codex lượt 2 B'3: luật hoà phải MỘT, sống
+# trong bộ quyết định chung :func:`_kv_resolution_steps` (đường lẻ và đường lô cùng tiêu thụ). Hai nhánh chỉ khác HAI bộ truy cập
+# (năm kết thúc, lớp cuối) — THPT: ``year_to`` / ``grade_to``; THCS: năm kết thúc / lớp cuối của PHẦN THCS (cắt liên cấp một chỗ,
+# :func:`kv_lien_cap_split_year`). "So được" = :func:`_history_int` cho cả hai (MỘT helper — CLAUDE.md §7).
 
 
-def kv_graduation_candidates_unclear(entries: list) -> Optional[list]:
-    """Bước hoà (M1) của luật học nhiều trường: các mục CÓ THỂ là trường tốt nghiệp mà KHÔNG so được ⇒ trả danh sách mục ấy (hoà
-    không phân định ⇒ cần xét tay); ``None`` = so được, đi tiếp phép xếp trong nhóm :func:`kv_graduation_year_group`.
+def kv_entry_end_year(entry: dict) -> Any:
+    """Nhánh THPT: năm kết thúc của mục ở bước hoà — ``year_to`` NGUYÊN giá trị (thiếu khoá ⇒ ``None``)."""
+    return entry.get("year_to")
 
-    * Một mục bất kỳ thiếu / sai kiểu ``year_to`` ⇒ không biết mục nào học sau cùng ⇒ MỌI mục.
-    * ``year_to`` đều hợp lệ: nhóm có ``year_to`` lớn nhất có từ 2 mục trở lên mà một mục thiếu / sai kiểu ``grade_to`` ⇒ nhóm ấy.
-    * Nhóm ``year_to`` lớn nhất chỉ có MỘT mục ⇒ so được (lớp không cần) — như cũ. Lớp lạ ở nhóm THẤP hơn không cản: nhóm ấy không
-      được xếp.
 
-    "Hợp lệ" = :func:`_history_int` (số nguyên thật: không ``bool``, chuỗi, số thực, ``None``). Vì sao: khoá sắp xếp cũ
-    ``(.get("year_to", 0), .get("grade_to", 0), -index)`` chỉ thay khi THIẾU khoá; JSON ``null`` (hay chuỗi) ⇒ so ``None`` với
-    ``int`` ⇒ ``TypeError`` (owner GO 22-11 "sửa ngay, PR nhỏ riêng" — phát hiện ở bàn giao L3-a)."""
-    if any(not _history_int(e.get("year_to")) for e in entries):
+def kv_entry_last_grade(entry: dict) -> Any:
+    """Nhánh THPT: lớp cuối của mục ở bước hoà — ``grade_to`` NGUYÊN giá trị (thiếu khoá ⇒ ``None``: owner 23-11 — "thiếu hẳn khoá"
+    và "null" xử lý NHƯ NHAU)."""
+    return entry.get("grade_to")
+
+
+def kv_graduation_year_group(
+    entries: list, year_of: Callable[[dict], Any] = kv_entry_end_year
+) -> list[tuple[int, dict]]:
+    """Nhóm ứng viên trường tốt nghiệp ở bước hoà: ``(chỉ số trong entries, mục)`` của các mục có năm kết thúc (``year_of``) LỚN NHẤT.
+
+    Trường tốt nghiệp luôn thuộc nhóm này vì khoá xếp đầu tiên của bước hoà là năm kết thúc. Bước hoà chỉ xếp TRONG nhóm (rà hợp nhất
+    23-11 mục B-H1): xếp cả các nhóm thấp hơn không đổi kết quả, nhưng bắt hai mục cùng năm ở nhóm thấp so lớp với nhau ⇒
+    ``TypeError`` khi một mục có lớp ``null`` / chuỗi. Chỉ số là chỉ số GỐC (``enumerate`` TRƯỚC khi lọc — khoá ổn định ``-index``).
+    Chỉ gọi khi MỌI năm kết thúc là số nguyên (:func:`_history_int`) — vế đầu của :func:`kv_graduation_candidates_unclear`."""
+    latest = max(year_of(e) for e in entries)
+    return [(i, e) for i, e in enumerate(entries) if year_of(e) == latest]
+
+
+def kv_graduation_candidates_unclear(
+    entries: list,
+    year_of: Callable[[dict], Any] = kv_entry_end_year,
+    grade_of: Callable[[dict], Any] = kv_entry_last_grade,
+) -> Optional[list]:
+    """Chốt thiếu dữ liệu của bước hoà (M1): các mục CÓ THỂ là trường tốt nghiệp mà KHÔNG so được ⇒ trả danh sách mục ấy (hoà không
+    phân định ⇒ cần xét tay); ``None`` = so được, đi tiếp phép xếp trong nhóm :func:`kv_graduation_year_group`.
+
+    * Một mục bất kỳ thiếu / sai kiểu năm kết thúc ⇒ không biết mục nào học sau cùng ⇒ MỌI mục.
+    * Năm đều hợp lệ: nhóm có năm kết thúc lớn nhất có từ 2 mục trở lên mà một mục thiếu / sai kiểu lớp ⇒ nhóm ấy.
+    * Nhóm năm lớn nhất chỉ có MỘT mục ⇒ so được (lớp không cần) — như cũ. Lớp lạ ở nhóm THẤP hơn không cản: nhóm ấy không được xếp.
+
+    "Hợp lệ" = :func:`_history_int` (số nguyên thật: không ``bool``, chuỗi, số thực, ``None``; thiếu khoá = ``None``). Vì sao: khoá
+    sắp xếp cũ ``(.get("year_to", 0), .get("grade_to", 0), -index)`` chỉ thay khi THIẾU khoá; JSON ``null`` (hay chuỗi) ⇒ so ``None``
+    với ``int`` ⇒ ``TypeError`` (owner GO 22-11 "sửa ngay, PR nhỏ riêng"). Owner 23-11 (a): áp CHUNG THPT và THCS."""
+    if any(not _history_int(year_of(e)) for e in entries):
         return list(entries)
-    candidates = [e for _, e in kv_graduation_year_group(entries)]
-    if len(candidates) >= 2 and any(not _history_int(e.get("grade_to")) for e in candidates):
+    candidates = [e for _, e in kv_graduation_year_group(entries, year_of)]
+    if len(candidates) >= 2 and any(not _history_int(grade_of(e)) for e in candidates):
         return candidates
     return None
+
+
+def kv_graduation_pick(
+    entries: list,
+    year_of: Callable[[dict], Any] = kv_entry_end_year,
+    grade_of: Callable[[dict], Any] = kv_entry_last_grade,
+) -> tuple[Optional[dict], list]:
+    """MỘT luật bước hoà của luật học nhiều trường (như ghi ở quyết định owner 23-11 ``QUYET-DINH-OWNER-O-LOP-TRONG-CAN-XET-TAY``: hoà
+    thời gian mà KV khác nhau ⇒ trường tốt nghiệp = năm kết thúc lớn nhất, năm trùng ⇒ lớp cuối lớn nhất) — gọi từ nhánh THPT VÀ
+    nhánh THCS của :func:`_kv_resolution_steps`.
+
+    Trả ``(mục tốt nghiệp, [])`` hoặc ``(None, các mục không phân định)``:
+    * chốt thiếu dữ liệu :func:`kv_graduation_candidates_unclear` ⇒ ``(None, mục không so được)``;
+    * xếp NHÓM năm lớn nhất theo ``(năm, lớp, -chỉ số gốc)`` (:func:`kv_graduation_year_group`); hai mục đầu bằng nhau cả năm lẫn
+      lớp ⇒ ``(None, [mục 1, mục 2])`` (M1).
+    Nhánh THPT đổi ``(None, …)`` thành ``ambiguous_requires_manual``; nhánh THCS thành "KV chờ xác minh"
+    (``thcs_tied_graduation_school``). Dữ liệu đúng kiểu: kết quả như phép xếp toàn bộ cũ (bàn giao hoà THPT G5 §2)."""
+    if not entries:
+        return None, []
+    unclear = kv_graduation_candidates_unclear(entries, year_of, grade_of)
+    if unclear is not None:
+        return None, unclear
+    ranked = sorted(
+        kv_graduation_year_group(entries, year_of),
+        key=lambda pair: (year_of(pair[1]), grade_of(pair[1]), -pair[0]),  # -index: ổn định, ưu tiên mục khai trước
+        reverse=True,
+    )
+    top = ranked[0][1]
+    if len(ranked) >= 2:
+        second = ranked[1][1]
+        if (year_of(top), grade_of(top)) == (year_of(second), grade_of(second)):
+            return None, [top, second]
+    return top, []
 
 
 def _has_thpt_history(academic_history: Optional[list]) -> bool:
@@ -496,6 +649,172 @@ def _has_thpt_history(academic_history: Optional[list]) -> bool:
     )
 
 
+# ── L3: dòng lịch sử học THCS (nhánh trung cấp sau THCS) ──
+KV_THCS_LEVEL = "THCS"
+#: ``graduation_type`` ("Trình độ" trên form) của dòng THCS. Đo production 22-11 (``gd2/l3/do-prod-2026-11-22``): dòng THCS thật
+#: hầu hết có ``level`` TRỐNG (giao diện chỉ gán ``level`` khi chọn trường từ danh mục), ``graduation_type = 'THCS'``, không ``school_id``.
+KV_THCS_GRADUATION_TYPE = "THCS"
+#: Mã ca DỪNG của một dòng THCS (``breakdown.entries[].case``) ⇒ hồ sơ "KV chờ xác minh".
+KV_THCS_ENTRY_WITHOUT_SCHOOL = "thcs_entry_without_school"
+KV_THCS_ENTRY_BAD_SCHOOL_ID = "thcs_entry_school_id_invalid"
+KV_THCS_ENTRY_LEVEL_MISMATCH = "school_level_mismatch"
+KV_THCS_ENTRY_LEVEL_UNKNOWN = "entry_level_unknown"
+KV_THCS_ENTRY_YEARS_INVALID = "entry_years_invalid"
+
+
+def _blank(value: Any) -> Optional[Any]:
+    """Chuỗi rỗng / chỉ khoảng trắng ⇒ ``None`` (ô "trống" của JSONB); giá trị khác giữ nguyên."""
+    if isinstance(value, str) and not value.strip():
+        return None
+    return value
+
+
+def kv_thcs_entry_case(entry: Any) -> tuple[bool, Optional[str]]:
+    """``(là dòng THCS, mã ca dừng | None)`` của một mục ``academic_history`` cho nhánh trung cấp sau THCS (L3).
+
+    * cấp ``THCS`` (chọn trường THCS từ danh mục): dòng THCS; ``graduation_type`` khác THCS (và không trống) ⇒ lệch cấp ⇒ dừng;
+    * ``level`` trống: ``graduation_type = 'THCS'`` ⇒ dòng THCS (dòng gõ tay — dạng phổ biến nhất ở production); trống cả hai ⇒
+      KHÔNG biết dòng thuộc cấp nào ⇒ dừng (không lặng lẽ bỏ — có thể là trường THCS gõ tay); trình độ khác ⇒ không phải dòng THCS;
+    * liên cấp (``THCS_THPT``): lớp kết thúc ≤ 9 ⇒ dòng THCS (cả mục); THIẾU / sai lớp kết thúc ⇒ dừng (như G5); lớp kết thúc ≥ 10 mà
+      mục CÒN năm học THCS (trước chỗ cắt :func:`kv_lien_cap_split_year`) ⇒ dòng THCS, chỉ đếm phần lớp 6–9 (owner 22-11
+      ``QUYET-DINH-OWNER-L3A-5-CAU`` câu 3); mục chỉ có năm THPT ⇒ không phải dòng THCS;
+    * cấp khác (THPT, trung học nghề, khác…): ``graduation_type = 'THCS'`` ⇒ lệch cấp ⇒ dừng (điều phối 22-11: 8 dòng production
+      chọn trường cấp THPT mà ghi trình độ THCS — KHÔNG tự tính); còn lại không phải dòng THCS.
+
+    Dòng THCS còn phải có năm hợp lệ và ``school_id`` (số nguyên), xét theo thứ tự: năm thiếu / ngược ⇒
+    :data:`KV_THCS_ENTRY_YEARS_INVALID`; 0 năm học (``y→y``) ⇒ :data:`KV_ENTRY_ZERO_LENGTH` (Q15(b), như G5); thiếu trường ⇒
+    :data:`KV_THCS_ENTRY_WITHOUT_SCHOOL` ("trường chưa có trong danh mục"). Cờ DTNT của trường tra ở bộ quyết định (cần CSDL)."""
+    if not isinstance(entry, dict):
+        return False, None
+    level = _blank(entry.get("level"))
+    gtype = _blank(entry.get("graduation_type"))
+    if level == KV_LIEN_CAP_LEVEL:
+        grade = _history_grade(entry.get("grade_to"))
+        if grade is None:
+            return True, KV_ENTRY_LIEN_CAP_MISSING_GRADE
+        if grade >= _THPT_FIRST_GRADE:
+            y_from, y_to = entry.get("year_from"), entry.get("year_to")
+            if not (_history_int(y_from) and _history_int(y_to) and y_to >= y_from):
+                return True, KV_THCS_ENTRY_YEARS_INVALID
+            if kv_lien_cap_split_year(entry) <= y_from:
+                return False, None  # chỉ có năm THPT
+    elif level == KV_THCS_LEVEL:
+        if gtype is not None and gtype != KV_THCS_GRADUATION_TYPE:
+            return True, KV_THCS_ENTRY_LEVEL_MISMATCH
+    elif level is None:
+        if gtype is None:
+            return True, KV_THCS_ENTRY_LEVEL_UNKNOWN
+        if gtype != KV_THCS_GRADUATION_TYPE:
+            return False, None
+    else:
+        if gtype == KV_THCS_GRADUATION_TYPE:
+            return True, KV_THCS_ENTRY_LEVEL_MISMATCH
+        return False, None
+    # Năm trước trường (điều phối 22-11 mục 4: dòng THCS ``y→y`` theo luật G5 — 0 năm học, dừng có nhãn — kể cả dòng gõ tay).
+    y_from, y_to = entry.get("year_from"), entry.get("year_to")
+    if not (_history_int(y_from) and _history_int(y_to) and y_to >= y_from):
+        return True, KV_THCS_ENTRY_YEARS_INVALID
+    if y_to == y_from:
+        return True, KV_ENTRY_ZERO_LENGTH
+    sid = entry.get("school_id")
+    if sid is None or sid == "":
+        return True, KV_THCS_ENTRY_WITHOUT_SCHOOL
+    if not _history_int(sid):
+        return True, KV_THCS_ENTRY_BAD_SCHOOL_ID
+    return True, None
+
+
+def kv_thcs_history_plan(academic_history: Any) -> tuple[list[dict], list[dict]]:
+    """``(dòng THCS đếm được, dòng dừng)`` — MỘT nguồn cho bộ quyết định (nhánh ``LICH_SU_THCS``) và :func:`kv_lookup_keys`. Dòng
+    dừng mang ``index`` theo ``academic_history`` + ``case`` (:func:`kv_thcs_entry_case`); không mang tên trường."""
+    countable: list[dict] = []
+    problems: list[dict] = []
+    for i, entry in enumerate(academic_history if isinstance(academic_history, list) else []):
+        is_thcs, problem = kv_thcs_entry_case(entry)
+        if not is_thcs:
+            continue
+        if problem is None:
+            countable.append(entry)
+            continue
+        problems.append(
+            {
+                "index": i,
+                "level": entry.get("level"),
+                "graduation_type": entry.get("graduation_type"),
+                "school_id": entry.get("school_id"),
+                "grade_to": entry.get("grade_to"),
+                "year_from": entry.get("year_from"),
+                "year_to": entry.get("year_to"),
+                "case": problem,
+            }
+        )
+    return countable, problems
+
+
+# =============================================================================
+# L3 (owner 22-11) — KV của thí sinh trung cấp xét sau THCS theo NƠI HỌC THCS; sơ cấp + nhánh cũ "chờ xác minh"
+# =============================================================================
+#
+# Căn cứ: ``logs-P5/cong-bo-ket-qua/gd2/l3/QUYET-DINH-OWNER-L3-5-CAU-2026-11-22.md`` (câu 1, 2, 4, 5) +
+# ``…/QUYET-DINH-OWNER-L3-TRUONG-THCS-VAO-DANH-MUC-2026-11-22.md`` (đổi câu 3: Admin thêm trường THCS vào danh mục, KV trường = KV xã
+# hiện tại) + ``…/DIEU-TRA-BO-KV-TRUNG-CAP-BO-SUNG-TT05-2026-11-22.md`` (TT 05 PL01 5.a / 5.c: KV theo nơi học và tốt nghiệp THCS).
+#
+# * Trung cấp sau THCS (chính quy; liên thông từ sơ cấp / trung cấp) ⇒ căn cứ ``LICH_SU_THCS``: tính từ các dòng lịch sử học THCS có
+#   trường trong danh mục — CÙNG cách đếm năm học (:func:`kv_entry_school_years`), CÙNG phép tra theo năm, CÙNG luật "khu vực học
+#   lâu nhất, hoà ⇒ trường tốt nghiệp" như THPT (owner câu 4 "giống cách tính THPT"; bước hoà là MỘT hàm :func:`kv_graduation_pick`
+#   — lớp trống ở nhóm tốt nghiệp ⇒ cần xét tay, owner 23-11 (a)). Không tính được ⇒ "KV chờ xác minh".
+# * Sơ cấp và nhánh cũ không truyền trình độ (THCS) ⇒ "KV chờ xác minh" (câu 5).
+# * Nhãn ``permanent_address_special`` KHÔNG là căn cứ cho ba nhóm này (câu 2); ấn định tay có nguồn gốc vẫn thắng.
+# * Câu 1 "đo trước rồi quyết": hồ sơ CŨ (ảnh chụp KV do luật cũ ra) giữ luật cũ cho tới khi bật cờ
+#   ``KV_L3_APPLY_TO_EXISTING_ENABLED`` (mặc định TẮT; env đọc lúc TẠO container ⇒ đổi bằng ``up -d``, không ``restart``).
+#
+# Nhánh ``legacy_completed_thpt_no_vocational`` (hoàn thành THPT, không chuyên môn / sơ cấp, nơi gọi không truyền trình độ): owner
+# 22-11 ``QUYET-DINH-OWNER-L3A-5-CAU`` câu 5 ⇒ tính theo trường THPT (``LICH_SU_THPT``), cùng cơ chế hồ sơ cũ. Nhánh còn lại cho em
+# đã xong THPT mà lấy hộ khẩu: ``cd_lien_thong_khoi_luong_no_thpt_history_fallback`` (CĐ liên thông, không có lịch sử THPT) — GIỮ,
+# chưa có quyết định (bàn giao L3-a lượt 2).
+
+KV_BASIS_THCS_HISTORY = "LICH_SU_THCS"
+KV_BASIS_PENDING_VERIFICATION = "PENDING_VERIFICATION"
+
+#: Lý do căn cứ của luật CŨ (``THUONG_TRU``) ở ba nhóm L3 ⇒ căn cứ MỚI.
+_L3_NEW_BASIS: dict[str, tuple[str, str]] = {
+    "tc_chinh_quy_post_thcs_uses_commune": (KV_BASIS_THCS_HISTORY, "tc_chinh_quy_post_thcs_uses_thcs_school_history"),
+    "tc_lien_thong_post_thcs_with_voc_uses_commune": (
+        KV_BASIS_THCS_HISTORY,
+        "tc_lien_thong_post_thcs_with_voc_uses_thcs_school_history",
+    ),
+    "sc_no_cultural_uses_commune": (KV_BASIS_PENDING_VERIFICATION, "sc_no_cultural_kv_needs_verification"),
+    "sc_uses_commune": (KV_BASIS_PENDING_VERIFICATION, "sc_kv_needs_verification"),
+    "legacy_thcs_pathway_uses_commune": (KV_BASIS_PENDING_VERIFICATION, "legacy_thcs_pathway_kv_needs_verification"),
+}
+
+#: Owner 22-11 ``QUYET-DINH-OWNER-L3A-5-CAU`` câu 5: nhánh cũ "hoàn thành THPT, không chuyên môn / sơ cấp, nơi gọi không truyền
+#: trình độ" ⇒ cách tính của NHÓM THPT (lý do có sẵn ``legacy_thpt_pathway``), bỏ hộ khẩu. Là nhóm THPT nên nhãn hộ khẩu đặc biệt
+#: VẪN thắng (câu 2 chỉ áp cho ba nhóm trên) — xét SAU nhãn. Hồ sơ cũ theo cùng cờ (câu 1; production 0 hồ sơ ở 22-11).
+_L3_THPT_BASIS: dict[str, tuple[str, str]] = {
+    "legacy_completed_thpt_no_vocational": ("LICH_SU_THPT", "legacy_thpt_pathway"),
+}
+
+#: ``(basis, basis_reason)`` mà luật CŨ ghi vào ảnh chụp KV của hồ sơ thuộc các nhánh L3 đổi — "hồ sơ cũ" (điều phối 22-11 chấp nhận).
+#: Gồm cả nhãn hộ khẩu đặc biệt (luật cũ cho nhãn ấy thắng mọi nhóm). Luật cũ tái tạo ĐÚNG cặp ấy ở lần chụp sau ⇒ ổn định.
+KV_L3_LEGACY_SNAPSHOT_PAIRS = frozenset(
+    {("THUONG_TRU", reason) for reason in (*_L3_NEW_BASIS, *_L3_THPT_BASIS)}
+    | {("COMMUNE_SPECIAL", "permanent_address_special_override")}
+)
+
+
+def kv_l3_keeps_legacy_rule(previous_snapshot: Any) -> bool:
+    """Hồ sơ CŨ giữ luật cũ ⇔ cờ ``KV_L3_APPLY_TO_EXISTING_ENABLED`` TẮT (mặc định; thiếu biến = tắt) VÀ ảnh chụp KV đang có do luật
+    cũ ra (:data:`KV_L3_LEGACY_SNAPSHOT_PAIRS`). Hồ sơ chưa từng chụp ⇒ luật mới. Cờ là cờ CHO PHÉP: chỉ ``true`` mới áp luật mới cho
+    hồ sơ cũ."""
+    from app.config import settings
+
+    if settings.KV_L3_APPLY_TO_EXISTING_ENABLED is True:
+        return False
+    s = previous_snapshot if isinstance(previous_snapshot, dict) else {}
+    return (s.get("basis"), s.get("basis_reason")) in KV_L3_LEGACY_SNAPSHOT_PAIRS
+
+
 def _derive_kv_basis_level(
     cultural: Optional[str],
     vocational: str,
@@ -503,8 +822,44 @@ def _derive_kv_basis_level(
     admission_type: Optional[str] = None,
     academic_history: Optional[list] = None,
     area_resolution_basis: Optional[str] = None,
+    previous_snapshot: Optional[dict] = None,
 ) -> tuple[str, str]:
-    """Map profile context → KV resolution basis + reason code.
+    """``(basis, basis_reason)`` của hồ sơ — ma trận :func:`_derive_kv_matrix_basis` + hai đường vượt + luật L3.
+
+    Thứ tự: ấn định tay (``MANUAL``) → ma trận → ba nhóm L3 (không giữ luật cũ) ⇒ căn cứ mới → nhãn hộ khẩu đặc biệt
+    (``COMMUNE_SPECIAL``) → nhánh cũ hoàn thành THPT (không giữ luật cũ) ⇒ ``LICH_SU_THPT`` → kết quả ma trận. ``previous_snapshot`` = ảnh chụp KV hiện có của hồ sơ (:func:`kv_l3_keeps_legacy_rule`);
+    ``None`` ⇒ hồ sơ chưa chụp ⇒ luật mới."""
+    if area_resolution_basis == "manual_override":
+        return "MANUAL", "admin_set_kv_directly"
+    basis, basis_reason = _derive_kv_matrix_basis(
+        cultural=cultural,
+        vocational=vocational,
+        target_level=target_level,
+        admission_type=admission_type,
+        academic_history=academic_history,
+    )
+    l3_basis = _L3_NEW_BASIS.get(basis_reason) if basis == "THUONG_TRU" else None
+    thpt_basis = _L3_THPT_BASIS.get(basis_reason) if basis == "THUONG_TRU" else None
+    if (l3_basis is not None or thpt_basis is not None) and kv_l3_keeps_legacy_rule(previous_snapshot):
+        l3_basis = thpt_basis = None  # hồ sơ cũ, cờ tắt ⇒ luật cũ
+    if l3_basis is not None:
+        return l3_basis
+    if area_resolution_basis == "permanent_address_special":
+        return "COMMUNE_SPECIAL", "permanent_address_special_override"
+    if thpt_basis is not None:
+        return thpt_basis
+    return basis, basis_reason
+
+
+def _derive_kv_matrix_basis(
+    cultural: Optional[str],
+    vocational: str,
+    target_level: Optional[str] = None,
+    admission_type: Optional[str] = None,
+    academic_history: Optional[list] = None,
+) -> tuple[str, str]:
+    """Map profile context → KV resolution basis + reason code (MA TRẬN gốc; hai đường vượt ``permanent_address_special`` /
+    ``manual_override`` và luật L3 nằm ở :func:`_derive_kv_basis_level`).
 
     Phase E.4 (commit 5) refactor — signature mở rộng target_level +
     admission_type + academic_history để khớp matrix nghiệp vụ #6:
@@ -538,11 +893,7 @@ def _derive_kv_basis_level(
     "LEGACY" path (replicate hành vi commit 4) — KHÔNG break test cũ NGAY,
     sẽ phase out khi resolve_kv_for_profile fully threaded.
     """
-    # 1. Override paths — output bypass, áp trên mọi context.
-    if area_resolution_basis == "permanent_address_special":
-        return "COMMUNE_SPECIAL", "permanent_address_special_override"
-    if area_resolution_basis == "manual_override":
-        return "MANUAL", "admin_set_kv_directly"
+    # 1. Override paths (``permanent_address_special`` / ``manual_override``) — ở :func:`_derive_kv_basis_level` (L3).
 
     # 2. SC chính quy carve-out (yêu cầu nghiệp vụ #5+#6): SC không yêu cầu
     # văn hóa → cultural=None vẫn pass eligibility. KV resolve qua THUONG_TRU
@@ -648,7 +999,7 @@ async def _lookup_commune_kv(
     the "now" row — which would silently mis-score historical/future cycles.
     Returns None if commune not in table (graceful — coverage may be partial).
     """
-    from app.models.vn_locality import VnCommuneAreaMap
+    from app.models.vn_locality import VnCommuneAreaMap, commune_kv_pick_order_sql
 
     as_of = date(year, 12, 31)
     stmt = (
@@ -659,7 +1010,8 @@ async def _lookup_commune_kv(
             (VnCommuneAreaMap.effective_to.is_(None))
             | (VnCommuneAreaMap.effective_to > as_of),
         )
-        .order_by(VnCommuneAreaMap.effective_from.desc())
+        # MỘT thứ tự với đường lô (``commune_kv_pick_order_sql``): mới nhất theo ``effective_from``, hoà ⇒ ``id`` lớn nhất.
+        .order_by(text(commune_kv_pick_order_sql(VnCommuneAreaMap.__tablename__)))
         .limit(1)
     )
     result = await db.execute(stmt)
@@ -677,7 +1029,7 @@ async def lookup_kv_for_school_year(
           AND :year BETWEEN effective_from_year
                        AND COALESCE(effective_to_year, 9999);
     """
-    from app.models.vn_school import VnSchoolKvAssignment
+    from app.models.vn_school import VnSchoolKvAssignment, school_kv_pick_order_sql
 
     stmt = (
         select(VnSchoolKvAssignment.kv_code)
@@ -687,10 +1039,45 @@ async def lookup_kv_for_school_year(
             (VnSchoolKvAssignment.effective_to_year.is_(None))
             | (VnSchoolKvAssignment.effective_to_year >= year),
         )
+        # Codex 22-11 lượt 2 B-P1: nhiều dòng chồng khoảng cùng khớp ⇒ thứ tự TẤT ĐỊNH, MỘT nguồn với đường lô.
+        .order_by(text(school_kv_pick_order_sql(VnSchoolKvAssignment.__tablename__)))
         .limit(1)
     )
     result = await db.execute(stmt)
     return result.scalar_one_or_none()
+
+
+async def lookup_school_is_dtnt(db: "AsyncSession", school_id: int) -> Optional[bool]:
+    """L3: cờ trường PT dân tộc nội trú (``vn_school.is_dtnt``) của một trường — ``None`` khi không có trường. Bản lô:
+    ``admission_review_load_repository.read_school_dtnt``."""
+    from app.models.vn_school import VnSchool
+
+    result = await db.execute(select(VnSchool.is_dtnt).where(VnSchool.id == school_id))
+    return result.scalar_one_or_none()
+
+
+# Bậc học của ``academic_history`` mà luật nhiều trường tính: MỘT định nghĩa ``_KV_HISTORY_LEVELS`` (khối G5, cạnh
+# ``kv_history_basis_entry``) — bộ quyết định và :func:`kv_lookup_keys` cùng đi qua ``kv_history_basis_entry`` (Codex GĐ2-B lượt 2 P4).
+#: Loại phép tra mà bộ quyết định KV yêu cầu.
+KV_LOOKUP_COMMUNE = "commune"
+KV_LOOKUP_SCHOOL = "school"
+#: L3 (điều phối 22-11, Phần C mục 2): cờ trường PT dân tộc nội trú (``vn_school.is_dtnt``) — khoá = id trường, năm = ``None``.
+KV_LOOKUP_SCHOOL_DTNT = "school_dtnt"
+
+
+class KvLookup(NamedTuple):
+    """Một phép tra danh mục KV mà bộ quyết định cần: ``(loại, khoá, năm)`` — ``commune``: khoá = mã xã (``_lookup_commune_kv``);
+    ``school``: khoá = id trường (``lookup_kv_for_school_year``); ``school_dtnt``: khoá = id trường, năm ``None``
+    (``lookup_school_is_dtnt``)."""
+
+    kind: str
+    key: Any
+    year: Any
+
+
+class KvLookupNotLoaded(RuntimeError):
+    """Đường lô: bộ quyết định cần một phép tra mà lượt nạp KHÔNG có trong bản đồ — fail-closed (nơi gọi coi như "không tính lại
+    được"), KHÔNG đoán ``None``. Chỉ id / năm trong thông điệp."""
 
 
 async def resolve_kv_for_profile(
@@ -700,7 +1087,298 @@ async def resolve_kv_for_profile(
     target_level: Optional[str] = None,
     admission_type: Optional[str] = None,
 ) -> tuple[Optional[str], dict[str, Any]]:
-    """Resolve KV cho profile per TT 05/2021 Phụ lục 01.
+    """Resolve KV cho profile per TT 05/2021 Phụ lục 01 — BỘ ĐỌC TỪNG HỒ SƠ quanh bộ quyết định :func:`_kv_resolution_steps`.
+
+    GĐ2-B đợt 2 (K1 — đề cương đợt 2 §3): luật nằm TRỌN trong bộ quyết định (generator thuần, không đọc CSDL); hàm này chỉ trả
+    lời từng phép tra nó yêu cầu bằng ĐÚNG hai hàm đọc cũ (``_lookup_commune_kv`` / ``lookup_kv_for_school_year``, gọi qua tên
+    module — test bọc được), đúng thứ tự và đúng số lần như trước. Đường lô (:func:`decide_kv_for_profile`) trả lời cùng bộ
+    quyết định từ bản đồ đã nạp bằng MỘT câu ⇒ một nguồn luật cho T1 / T6 / bản in GĐ1 / máy xét GĐ2-B. Tham số, giá trị trả,
+    nhánh lỗi: xem :func:`_kv_resolution_steps`."""
+    steps = _kv_resolution_steps(profile, target_level=target_level, admission_type=admission_type)
+    try:
+        request = next(steps)
+        while True:
+            if request.kind == KV_LOOKUP_COMMUNE:
+                answer = await _lookup_commune_kv(db, request.key, request.year)
+            elif request.kind == KV_LOOKUP_SCHOOL_DTNT:
+                answer = await lookup_school_is_dtnt(db, request.key)
+            else:
+                answer = await lookup_kv_for_school_year(db, request.key, request.year)
+            request = steps.send(answer)
+    except StopIteration as done:
+        return done.value
+
+
+def decide_kv_for_profile(
+    profile: "AdmissionProfile",
+    *,
+    commune_kv: Mapping[tuple[Any, Any], Optional[str]],
+    school_kv: Mapping[tuple[Any, Any], Optional[str]],
+    target_level: Optional[str] = None,
+    admission_type: Optional[str] = None,
+    school_dtnt: Optional[Mapping[Any, Optional[bool]]] = None,
+) -> tuple[Optional[str], dict[str, Any]]:
+    """Đường LÔ của :func:`resolve_kv_for_profile`: CÙNG bộ quyết định, mỗi phép tra trả lời từ bản đồ đã nạp —
+    ``commune_kv[(mã xã, năm)]`` / ``school_kv[(id trường, năm)]`` (giá trị ``None`` = danh mục không có hàng, như hai hàm đọc);
+    ``school_dtnt[id trường]`` (L3 — cờ DTNT, ``None`` = không có trường; khoá từ :func:`kv_school_dtnt_keys`).
+    Khoá vắng trong bản đồ ⇒ :class:`KvLookupNotLoaded` (không đoán; ``school_dtnt`` không truyền = bản đồ rỗng). Không đọc CSDL."""
+    steps = _kv_resolution_steps(profile, target_level=target_level, admission_type=admission_type)
+    try:
+        request = next(steps)
+        while True:
+            if request.kind == KV_LOOKUP_SCHOOL_DTNT:
+                table, key = (school_dtnt or {}), request.key
+            else:
+                table = commune_kv if request.kind == KV_LOOKUP_COMMUNE else school_kv
+                key = (request.key, request.year)
+            if key not in table:
+                steps.close()
+                raise KvLookupNotLoaded(
+                    "Thiếu phép tra KV %s cho hồ sơ %s (năm %r)."
+                    % (request.kind, getattr(profile, "id", None), request.year)
+                )
+            request = steps.send(table[key])
+    except StopIteration as done:
+        return done.value
+
+
+def kv_lookup_keys(
+    profile: "AdmissionProfile",
+    *,
+    target_level: Optional[str] = None,
+    admission_type: Optional[str] = None,
+) -> tuple[frozenset, frozenset]:
+    """Tập KHOÁ TRA (bao trùm) mà bộ quyết định có thể cần cho ``profile`` — ``(xã: {(mã xã, năm)}, trường: {(id trường, năm)})``
+    — để đường lô nạp TRƯỚC bằng hai câu cho mọi hồ sơ. Chỉ khoá đúng kiểu (mã xã chuỗi; id trường / năm số nguyên); dữ liệu
+    lạ không sinh khoá ⇒ bộ quyết định gặp khoá vắng ⇒ :class:`KvLookupNotLoaded` (fail-closed).
+
+    Dựng bằng CHÍNH các helper G5 của bộ quyết định (Codex GĐ2-B lượt 2 P4 / P5 — không giữ luật năm riêng): mục =
+    ``kv_history_basis_entry`` không có mã dừng ``kv_entry_problem`` (mục dừng ⇒ bộ quyết định dừng trước mọi phép tra); năm đếm =
+    ``kv_entry_school_years``; ứng viên trường tốt nghiệp = ``kv_last_school_year`` của MỌI mục ấy, kể cả mục thiếu / ngược
+    ``year_from`` (bị bỏ khỏi phép đếm nhưng vẫn được xếp ở bước hoà)."""
+    communes, schools, _dtnt = _kv_lookup_plan(profile, target_level=target_level, admission_type=admission_type)
+    return communes, schools
+
+
+def kv_school_dtnt_keys(
+    profile: "AdmissionProfile",
+    *,
+    target_level: Optional[str] = None,
+    admission_type: Optional[str] = None,
+) -> frozenset:
+    """L3: id trường cần tra cờ DTNT (``school_dtnt`` của :func:`decide_kv_for_profile`) — CÙNG kế hoạch với :func:`kv_lookup_keys`."""
+    return _kv_lookup_plan(profile, target_level=target_level, admission_type=admission_type)[2]
+
+
+def _kv_lookup_plan(
+    profile: "AdmissionProfile",
+    *,
+    target_level: Optional[str] = None,
+    admission_type: Optional[str] = None,
+) -> tuple[frozenset, frozenset, frozenset]:
+    """``(khoá xã, khoá trường theo năm, id trường cần cờ DTNT)`` — MỘT nơi dựng mọi khoá tra cho đường lô."""
+    try:
+        kv_year = priority_academic_year(profile)
+    except ValueError:
+        return frozenset(), frozenset(), frozenset()
+    history = getattr(profile, "academic_history", None) or []
+    basis, _ = _derive_kv_basis_level(
+        cultural=getattr(profile, "cultural_education_level", None),
+        vocational=getattr(profile, "vocational_qualification", "none") or "none",
+        target_level=target_level,
+        admission_type=admission_type,
+        academic_history=history,
+        area_resolution_basis=getattr(profile, "area_resolution_basis", None),
+        previous_snapshot=getattr(profile, "priority_resolution_snapshot", None),
+    )
+    communes: set = set()
+    schools: set = set()
+    dtnt: set = set()
+    if basis in ("COMMUNE_SPECIAL", "THUONG_TRU"):
+        commune_code = getattr(profile, "permanent_commune_code", None)
+        if isinstance(commune_code, str) and commune_code:
+            communes.add((commune_code, kv_year))
+    elif basis == "LICH_SU_THPT":
+        for entry in history:
+            if not kv_history_basis_entry(entry) or kv_entry_problem(entry) is not None:
+                continue
+            sid = entry.get("school_id")
+            if not _history_int(sid):  # MỘT helper "số nguyên thật" với bộ quyết định (bỏ bản trùng ``_plain_int`` — Codex B'3)
+                continue
+            y_from, y_to = entry.get("year_from"), entry.get("year_to")
+            last_year = kv_last_school_year(entry)
+            if _history_int(last_year):
+                schools.add((sid, last_year))
+            if _history_int(y_from) and _history_int(y_to) and y_to >= y_from:
+                for year in kv_entry_school_years(entry):
+                    schools.add((sid, year))
+    elif basis == KV_BASIS_THCS_HISTORY:
+        # L3: CÙNG kế hoạch dòng THCS với bộ quyết định (:func:`kv_thcs_history_plan`) — có dòng dừng ⇒ bộ quyết định dừng trước
+        # mọi phép tra ⇒ không cần khoá. Dòng đếm được đã có ``school_id`` / năm là số nguyên.
+        entries, problems = kv_thcs_history_plan(history)
+        if not problems:
+            for entry in entries:
+                sid = entry["school_id"]
+                dtnt.add(sid)
+                schools.add((sid, kv_entry_thcs_last_school_year(entry)))
+                for year in kv_entry_thcs_school_years(entry):
+                    schools.add((sid, year))
+    return frozenset(communes), frozenset(schools), frozenset(dtnt)
+
+
+def _kv_count_school_years(
+    entries: list,
+    years_of: Callable[[dict], range] = kv_entry_school_years,
+) -> Generator[KvLookup, Optional[str], tuple[dict[str, int], list[dict[str, Any]], list[dict[str, Any]]]]:
+    """Vòng ĐẾM NĂM HỌC theo KV của luật học nhiều trường — MỘT nguồn cho nhánh THPT (``LICH_SU_THPT``) và nhánh THCS (L3,
+    ``LICH_SU_THCS``): mỗi năm học (khoá năm bắt đầu — ``years_of``: :func:`kv_entry_school_years` cho THPT,
+    :func:`kv_entry_thcs_school_years` cho THCS, cùng chỗ cắt liên cấp) một phép tra KV trường theo năm. Trả
+    ``(số năm theo KV, breakdown từng mục, các phép tra không ra hàng)``. Mục thiếu / ngược năm bị bỏ qua (hành vi THPT cũ; nhánh
+    THCS đã loại các mục ấy ở :func:`kv_thcs_entry_case`)."""
+    kv_years: dict[str, int] = {}
+    breakdown_entries: list[dict[str, Any]] = []
+    missing_lookups: list[dict[str, Any]] = []
+
+    for entry in entries:
+        sid = entry["school_id"]
+        y_from = entry.get("year_from")
+        y_to = entry.get("year_to")
+        if y_from is None or y_to is None or y_to < y_from:
+            continue
+
+        entry_years_by_kv: list[dict[str, Any]] = []
+        # G5: khoá NĂM BẮT ĐẦU của từng năm học thực học (``year_from .. year_to − 1``); liên cấp chỉ phần của nhánh (THPT: lớp
+        # 10..``grade_to``; THCS: lớp 6–9).
+        school_years = years_of(entry)
+        for year in school_years:
+            kv = yield KvLookup(KV_LOOKUP_SCHOOL, sid, year)
+            if kv:
+                kv_years[kv] = kv_years.get(kv, 0) + 1
+                entry_years_by_kv.append({"year": year, "kv": kv})
+            else:
+                missing_lookups.append({"school_id": sid, "year": year})
+
+        breakdown_entries.append(
+            {
+                "school_id": sid,
+                "school_name_at_time": entry.get("school_name"),
+                "year_from": y_from,
+                "year_to": y_to,
+                "counted_school_years": list(school_years),
+                "years_by_kv": entry_years_by_kv,
+            }
+        )
+    return kv_years, breakdown_entries, missing_lookups
+
+
+#: ``pathway`` của hai nhánh L3.
+KV_PATHWAY_THCS_HISTORY = "lich_su_thcs"
+KV_PATHWAY_PENDING_VERIFICATION = "cho_xac_minh"
+#: ``reason`` của "KV chờ xác minh" (snapshot ``reason``) — câu hiển thị ở ``kv-labels.ts`` (FE).
+KV_PENDING_REASON_NEEDS_VERIFICATION = "kv_basis_needs_manual_verification"
+KV_PENDING_REASON_THCS_MISSING = "thcs_history_missing"
+KV_PENDING_REASON_THCS_NOT_IN_CATALOG = "thcs_school_not_in_catalog"
+KV_PENDING_REASON_THCS_INCONSISTENT = "thcs_history_inconsistent"
+KV_PENDING_REASON_THCS_KV_MISSING = "thcs_school_kv_missing"
+KV_PENDING_REASON_THCS_TIED = "thcs_tied_graduation_school"
+KV_PENDING_REASON_THCS_DTNT = "thcs_school_dtnt"
+
+
+def _kv_thcs_history_steps(
+    academic_history: list,
+    meta_base: Callable[..., dict[str, Any]],
+) -> Generator[KvLookup, Optional[str], tuple[Optional[str], dict[str, Any]]]:
+    """Nhánh ``LICH_SU_THCS`` (L3): KV theo các dòng THCS có trường trong danh mục — khu vực học lâu nhất (cùng vòng đếm với THPT),
+    hoà ⇒ KV trường tốt nghiệp lớp 9 (MỘT luật hoà với THPT — :func:`kv_graduation_pick`) tra ở năm học lớp 9
+    (:func:`kv_entry_thcs_last_school_year`). MỌI ca không tính được ⇒ "KV chờ xác minh" (:data:`KV_PENDING_VERIFICATION_RULE`,
+    ``requires_manual_override``), ``reason`` nói đúng việc cán bộ cần làm — kể cả lớp trống / sai kiểu ở nhóm tốt nghiệp khi hoà (owner
+    23-11 (a))."""
+    pathway = KV_PATHWAY_THCS_HISTORY
+
+    def _pending(reason: str, breakdown: dict[str, Any]) -> tuple[None, dict[str, Any]]:
+        return None, meta_base(
+            rule_applied=KV_PENDING_VERIFICATION_RULE,
+            pathway=pathway,
+            requires_manual_override=True,
+            reason=reason,
+            breakdown=breakdown,
+        )
+
+    entries, problems = kv_thcs_history_plan(academic_history)
+    if problems:
+        only_not_in_catalog = all(p["case"] == KV_THCS_ENTRY_WITHOUT_SCHOOL for p in problems)
+        return _pending(
+            KV_PENDING_REASON_THCS_NOT_IN_CATALOG if only_not_in_catalog else KV_PENDING_REASON_THCS_INCONSISTENT,
+            {"entries": problems},
+        )
+    if not entries:
+        return _pending(KV_PENDING_REASON_THCS_MISSING, {"entries": []})
+
+    # Điều phối 22-11 (Phần C mục 2): trường PT DTNT ⇒ diện hộ khẩu (TT 05 PL01 5.b) ⇒ "chờ xác minh", xác minh bằng ấn định tay; không
+    # tự tính theo KV trường. Mỗi trường một lần tra, theo thứ tự xuất hiện. Không có trường (id lạ) ⇒ "chưa có trong danh mục".
+    dtnt_ids: list = []
+    unknown_ids: list = []
+    for sid in dict.fromkeys(e["school_id"] for e in entries):
+        flag = yield KvLookup(KV_LOOKUP_SCHOOL_DTNT, sid, None)
+        if flag is None:
+            unknown_ids.append(sid)
+        elif flag:
+            dtnt_ids.append(sid)
+    if unknown_ids:
+        return _pending(KV_PENDING_REASON_THCS_NOT_IN_CATALOG, {"entries": [], "unknown_school_ids": unknown_ids})
+    if dtnt_ids:
+        return _pending(KV_PENDING_REASON_THCS_DTNT, {"entries": [], "dtnt_school_ids": dtnt_ids})
+
+    kv_years, breakdown_entries, missing_lookups = yield from _kv_count_school_years(entries, kv_entry_thcs_school_years)
+    if missing_lookups or not kv_years:
+        # Trường THCS chưa có KV cho một / mọi năm học (Q19(d)(ii): không tính từ phần còn lại).
+        return _pending(
+            KV_PENDING_REASON_THCS_KV_MISSING,
+            {"entries": breakdown_entries, "kv_totals": kv_years, "missing_lookups": missing_lookups},
+        )
+
+    max_yrs = max(kv_years.values())
+    winners = [kv for kv, y in kv_years.items() if y == max_yrs]
+    breakdown_base = {"entries": breakdown_entries, "kv_totals": kv_years, "winner_years": max_yrs}
+    if len(winners) == 1:
+        return winners[0], meta_base(rule_applied="longest_duration", pathway=pathway, breakdown=breakdown_base)
+
+    # Bước hoà: MỘT luật với nhánh THPT (:func:`kv_graduation_pick`) trên phần THCS — năm kết thúc phần THCS, lớp cuối phần THCS
+    # (liên cấp ⇒ 9). Owner 23-11 (a): lớp trống / null / sai kiểu ở nhóm tốt nghiệp ⇒ KHÔNG coi là 0 mà "KV chờ xác minh" — cùng
+    # đường với hai dòng ngang nhau cả năm lẫn lớp (``thcs_tied_graduation_school``; cổng nộp cho qua, T6 dừng có nhãn, F231
+    # ``khu_vuc_cho_xac_minh``), như THPT dùng chung đường M1 cho hai ca ấy.
+    grad_entry, undecided = kv_graduation_pick(entries, kv_entry_thcs_end_year, kv_entry_thcs_last_grade)
+    if grad_entry is None:
+        return _pending(
+            KV_PENDING_REASON_THCS_TIED,
+            {**breakdown_base, "tied_kv": winners, "tied_entries": [e["school_id"] for e in undecided]},
+        )
+    grad_lookup_year = kv_entry_thcs_last_school_year(grad_entry)
+    grad_kv = yield KvLookup(KV_LOOKUP_SCHOOL, grad_entry["school_id"], grad_lookup_year)
+    graduation = {
+        "tied_kv": winners,
+        "graduation_school_id": grad_entry["school_id"],
+        "graduation_year": kv_entry_thcs_end_year(grad_entry),
+        "graduation_lookup_year": grad_lookup_year,
+    }
+    if grad_kv is None:
+        return _pending(KV_PENDING_REASON_THCS_KV_MISSING, {**breakdown_base, **graduation})
+    return grad_kv, meta_base(
+        rule_applied="tiebreak_graduation_school", pathway=pathway, breakdown={**breakdown_base, **graduation}
+    )
+
+
+def _kv_resolution_steps(
+    profile: "AdmissionProfile",
+    *,
+    target_level: Optional[str] = None,
+    admission_type: Optional[str] = None,
+) -> Generator[KvLookup, Optional[str], tuple[Optional[str], dict[str, Any]]]:
+    """BỘ QUYẾT ĐỊNH KV (thuần, không đọc CSDL): mỗi phép tra danh mục là một ``yield KvLookup(...)``; nơi gọi gửi lại kết quả
+    (``None`` = không có hàng). Trả ``(kv_code, meta)`` qua ``StopIteration.value``. Hai nơi gọi: :func:`resolve_kv_for_profile`
+    (từng hồ sơ, đọc CSDL) và :func:`decide_kv_for_profile` (lô). Phần dưới là docstring luật gốc (``db`` = nơi gọi tra).
+
+    Resolve KV cho profile per TT 05/2021 Phụ lục 01.
 
     Phase E.4 (commit 5) refactor — pipeline:
        Eligibility (upstream gate) → Exception → Auto basis → Resolve KV
@@ -755,6 +1433,7 @@ async def resolve_kv_for_profile(
         admission_type=admission_type,
         academic_history=academic_history,
         area_resolution_basis=area_basis,
+        previous_snapshot=getattr(profile, "priority_resolution_snapshot", None),
     )
 
     # Common meta scaffold — basis + basis_reason luôn included.
@@ -774,7 +1453,7 @@ async def resolve_kv_for_profile(
                 requires_manual_override=True,
                 reason="special_case_no_commune_code",
             )
-        kv = await _lookup_commune_kv(db, commune_code, kv_year)
+        kv = yield KvLookup(KV_LOOKUP_COMMUNE, commune_code, kv_year)
         if kv is None:
             return None, _meta_base(
                 rule_applied="catalog_gap_commune",
@@ -828,7 +1507,7 @@ async def resolve_kv_for_profile(
                 requires_manual_override=True,
                 reason="profile_missing_permanent_commune_code",
             )
-        kv = await _lookup_commune_kv(db, commune_code, kv_year)
+        kv = yield KvLookup(KV_LOOKUP_COMMUNE, commune_code, kv_year)
         if kv is None:
             return None, _meta_base(
                 rule_applied="catalog_gap_commune",
@@ -843,11 +1522,24 @@ async def resolve_kv_for_profile(
             breakdown={"commune_code_used": commune_code},
         )
 
+    # --- L3: sơ cấp / nhánh cũ không truyền trình độ — "KV chờ xác minh" (không tra danh mục nào). ---
+    if basis == KV_BASIS_PENDING_VERIFICATION:
+        return None, _meta_base(
+            rule_applied=KV_PENDING_VERIFICATION_RULE,
+            pathway=KV_PATHWAY_PENDING_VERIFICATION,
+            requires_manual_override=True,
+            reason=KV_PENDING_REASON_NEEDS_VERIFICATION,
+        )
+
+    # --- L3: trung cấp sau THCS — KV theo nơi học THCS (trường trong danh mục). ---
+    if basis == KV_BASIS_THCS_HISTORY:
+        return (yield from _kv_thcs_history_steps(academic_history, _meta_base))
+
     # --- LICH_SU_THPT: multi-school rule TT 05/2021 Phụ lục 01 Mục 5.a. ---
     # Aggregate duration per KV qua academic_history, longest duration wins,
     # tie → graduation school (year_to + grade_to).
-    # G5 (owner 22-11): tập mục = MỘT vị từ ``kv_history_basis_entry`` (chung với ``_has_thpt_history``) — mục liên cấp chỉ có năm
-    # THCS (lớp kết thúc ≤ 9) KHÔNG đóng góp năm nào và KHÔNG là ứng viên trường tốt nghiệp (như mục THCS).
+    # G5 (owner 22-11): tập mục = MỘT vị từ ``kv_history_basis_entry`` (chung với ``_has_thpt_history`` và :func:`kv_lookup_keys`) —
+    # mục liên cấp chỉ có năm THCS (lớp kết thúc ≤ 9) KHÔNG đóng góp năm nào và KHÔNG là ứng viên trường tốt nghiệp (như mục THCS).
     basis_entries = [e for e in academic_history if kv_history_basis_entry(e)]
 
     pathway = "lich_su_thpt"
@@ -887,39 +1579,8 @@ async def resolve_kv_for_profile(
         )
 
     # Per-year KV duration map + breakdown per entry. Track lookup failures
-    # explicit để fail-closed (catalog_gap_school).
-    kv_years: dict[str, int] = {}
-    breakdown_entries: list[dict[str, Any]] = []
-    missing_lookups: list[dict[str, Any]] = []
-
-    for entry in basis_entries:
-        sid = entry["school_id"]
-        y_from = entry.get("year_from")
-        y_to = entry.get("year_to")
-        if y_from is None or y_to is None or y_to < y_from:
-            continue
-
-        entry_years_by_kv: list[dict[str, Any]] = []
-        # G5: khoá NĂM BẮT ĐẦU của từng năm học thực học (``year_from .. year_to − 1``); liên cấp chỉ phần lớp 10..``grade_to``.
-        school_years = kv_entry_school_years(entry)
-        for year in school_years:
-            kv = await lookup_kv_for_school_year(db, sid, year)
-            if kv:
-                kv_years[kv] = kv_years.get(kv, 0) + 1
-                entry_years_by_kv.append({"year": year, "kv": kv})
-            else:
-                missing_lookups.append({"school_id": sid, "year": year})
-
-        breakdown_entries.append(
-            {
-                "school_id": sid,
-                "school_name_at_time": entry.get("school_name"),
-                "year_from": y_from,
-                "year_to": y_to,
-                "counted_school_years": list(school_years),
-                "years_by_kv": entry_years_by_kv,
-            }
-        )
+    # explicit để fail-closed (catalog_gap_school). MỘT vòng đếm cho THPT và THCS (L3): :func:`_kv_count_school_years`.
+    kv_years, breakdown_entries, missing_lookups = yield from _kv_count_school_years(basis_entries)
 
     if not kv_years:
         # Tất cả lookup miss → vn_school_kv_assignment thiếu catalog cho 100%
@@ -969,12 +1630,16 @@ async def resolve_kv_for_profile(
             breakdown=breakdown_base,
         )
 
-    # Tiebreak: graduation school (highest year_to + grade_to, stable index).
-    # M1: detect ambiguous (2+ entries cùng year_to + grade_to) → require manual.
-    # Owner GO 22-11: mục có thể là trường tốt nghiệp mà thiếu / sai kiểu year_to / grade_to ⇒ KHÔNG so (tránh TypeError của khoá
-    # sắp xếp) ⇒ cùng đường M1 (hoà không phân định ⇒ cần xét tay), cùng mã lý do.
-    unclear = kv_graduation_candidates_unclear(basis_entries)
-    if unclear is not None:
+    # Tiebreak: graduation school (highest year_to + grade_to, stable index) — MỘT luật hoà với nhánh THCS: :func:`kv_graduation_pick`
+    # (bộ truy cập mặc định ``year_to`` / ``grade_to``). Hai ca ra ``(None, …)`` cùng đường M1 (hoà không phân định ⇒ cần xét tay,
+    # cùng mã lý do):
+    # * owner GO 22-11 + owner 23-11 (a): mục có thể là trường tốt nghiệp mà thiếu / sai kiểu year_to / grade_to ⇒ KHÔNG so (tránh
+    #   TypeError của khoá sắp xếp) — ``tied_entries`` = các mục ấy;
+    # * M1: hai mục đầu NHÓM year_to lớn nhất cùng year_to + grade_to — ``tied_entries`` = hai mục ấy.
+    # Chỉ xếp NHÓM year_to lớn nhất (rà hợp nhất 23-11 B-H1): nhóm thấp có thể có hai mục cùng năm, một lớp null / chuỗi, một lớp số ⇒
+    # xếp chung buộc so hai lớp ấy ⇒ TypeError. Dữ liệu đúng kiểu: kết quả như xếp toàn bộ cũ.
+    grad_entry, undecided = kv_graduation_pick(basis_entries)
+    if grad_entry is None:
         return None, _meta_base(
             rule_applied="ambiguous_requires_manual",
             pathway=pathway,
@@ -983,47 +1648,14 @@ async def resolve_kv_for_profile(
             breakdown={
                 **breakdown_base,
                 "tied_kv": winners,
-                "tied_entries": [e["school_id"] for e in unclear],
+                "tied_entries": [e["school_id"] for e in undecided],
             },
         )
-    # Chỉ xếp NHÓM year_to lớn nhất (rà hợp nhất 23-11 B-H1): trường tốt nghiệp luôn ở nhóm ấy; nhóm thấp hơn có thể có hai mục cùng
-    # năm, một lớp null / chuỗi, một lớp số ⇒ xếp chung buộc so hai lớp ấy ⇒ TypeError. Dữ liệu đúng kiểu: kết quả không đổi (hai phần
-    # tử đầu khi xếp toàn bộ đều thuộc nhóm này, trừ khi nhóm chỉ một mục — khi ấy mục thứ hai khác year_to nên không vào M1).
-    sorted_entries = sorted(
-        kv_graduation_year_group(basis_entries),
-        key=lambda pair: (
-            pair[1].get("year_to", 0),
-            pair[1].get("grade_to", 0),
-            -pair[0],  # stable: prefer earlier index when ties
-        ),
-        reverse=True,
-    )
-    if len(sorted_entries) >= 2:
-        top_entry = sorted_entries[0][1]
-        second_entry = sorted_entries[1][1]
-        if top_entry.get("year_to") == second_entry.get("year_to") and top_entry.get(
-            "grade_to"
-        ) == second_entry.get("grade_to"):
-            return None, _meta_base(
-                rule_applied="ambiguous_requires_manual",
-                pathway=pathway,
-                requires_manual_override=True,
-                reason="tied_graduation_year_and_grade",
-                breakdown={
-                    **breakdown_base,
-                    "tied_kv": winners,
-                    "tied_entries": [
-                        top_entry["school_id"],
-                        second_entry["school_id"],
-                    ],
-                },
-            )
 
-    grad_entry = sorted_entries[0][1]
     # G5 (owner 22-11): tra trường tốt nghiệp ở NĂM HỌC CUỐI (khoá năm bắt đầu ``year_to − 1``), không phải năm sau tốt nghiệp.
     # ``graduation_lookup_year`` ghi ĐÚNG khoá đã đem tra (Codex G5 P1) — ``graduation_year`` vẫn là ``year_to`` như cũ.
     grad_lookup_year = kv_last_school_year(grad_entry)
-    grad_kv = await lookup_kv_for_school_year(db, grad_entry["school_id"], grad_lookup_year)
+    grad_kv = yield KvLookup(KV_LOOKUP_SCHOOL, grad_entry["school_id"], grad_lookup_year)
     if grad_kv is None:
         # Graduation school year miss catalog → fail-closed.
         return None, _meta_base(
@@ -1217,12 +1849,70 @@ async def verify_manual_override_provenance(
         ``snapshot["reason"]`` + log.
 
     Fail-closed ở MỌI nhánh. Xem khối chú thích phía trên cho 5 điều kiện.
+
+    GĐ2-B đợt 2 (đề cương §3): luật nằm ở hai hàm thuần :func:`manual_override_claim_refusal` (ảnh chụp) và
+    :func:`decide_manual_override_provenance` (đối chiếu sổ); hàm này chỉ ĐỌC hàng sổ mới nhất của MỘT hồ sơ (đúng câu cũ, chỉ
+    đọc khi ảnh chụp qua kiểm). Đường lô đọc hàng sổ của MỌI hồ sơ bằng :func:`latest_manual_override_audit_rows` rồi gọi cùng
+    hàm thuần.
     """
     from app.models.priority_audit import PriorityAuditLog
 
+    refusal = manual_override_claim_refusal(profile)
+    if refusal is not None:
+        return False, refusal, {}
+
+    stmt = (
+        select(PriorityAuditLog)
+        .where(
+            PriorityAuditLog.profile_id == profile.id,
+            PriorityAuditLog.action_type == _MANUAL_OVERRIDE_AUDIT_ACTION,
+        )
+        .order_by(PriorityAuditLog.created_at.desc(), PriorityAuditLog.id.desc())
+        .limit(1)
+    )
+    audit_row = (await db.execute(stmt)).scalars().first()
+    return decide_manual_override_provenance(profile, audit_row)
+
+
+#: ``priority_audit_log.action_type`` của đường override KV DUY NHẤT (``priority_override_service.override_kv``).
+_MANUAL_OVERRIDE_AUDIT_ACTION = "kv_manual_override"
+
+
+async def latest_manual_override_audit_rows(db: Any, profile_ids: Sequence[int]) -> dict[int, Any]:
+    """Đường LÔ của phần đọc sổ trong :func:`verify_manual_override_provenance`: hàng ``kv_manual_override`` MỚI NHẤT của từng hồ
+    sơ (cùng thứ tự ``created_at`` giảm rồi ``id`` giảm — ``DISTINCT ON``) bằng MỘT câu (kể cả danh sách rỗng). Hồ sơ không có
+    hàng ⇒ vắng khoá.
+    ``db``: phiên ORM (kể cả phiên trên kết nối ảnh chụp chỉ đọc)."""
+    from sqlalchemy import Integer, any_, bindparam
+    from sqlalchemy.dialects.postgresql import ARRAY
+
+    from app.models.priority_audit import PriorityAuditLog
+
+    ids = sorted({int(p) for p in profile_ids})
+    stmt = (
+        select(PriorityAuditLog)
+        .where(
+            # Tham số MẢNG (một tham số, không chia khúc) và chạy cả khi rỗng — số câu không theo số hồ sơ (owner Q3 22-11).
+            PriorityAuditLog.profile_id == any_(bindparam("ids", ids, type_=ARRAY(Integer))),
+            PriorityAuditLog.action_type == _MANUAL_OVERRIDE_AUDIT_ACTION,
+        )
+        .distinct(PriorityAuditLog.profile_id)
+        .order_by(
+            PriorityAuditLog.profile_id,
+            PriorityAuditLog.created_at.desc(),
+            PriorityAuditLog.id.desc(),
+        )
+    )
+    return {int(r.profile_id): r for r in (await db.execute(stmt)).scalars()}
+
+
+def manual_override_claim_refusal(profile: Any) -> Optional[str]:
+    """Bước 1 (thuần) của :func:`verify_manual_override_provenance`: ảnh chụp có khai override ĐỦ dạng không — ``None`` = đủ;
+    không thì mã từ chối (``no_prior_snapshot`` / ``snapshot_kv_invalid`` / ``snapshot_missing_actor`` /
+    ``snapshot_missing_timestamp`` / ``snapshot_reason_too_short``)."""
     snapshot = getattr(profile, "priority_resolution_snapshot", None)
     if not isinstance(snapshot, dict) or not snapshot:
-        return False, "no_prior_snapshot", {}
+        return "no_prior_snapshot"
 
     claimed_kv = snapshot.get("kv_resolved")
     claimed_by = snapshot.get("manual_override_by")
@@ -1230,24 +1920,31 @@ async def verify_manual_override_provenance(
     claimed_reason = (snapshot.get("manual_override_reason") or "").strip()
 
     if claimed_kv not in _MANUAL_OVERRIDE_KV_CODES:
-        return False, "snapshot_kv_invalid", {}
+        return "snapshot_kv_invalid"
     if not isinstance(claimed_by, int) or isinstance(claimed_by, bool):
-        return False, "snapshot_missing_actor", {}
+        return "snapshot_missing_actor"
     if claimed_at is None:
-        return False, "snapshot_missing_timestamp", {}
+        return "snapshot_missing_timestamp"
     if len(claimed_reason) < _MANUAL_OVERRIDE_MIN_REASON_LEN:
-        return False, "snapshot_reason_too_short", {}
+        return "snapshot_reason_too_short"
+    return None
 
-    stmt = (
-        select(PriorityAuditLog)
-        .where(
-            PriorityAuditLog.profile_id == profile.id,
-            PriorityAuditLog.action_type == "kv_manual_override",
-        )
-        .order_by(PriorityAuditLog.created_at.desc(), PriorityAuditLog.id.desc())
-        .limit(1)
-    )
-    audit_row = (await db.execute(stmt)).scalars().first()
+
+def decide_manual_override_provenance(
+    profile: Any, audit_row: Any
+) -> tuple[bool, Optional[str], dict[str, Any]]:
+    """Phần QUYẾT ĐỊNH (thuần) của :func:`verify_manual_override_provenance` trên hàng sổ mới nhất ĐÃ ĐỌC (``None`` = không có) —
+    cùng 5 điều kiện, cùng mã, cùng ``evidence``. Gọi lại :func:`manual_override_claim_refusal` trước (đường lô không đọc sổ
+    riêng cho từng hồ sơ nên không có bước chặn sớm)."""
+    refusal = manual_override_claim_refusal(profile)
+    if refusal is not None:
+        return False, refusal, {}
+    snapshot = profile.priority_resolution_snapshot
+    claimed_kv = snapshot.get("kv_resolved")
+    claimed_by = snapshot.get("manual_override_by")
+    claimed_at = _parse_iso_utc(snapshot.get("manual_override_at"))
+    claimed_reason = (snapshot.get("manual_override_reason") or "").strip()
+
     if audit_row is None:
         return False, "no_audit_row", {}
 

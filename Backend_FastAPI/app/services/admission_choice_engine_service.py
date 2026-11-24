@@ -115,59 +115,73 @@ T6_PER_PROFILE_STOP_ERRORS = (
 )
 
 
-def t6_profile_load_options() -> list:
-    """Chuỗi eager-load mà T6 cần — MỘT nguồn cho router ``publish-result`` và test.
+def t6_profile_load_paths() -> tuple:
+    """Chuỗi quan hệ mà T6 cần, dạng DỮ LIỆU (mỗi phần tử là một đường thuộc tính từ ``AdmissionProfile``) — MỘT nguồn cho
+    :func:`t6_profile_load_options` (``selectinload`` của T6) và cho bộ nạp theo lô của máy xét GĐ2-B
+    (``admission_review_load_repository.load_relationship_paths`` — đọc bằng tham số mảng, không chia khúc 500 của
+    ``selectinload``; owner Q3 22-11). Thêm / bớt một tầng ở đây là đổi cho CẢ HAI nơi.
 
     Thiếu chuỗi trình độ/loại hình thì ``derive_target_level_and_type`` ném và T6 DỪNG
     (``ChoiceTargetLevelNotConfigured``, owner Q20(a)); thiếu ``admission_round`` thì không so được năm đợt.
     """
-    from sqlalchemy.orm import selectinload
-
-    return [
+    profile, choice, path = models.AdmissionProfile, models.AdmissionProfileChoice, models.AdmissionPath
+    return (
         # P2 fix 2026-05-22 — eager-load `.lead` cho cascade gọi
         # sync_lead_from_admission() sau khi profile.status flip
         # (reviewing → result_published → admitted/rejected). Trước
         # đây không eager-load → sync silent fail "Lead not loaded".
-        selectinload(models.AdmissionProfile.lead),
-        selectinload(models.AdmissionProfile.choices)
-        .selectinload(models.AdmissionProfileChoice.admission_path)
-        .selectinload(models.AdmissionPath.admission_method),
+        (profile.lead,),
+        (profile.choices, choice.admission_path, path.admission_method),
         # admission_round: T6 so năm của đợt với năm tuyển sinh của hồ sơ (lệch ⇒ PriorityYearMismatch). Mức điểm
         # tra theo năm của HỒ SƠ (owner Q10(a)), không theo đợt.
-        selectinload(models.AdmissionProfile.choices)
-        .selectinload(models.AdmissionProfileChoice.admission_path)
-        .selectinload(models.AdmissionPath.admission_round),
-        selectinload(models.AdmissionProfile.choices)
-        .selectinload(models.AdmissionProfileChoice.admission_path)
-        .selectinload(models.AdmissionPath.criteria),
+        (profile.choices, choice.admission_path, path.admission_round),
+        (profile.choices, choice.admission_path, path.criteria),
         # Q9 #07 Phase E.4 — choice-engine gate 0 (eligibility) needs
         # derive_target_level_and_type(path), which reads:
         #   path.academic_info.offering.program.degree_level_ref.code
         #   path.academic_info.offering.offering_type_config.code
         # Without this chain, gate 0 raises CONFIG_GAP_TARGET_LEVEL and
         # every choice rejects silently. Mirrors the bonus_rule chain.
-        selectinload(models.AdmissionProfile.choices)
-        .selectinload(models.AdmissionProfileChoice.admission_path)
-        .selectinload(models.AdmissionPath.academic_info)
-        .selectinload(models.OfferingAcademicInfo.offering)
-        .selectinload(models.ProgramOffering.program)
-        .selectinload(models.MajorProgram.degree_level_ref),
-        selectinload(models.AdmissionProfile.choices)
-        .selectinload(models.AdmissionProfileChoice.admission_path)
-        .selectinload(models.AdmissionPath.academic_info)
-        .selectinload(models.OfferingAcademicInfo.offering)
-        .selectinload(models.ProgramOffering.offering_type_config),
+        (
+            profile.choices,
+            choice.admission_path,
+            path.academic_info,
+            models.OfferingAcademicInfo.offering,
+            models.ProgramOffering.program,
+            models.MajorProgram.degree_level_ref,
+        ),
+        (
+            profile.choices,
+            choice.admission_path,
+            path.academic_info,
+            models.OfferingAcademicInfo.offering,
+            models.ProgramOffering.offering_type_config,
+        ),
         # SubjectGroup uses subject_mappings (M2M) → SubjectGroupSubject.subject
         # NOT direct `subjects` relation (em earlier drift, fixed).
-        selectinload(models.AdmissionProfile.choices)
-        .selectinload(models.AdmissionProfileChoice.path_subject_group_config)
-        .selectinload(models.PathSubjectGroupConfig.subject_group)
-        .selectinload(models.SubjectGroup.subject_mappings)
-        .selectinload(models.SubjectGroupSubject.subject),
-        selectinload(models.AdmissionProfile.choices)
-        .selectinload(models.AdmissionProfileChoice.scores)
-        .selectinload(models.ProfileChoiceScore.subject),
-    ]
+        (
+            profile.choices,
+            choice.path_subject_group_config,
+            models.PathSubjectGroupConfig.subject_group,
+            models.SubjectGroup.subject_mappings,
+            models.SubjectGroupSubject.subject,
+        ),
+        (profile.choices, choice.scores, models.ProfileChoiceScore.subject),
+    )
+
+
+def t6_profile_load_options() -> list:
+    """Chuỗi eager-load mà T6 cần — MỘT nguồn cho router ``publish-result`` và test: mỗi đường của
+    :func:`t6_profile_load_paths` thành một chuỗi ``selectinload`` (cùng thứ tự, cùng tầng như bản viết tay trước đây)."""
+    from sqlalchemy.orm import selectinload
+
+    options = []
+    for attrs in t6_profile_load_paths():
+        option = selectinload(attrs[0])
+        for attr in attrs[1:]:
+            option = option.selectinload(attr)
+        options.append(option)
+    return options
 
 
 # ============================================================================
@@ -501,6 +515,102 @@ def _target_context_or_stop(
         ) from gap_exc
 
 
+@dataclass(frozen=True)
+class ChoiceGateOutcome:
+    """Kết quả các CỔNG điều kiện của MỘT nguyện vọng — MỘT nguồn cho T6 (:func:`_evaluate_single_choice`) và máy xét mới
+    GĐ2-B (``admission_review_rules.choice_gate_facts``; đặc tả GĐ2-B bản 4 §6.5 bước 7).
+
+    * ``reason_codes`` khác rỗng ⇒ trượt TRƯỚC bước tính điểm (``ELIGIBILITY_FAIL:<lý do>``, ``BELOW_MIN_GPA``,
+      ``MISSING_GPA_OVERALL``, ``GRADUATION_YEAR_OUT_OF_RANGE``); khi ấy ``score_result`` là ``None``.
+    * ``score_result``: kết quả ``calculate_score`` (CHƯA cộng ưu tiên) — chỉ có khi có tiêu chí, có điểm môn và tổ hợp có môn.
+      Mã ``BELOW_MIN_SCORE`` (điểm chuẩn) nằm trong ``disqualification_codes`` của nó — T6 dùng, lần xét KHÔNG dùng (Q4).
+    * ``has_subject_scores`` / ``has_scoring_config``: để nơi gọi phân biệt "không có điểm" (``NO_VALID_SCORES``) với "thiếu tiêu
+      chí / tổ hợp không có môn" (cấu hình).
+    """
+
+    reason_codes: Tuple[str, ...]
+    score_result: Optional[AdmissionScoreResult]
+    has_subject_scores: bool
+    has_scoring_config: bool
+
+
+def choice_scoring_config_complete(choice: "AdmissionProfileChoice") -> bool:
+    """Nguyện vọng có đủ cấu hình để tính điểm: đường xét có tiêu chí và tổ hợp đã chọn có môn — ĐÚNG hai điều kiện
+    cấu hình mà :func:`evaluate_choice_gates` đòi trước ``calculate_score``. MỘT nguồn cho ``has_scoring_config`` và cho máy
+    xét mới (đặc tả GĐ2-B bản 4 §6.5 bước 6 — kiểm TRƯỚC các cổng điều kiện của bước 7)."""
+    path = getattr(choice, "admission_path", None)
+    return getattr(path, "criteria", None) is not None and bool(_resolve_allowed_subjects(choice))
+
+
+def evaluate_choice_gates(
+    profile: "AdmissionProfile",
+    choice: "AdmissionProfileChoice",
+) -> ChoiceGateOutcome:
+    """Cổng 0 (trình độ / loại hình + đủ điều kiện văn hoá), cổng 1 (điểm TB tối thiểu), cổng 2 (năm tốt nghiệp — NO-OP mùa
+    2026) rồi ``calculate_score`` — đúng thứ tự và đúng hàm mà :func:`_evaluate_single_choice` vẫn dùng (tách ra để máy xét mới
+    GĐ2-B dùng CHUNG, không chép luật). KHÔNG cộng ưu tiên, KHÔNG quyết đạt / trượt theo điểm chuẩn — phần ấy là của nơi gọi.
+
+    Thiếu cấu hình trình độ / loại hình ⇒ ``ChoiceTargetLevelNotConfigured`` (owner Q20(a)); thiếu chuỗi eager-load ⇒
+    ``T6ChainNotLoaded`` — như trước. Không đọc CSDL (đối tượng phải đã nạp sẵn)."""
+    path = choice.admission_path
+
+    # Q9 #07 Phase E.4 — Gate 0: eligibility per target_level/admission_type
+    # TRƯỚC GPA gate (per priority_service pipeline). Fail-safe T6: nếu
+    # submit-time validate đã chạy thì pass-through; legacy magic-link
+    # paths chưa qua submit gate sẽ catch ở đây.
+    #
+    # Lazy import (cùng pattern với calculate_priority_bonus): priority_service
+    # imports app.models → circular dep nếu top-level import.
+    from app.services.priority_service import derive_major_code, validate_eligibility
+
+    # Thiếu cấu hình trình độ/loại hình ⇒ DỪNG (Q20(a)), không ghi "rejected". Engine KHÔNG fallback SC
+    # (yêu cầu nghiệp vụ #5).
+    target_level, admission_type = _target_context_or_stop(profile, choice)
+    passed_elig, elig_reason = validate_eligibility(
+        profile, target_level, admission_type, derive_major_code(path)
+    )
+    if not passed_elig:
+        return ChoiceGateOutcome((f"ELIGIBILITY_FAIL:{elig_reason}",), None, False, False)
+
+    # Gate 1: min GPA threshold (Sub-1 helper)
+    # AdmissionPath has FK to AdmissionCriteria via criteria_id. Eager-loaded.
+    criteria = getattr(path, "criteria", None)
+    if criteria is not None:
+        passed_gpa, reason = AdmissionScoringService._check_min_gpa(
+            profile_gpa_overall=getattr(profile, "gpa_overall", None),
+            criteria_min_gpa=getattr(criteria, "min_gpa", None),
+        )
+        if not passed_gpa:
+            return ChoiceGateOutcome((reason,), None, False, False)
+
+        # Gate 2: graduation year range (Sub-1 helper; NO-OP cho mùa 2026)
+        # Phase 4 will activate by passing criteria.min/max_graduation_year
+        passed_year, reason = AdmissionScoringService._check_graduation_year_range(
+            profile_graduation_year=getattr(profile, "graduation_year", None),
+            # Phase 1 #04 deferred → pass None until Phase 4
+            criteria_min_graduation_year=None,
+            criteria_max_graduation_year=None,
+        )
+        if not passed_year:
+            return ChoiceGateOutcome((reason,), None, False, False)
+
+    # Gate 3..6 + scoring via existing calculate_score (Phase 2 rules)
+    # Caller MUST have provided subject_scores on profile (eager loaded)
+    subject_scores = _collect_subject_scores(choice)
+    allowed_subjects = _resolve_allowed_subjects(choice)
+    has_scoring_config = choice_scoring_config_complete(choice)
+
+    score_result: Optional[AdmissionScoreResult] = None
+    if criteria is not None and subject_scores and allowed_subjects:
+        score_result = AdmissionScoringService.calculate_score(
+            criteria=criteria,
+            subject_scores=subject_scores,
+            allowed_subjects=allowed_subjects,
+            subject_weights=None,  # Phase 4: read from path snapshot
+        )
+    return ChoiceGateOutcome((), score_result, bool(subject_scores), has_scoring_config)
+
+
 def _evaluate_single_choice(
     profile: "AdmissionProfile",
     choice: "AdmissionProfileChoice",
@@ -521,66 +631,18 @@ def _evaluate_single_choice(
     Side effects: mutates ``score_result.final_score`` / ``score_result.passed`` /
     ``score_result.failure_reasons`` / ``score_result.disqualification_codes``
     when priority bonus flips the pass/fail outcome.
+
+    GĐ2-B: cổng 0–2 + ``calculate_score`` nằm ở :func:`evaluate_choice_gates` (MỘT nguồn với máy xét
+    mới); phần dưới (cộng ưu tiên, điểm chuẩn, quyết định) GIỮ NGUYÊN. Tên + chữ ký hàm này giữ nguyên
+    — nhiều tệp test ``monkeypatch`` nó.
     """
-    reason_codes: List[str] = []
-    path = choice.admission_path
-
-    # Q9 #07 Phase E.4 — Gate 0: eligibility per target_level/admission_type
-    # TRƯỚC GPA gate (per priority_service pipeline). Fail-safe T6: nếu
-    # submit-time validate đã chạy thì pass-through; legacy magic-link
-    # paths chưa qua submit gate sẽ catch ở đây.
-    #
-    # Lazy import (cùng pattern với calculate_priority_bonus): priority_service
-    # imports app.models → circular dep nếu top-level import.
-    from app.services.priority_service import derive_major_code, validate_eligibility
-
-    # Thiếu cấu hình trình độ/loại hình ⇒ DỪNG (Q20(a)), không ghi "rejected". Engine KHÔNG fallback SC
-    # (yêu cầu nghiệp vụ #5).
-    target_level, admission_type = _target_context_or_stop(profile, choice)
-    passed_elig, elig_reason = validate_eligibility(
-        profile, target_level, admission_type, derive_major_code(path)
-    )
-    if not passed_elig:
-        reason_codes.append(f"ELIGIBILITY_FAIL:{elig_reason}")
+    gates = evaluate_choice_gates(profile, choice)
+    reason_codes: List[str] = list(gates.reason_codes)
+    if reason_codes:
         return "rejected", None, reason_codes
 
-    # Gate 1: min GPA threshold (Sub-1 helper)
-    # AdmissionPath has FK to AdmissionCriteria via criteria_id. Eager-loaded.
-    criteria = getattr(path, "criteria", None)
-    if criteria is not None:
-        passed_gpa, reason = AdmissionScoringService._check_min_gpa(
-            profile_gpa_overall=getattr(profile, "gpa_overall", None),
-            criteria_min_gpa=getattr(criteria, "min_gpa", None),
-        )
-        if not passed_gpa:
-            reason_codes.append(reason)
-            return "rejected", None, reason_codes
-
-        # Gate 2: graduation year range (Sub-1 helper; NO-OP cho mùa 2026)
-        # Phase 4 will activate by passing criteria.min/max_graduation_year
-        passed_year, reason = AdmissionScoringService._check_graduation_year_range(
-            profile_graduation_year=getattr(profile, "graduation_year", None),
-            # Phase 1 #04 deferred → pass None until Phase 4
-            criteria_min_graduation_year=None,
-            criteria_max_graduation_year=None,
-        )
-        if not passed_year:
-            reason_codes.append(reason)
-            return "rejected", None, reason_codes
-
-    # Gate 3..6 + scoring via existing calculate_score (Phase 2 rules)
-    # Caller MUST have provided subject_scores on profile (eager loaded)
-    subject_scores = _collect_subject_scores(choice)
-    allowed_subjects = _resolve_allowed_subjects(choice)
-
-    score_result: Optional[AdmissionScoreResult] = None
-    if criteria is not None and subject_scores and allowed_subjects:
-        score_result = AdmissionScoringService.calculate_score(
-            criteria=criteria,
-            subject_scores=subject_scores,
-            allowed_subjects=allowed_subjects,
-            subject_weights=None,  # Phase 4: read from path snapshot
-        )
+    score_result: Optional[AdmissionScoreResult] = gates.score_result
+    if score_result is not None:
 
         # Q9 #07 CR-P0: apply priority bonus to final_score + re-check
         # passed flag against min_score threshold. This is the load-
@@ -622,7 +684,7 @@ def _evaluate_single_choice(
         return "admitted", score_result, reason_codes
 
     # Missing data → reject with explicit code
-    if not subject_scores:
+    if not gates.has_subject_scores:
         reason_codes.append("NO_VALID_SCORES")
     return "rejected", score_result, reason_codes
 

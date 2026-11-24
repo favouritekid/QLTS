@@ -44,22 +44,24 @@ from app.services.priority_service import (
         ("graduated_gdtx", "cao_dang", None, "LICH_SU_THPT"),
         ("completed_thpt", "trung_cap", None, "LICH_SU_THPT"),
         ("completed_thpt", "cao_dang", None, "LICH_SU_THPT"),
-        # completed_thpt + so_cap/none — legacy branch fall back commune
-        ("completed_thpt", "so_cap", None, "THUONG_TRU"),
-        ("completed_thpt", "none", None, "THUONG_TRU"),
-        # graduated_thcs all → THUONG_TRU (per nghiệp vụ 2026-05-18 user override)
-        ("graduated_thcs", "trung_cap", None, "THUONG_TRU"),
-        ("graduated_thcs", "cao_dang", None, "THUONG_TRU"),
-        ("graduated_thcs", "so_cap", None, "THUONG_TRU"),
-        ("graduated_thcs", "none", None, "THUONG_TRU"),
-        ("completed_thcs", "none", None, "THUONG_TRU"),
-        ("completed_thcs", "trung_cap", None, "THUONG_TRU"),
+        # completed_thpt + so_cap/none — trước đây legacy fall back commune; owner 22-11 L3A câu 5 ⇒ cách tính nhóm THPT.
+        ("completed_thpt", "so_cap", None, "LICH_SU_THPT"),
+        ("completed_thpt", "none", None, "LICH_SU_THPT"),
+        # graduated_thcs / completed_thcs, nơi gọi không truyền trình độ: trước đây THUONG_TRU (nghiệp vụ 2026-05-18); L3
+        # (owner 22-11 câu 5) ⇒ chờ xác minh. Hồ sơ CŨ giữ THUONG_TRU khi cờ tắt — ``test_l3_kv_cho_xac_minh.py``.
+        ("graduated_thcs", "trung_cap", None, "PENDING_VERIFICATION"),
+        ("graduated_thcs", "cao_dang", None, "PENDING_VERIFICATION"),
+        ("graduated_thcs", "so_cap", None, "PENDING_VERIFICATION"),
+        ("graduated_thcs", "none", None, "PENDING_VERIFICATION"),
+        ("completed_thcs", "none", None, "PENDING_VERIFICATION"),
+        ("completed_thcs", "trung_cap", None, "PENDING_VERIFICATION"),
         # Cultural NULL → NOT_RESOLVED
         (None, "none", None, "NOT_RESOLVED"),
         (None, "trung_cap", None, "NOT_RESOLVED"),
         # area_basis bypass — output overrides matrix
         ("graduated_thpt", "none", "permanent_address_special", "COMMUNE_SPECIAL"),
-        ("graduated_thcs", "trung_cap", "permanent_address_special", "COMMUNE_SPECIAL"),
+        # L3 câu 2: nhãn hộ khẩu đặc biệt KHÔNG là căn cứ cho ba nhóm ⇒ chờ xác minh (nhóm khác vẫn COMMUNE_SPECIAL).
+        ("graduated_thcs", "trung_cap", "permanent_address_special", "PENDING_VERIFICATION"),
         (None, "none", "permanent_address_special", "COMMUNE_SPECIAL"),
         ("graduated_thpt", "none", "manual_override", "MANUAL"),
         ("graduated_thcs", "cao_dang", "manual_override", "MANUAL"),
@@ -145,9 +147,9 @@ def _mock_db(commune_kv=None, school_kv_sequence=None):
 
 @pytest.mark.asyncio
 async def test_resolve_kv_special_case_with_commune():
-    """Row 8: area_resolution_basis='permanent_address_special' + commune set."""
+    """Row 8: area_resolution_basis='permanent_address_special' + commune set (ngoài ba nhóm L3 — văn hoá THPT)."""
     profile = _mock_profile(
-        cultural_education_level="graduated_thcs",  # would normally be TC pathway
+        cultural_education_level="graduated_thpt",  # L3: nhãn đặc biệt không còn là căn cứ cho em THCS
         area_resolution_basis="permanent_address_special",
         permanent_commune_code="66_24305",
     )
@@ -199,7 +201,7 @@ async def test_resolve_kv_draft_cultural_not_set():
 
 @pytest.mark.asyncio
 async def test_resolve_kv_commune_fallback_thcs_only():
-    """Row 5: graduated_thcs + none → COMMUNE_FALLBACK."""
+    """Row 5: graduated_thcs + none, nơi gọi không truyền trình độ — L3 (owner 22-11 câu 5) ⇒ "KV chờ xác minh", không tra xã."""
     profile = _mock_profile(
         cultural_education_level="graduated_thcs",
         vocational_qualification="none",
@@ -207,8 +209,9 @@ async def test_resolve_kv_commune_fallback_thcs_only():
     )
     db = _mock_db(commune_kv="KV2-NT")
     kv, meta = await resolve_kv_for_profile(profile, db)
-    assert kv == "KV2-NT"
-    assert meta["pathway"] == "thuong_tru"
+    assert kv is None
+    assert meta["pathway"] == "cho_xac_minh"
+    assert meta["rule_applied"] == "kv_pending_verification"
 
 
 @pytest.mark.asyncio
@@ -337,7 +340,8 @@ async def test_resolve_kv_thpt_accepts_thcs_thpt_lien_cap():
 
 @pytest.mark.asyncio
 async def test_resolve_kv_thcs_plus_tc_falls_to_commune():
-    """Nghiệp vụ user 2026-05-18: TN THCS bất kể có bằng TC → KV theo hộ khẩu.
+    """Nghiệp vụ user 2026-05-18: TN THCS bất kể có bằng TC → KV theo hộ khẩu — nay chỉ còn cho HỒ SƠ CŨ (L3, owner 22-11:
+    ảnh chụp theo hộ khẩu của luật cũ, cờ ``KV_L3_APPLY_TO_EXISTING_ENABLED`` tắt). Không có ảnh chụp cũ ⇒ chờ xác minh (ca dưới).
 
     Original v1.3 design Row 4 (TC basis cho liên thông TC pathway) overridden
     by trường nghiệp vụ. Engine should fallback to commune_lookup even when
@@ -347,6 +351,7 @@ async def test_resolve_kv_thcs_plus_tc_falls_to_commune():
         cultural_education_level="graduated_thcs",
         vocational_qualification="trung_cap",
         permanent_commune_code="40_03139",
+        priority_resolution_snapshot={"basis": "THUONG_TRU", "basis_reason": "legacy_thcs_pathway_uses_commune"},
         academic_history=[
             {
                 "school_id": 200,
@@ -362,6 +367,10 @@ async def test_resolve_kv_thcs_plus_tc_falls_to_commune():
     assert kv == "KV1"
     assert meta["pathway"] == "thuong_tru"
     assert meta["rule_applied"] == "commune_lookup"
+    # Cùng hồ sơ CHƯA có ảnh chụp cũ ⇒ L3: chờ xác minh.
+    profile.priority_resolution_snapshot = None
+    kv, meta = await resolve_kv_for_profile(profile, _mock_db(commune_kv="KV1"))
+    assert (kv, meta["rule_applied"]) == (None, "kv_pending_verification")
 
 
 # =============================================================================

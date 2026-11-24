@@ -308,14 +308,30 @@ async def check_academic_info_move_allowed(
     * R4 — học vụ đang là thành viên một nhóm của bảng chỉ tiêu ⇒ :class:`AcademicInfoInQuotaGroup` (kiểm TRƯỚC R3 để học vụ
       thành viên của bảng đã khoá cũng nhận câu "gỡ khỏi nhóm trước" — việc người dùng phải làm trước tiên). Thành viên nhóm chỉ
       đổi qua PUT bảng, PUT giữ khoá năm ⇒ đọc ở đây ổn định.
+    * GĐ2-B (đặc tả bản 4 §4.3, P3; hợp đồng API bản 4 §0, §5) — học vụ đang có điểm sàn ở một lần xét NHÁP ⇒
+      ``admission_review_errors.AcademicInfoInReviewFloor`` (409 ``ACADEMIC_INFO_IN_REVIEW_FLOOR``; nhiều lần xét nháp ⇒ nêu lần
+      ``seq_no`` NHỎ NHẤT — phụ lục K1–K4 điểm 5). Khoá ngoại ghép (học vụ, năm) của sàn không có ``ON UPDATE`` ⇒ không kiểm ở đây
+      thì lệnh dời năm vấp lỗi khoá ngoại (500). Đọc sàn ở đây ỔN ĐỊNH vì MỌI đường ghi / xoá sàn (E4 lưu sàn, E5 huỷ —
+      ``admission_review_service``) giữ CÙNG khoá năm của lần xét trước khi chạm dòng sàn (chế độ CHIA SẺ — xung đột với bản ĐỘC
+      QUYỀN mà ``PATCH`` giữ, quyết định owner 23-11), và năm của sàn = năm của học vụ (khoá ngoại ghép) = năm cũ mà ta
+      đang giữ khoá ⇒ E4 / E5 đang dở thì ta đã chờ nó commit; ta đang giữ thì nó chờ ta.
     * R3 — học vụ có chỉ tiêu (cũ HOẶC mới khác NULL) chuyển VÀO hoặc RA năm có bảng đã khoá ⇒ :class:`QuotaTableLockedWrite`
       (kể cả khi con số không đổi). Tầng chủ sở hữu R3: trigger (theo dõi thêm ``academic_year``); đây là lớp kiểm trước."""
+    from app.repositories import admission_review_repository as review_repo
+    from app.services.admission_review_errors import AcademicInfoInReviewFloor
+
     m = models.AdmissionQuotaGroupMember
     nam_nhom = (
         await db.execute(select(m.academic_year).where(m.offering_academic_info_id == academic_info_id))
     ).scalar_one_or_none()
     if nam_nhom is not None:
         raise AcademicInfoInQuotaGroup(int(nam_nhom))
+    # KHÔNG lọc theo trạng thái lần xét: ở GĐ2-B chỉ lần xét nháp còn dòng sàn (E5 xoá sàn trước khi huỷ; trigger chặn huỷ khi còn
+    # sàn) ⇒ lọc là mã chết; không lọc thì một dòng sàn trái bất biến ấy vẫn ra 409 thay vì vỡ khoá ngoại (500) — fail-closed.
+    # Sắp ``seq_no`` rồi ``id`` tăng (repository) ⇒ phần tử đầu là lần có số NHỎ NHẤT.
+    giu_san = await review_repo.sessions_with_floor_for_academic_info(db, academic_info_id)
+    if giu_san:
+        raise AcademicInfoInReviewFloor(int(giu_san[0].seq_no), int(giu_san[0].academic_year))
     if old_quota is None and new_quota is None:
         return
     if await _locked_years(db, [old_year, new_year]):

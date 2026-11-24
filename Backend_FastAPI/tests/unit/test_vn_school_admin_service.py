@@ -219,6 +219,20 @@ async def test_import_csv_idempotent_and_invalid_level(db) -> None:
     assert result2["inserted"] == 0 and result2["skipped_existing"] == 1
 
 
+async def test_current_kv_hai_dong_mo_cung_nam_bat_dau_chon_id_lon_nhat(db) -> None:
+    """Codex GĐ2-B lượt 2 (P1, không chặn): KV hiện hành trên ô chọn trường dùng CHUNG thứ tự với resolver / đường lô
+    (``school_kv_pick_order_sql``: năm bắt đầu mới nhất, hoà ⇒ id lớn nhất). Hai dòng mở cùng năm bắt đầu (chèn thẳng, bỏ qua kiểm
+    chồng lấn của dịch vụ) ⇒ dòng chèn SAU thắng."""
+    s = VnSchoolService(db)
+    school, _ = await s.create_school(_school("S099"))
+    await db.flush()
+    db.add(VnSchoolKvAssignment(school_id=school.id, **_kv(2022, None, "KV3")))
+    await db.flush()
+    db.add(VnSchoolKvAssignment(school_id=school.id, **_kv(2022, None, "KV1")))
+    await db.flush()
+    assert await s.current_kv(school.id) == "KV1"
+
+
 async def test_current_kv_none_when_no_active_assignment(db) -> None:
     """current_kv = None nếu mọi assignment đã đóng (effective_to_year != NULL)."""
     s = VnSchoolService(db)

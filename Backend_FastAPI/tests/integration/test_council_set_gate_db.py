@@ -833,13 +833,15 @@ async def test_kv_tinh_lai_khac_anh_chup_thi_chan(hs):
 
 
 async def test_kv_tinh_lai_theo_thuong_tru_khac_anh_chup_thi_chan(hs):
-    # Nhánh THƯỜNG TRÚ (văn hoá THCS): đổi xã thường trú GX3 (KV2-NT) ⇒ GX1 (KV1).
+    # Nhánh THƯỜNG TRÚ còn giữ sau L3 (owner 22-11): CĐ liên thông "khối lượng VH THPT + TC" KHÔNG có lịch sử THPT (ngữ cảnh ghi
+    # trong ảnh chụp) — nhánh "văn hoá THCS" cũ nay "chờ xác minh", nhánh cũ "hoàn thành THPT" nay theo trường THPT. Đổi xã thường
+    # trú GX3 (KV2-NT) ⇒ GX1 (KV1).
     cccd, pid = await _mot(
         hs,
         permanent_commune_code="GX3",
-        cultural_education_level="graduated_thcs",
-        vocational_qualification="so_cap",
-        priority_resolution_snapshot=kv("KV2-NT"),
+        cultural_education_level="completed_thpt",
+        vocational_qualification="trung_cap",
+        priority_resolution_snapshot=dict(kv("KV2-NT"), target_level="cao_dang", admission_type="lien_thong"),
         academic_history=[],
     )
     assert (await _cong([cccd]))[0].blocks == ()  # phép đo hợp lệ: trước khi đổi thì qua
@@ -863,19 +865,82 @@ async def test_du_lieu_doi_ma_kv_tinh_lai_khong_doi_thi_qua(hs):
     assert kq.blocks == () and kq.area_scores == ("0.75",)
 
 
+# ═══════════════════════════════ L3 (owner 22-11) — KV trung cấp sau THCS ═══════════════════════════════
+#: Dòng THCS gõ tay như production 22-11 (``level`` trống, trình độ THCS, không ``school_id``).
+_THCS_GO_TAY = [{"level": None, "graduation_type": "THCS", "school_id": None, "school_name": "Trường THCS gõ tay",
+                 "year_from": 2018, "year_to": 2022}]
+
+
+def _anh_cu_thcs(ma_kv):
+    """Ảnh chụp KV theo hộ khẩu do luật CŨ ra (nơi gọi không truyền trình độ) — "hồ sơ cũ"."""
+    return {**kv(ma_kv), "basis": "THUONG_TRU", "basis_reason": "legacy_thcs_pathway_uses_commune"}
+
+
+async def test_l3_ho_so_cu_co_tat_ban_in_khong_bao_doi_sau_anh_chup(hs, monkeypatch):
+    """Điều phối 22-11 (Phần C mục 4): cờ "hồ sơ cũ giữ cách cũ" TẮT ⇒ bản in tính lại bằng ĐÚNG hàm chung ⇒ KV theo hộ khẩu như lúc
+    chụp ⇒ KHÔNG ``khu_vuc_doi_sau_anh_chup``. Cùng hồ sơ, cờ BẬT ⇒ luật mới (chờ xác minh) ⇒ chặn."""
+    from app.config import settings
+
+    cccd, _ = await _mot(
+        hs,
+        permanent_commune_code="GX3",
+        cultural_education_level="graduated_thcs",
+        vocational_qualification="so_cap",
+        priority_resolution_snapshot=_anh_cu_thcs("KV2-NT"),
+        academic_history=_THCS_GO_TAY,
+    )
+    monkeypatch.setattr(settings, "KV_L3_APPLY_TO_EXISTING_ENABLED", False)
+    assert (await _cong([cccd]))[0].blocks == ()
+    monkeypatch.setattr(settings, "KV_L3_APPLY_TO_EXISTING_ENABLED", True)
+    assert (await _cong([cccd]))[0].blocks == _mot_ly_do("khu_vuc_doi_sau_anh_chup")
+
+
+async def test_l3_anh_chup_khong_co_cap_luat_cu_thi_ban_in_bao_doi(hs, monkeypatch):
+    """Đối chứng: cùng dữ liệu, ảnh chụp KHÔNG mang cặp luật cũ (không phải hồ sơ cũ) ⇒ dù cờ tắt vẫn theo luật mới ⇒ chặn."""
+    from app.config import settings
+
+    cccd, _ = await _mot(
+        hs,
+        permanent_commune_code="GX3",
+        cultural_education_level="graduated_thcs",
+        vocational_qualification="so_cap",
+        priority_resolution_snapshot=kv("KV2-NT"),
+        academic_history=_THCS_GO_TAY,
+    )
+    monkeypatch.setattr(settings, "KV_L3_APPLY_TO_EXISTING_ENABLED", False)
+    assert (await _cong([cccd]))[0].blocks == _mot_ly_do("khu_vuc_doi_sau_anh_chup")
+
+
+async def test_l3_anh_chup_cho_xac_minh_thi_chan_ma_rieng(hs):
+    cccd, _ = await _mot(
+        hs,
+        cultural_education_level="graduated_thcs",
+        priority_resolution_snapshot={"kv_resolved": None, "rule_applied": "kv_pending_verification",
+                                      "requires_manual_override": True, "reason": "thcs_school_not_in_catalog"},
+        academic_history=_THCS_GO_TAY,
+    )
+    kq, _ = await _cong([cccd])
+    assert kq.blocks == _mot_ly_do("khu_vuc_cho_xac_minh") and kq.area_scores == (None,)
+
+
 async def test_kv_tinh_lai_dung_ngu_canh_trinh_do_cua_anh_chup(hs):
-    # "Hoàn thành THPT, không chuyên môn": không ngữ cảnh trình độ ⇒ resolver đi THƯỜNG TRÚ (GX2 =
-    # KV2); ngữ cảnh "cao đẳng chính quy" ghi trong ảnh chụp ⇒ LỊCH SỬ THPT (trường KV1). Tính lại
-    # phải dùng ĐÚNG ngữ cảnh của lần chụp ⇒ KV1 = ảnh chụp ⇒ qua.
+    # Văn hoá THCS + dòng THCS ở trường KV1 (L3 owner 22-11): không ngữ cảnh trình độ ⇒ nhánh cũ ⇒ "KV chờ xác minh" (None);
+    # ngữ cảnh "trung cấp chính quy" ghi trong ảnh chụp ⇒ LỊCH SỬ THCS (trường KV1). Tính lại phải dùng ĐÚNG ngữ cảnh của lần
+    # chụp ⇒ KV1 = ảnh chụp ⇒ qua. (Bản trước dùng "hoàn thành THPT, không chuyên môn" — L3A câu 5 đưa nhánh cũ ấy về trường THPT
+    # nên hai ngữ cảnh ra CÙNG KV, phép đo hết sức bắt.)
     cccd, _ = await _mot(
         hs,
         permanent_commune_code="GX2",
-        cultural_education_level="completed_thpt",
+        cultural_education_level="graduated_thcs",
         vocational_qualification="none",
+        academic_history=[
+            {"level": "THCS", "graduation_type": "THCS", "school_id": hs["_danh_muc"]["truong"]["KV1"],
+             "school_name": "Trường giả KV1", "year_from": 2020, "year_to": 2024}
+        ],
         priority_resolution_snapshot={
             "kv_resolved": "KV1",
             "rule_applied": "longest_duration",
-            "target_level": "cao_dang",
+            "target_level": "trung_cap",
             "admission_type": "chinh_quy",
         },
     )
