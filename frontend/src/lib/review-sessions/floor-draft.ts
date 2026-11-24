@@ -24,7 +24,7 @@ export type FloorInput = { kind: "empty" } | { kind: "ok"; value: string } | { k
 /** Chuẩn hoá MỘT ô: trống ⇒ `empty`; đúng dạng ⇒ chuỗi gửi đi "NNN.DD"; còn lại ⇒ `invalid`. Không đổi sang số thực. */
 export function normalizeFloorInput(raw: string): FloorInput {
   const s = raw.trim()
-  if (s === "") return { kind: "empty" }
+  if (s === "") return { kind: "ok", value: "0.00" }
   const m = FLOOR_INPUT_PATTERN.exec(s)
   if (!m) return { kind: "invalid" }
   const whole = m[1].replace(/^0+(?=[0-9])/, "")
