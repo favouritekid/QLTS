@@ -270,6 +270,47 @@ describe("M4 — 202 và theo dõi lượt (HĐ5: queued / running)", () => {
   })
 })
 
+// ═══════════════════════════════════════ rời màn giữa lúc theo dõi (Codex F3-7 NỢ-1 a) ═══════════════════════════════════════
+describe("M4 — rời màn giữa lúc theo dõi: huỷ hẹn + huỷ request (chốt ngân sách hỏi lại)", () => {
+  it("rời màn TRƯỚC lần hỏi kế ⇒ huỷ hẹn: không còn lần hỏi E8 nào, không mở M5", async () => {
+    // Biến thể phá: bỏ dọn dẹp của effect hỏi lại (không clearTimeout, không abort) ⇒ hẹn vẫn chạy sau khi rời màn ⇒ E8 bị gọi ⇒ ĐỎ.
+    mayChuE3([json(sessionGia())])
+    mayChuE6([tao(chay("running"))])
+    const e8 = mayChuE8(12, [json(runGia({ id: 12 }))])
+    const { unmount } = await moChiTiet()
+    await bamKiem()
+    expect(await screen.findByTestId("kiem-trang-thai-luot")).toHaveTextContent(runTrackingLabel(12, "running"))
+    unmount()
+    await choLau(300)
+    expect(e8.lan).toBe(0)
+    expect(push).not.toHaveBeenCalled()
+  })
+
+  it("rời màn GIỮA lúc lần hỏi đang chờ máy chủ ⇒ huỷ request: kết quả về muộn (done) không mở M5, không hỏi thêm", async () => {
+    // Biến thể phá: bỏ `controller.abort()` ⇒ phản hồi về sau khi rời màn vẫn được xử lý ⇒ mở M5 ⇒ ĐỎ.
+    mayChuE3([json(sessionGia())])
+    mayChuE6([tao(chay("running"))])
+    let moCong: () => void = () => undefined
+    const cong = new Promise<void>((r) => {
+      moCong = () => r()
+    })
+    const e8 = mayChuE8(12, [
+      async () => {
+        await cong
+        return HttpResponse.json(runGia({ id: 12 }))
+      },
+    ])
+    const { unmount } = await moChiTiet()
+    await bamKiem()
+    await waitFor(() => expect(e8.lan).toBe(1))
+    unmount()
+    moCong()
+    await choLau(200)
+    expect(push).not.toHaveBeenCalled()
+    expect(e8.lan).toBe(1)
+  })
+})
+
 // ═══════════════════════════════════════ chưa rõ đã chạy hay chưa ═══════════════════════════════════════
 describe("M4 — mất kết nối / 502 / 504 ở E6 ⇒ tra E7, không bấm lại ngay", () => {
   it.each<[string, Tra]>([
