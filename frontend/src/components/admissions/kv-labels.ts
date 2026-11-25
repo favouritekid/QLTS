@@ -34,7 +34,7 @@ export const PATHWAY_LABEL_VI: Record<string, string> = {
   // Đoàn 3c (24-11) — mã BE HIỆN HÀNH (`priority_service._kv_resolution_steps`, `pathway=`); các khoá
   // `thpt_multi_school` / `tc_multi_school` / `commune_fallback` ở trên là tên CŨ, giữ cho ảnh chụp cũ.
   // Câu owner duyệt 25-11 (QUYET-DINH-OWNER-DOAN-3C-CAU-KV câu 1).
-  lich_su_thpt: "Theo lịch sử học các trường THPT",
+  lich_su_thpt_cu: "Theo lịch sử học các trường THPT",
   thuong_tru: "Theo nơi thường trú",
   insufficient_data: "Chưa đủ dữ liệu để tính khu vực",
 }
