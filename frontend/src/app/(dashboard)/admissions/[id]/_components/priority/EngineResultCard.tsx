@@ -199,7 +199,7 @@ export function EngineResultCard({
         <div className="space-y-2 text-sm">
           {reason && (
             <p data-testid="engine-result-reason">
-              <span className="font-medium">Lý do:</span> {localizeReason(reason)}
+              <span className="font-medium">Lý do:</span> {reason}
             </p>
           )}
           {canOverride ? (
