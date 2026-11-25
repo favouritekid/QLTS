@@ -15,7 +15,7 @@
  */
 
 import { test, expect, type Page, type Cookie } from "@playwright/test";
-import { FIXTURE_MA_XA, FIXTURE_TINH, FIXTURE_XA, createAdmissionProfile, expectOk, fixtureAcademicHistory, resolveAdmissionContext, resolveFixtureSchoolId, safeBody, summarizeApiError, type AdmissionPathContext, xacThucMfa } from "./helpers/e2e-fixtures";
+import { FIXTURE_MA_XA, FIXTURE_TINH, FIXTURE_XA, createAdmissionProfile, docRowVersion, expectOk, fixtureAcademicHistory, resolveAdmissionContext, resolveFixtureSchoolId, safeBody, summarizeApiError, type AdmissionPathContext, xacThucMfa } from "./helpers/e2e-fixtures";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -331,7 +331,13 @@ async function setupApprovedProfile(
   )) {
     const vResp = await page.request.patch(
       `${API_URL}/api/admissions/${profileId}/documents/${doc.code}/verify-format`,
-      { headers: verifyHeaders, data: { format: "photo" } }
+      {
+        headers: verifyHeaders,
+        data: {
+          format: "photo",
+          expected_row_version: await docRowVersion(page.request, profileId, doc.code, verifyHeaders),
+        },
+      }
     );
     await expectOk(vResp, `admin xác minh tài liệu ${doc.code}`, [200]);
   }
