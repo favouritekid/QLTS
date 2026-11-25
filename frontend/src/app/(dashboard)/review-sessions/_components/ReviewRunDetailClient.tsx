@@ -115,7 +115,7 @@ export function ReviewRunDetailClient({
         <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted-foreground">
           {run.finished_at !== null ? <span data-testid="luot-xong">Xong lúc {formatDateTimeVN(run.finished_at)}</span> : null}
           <span data-testid="luot-thoi-luong">Thời lượng {durationLabel(run.duration_ms)}</span>
-          <span data-testid="luot-nguoi-chay">Chạy bởi {userRef(run.requested_by_user_id)}</span>
+          <span data-testid="luot-nguoi-chay">Chạy bởi {userRef(run.requested_by_user_id, run.requested_by_full_name)}</span>
           <span data-testid="luot-bo-luat">Bộ luật {run.rule_version}</span>
           <span data-testid="luot-cong-hoc-phi">Cổng học phí lúc chạy: {feeGateModeLabel(run.inputs.fee_gate_mode)}</span>
           <span data-testid="luot-anh-chup">Ảnh chụp lúc {formatDateTimeVN(run.inputs.snapshot_at)}</span>

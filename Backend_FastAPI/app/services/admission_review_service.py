@@ -160,8 +160,16 @@ def config_changed_since_run(inputs: Mapping[str, Any], *, session_version: int,
     )
 
 
-def run_summary_out(run: Any, *, session_version: int, quota_table: Mapping[str, Any]) -> Dict[str, Any]:
-    """``RunSummaryOut`` (hợp đồng §3.4)."""
+def actor_name(names: Mapping[int, Optional[str]], user_id: Optional[int]) -> Optional[str]:
+    """S3 — họ tên người thao tác lấy từ bảng tên ĐÃ ĐỌC cho cả phản hồi (``review_repo.read_user_full_names`` — MỘT nguồn cho mọi
+    trường ``*_by_full_name``). Không có người (vd chưa huỷ) hoặc người chưa khai họ tên ⇒ ``None`` — không thay bằng tên đăng nhập."""
+    return names.get(int(user_id)) if user_id is not None else None
+
+
+def run_summary_out(
+    run: Any, *, session_version: int, quota_table: Mapping[str, Any], names: Mapping[int, Optional[str]]
+) -> Dict[str, Any]:
+    """``RunSummaryOut`` (hợp đồng §3.4; S3 ``requested_by_full_name`` — phụ lục S3/S7)."""
     summary = run.summary if isinstance(run.summary, Mapping) else None
     return {
         "id": int(run.id),
@@ -169,6 +177,7 @@ def run_summary_out(run: Any, *, session_version: int, quota_table: Mapping[str,
         "status": run.status,
         "rule_version": run.rule_version,
         "requested_by_user_id": int(run.requested_by_user_id),
+        "requested_by_full_name": actor_name(names, run.requested_by_user_id),
         "requested_at": run.requested_at,
         "finished_at": run.finished_at,
         "duration_ms": run.duration_ms,
@@ -179,9 +188,11 @@ def run_summary_out(run: Any, *, session_version: int, quota_table: Mapping[str,
     }
 
 
-def run_out(run: Any, *, session_version: int, quota_table: Mapping[str, Any]) -> Dict[str, Any]:
+def run_out(
+    run: Any, *, session_version: int, quota_table: Mapping[str, Any], names: Mapping[int, Optional[str]]
+) -> Dict[str, Any]:
     """``RunOut`` (hợp đồng §3.3). ``inputs`` / ``summary`` / ``quota_view`` trả NGUYÊN GIÁ TRỊ đã ghi khi chạy (bất biến — mức sàn
-    là ẢNH CHỤP ``inputs.floors``, KHÔNG đọc bảng sàn hiện tại: P4, BT45)."""
+    là ẢNH CHỤP ``inputs.floors``, KHÔNG đọc bảng sàn hiện tại: P4, BT45). ``requested_by_full_name`` (S3) đọc LÚC GET."""
     return {
         "id": int(run.id),
         "session_id": int(run.session_id),
@@ -189,6 +200,7 @@ def run_out(run: Any, *, session_version: int, quota_table: Mapping[str, Any]) -
         "status": run.status,
         "rule_version": run.rule_version,
         "requested_by_user_id": int(run.requested_by_user_id),
+        "requested_by_full_name": actor_name(names, run.requested_by_user_id),
         "requested_at": run.requested_at,
         "started_at": run.started_at,
         "finished_at": run.finished_at,
@@ -207,7 +219,7 @@ def _round_out(rnd: Any) -> Dict[str, Any]:
     return {"id": int(rnd.id), "round_code": rnd.round_code, "round_name": rnd.round_name}
 
 
-def _floor_out(r: Any) -> Dict[str, Any]:
+def _floor_out(r: Any, names: Mapping[int, Optional[str]]) -> Dict[str, Any]:
     return {
         "offering_academic_info_id": int(r.offering_academic_info_id),
         "floor_score": format_score(r.floor_score),
@@ -218,19 +230,27 @@ def _floor_out(r: Any) -> Dict[str, Any]:
         "group_code": r.group_code,
         "is_deleted": bool(r.is_deleted),
         "updated_by_user_id": int(r.updated_by_user_id),
+        "updated_by_full_name": actor_name(names, r.updated_by_user_id),
         "updated_at": r.updated_at,
     }
 
 
 async def build_session_out(db: AsyncSession, session: models.AdmissionReviewSession) -> Dict[str, Any]:
     """``SessionOut`` (hợp đồng §3.1). ``floors`` đọc THẲNG bảng sàn (không đặt ``[]`` theo trạng thái — lần xét đã huỷ có 0 dòng
-    sàn do E5 xoá + trigger chặn huỷ khi còn sàn; đọc thẳng để một lỗi ở hai lớp ấy hiện ra chứ không bị che)."""
+    sàn do E5 xoá + trigger chặn huỷ khi còn sàn; đọc thẳng để một lỗi ở hai lớp ấy hiện ra chứ không bị che). Họ tên người thao
+    tác (S3: người tạo, người huỷ, người lưu sàn, người chạy lượt mới nhất) đọc MỘT câu cho cả phản hồi."""
     sid, year = int(session.id), int(session.academic_year)
     rnd = (await review_repo.read_rounds(db, [session.admission_round_id]))[int(session.admission_round_id)]
     qt = await quota_table_state(db, year)
-    floors = [_floor_out(r) for r in await review_repo.list_floors_detail(db, sid)]
+    floor_rows = await review_repo.list_floors_detail(db, sid)
     latest = (await review_repo.latest_runs(db, [sid])).get(sid)
     done_id = (await review_repo.latest_done_run_ids(db, [sid])).get(sid)
+    names = await review_repo.read_user_full_names(
+        db,
+        [session.created_by_user_id, session.cancelled_by_user_id]
+        + [r.updated_by_user_id for r in floor_rows]
+        + ([latest.requested_by_user_id] if latest is not None else []),
+    )
     return {
         "id": sid,
         "academic_year": year,
@@ -239,15 +259,19 @@ async def build_session_out(db: AsyncSession, session: models.AdmissionReviewSes
         "status": session.status,
         "version": int(session.version),
         "created_by_user_id": int(session.created_by_user_id),
+        "created_by_full_name": actor_name(names, session.created_by_user_id),
         "created_at": session.created_at,
         "updated_at": session.updated_at,
         "cancelled_by_user_id": session.cancelled_by_user_id,
+        "cancelled_by_full_name": actor_name(names, session.cancelled_by_user_id),
         "cancelled_at": session.cancelled_at,
         "cancel_reason": session.cancel_reason,
         "quota_table": qt,
-        "floors": floors,
+        "floors": [_floor_out(r, names) for r in floor_rows],
         "latest_run": (
-            run_summary_out(latest, session_version=int(session.version), quota_table=qt) if latest is not None else None
+            run_summary_out(latest, session_version=int(session.version), quota_table=qt, names=names)
+            if latest is not None
+            else None
         ),
         "latest_done_run_id": done_id,
         "available_actions": session_actions(session.status),
@@ -329,6 +353,9 @@ async def list_sessions(
     states: Dict[int, Dict[str, Any]] = {}
     for year in sorted({int(s.academic_year) for s in items if int(s.id) in latest}):
         states[year] = await quota_table_state(db, year)
+    names = await review_repo.read_user_full_names(
+        db, [s.created_by_user_id for s in items] + [r.requested_by_user_id for r in latest.values()]
+    )
     out = []
     for s in items:
         sid = int(s.id)
@@ -342,10 +369,13 @@ async def list_sessions(
                 "status": s.status,
                 "version": int(s.version),
                 "created_by_user_id": int(s.created_by_user_id),
+                "created_by_full_name": actor_name(names, s.created_by_user_id),
                 "created_at": s.created_at,
                 "floor_count": counts.get(sid, 0),
                 "latest_run": (
-                    run_summary_out(run, session_version=int(s.version), quota_table=states[int(s.academic_year)])
+                    run_summary_out(
+                        run, session_version=int(s.version), quota_table=states[int(s.academic_year)], names=names
+                    )
                     if run is not None
                     else None
                 ),
@@ -459,10 +489,20 @@ async def cancel_session(
 
 
 # ═══════════════════════════════════════════ E6 (phản hồi) / E7 / E8 / E9 — đọc run ═══════════════════════════════════════════
+async def _run_out_now(db: AsyncSession, session: models.AdmissionReviewSession, run: Any) -> Dict[str, Any]:
+    """``RunOut`` với phần đọc LÚC GET (bảng chỉ tiêu hiện tại, họ tên người chạy — S3) — MỘT hàm cho E6 (phản hồi) và E8."""
+    names = await review_repo.read_user_full_names(db, [run.requested_by_user_id])
+    return run_out(
+        run,
+        session_version=int(session.version),
+        quota_table=await quota_table_state(db, session.academic_year),
+        names=names,
+    )
+
+
 async def run_out_for(db: AsyncSession, session_id: int, run: Any) -> Dict[str, Any]:
     """``RunOut`` của một run vừa chạy (E6) — cùng hàm dựng với E8."""
-    session = await _session_or_404(db, session_id)
-    return run_out(run, session_version=int(session.version), quota_table=await quota_table_state(db, session.academic_year))
+    return await _run_out_now(db, await _session_or_404(db, session_id), run)
 
 
 async def list_runs(db: AsyncSession, session_id: int, *, page: int, page_size: int) -> Dict[str, Any]:
@@ -470,8 +510,12 @@ async def list_runs(db: AsyncSession, session_id: int, *, page: int, page_size: 
     session = await _session_or_404(db, session_id)
     items, total = await review_repo.list_runs(db, session_id, offset=_offset(page, page_size), limit=page_size)
     qt = await quota_table_state(db, session.academic_year) if items else None
+    names = await review_repo.read_user_full_names(db, [r.requested_by_user_id for r in items])
     return _page(
-        [run_summary_out(r, session_version=int(session.version), quota_table=qt) for r in items], total, page, page_size
+        [run_summary_out(r, session_version=int(session.version), quota_table=qt, names=names) for r in items],
+        total,
+        page,
+        page_size,
     )
 
 
@@ -488,7 +532,7 @@ async def _run_or_404(db: AsyncSession, session_id: int, run_id: int) -> Tuple[m
 async def get_run_out(db: AsyncSession, session_id: int, run_id: int) -> Dict[str, Any]:
     """E8 — ``RunOut``."""
     session, run = await _run_or_404(db, session_id, run_id)
-    return run_out(run, session_version=int(session.version), quota_table=await quota_table_state(db, session.academic_year))
+    return await _run_out_now(db, session, run)
 
 
 def _score_parts(row: Any) -> Optional[Dict[str, Any]]:
@@ -519,12 +563,14 @@ def _considered_choice(row: Any) -> Optional[Dict[str, Any]]:
 
 
 def row_out(row: Any, person: Any) -> Dict[str, Any]:
-    """``RowOut`` (hợp đồng §3.5). ``full_name`` / ``unit_id`` từ ``person`` (đọc lúc GET); mọi trường khác từ dòng ĐÃ GHI của run
-    (bất biến — điểm dạng chuỗi qua ``admission_review_rules.format_score``). Danh sách mã sắp tăng (hợp đồng §1.4)."""
+    """``RowOut`` (hợp đồng §3.5). ``full_name`` / ``unit_id`` / ``unit_name`` (S7) từ ``person`` (đọc lúc GET, MỘT câu —
+    ``review_repo.read_profile_people``); mọi trường khác từ dòng ĐÃ GHI của run (bất biến — điểm dạng chuỗi qua
+    ``admission_review_rules.format_score``). Danh sách mã sắp tăng (hợp đồng §1.4)."""
     return {
         "profile_id": int(row.profile_id),
         "full_name": person.full_name if person is not None else None,
         "unit_id": person.unit_id if person is not None else None,
+        "unit_name": person.unit_name if person is not None else None,
         "profile_status": row.profile_status,
         "tab": row.tab,
         "reason_codes": sorted(row.reason_codes or []),

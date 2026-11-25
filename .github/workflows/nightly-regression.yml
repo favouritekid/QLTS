@@ -14,7 +14,12 @@ on:
 jobs:
   regression:
     name: E2E Regression
-    runs-on: ubuntu-latest
+    # Ghim 24.04: từ ~18-11-2026 `ubuntu-latest` = Ubuntu 26.04, và Playwright
+    # (frontend/package.json ^1.56) báo "does not support chromium on
+    # ubuntu26.04-x64" ⇒ không cài được trình duyệt, mọi ca E2E đỏ dây chuyền
+    # (lượt xanh cuối 44059639094 ngày 17-11 chạy trên ubuntu-24.04). Gỡ ghim
+    # khi đã nâng Playwright lên bản hỗ trợ 26.04 và đo xanh trên runner mới.
+    runs-on: ubuntu-24.04
     # ⚠️ 30 phút cũ là ngân sách của một job mà SÁU bước E2E chưa bao giờ
     # chạy (15/15 lượt schedule 23-08→06-09 đều skip cả sáu). Ngay khi
     # chúng chạy thật, `npm ci` + `playwright install --with-deps` +

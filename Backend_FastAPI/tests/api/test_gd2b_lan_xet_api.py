@@ -202,8 +202,8 @@ async def test_e2_sap_nam_giam_roi_so_giam_loc_va_phan_trang(client: AsyncClient
     assert dong[a2["id"]]["floor_count"] == 1 and dong[a1["id"]]["floor_count"] == 0
     assert dong[a1["id"]]["status"] == "cancelled" and dong[a2["id"]]["latest_run"] is None
     assert set(dong[a2["id"]]) == {
-        "id", "academic_year", "admission_round", "seq_no", "status", "version", "created_by_user_id", "created_at",
-        "floor_count", "latest_run",
+        "id", "academic_year", "admission_round", "seq_no", "status", "version", "created_by_user_id",
+        "created_by_full_name", "created_at", "floor_count", "latest_run",
     }
     r = await client.get(P, headers=h, params={"academic_year": NAM, "status": "draft"})
     assert [x["id"] for x in r.json()["items"]] == [a2["id"]]

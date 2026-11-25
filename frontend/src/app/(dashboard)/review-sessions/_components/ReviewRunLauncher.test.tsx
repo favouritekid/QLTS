@@ -576,6 +576,27 @@ describe("M4 — danh sách lượt kiểm (E7)", () => {
     expect(screen.queryByTestId("luot-10-cau-hinh-doi")).toBeNull()
   })
 
+  it("S3 (phụ lục S3/S7): người chạy hiện HỌ TÊN máy chủ trả; tên null ⇒ giữ 'Người dùng #id'", async () => {
+    // Biến thể phá: dòng E7 bỏ `requested_by_full_name` (gọi userRef chỉ với id) ⇒ ĐỎ.
+    mayChuE3([json(sessionGia())])
+    server.use(
+      http.get(`${RS}/3/runs`, () =>
+        HttpResponse.json(
+          pageGia([
+            runSummaryGia({ id: 12, requested_by_user_id: 2, requested_by_full_name: "Người Chạy Giả" }),
+            runSummaryGia({ id: 10, requested_by_full_name: null }),
+          ]),
+        ),
+      ),
+    )
+    await moChiTiet()
+    await screen.findByTestId("luot-kiem")
+    fireEvent.click(screen.getByTestId("luot-kiem-mo"))
+    expect(await screen.findByTestId("luot-12-nguoi-chay")).toHaveTextContent("Người Chạy Giả")
+    expect(screen.getByTestId("luot-12-nguoi-chay")).not.toHaveTextContent("#")
+    expect(screen.getByTestId("luot-10-nguoi-chay")).toHaveTextContent("Người dùng #1")
+  })
+
   it("đính chính 2 §1: E7 tải lại bị 429 ⇒ hiện LỖI, KHÔNG vẽ dòng cũ", async () => {
     mayChuE3([json(sessionGia())])
     mayChuE7([json(pageGia([runSummaryGia({ id: 12 })])), json({ detail: "Rate limit exceeded" }, 429)])

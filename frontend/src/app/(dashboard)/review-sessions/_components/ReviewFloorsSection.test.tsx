@@ -152,6 +152,19 @@ describe("M3 — chế độ xem (E3)", () => {
     expect(screen.queryByTestId("san-o-41")).toBeNull()
     expect(e10.lan).toBe(0)
   })
+
+  it("S3 (phụ lục S3/S7): dòng 'lưu lần cuối bởi …' hiện HỌ TÊN máy chủ trả (`updated_by_full_name`)", async () => {
+    // Biến thể phá: `lastFloorSave` / thẻ sàn bỏ họ tên ⇒ ĐỎ.
+    const luc = "2026-11-24T02:05:00Z"
+    mayChuE3([json(sessionGia({ floors: [floorGia({ updated_by_full_name: "Người Lưu Sàn Giả", updated_at: luc })] }))])
+    mayChuE10([json(floorCandidatesGia())])
+    await moChiTiet()
+    const the = await screen.findByTestId("san")
+    expect(within(the).getByTestId("san-luu-lan-cuoi")).toHaveTextContent(
+      floorsLastSaved("Người Lưu Sàn Giả", formatDateTimeVN(luc)),
+    )
+    expect(within(the).queryByText(/Người dùng #/)).toBeNull()
+  })
 })
 
 // ═══════════════════════════════════════ thin client ═══════════════════════════════════════

@@ -30,7 +30,7 @@ import { ReviewErrorAlert } from "./ReviewErrorAlert"
 
 /**
  * M4 — danh sách lượt kiểm của lần xét (E7, 20 / trang, `id` giảm dần — thứ tự máy chủ, không sắp lại). Thiết kế §3.5: thời điểm
- * yêu cầu / xong · thời lượng · người chạy (KT-2: "Người dùng #id" tới khi có S3) · trạng thái (nhãn Phụ lục A; lạ ⇒ chữ máy chủ) ·
+ * yêu cầu / xong · thời lượng · người chạy (S3: họ tên máy chủ trả; trống ⇒ "Người dùng #id") · trạng thái (nhãn Phụ lục A; lạ ⇒ chữ máy chủ) ·
  * 4 số `tab_counts` của máy chủ · nhãn "Cấu hình đã đổi" · bộ luật. Bấm ⇒ M5.
  *
  * CHỈ tải khi người dùng mở danh sách (bớt một lần gọi `ADMIN_READ` mỗi lần vào trang — R6). Query E7 theo khuôn DC-1 (`staleTime` /
@@ -114,7 +114,7 @@ export function ReviewRunsSection({ sessionId }: { sessionId: number }) {
                   <TableCell>{formatDateTimeVN(r.requested_at)}</TableCell>
                   <TableCell data-testid={`luot-${r.id}-xong`}>{r.finished_at ? formatDateTimeVN(r.finished_at) : "—"}</TableCell>
                   <TableCell data-testid={`luot-${r.id}-thoi-luong`}>{durationLabel(r.duration_ms)}</TableCell>
-                  <TableCell data-testid={`luot-${r.id}-nguoi-chay`}>{userRef(r.requested_by_user_id)}</TableCell>
+                  <TableCell data-testid={`luot-${r.id}-nguoi-chay`}>{userRef(r.requested_by_user_id, r.requested_by_full_name)}</TableCell>
                   <TableCell data-testid={`luot-${r.id}-so-nhom`}>
                     {counts.length ? counts.map((c) => `${c.label} ${c.count}`).join(" · ") : "—"}
                   </TableCell>

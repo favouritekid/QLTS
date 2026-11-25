@@ -152,8 +152,8 @@ async def test_e7_sap_id_giam_va_phan_trang(client: AsyncClient, admin_token_hea
     r = await client.get(f"{P}/{sid}/runs", headers=h, params={"page": 2, "page_size": 1})
     assert [x["id"] for x in r.json()["items"]] == [r1["id"]]
     assert set(r.json()["items"][0]) == {
-        "id", "kind", "status", "rule_version", "requested_by_user_id", "requested_at", "finished_at", "duration_ms",
-        "tab_counts", "config_changed_since_run",
+        "id", "kind", "status", "rule_version", "requested_by_user_id", "requested_by_full_name", "requested_at",
+        "finished_at", "duration_ms", "tab_counts", "config_changed_since_run",
     }
     _loi(await client.get(f"{P}/987654/runs", headers=h), 404, "RESOURCE_NOT_FOUND", "review_session_not_found")
     _loi(await client.get(f"{P}/{sid}/runs", headers=h, params={"page_size": 101}), 422, "VALIDATION_ERROR")

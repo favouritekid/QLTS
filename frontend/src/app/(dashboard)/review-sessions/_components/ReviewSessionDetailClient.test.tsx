@@ -136,6 +136,23 @@ describe("M2 — đầu trang, băng cảnh báo", () => {
     expect(screen.getByTestId("lan-xet-huy")).toHaveTextContent("Lý do: <lý do>")
     expect(screen.queryByTestId("thanh-nut")).toBeNull()
   })
+
+  it("S3 (phụ lục S3/S7): 'Tạo bởi' / 'Huỷ bởi' hiện HỌ TÊN của ĐÚNG người ở từng cột (hai người khác nhau)", async () => {
+    // Biến thể phá: lẫn cột (huỷ lấy tên người tạo) hoặc bỏ tên ⇒ ĐỎ.
+    mayChuE3([
+      json(
+        sessionDaHuyGia({
+          created_by_full_name: "Người Tạo Giả",
+          cancelled_by_user_id: 2,
+          cancelled_by_full_name: "Người Huỷ Giả",
+        }),
+      ),
+    ])
+    await moChiTiet()
+    expect(await screen.findByTestId("lan-xet-tao")).toHaveTextContent("Tạo bởi Người Tạo Giả")
+    expect(screen.getByTestId("lan-xet-huy")).toHaveTextContent("Huỷ bởi Người Huỷ Giả")
+    expect(screen.getByTestId("lan-xet-huy")).not.toHaveTextContent("Người Tạo Giả")
+  })
 })
 
 describe("M2 — thanh nút CHỈ theo available_actions", () => {
