@@ -89,7 +89,7 @@ class TestCreateCollaborator:
         assert collab.status == "pending"
         assert collab.approved_at is None
 
-    async def test_create_with_user_link(self, db: AsyncSession, seeded_dependencies, admin_user):
+    async def test_create_with_user_link(self, db: AsyncSession, seeded_dependencies, admin_user, lenh_cat_socket):
         """user_id provided -> user.role set to COLLABORATOR."""
         target_user = models.User(
             username="link_target",
@@ -129,7 +129,7 @@ class TestCreateCollaborator:
 
         assert collab.managed_by_officer_id == officer_user.id
 
-    async def test_create_with_user_and_officer(self, db: AsyncSession, seeded_dependencies, admin_user, officer_user):
+    async def test_create_with_user_and_officer(self, db: AsyncSession, seeded_dependencies, admin_user, officer_user, lenh_cat_socket):
         """Both user_id and managed_by_officer_id set together."""
         target_user = models.User(
             username="both_link",

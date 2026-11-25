@@ -291,7 +291,7 @@ class TestUpdateUser:
 class TestDeleteUser:
     """Tests for delete_user."""
     
-    async def test_delete_user_success(self, db: AsyncSession):
+    async def test_delete_user_success(self, db: AsyncSession, lenh_cat_socket):
         """Test delete_user removes user from database."""
         # Arrange - create a user to delete
         user_to_delete = models.User(
@@ -358,7 +358,7 @@ class TestDeleteUser:
         assert still_there is not None
 
     async def test_delete_admin_when_multiple_active_admins_succeeds_real_query(
-        self, db: AsyncSession
+        self, db: AsyncSession, lenh_cat_socket
     ):
         """Real DB query: with two active admins, deleting one is allowed."""
         await self._wipe_admins(db)
@@ -392,7 +392,7 @@ class TestDeleteUser:
             assert remaining_admin is not None and remaining_admin.status == "active"
 
     async def test_delete_inactive_admin_skips_guard_real_query(
-        self, db: AsyncSession
+        self, db: AsyncSession, lenh_cat_socket
     ):
         """Inactive admin can be deleted even when no other active admins exist."""
         await self._wipe_admins(db)
@@ -416,7 +416,7 @@ class TestDeleteUser:
         async with AsyncSessionLocal() as verify_session:
             assert await verify_session.get(models.User, inactive_admin_id) is None
 
-    async def test_concurrent_delete_admins_serialized_by_lock(self):
+    async def test_concurrent_delete_admins_serialized_by_lock(self, lenh_cat_socket):
         """
         Race condition test: two transactions concurrently delete two
         different admins. Without the SELECT FOR UPDATE lock both would
@@ -662,11 +662,24 @@ class TestBulkActions:
     """Tests for perform_bulk_action."""
     
     async def test_perform_bulk_action_delete(
-        self, 
-        db: AsyncSession, 
-        admin_user: models.User
+        self,
+        db: AsyncSession,
+        admin_user: models.User,
+        monkeypatch,
+        test_redis_client,
     ):
-        """Test perform_bulk_action with delete action."""
+        """Test perform_bulk_action with delete action.
+
+        F154 (owner 25-11): xoá hàng loạt nay thu hồi + cắt socket NGAY qua cơ chế chung. Tầng service không có worker
+        socket ⇒ thay lệnh cắt bằng bộ ghi (ca HTTP + socket thật: ``tests/security/test_session_revocation.py``)."""
+        import app.socket_manager as sm
+
+        cat: list = []
+
+        async def _ghi_cat(user_ids, *a, **kw):
+            cat.append(user_ids)
+
+        monkeypatch.setattr(sm, "force_disconnect_user_strict", _ghi_cat)
         # Arrange - create users to delete
         users_to_delete = []
         for i in range(3):
@@ -687,7 +700,7 @@ class TestBulkActions:
             mock_lead_repo = MockLeadRepo.return_value
             mock_lead_repo.unassign_leads_from_officers = AsyncMock(return_value=0)
             
-            msg, callback, _disconnect_ids = await user_service.perform_bulk_action(
+            msg, callback = await user_service.perform_bulk_action(
                 db,
                 "delete",
                 user_ids, 
@@ -697,10 +710,14 @@ class TestBulkActions:
             if callback:
                 await callback()
         
+        for user_id in user_ids:
+            await test_redis_client.delete(f"user_blacklist:{user_id}")
+
         # Assert
         assert "deleted" in msg.lower()
         assert "3" in msg
-        
+        assert cat == [sorted(user_ids)], f"lệnh cắt socket phải nêu đúng những người bị xoá: {cat}"
+
         # Verify users are deleted
         for user_id in user_ids:
             deleted_user = await db.get(models.User, user_id)
@@ -728,7 +745,7 @@ class TestBulkActions:
         user_ids = [u.id for u in inactive_users]
         
         # Act - use change_status action with new_status parameter
-        msg, callback, _disconnect_ids = await user_service.perform_bulk_action(
+        msg, callback = await user_service.perform_bulk_action(
             db, 
             "change_status", 
             user_ids, 
@@ -748,11 +765,24 @@ class TestBulkActions:
             assert activated_user.status == "active"
     
     async def test_perform_bulk_action_change_status_to_banned(
-        self, 
-        db: AsyncSession, 
-        admin_user: models.User
+        self,
+        db: AsyncSession,
+        admin_user: models.User,
+        monkeypatch,
+        test_redis_client,
     ):
-        """Test perform_bulk_action with change_status action to banned."""
+        """Test perform_bulk_action with change_status action to banned.
+
+        F154: khoá hàng loạt nay cắt socket TRONG service qua cơ chế chung (trước đây router tự cắt) ⇒ thay lệnh cắt bằng
+        bộ ghi như ca xoá hàng loạt."""
+        import app.socket_manager as sm
+
+        cat: list = []
+
+        async def _ghi_cat(user_ids, *a, **kw):
+            cat.append(user_ids)
+
+        monkeypatch.setattr(sm, "force_disconnect_user_strict", _ghi_cat)
         # Arrange - create active users
         active_users = []
         for i in range(2):
@@ -769,7 +799,7 @@ class TestBulkActions:
         user_ids = [u.id for u in active_users]
         
         # Act - use change_status with banned status
-        msg, callback, _disconnect_ids = await user_service.perform_bulk_action(
+        msg, callback = await user_service.perform_bulk_action(
             db, 
             "change_status", 
             user_ids, 
@@ -779,9 +809,12 @@ class TestBulkActions:
         await db.commit()
         if callback:
             await callback()
-        
+        for user_id in user_ids:
+            await test_redis_client.delete(f"user_blacklist:{user_id}")
+
         # Assert
         assert "banned" in msg.lower()
+        assert cat == [sorted(user_ids)], f"lệnh cắt socket phải nêu đúng những người bị khoá: {cat}"
         
         # Verify users are now banned
         for user_id in user_ids:

@@ -165,7 +165,9 @@ async def create_collaborator(
     max_retries = 3
     collaborator = None
 
+    doi_vai_ctv: list = []  # F154: tài khoản vừa bị đổi vai sang CTV (savepoint của lượt thành công)
     for attempt in range(max_retries):
+        doi_vai_ctv = []
         try:
             async with db.begin_nested():
                 code = await repo.generate_next_code(year)
@@ -215,12 +217,20 @@ async def create_collaborator(
                             enforcer=None,
                         )
                         await db.flush()
+                        doi_vai_ctv.append(user)
 
             break
         except IntegrityError:
             if attempt == max_retries - 1:
                 raise DuplicateResourceError("Không thể tạo mã CTV, vui lòng thử lại")
             continue
+
+    # F154 (owner 25-11, đường anh em ý 1): gắn tài khoản làm CTV = ĐỔI VAI (user → collaborator) ⇒ thu hồi mọi phiên +
+    # cắt socket của tài khoản ấy qua cơ chế chung, trước commit. Tài khoản vốn đã là CTV (vai không đổi) không bị đụng.
+    # Lỗi ⇒ 503, router không commit (hồ sơ CTV + đổi vai cùng rollback).
+    from app.services.user_service import revoke_all_access_before_commit
+
+    await revoke_all_access_before_commit(db, doi_vai_ctv, reason="Role changed: account linked as collaborator")
 
     log.info(
         "Collaborator created",

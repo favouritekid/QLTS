@@ -728,39 +728,52 @@ def access_revocation_reason(
     return None
 
 
-async def revoke_all_access_before_commit(db: AsyncSession, user: models.User, *, reason: str) -> None:
-    """MỘT cơ chế "thu hồi MỌI phiên + cắt MỌI socket của ``user`` TRƯỚC commit, lỗi ⇒ từ chối" — F154 (owner 25-11).
+async def revoke_all_access_before_commit(db: AsyncSession, users, *, reason: str) -> None:
+    """MỘT cơ chế "thu hồi MỌI phiên + cắt MỌI socket của các tài khoản ``users`` TRƯỚC commit, lỗi ⇒ từ chối" — F154.
 
-    Trước đây chỉ nhánh khoá tài khoản của ``PUT /api/admin/users/{id}`` có khối này (viết thẳng trong router). Nay
-    khoá tài khoản, đổi vai / đơn vị (PUT) và Quản trị đặt mật khẩu (:func:`set_password_by_admin`) cùng gọi hàm này —
-    không bản thứ hai.
+    ``users``: danh sách ``models.User`` (rỗng ⇒ không làm gì; trùng id ⇒ một lần). MỌI đường dưới đây gọi CHÍNH hàm này —
+    không bản thứ hai:
+    - Quản trị đặt mật khẩu (:func:`set_password_by_admin`);
+    - ``PUT /api/admin/users/{id}``: khoá tài khoản / đổi vai / đổi đơn vị (owner 25-11 Q-A10);
+    - khoá tài khoản HÀNG LOẠT (:func:`perform_bulk_action` ``change_status``);
+    - xoá tài khoản lẻ + hàng loạt (:func:`delete_user`, :func:`perform_bulk_action` ``delete``) — owner 25-11 (đường anh
+      em, ý 2): cắt socket NGAY;
+    - đổi vai qua gỡ vai hàng loạt / xoá vai tự tạo (``role_service``), đồng bộ vai (:func:`sync_users_to_casbin`), gắn tài
+      khoản làm cộng tác viên (``collaborator_service.create_collaborator``) — owner 25-11 (đường anh em, ý 1).
 
-    Thứ tự (giữ nguyên bản khoá tài khoản):
+    Thứ tự:
     1. ``flush`` thay đổi của người gọi ⇒ dòng ``user`` bị khoá; lượt đăng nhập đồng thời phải chờ (flush-before-revoke).
-    2. :func:`invalidate_all_sessions` chế độ NGHIÊM: đánh dấu ``revoked_at`` mọi hàng phiên (staged trong giao dịch người
-       gọi), đặt ``user_blacklist:{id}``, xoá ``session:{jti}`` + đặt ``blacklist:{jti}`` — dọn Redis hụt cũng là lỗi.
-       Callback sau-commit nó trả về KHÔNG chạy: bước 3 đã cắt rồi.
-    3. ``force_disconnect_user_strict``: cắt socket trên MỌI worker sống, chờ ACK; thiếu ACK / không worker ⇒ lỗi.
+    2. :func:`invalidate_all_sessions` chế độ NGHIÊM cho TỪNG người (id tăng): đánh dấu ``revoked_at`` mọi hàng phiên
+       (staged trong giao dịch người gọi), đặt ``user_blacklist:{id}``, xoá ``session:{jti}`` + đặt ``blacklist:{jti}`` —
+       dọn Redis hụt cũng là lỗi. Callback sau-commit nó trả về KHÔNG chạy: bước 3 đã cắt rồi.
+    3. ``force_disconnect_user_strict`` MỘT lệnh cho cả tập: cắt socket trên MỌI worker sống, chờ ACK; thiếu ACK / không
+       worker ⇒ lỗi. Một lệnh ⇒ chờ tối đa MỘT lần hết hạn ACK dù bao nhiêu người (khuôn khoá hàng loạt cũ của router).
 
     Bất kỳ lỗi nào ⇒ :class:`SessionRevocationUnavailable` (503). Người gọi KHÔNG commit ⇒ thay đổi nghiệp vụ, hàng thu
     hồi, nhật ký thao tác cùng rollback (owner Q-A9: "không thu hồi được ⇒ từ chối, không đổi gì")."""
-    user_id = user.id
+    targets = sorted({u.id: u for u in users}.values(), key=lambda u: u.id)
+    if not targets:
+        return
+    user_ids = [u.id for u in targets]
     await db.flush()
     try:
-        await invalidate_all_sessions(db, user, reason=reason, fail_on_cache_cleanup=True)
+        for target in targets:
+            await invalidate_all_sessions(db, target, reason=reason, fail_on_cache_cleanup=True)
         from app.socket_manager import force_disconnect_user_strict
 
-        await force_disconnect_user_strict(user_id)
+        # Một người ⇒ đối số int, nhiều người ⇒ danh sách: GIỮ đúng dạng lời gọi cũ của nhánh khoá lẻ / khoá hàng loạt
+        # (hàm nhận cả hai, cùng một lệnh) để các bộ ghi lời gọi trong test cũ không đổi nghĩa.
+        await force_disconnect_user_strict(user_ids if len(user_ids) > 1 else user_ids[0])
     except Exception as exc:
         log.error(
             "Revoke-all before commit failed — refusing the change",
-            user_id=user_id,
+            user_ids=user_ids,
             reason=reason,
             error_type=type(exc).__name__,
             error=chu_loi_an_toan(exc),
         )
         raise SessionRevocationUnavailable(
-            context={"user_id": user_id, "reason": reason, "error_type": type(exc).__name__}
+            context={"user_ids": user_ids, "reason": reason, "error_type": type(exc).__name__}
         ) from exc
 
 
@@ -1138,6 +1151,11 @@ async def delete_user(
         # Save data for emit before deletion
         deleted_username = user_to_delete.username
 
+        # F154 (owner 25-11, đường anh em ý 2): xoá tài khoản ⇒ thu hồi mọi phiên + cắt socket NGAY, qua cơ chế chung —
+        # SAU khi K4 cho xoá (không đăng xuất người không bị xoá), TRƯỚC câu DELETE (hàng phiên còn để đánh dấu, khoá
+        # ``session:{jti}`` còn để dọn). Lỗi ⇒ 503, không xoá.
+        await revoke_all_access_before_commit(db, [user_to_delete], reason="Account deleted by administrator")
+
         await db.delete(user_to_delete)
 
         # ✅ TRANSACTION FIX: Flush instead of commit
@@ -1457,7 +1475,7 @@ async def set_password_by_admin(
         db.add(user)
 
         # flush (khoá dòng người) → thu hồi mọi phiên + cắt socket, TRƯỚC commit; lỗi ⇒ ném, không đổi gì.
-        await revoke_all_access_before_commit(db, user, reason="Password set by administrator")
+        await revoke_all_access_before_commit(db, [user], reason="Password set by administrator")
 
         target_id = user.id
 
@@ -1747,12 +1765,14 @@ async def perform_bulk_action(
             # ✅ FIX Bug #2: Return Tuple instead of string
             async def _noop():
                 pass
-            return "No users found for the provided IDs. 0 users affected.", _noop, []
+            return "No users found for the provided IDs. 0 users affected.", _noop
 
         processed_count = 0
         message = ""
-        disconnect_ids: list = []  # status-changed ids the router must force-disconnect
         if action == "delete":
+            # F154 (owner 25-11, đường anh em ý 2): xoá hàng loạt ⇒ thu hồi + cắt socket NGAY cho ĐÚNG những người sẽ bị xoá
+            # (đã qua K4), qua cơ chế chung, TRƯỚC các câu DELETE. Lỗi ⇒ 503, không xoá ai.
+            await revoke_all_access_before_commit(db, users_to_process, reason="Account deleted by administrator")
             for user in users_to_process:
                 await db.delete(user)  # Mark user for deletion
                 processed_count += 1
@@ -1831,27 +1851,16 @@ async def perform_bulk_action(
                     new_status=new_status,
                 )
 
-            # Revoke sessions for accounts moved to a NON-active status. Persist
-            # the status (flush ⇒ row lock) BEFORE revoking so a concurrent login
-            # is serialized on the locked row (flush-before-revoke, P0). Strict
-            # cache cleanup so a Redis miss fails the whole bulk → router rollback.
-            # Server-side socket force-disconnect is done by the ROUTER (transport
-            # boundary): this service returns the ids to disconnect.
+            # Khoá hàng loạt (trạng thái mới khác active) ⇒ thu hồi + cắt socket những người THỰC SỰ đổi trạng thái, qua cơ
+            # chế chung (F154: trước đây service thu hồi còn router tự cắt socket — một bản thứ hai của cùng khối). Cơ chế
+            # flush trước (khoá dòng), một lệnh cắt cho cả tập, lỗi ⇒ 503 + không commit.
             if new_status != "active" and ids_changed:
-                await db.flush()
-                by_id = {u.id: u for u in users_to_process}
-                for uid in sorted(ids_changed):
-                    u = by_id.get(uid)
-                    if u is not None:
-                        # Its post-commit callback is not run: the router cuts
-                        # these users strictly BEFORE commit (offboarding).
-                        await invalidate_all_sessions(
-                            db,
-                            u,
-                            reason="Account deactivated by administrator",
-                            fail_on_cache_cleanup=True,
-                        )
-                disconnect_ids = sorted(ids_changed)
+                ids_doi = set(ids_changed)
+                await revoke_all_access_before_commit(
+                    db,
+                    [u for u in users_to_process if u.id in ids_doi],
+                    reason="Account deactivated by administrator",
+                )
 
         # ✅ TRANSACTION FIX: Flush instead of commit
         await db.flush()
@@ -1861,7 +1870,7 @@ async def perform_bulk_action(
             """Execute after router commits the transaction."""
             pass
 
-        return message, _post_commit, disconnect_ids
+        return message, _post_commit
 
     except Exception as e:
         # ✅ Router will handle rollback
@@ -2051,6 +2060,7 @@ async def sync_users_to_casbin(
 
     synced_count = 0
     failed_users = []
+    doi_vai: List[models.User] = []  # F154: người bị đổi vai CSDL trong lượt đồng bộ này
 
     from app.repositories import document_bulk_repository as bulk_repo
     from app.services.document_cross_review_service import revoke_grants_on_account_change
@@ -2103,6 +2113,7 @@ async def sync_users_to_casbin(
             )
             db.add(user)
             synced_count += 1
+            doi_vai.append(user)
 
             log.info(
                 "User role synced from Casbin to DB",
@@ -2111,6 +2122,10 @@ async def sync_users_to_casbin(
                 old_role=old_role,
                 new_role=casbin_role
             )
+
+    # F154 (owner 25-11, đường anh em ý 1): ĐÚNG những người vừa bị đổi vai CSDL ⇒ thu hồi mọi phiên + cắt socket qua cơ
+    # chế chung, trước commit; người không đổi vai không bị đụng. Lỗi ⇒ 503, không commit gì.
+    await revoke_all_access_before_commit(db, doi_vai, reason="Role changed by role sync")
 
     # Note: Caller is responsible for db.commit()
 

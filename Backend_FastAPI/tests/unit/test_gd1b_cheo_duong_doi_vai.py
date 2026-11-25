@@ -320,3 +320,60 @@ def test_duong_ghi_cot_khoa_user_co_trong_so_va_duong_gop_duoc_chan():
         if quyet == "KHONG_THU_HOI" and _goi(found[key], HELPER):
             sai.append((key, "gọi tự thu hồi — phải xếp CHAN_GOP"))
     assert not sai, sai
+
+
+# --------------------------------------------------------------------------------------------------------------------------
+# F154 (owner 25-11, đường anh em): MỌI đường đổi vai / đơn vị của tài khoản ĐANG CÓ và mọi đường XOÁ tài khoản phải thu hồi
+# phiên + cắt socket qua MỘT cơ chế ``user_service.revoke_all_access_before_commit``. Sổ dưới khoá danh sách — có người gọi
+# ``_create_or_update_user_assignment`` mới mà chưa xếp ⇒ ĐỎ (quên một đường). Ca HTTP từng đường:
+# ``tests/security/test_session_revocation.py`` (F154, AE*).
+# --------------------------------------------------------------------------------------------------------------------------
+THU_HOI_PHIEN = "revoke_all_access_before_commit"
+
+#: "NOI" = gọi ``THU_HOI_PHIEN`` trong CHÍNH hàm; "ROUTER" = router của nó gọi (PUT quyết theo giá trị đọc dưới khoá trả
+#: ra); "MOI" = tài khoản vừa tạo (chưa có phiên nào).
+NGUOI_GOI_PHAN_CONG_THU_HOI_PHIEN = {
+    ("services/user_service.py", "update_user"): "ROUTER",  # routers/admin/users.py update_existing_user
+    ("services/user_service.py", "sync_users_to_casbin"): "NOI",
+    ("services/role_service.py", "remove_role_from_users"): "NOI",
+    ("services/role_service.py", "delete_role_atomic"): "NOI",
+    ("services/collaborator_service.py", "create_collaborator"): "NOI",
+    ("services/user_service.py", "create_user_by_admin"): "MOI",
+    ("services/collaborator_service.py", "approve_collaborator"): "MOI",
+}
+
+#: Đường XOÁ tài khoản (owner 25-11 ý 2) — phải gọi ``THU_HOI_PHIEN`` trong chính hàm.
+DUONG_XOA_TAI_KHOAN = {
+    ("services/user_service.py", "delete_user"),
+    ("services/user_service.py", "perform_bulk_action"),
+}
+
+
+def _ham(rel: str, ten: str):
+    for f in ast.walk(ast.parse((APP / rel).read_text(encoding="utf-8"))):
+        if isinstance(f, (ast.FunctionDef, ast.AsyncFunctionDef)) and f.name == ten:
+            return f
+    raise AssertionError(f"không thấy {rel}:{ten}")
+
+
+def test_f154_moi_duong_doi_vai_tai_khoan_dang_co_deu_thu_hoi_phien():
+    nguoi_goi = {}
+    for p in APP.rglob("*.py"):
+        rel = p.relative_to(APP).as_posix()
+        for f in ast.walk(ast.parse(p.read_text(encoding="utf-8"))):
+            if isinstance(f, (ast.FunctionDef, ast.AsyncFunctionDef)) and _goi(f, "_create_or_update_user_assignment"):
+                nguoi_goi[(rel, f.name)] = f
+    assert set(nguoi_goi) == set(NGUOI_GOI_PHAN_CONG_THU_HOI_PHIEN), (
+        "Đường đổi vai / đơn vị thay đổi — xếp thu hồi phiên (F154) cho nó:\n"
+        f"  mới: {sorted(set(nguoi_goi) - set(NGUOI_GOI_PHAN_CONG_THU_HOI_PHIEN))}\n"
+        f"  mất: {sorted(set(NGUOI_GOI_PHAN_CONG_THU_HOI_PHIEN) - set(nguoi_goi))}"
+    )
+    quen = [k for k, q in NGUOI_GOI_PHAN_CONG_THU_HOI_PHIEN.items() if q == "NOI" and not _goi(nguoi_goi[k], THU_HOI_PHIEN)]
+    if not _goi(_ham("routers/admin/users.py", "update_existing_user"), THU_HOI_PHIEN):
+        quen.append(("routers/admin/users.py", "update_existing_user"))
+    assert not quen, f"đổi vai / đơn vị mà KHÔNG thu hồi phiên qua {THU_HOI_PHIEN}: {quen}"
+
+
+def test_f154_moi_duong_xoa_tai_khoan_deu_thu_hoi_phien():
+    quen = [k for k in sorted(DUONG_XOA_TAI_KHOAN) if not _goi(_ham(*k), THU_HOI_PHIEN)]
+    assert not quen, f"xoá tài khoản mà KHÔNG cắt socket / thu hồi phiên qua {THU_HOI_PHIEN}: {quen}"

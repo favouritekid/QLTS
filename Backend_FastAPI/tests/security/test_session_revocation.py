@@ -4698,3 +4698,236 @@ async def test_f154_doi_vai_worker_khong_ack_thi_vai_khong_doi(
         )
     finally:
         await test_redis_client.delete(f"user_blacklist:{user['id']}")
+
+
+# -----------------------------------------------------------------------------
+# F154 — ĐƯỜNG ANH EM (owner 25-11, `QUYET-DINH-OWNER-GOI-A-DUONG-ANH-EM-2026-11-25.md`):
+# (1) mọi đường ĐỔI VAI CSDL còn lại — gỡ vai hàng loạt, xoá vai tự tạo, đồng bộ vai, gắn tài khoản làm CTV — thu hồi mọi
+#     phiên + cắt socket của ĐÚNG những người bị đổi vai (người không đổi vai trong cùng lệnh không bị đụng);
+# (2) xoá tài khoản lẻ + hàng loạt ⇒ cắt socket NGAY. Cả hai qua `user_service.revoke_all_access_before_commit`.
+# Mỗi ca một bất biến, đo ở tầng nó sống (hàng phiên CSDL / token cũ gọi lại / socket phía server).
+# -----------------------------------------------------------------------------
+
+MAT_KHAU_ANH_EM = "AnhEmF154!2026x"
+
+
+async def _tao_nguoi_ae(username: str, role: str, vai_casbin: tuple, unit_id=None) -> dict:
+    """Người dùng thật (mật khẩu băm) + các dòng ``g, user:<id>, <vai>`` trong ``casbin_rule``."""
+    from casbin_async_sqlalchemy_adapter.adapter import CasbinRule
+    from sqlalchemy import insert
+
+    from app.main import fastapi_app
+
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            u = models.User(
+                username=username,
+                email=f"{username}@example.com",
+                password_hash=security.get_password_hash(MAT_KHAU_ANH_EM),
+                role=role,
+                status="active",
+                full_name=f"F154 {username}",
+                unit_id=unit_id,
+            )
+            s.add(u)
+            await s.flush()
+            uid = u.id
+            for vai in vai_casbin:
+                await s.execute(insert(CasbinRule).values(ptype="g", v0=f"user:{uid}", v1=vai))
+    await fastapi_app.state.enforcer.load_policy()
+    return {"id": uid, "username": username, "password": MAT_KHAU_ANH_EM}
+
+
+async def _goi_admin(client, admin_access: str, method: str, url: str, **kw):
+    client.cookies.clear()
+    try:
+        return await client.request(method, url, headers={"Cookie": f"access_token={admin_access}"}, **kw)
+    finally:
+        client.cookies.clear()
+
+
+async def _don_blacklist(test_redis_client, *nguoi):
+    for n in nguoi:
+        await test_redis_client.delete(f"user_blacklist:{n['id']}")
+
+
+async def _go_vai_officer_hang_loat(client, admin_user_in_db):
+    """A: chỉ có vai Cán bộ (gỡ ⇒ vai CSDL user — ĐỔI). B: Quản lý có thêm vai Cán bộ phụ (gỡ ⇒ vai CSDL vẫn Quản lý)."""
+    a = await _tao_nguoi_ae("f154_ae_go_a", "officer", ("role:officer",))
+    b = await _tao_nguoi_ae("f154_ae_go_b", "manager", ("role:manager", "role:officer"))
+    _, _, jti_a = await _login_as(client, a, ua=UA_DESKTOP)
+    _, _, jti_b = await _login_as(client, b, ua=UA_DESKTOP)
+    admin_access, _, _ = await _login_as(client, admin_user_in_db, ua=UA_FIREFOX_LINUX)
+    res = await _goi_admin(
+        client, admin_access, "DELETE", "/api/admin/roles/role:officer/users",
+        json={"user_ids": [a["id"], b["id"]], "role_to_remove": "role:officer"},
+    )
+    return {"a": a, "b": b, "jti_a": jti_a, "jti_b": jti_b, "res": res}
+
+
+@pytest.mark.asyncio
+async def test_f154_go_vai_hang_loat_thu_hoi_phien_nguoi_bi_doi_vai(
+    client, admin_user_in_db, test_redis_client
+):
+    """AE1a — gỡ vai hàng loạt: người bị ĐỔI vai CSDL ⇒ mọi hàng phiên của họ bị thu hồi trong CSDL (đọc session riêng)."""
+    g = await _go_vai_officer_hang_loat(client, admin_user_in_db)
+    try:
+        assert g["res"].status_code == 200, g["res"].text
+        assert await _role_cua(g["a"]["id"]) == "user", "tiền đề: A phải bị đổi vai CSDL"
+        assert await _live_session_jtis(g["a"]["id"]) == [], "bị gỡ vai (đổi vai CSDL) mà phiên cũ vẫn sống trong CSDL"
+    finally:
+        await _don_blacklist(test_redis_client, g["a"], g["b"])
+
+
+@pytest.mark.asyncio
+async def test_f154_go_vai_hang_loat_khong_dung_nguoi_khong_doi_vai(
+    client, admin_user_in_db, test_redis_client
+):
+    """AE1b — cùng lệnh: người chỉ mất một vai Casbin PHỤ (vai CSDL giữ nguyên) ⇒ phiên còn sống (không đăng xuất oan)."""
+    g = await _go_vai_officer_hang_loat(client, admin_user_in_db)
+    try:
+        assert g["res"].status_code == 200, g["res"].text
+        assert await _role_cua(g["b"]["id"]) == "manager", "tiền đề: B giữ vai CSDL"
+        assert await _live_session_jtis(g["b"]["id"]) == [g["jti_b"]], "người không bị đổi vai CSDL cũng bị đăng xuất"
+    finally:
+        await _don_blacklist(test_redis_client, g["a"], g["b"])
+
+
+@pytest.mark.asyncio
+async def test_f154_xoa_vai_tu_tao_thu_hoi_access_nguoi_mang_vai(
+    client, admin_user_in_db, test_redis_client
+):
+    """AE2 — xoá một vai TỰ TẠO ⇒ người đang mang vai ấy bị đổi về ``user`` ⇒ access token cũ 401 ngay."""
+    from app.main import fastapi_app
+
+    enf = fastapi_app.state.enforcer
+    quyen = ("role:f154_tam", "/api/f154_tam_probe", "GET", "allow")
+    await enf.add_policy(*quyen)
+    c = await _tao_nguoi_ae("f154_ae_vai_tam", "f154_tam", ("role:f154_tam",))
+    try:
+        access_c, _, _ = await _login_as(client, c, ua=UA_DESKTOP)
+        admin_access, _, _ = await _login_as(client, admin_user_in_db, ua=UA_FIREFOX_LINUX)
+        res = await _goi_admin(client, admin_access, "DELETE", "/api/admin/roles/role:f154_tam")
+        assert res.status_code == 200, res.text
+
+        assert (await _check_access(client, access_c)).status_code == 401, "vai bị xoá mà phiên mang vai cũ vẫn dùng được"
+    finally:
+        if quyen in [tuple(p) for p in enf.get_policy()]:
+            await enf.remove_policy(*quyen)
+        await _don_blacklist(test_redis_client, c)
+
+
+async def _dong_bo_hai_nguoi(client, admin_user_in_db):
+    """D: vai CSDL ``user`` nhưng Casbin có thêm Cán bộ (đồng bộ ⇒ ĐỔI). E: vai CSDL = vai Casbin (không đổi)."""
+    d = await _tao_nguoi_ae("f154_ae_sync_d", "user", ("role:user", "role:officer"))
+    e = await _tao_nguoi_ae("f154_ae_sync_e", "officer", ("role:officer",))
+    access_d, _, _ = await _login_as(client, d, ua=UA_DESKTOP)
+    access_e, _, _ = await _login_as(client, e, ua=UA_DESKTOP)
+    admin_access, _, _ = await _login_as(client, admin_user_in_db, ua=UA_FIREFOX_LINUX)
+    res = await _goi_admin(client, admin_access, "POST", "/api/admin/users/sync", json={"user_ids": [d["id"], e["id"]]})
+    return {"d": d, "e": e, "access_d": access_d, "access_e": access_e, "res": res}
+
+
+@pytest.mark.asyncio
+async def test_f154_dong_bo_vai_thu_hoi_access_nguoi_bi_doi(
+    client, admin_user_in_db, test_redis_client
+):
+    """AE3a — đồng bộ vai Casbin → CSDL: người bị đổi vai ⇒ access token cũ 401 ngay."""
+    g = await _dong_bo_hai_nguoi(client, admin_user_in_db)
+    try:
+        assert g["res"].status_code == 200, g["res"].text
+        assert await _role_cua(g["d"]["id"]) == "officer", "tiền đề: D phải bị đổi vai CSDL"
+        assert (await _check_access(client, g["access_d"])).status_code == 401, "đồng bộ đổi vai mà phiên cũ còn dùng được"
+    finally:
+        await _don_blacklist(test_redis_client, g["d"], g["e"])
+
+
+@pytest.mark.asyncio
+async def test_f154_dong_bo_vai_khong_dung_nguoi_khong_doi(
+    client, admin_user_in_db, test_redis_client
+):
+    """AE3b — cùng lệnh đồng bộ: người có vai CSDL đã khớp Casbin ⇒ access token cũ vẫn 200."""
+    g = await _dong_bo_hai_nguoi(client, admin_user_in_db)
+    try:
+        assert g["res"].status_code == 200, g["res"].text
+        assert (await _check_access(client, g["access_e"])).status_code == 200, "người không đổi vai cũng bị đăng xuất"
+    finally:
+        await _don_blacklist(test_redis_client, g["d"], g["e"])
+
+
+@pytest.mark.asyncio
+async def test_f154_gan_tai_khoan_lam_ctv_thu_hoi_access(
+    client, admin_user_in_db, seed_lead_dependencies, test_redis_client
+):
+    """AE4 — Quản trị gắn một tài khoản ``user`` vào hồ sơ CTV (vai đổi sang ``collaborator``) ⇒ access token cũ 401."""
+    unit_id = seed_lead_dependencies["unit_id"]
+    f = await _tao_nguoi_ae("f154_ae_ctv_f", "user", ("role:user",), unit_id=unit_id)
+    try:
+        access_f, _, _ = await _login_as(client, f, ua=UA_DESKTOP)
+        admin_access, _, _ = await _login_as(client, admin_user_in_db, ua=UA_FIREFOX_LINUX)
+        res = await _goi_admin(
+            client, admin_access, "POST", "/api/collaborators",
+            json={"full_name": "F154 CTV gan", "phone": "0912154001", "unit_id": unit_id, "user_id": f["id"]},
+        )
+        assert res.status_code == 201, res.text
+        assert await _role_cua(f["id"]) == "collaborator", "tiền đề: tài khoản phải bị đổi vai sang CTV"
+
+        assert (await _check_access(client, access_f)).status_code == 401, "gắn làm CTV mà phiên vai cũ còn dùng được"
+    finally:
+        await _don_blacklist(test_redis_client, f)
+
+
+@pytest.mark.asyncio
+async def test_f154_xoa_tai_khoan_cat_socket_ngay(
+    test_server, client, admin_user_in_db, test_redis_client
+):
+    """AE5 — xoá MỘT tài khoản ⇒ khi lệnh trả về, server đã cắt socket của người bị xoá; socket Quản trị vẫn sống."""
+    g = await _tao_nguoi_ae("f154_ae_xoa_g", "user", ("role:user",))
+    try:
+        access_g, _, _ = await _login_as(client, g, ua=UA_DESKTOP)
+        admin_access, _, _ = await _login_as(client, admin_user_in_db, ua=UA_FIREFOX_LINUX)
+        async with _sio() as g_1, _sio() as ad_1:
+            sids = {
+                "người bị xoá": await _noi(g_1, test_server, access_g),
+                "admin": await _noi(ad_1, test_server, admin_access),
+            }
+
+            res = await _goi_admin(client, admin_access, "DELETE", f"/api/admin/users/{g['id']}")
+
+            assert res.status_code == 200, res.text
+            assert _phuc_vu(sids) == {"người bị xoá": False, "admin": True}, (
+                f"xoá tài khoản mà socket của người ấy vẫn được phục vụ: {_phuc_vu(sids)}"
+            )
+    finally:
+        await _don_blacklist(test_redis_client, g)
+
+
+@pytest.mark.asyncio
+async def test_f154_xoa_hang_loat_chi_cat_socket_nguoi_bi_xoa(
+    test_server, client, admin_user_in_db, test_redis_client
+):
+    """AE6 — xoá HÀNG LOẠT hai người ⇒ socket của ĐÚNG hai người ấy bị cắt; người thứ ba (không bị xoá) vẫn được phục vụ."""
+    g1 = await _tao_nguoi_ae("f154_ae_xhl_1", "user", ("role:user",))
+    g2 = await _tao_nguoi_ae("f154_ae_xhl_2", "user", ("role:user",))
+    h = await _tao_nguoi_ae("f154_ae_xhl_h", "user", ("role:user",))
+    try:
+        acc = {n["username"]: (await _login_as(client, n, ua=UA_DESKTOP))[0] for n in (g1, g2, h)}
+        admin_access, _, _ = await _login_as(client, admin_user_in_db, ua=UA_FIREFOX_LINUX)
+        async with _sio() as t1, _sio() as t2, _sio() as th:
+            sids = {
+                "xoá 1": await _noi(t1, test_server, acc[g1["username"]]),
+                "xoá 2": await _noi(t2, test_server, acc[g2["username"]]),
+                "giữ": await _noi(th, test_server, acc[h["username"]]),
+            }
+
+            res = await _goi_admin(
+                client, admin_access, "POST", "/api/admin/users/bulk",
+                json={"action": "delete", "user_ids": [g1["id"], g2["id"]]},
+            )
+
+            assert res.status_code == 200, res.text
+            assert _phuc_vu(sids) == {"xoá 1": False, "xoá 2": False, "giữ": True}, (
+                f"xoá hàng loạt không cắt đúng socket: {_phuc_vu(sids)}"
+            )
+    finally:
+        await _don_blacklist(test_redis_client, g1, g2, h)

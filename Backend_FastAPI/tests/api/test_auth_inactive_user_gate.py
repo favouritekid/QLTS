@@ -236,7 +236,9 @@ async def test_bulk_deactivate_fail_closed_on_disconnect_error(
         json={"action": "change_status", "user_ids": [uid], "status": "banned"},
         headers=admin_token_headers,
     )
-    assert res.status_code == 500
+    # F154 (25-11): khoá hàng loạt cắt socket qua cơ chế chung ``revoke_all_access_before_commit`` (trong service) ⇒ lỗi
+    # cắt là ``SessionRevocationUnavailable`` (họ 503) thay cho HTTPException 500 của router cũ.
+    assert res.status_code == 503
     assert await _get_status(uid) == "active"  # fail-closed
 
 

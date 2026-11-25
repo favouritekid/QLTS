@@ -50,6 +50,7 @@ from app.utils.exceptions import (
     DuplicateResourceError,
     PermissionDeniedError,
     ResourceNotFoundError,
+    SessionRevocationUnavailable,
 )
 from app.socket_manager import sio
 from app.socket_metrics import socket_events_emitted_total
@@ -814,7 +815,9 @@ async def delete_role_atomic(
         )
 
     except (ConflictError, DuplicateResourceError, PermissionDeniedError,
-            ResourceNotFoundError, BadRequest) as e:
+            ResourceNotFoundError, BadRequest, SessionRevocationUnavailable) as e:
+        # F154: SessionRevocationUnavailable (503 — không thu hồi được phiên của người bị đổi vai) cũng là lỗi miền: giữ
+        # đúng 503 "thử lại có ích", không bọc thành 500.
         # Domain exception: rollback rồi NÉM LẠI để middleware giữ đúng mã —
         # 409 / 400 / 404. Bọc chúng thành 500 là xoá mất thông tin người gọi
         # cần: "không xoá được vì còn policy" (409, hành động được) khác hẳn

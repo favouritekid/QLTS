@@ -38,6 +38,30 @@ log = logging.getLogger(__name__)
 
 
 # =============================================================================
+# F154 — LỆNH CẮT SOCKET Ở TẦNG SERVICE
+# =============================================================================
+
+@pytest_asyncio.fixture
+async def lenh_cat_socket(monkeypatch, test_redis_client):
+    """F154 (owner 25-11): đặt mật khẩu / khoá / xoá / đổi vai đi qua ``user_service.revoke_all_access_before_commit`` —
+    bước cuối là ``force_disconnect_user_strict`` (chờ ACK của worker socket). Test tầng service không chạy lifespan nên
+    KHÔNG có worker ⇒ lệnh thật sẽ ném "No live socket workers". Fixture thay nó bằng bộ GHI (trả danh sách lệnh đã gửi
+    để ca kiểm khẳng định đúng người) và dọn ``user_blacklist:*`` mà thu hồi để lại (id người dùng lặp lại sau TRUNCATE).
+    Ca HTTP + socket thật: ``tests/security/test_session_revocation.py`` (F154)."""
+    import app.socket_manager as sm
+
+    lenh: list = []
+
+    async def _ghi(user_ids, *args, **kwargs):
+        lenh.append(user_ids)
+
+    monkeypatch.setattr(sm, "force_disconnect_user_strict", _ghi)
+    yield lenh
+    for khoa in await test_redis_client.keys("user_blacklist:*"):
+        await test_redis_client.delete(khoa)
+
+
+# =============================================================================
 # DATABASE SESSION FIXTURE
 # =============================================================================
 

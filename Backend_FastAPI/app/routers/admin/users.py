@@ -504,7 +504,9 @@ async def bulk_user_action(
     enforcer = request.app.state.enforcer
 
     # Perform bulk action
-    message, bulk_callback, disconnect_ids = await user_service.perform_bulk_action(
+    # F154: thu hồi phiên + cắt socket (khoá hàng loạt, xoá hàng loạt) nằm TRONG service qua cơ chế chung
+    # ``user_service.revoke_all_access_before_commit``, TRƯỚC mọi thao tác Casbin bên dưới; lỗi ⇒ 503, không commit.
+    message, bulk_callback = await user_service.perform_bulk_action(
         db,
         action=action_data.action,
         user_ids=action_data.user_ids,
@@ -560,31 +562,6 @@ async def bulk_user_action(
         description=action_desc,
         changes={"user_ids": action_data.user_ids, "status": action_data.status} if action_data.status else {"user_ids": action_data.user_ids},
     )
-    # Server-side socket force-disconnect for deactivated users (transport
-    # boundary — done here in the router, NOT the service). BEFORE commit: any
-    # failure (publish error / ACK timeout) raises → no commit → the status
-    # change rolls back (fail-closed). disconnect_ids is only populated when the
-    # bulk moved accounts to a non-active status.
-    if disconnect_ids:
-        # ONE batched command for the whole set → bounded to a single ACK
-        # timeout regardless of how many users (avoids N × timeout holding the
-        # transaction + row locks). Fail-closed: any failure rolls back the
-        # status change and returns 500 (mirrors update_existing_user).
-        from app.socket_manager import force_disconnect_user_strict
-        try:
-            await force_disconnect_user_strict(disconnect_ids)
-        except Exception:
-            await db.rollback()
-            log.error(
-                "Bulk deactivation failed: could not disconnect sockets",
-                user_ids=disconnect_ids,
-                exc_info=True,
-            )
-            raise HTTPException(
-                status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Deactivation failed: could not disconnect sockets.",
-            )
-
     await db.commit()
     await bulk_callback()
 
@@ -1130,7 +1107,7 @@ async def update_existing_user(
     # Quyết bằng giá trị đọc DƯỚI khoá trong ``update_user`` (``status_transition`` / ``assignment_change``).
     revoke_reason = user_service.access_revocation_reason(status_transition, assignment_change)
     if revoke_reason:
-        await user_service.revoke_all_access_before_commit(db, db_user, reason=revoke_reason)
+        await user_service.revoke_all_access_before_commit(db, [db_user], reason=revoke_reason)
 
     # ✅ TRANSACTION PATTERN: Commit and execute callback
     await db.commit()

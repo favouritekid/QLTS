@@ -136,6 +136,7 @@ async def remove_role_from_users(
     removed_count = 0
     reassigned_count = 0
     failed_users = []
+    doi_vai: List[Any] = []  # F154: người bị đổi vai CSDL trong lệnh này (thu hồi phiên + cắt socket trước commit)
 
     from app.repositories import UserRepository
     from app.services.document_cross_review_service import revoke_grants_on_account_change
@@ -220,6 +221,7 @@ async def remove_role_from_users(
                     assigned_by_user_id=actor_id,
                     enforcer=None,
                 )
+                doi_vai.append(user)
             db.add(user)
         if role_to_remove in roles:
             # Xoá ĐÚNG các dòng đã đọc + khoá ở (1) (theo id) — dòng cùng cặp chèn sau lần đọc là thao tác đến sau, phải còn.
@@ -243,6 +245,13 @@ async def remove_role_from_users(
                 "db_role": db_role_name,
             },
         )
+
+    # F154 (owner 25-11, đường anh em ý 1 — chấp nhận đăng xuất nhiều người cùng lúc): ĐÚNG những người vừa bị đổi vai
+    # CSDL ⇒ thu hồi mọi phiên + cắt socket qua cơ chế chung, trước commit; người chỉ mất một vai Casbin phụ (vai CSDL giữ
+    # nguyên) không bị đụng. ``casbin_rule`` ở đây ghi TRONG giao dịch ⇒ lỗi (503) rollback được cả nó.
+    from app.services.user_service import revoke_all_access_before_commit
+
+    await revoke_all_access_before_commit(db, doi_vai, reason="Role changed: role removed by administrator")
 
     # ✅ TRANSACTION FIX: Flush instead of commit
     await db.flush()
@@ -369,6 +378,7 @@ async def delete_role_atomic(
         await lock_users_in_id_order(db, target_ids=moi, referenced_ids=refs)
         held_ref_ids += refs
         # (B) STEP 4 — đổi vai CSDL cho người CÒN mang vai bị xoá (vai đọc DƯỚI khoá dòng ``user``).
+        doi_vai_vong: List[Any] = []  # F154: người bị đổi vai trong vòng này
         for user_id in moi:
             locked_ids.append(user_id)
             locked = await bulk_repo.lock_user_no_key_update(db, user_id)
@@ -394,6 +404,14 @@ async def delete_role_atomic(
             )
             db.add(user)
             reassigned_ids.add(user_id)
+            doi_vai_vong.append(user)
+        # F154 (owner 25-11, đường anh em ý 1): người vừa bị đổi vai CSDL ⇒ thu hồi mọi phiên + cắt socket qua cơ chế
+        # chung, NGAY trong (B) — TRƯỚC lock enforcer và mọi thao tác Casbin (ghi bằng phiên riêng, không rollback được):
+        # lỗi (503) ở đây ⇒ chưa đụng Casbin, router không commit. Vòng khởi động lại (savepoint lùi) ⇒ người ấy được xử lý
+        # + thu hồi lại ở vòng sau (đăng xuất hai lần vô hại); phía Redis / socket của vòng bị lùi giữ nguyên (lệch an toàn).
+        from app.services.user_service import revoke_all_access_before_commit
+
+        await revoke_all_access_before_commit(db, doi_vai_vong, reason="Role changed: custom role deleted")
         await db.flush()  # mọi câu ghi dòng ``user`` xong TRƯỚC khi vào lock enforcer
 
         # (C)
