@@ -19,7 +19,7 @@
  */
 
 import { test, expect, type Page, type Cookie } from "@playwright/test";
-import { FIXTURE_MA_XA, FIXTURE_TINH, FIXTURE_XA, createAdmissionProfile, expectOk, fixtureAcademicHistory, resolveAdmissionContext, resolveFixtureSchoolId, safeBody, summarizeApiError, type AdmissionPathContext, xacThucMfa } from "./helpers/e2e-fixtures";
+import { FIXTURE_MA_XA, FIXTURE_TINH, FIXTURE_XA, createAdmissionProfile, docRowVersion, expectOk, fixtureAcademicHistory, resolveAdmissionContext, resolveFixtureSchoolId, safeBody, summarizeApiError, type AdmissionPathContext, xacThucMfa } from "./helpers/e2e-fixtures";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -413,7 +413,13 @@ async function createLeadAndProfile(
     // PATCH, không phải POST (`app/routers/admissions.py:1187`).
     const vResp = await page.request.patch(
       `${API_URL}/api/admissions/${profileId}/documents/${doc.code}/verify-format`,
-      { headers: verifyHeaders, data: { format: "photo" } }
+      {
+        headers: verifyHeaders,
+        data: {
+          format: "photo",
+          expected_row_version: await docRowVersion(page.request, profileId, doc.code, verifyHeaders),
+        },
+      }
     );
     await expectOk(vResp, `admin xác minh tài liệu ${doc.code}`, [200]);
   }
@@ -1268,7 +1274,10 @@ test.describe("Admission Profile Lifecycle", () => {
         `${API_URL}/api/admissions/${profileId4}/documents/${testDocCode}/verify-format`,
         {
           headers: adminHeaders,
-          data: { format: "photo" },
+          data: {
+            format: "photo",
+            expected_row_version: await docRowVersion(page.request, profileId4, testDocCode, adminHeaders),
+          },
         }
       );
       expect(resp.ok()).toBeTruthy();
@@ -1281,7 +1290,10 @@ test.describe("Admission Profile Lifecycle", () => {
         `${API_URL}/api/admissions/${profileId4}/documents/${testDocCode}/reject`,
         {
           headers: adminHeaders,
-          data: { reason: "Document is blurry and unreadable" },
+          data: {
+            reason: "Document is blurry and unreadable",
+            expected_row_version: await docRowVersion(page.request, profileId4, testDocCode, adminHeaders),
+          },
         }
       );
       expect(resp.ok()).toBeTruthy();
@@ -1292,7 +1304,14 @@ test.describe("Admission Profile Lifecycle", () => {
     await test.step("Admin resets document", async () => {
       const resp = await page.request.post(
         `${API_URL}/api/admissions/${profileId4}/documents/${testDocCode}/reset`,
-        { headers: adminHeaders }
+        {
+          headers: adminHeaders,
+          // GĐ1b: đặt lại giấy BẮT BUỘC lý do (`DocumentResetRequest`, app/schemas/admission.py:2039).
+          data: {
+            reason: "E2E: đặt lại để cán bộ nộp lại bản rõ",
+            expected_row_version: await docRowVersion(page.request, profileId4, testDocCode, adminHeaders),
+          },
+        }
       );
       expect(resp.ok()).toBeTruthy();
       console.log(`Document ${testDocCode} reset to missing`);

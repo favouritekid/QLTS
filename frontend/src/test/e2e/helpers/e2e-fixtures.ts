@@ -666,6 +666,35 @@ export async function createAdmissionProfile(
   return (await resp.json()) as Record<string, unknown>;
 }
 
+/**
+ * `row_version` HIỆN TẠI của một dòng giấy — để gửi làm `expected_row_version`.
+ *
+ * GĐ1b: `verify-format` / `reject` / `reset` đều BẮT BUỘC `expected_row_version`
+ * (`DocumentFormatVerifyRequest` … `app/schemas/admission.py:2005,2026,2041`;
+ * thiếu ⇒ 422 `body.expected_row_version[missing]`). Giá trị lấy từ
+ * `documents_checklist[].row_version` (`DocumentItemSchema`, cùng tệp :431).
+ * Đọc LẠI ngay trước MỖI lời gọi: mỗi thao tác tăng phiên bản, dùng số cũ
+ * sẽ nhận 409 xung đột — đúng như giao diện thật làm.
+ * Không có số hợp lệ ⇒ ném lỗi tại chỗ, không đoán.
+ */
+export async function docRowVersion(
+  ctx: APIRequestContext,
+  profileId: number | string,
+  docCode: string,
+  headers?: Record<string, string>
+): Promise<number> {
+  const resp = await ctx.get(`${API_URL}/api/admissions/${profileId}`, headers ? { headers } : undefined);
+  await expectOk(resp, `đọc hồ sơ ${profileId} lấy row_version giấy ${docCode}`, [200]);
+  const docs: Array<{ code: string; row_version?: number | null }> =
+    ((await resp.json()) as { documents_checklist?: Array<{ code: string; row_version?: number | null }> })
+      .documents_checklist || [];
+  const rv = docs.find((d) => d.code === docCode)?.row_version;
+  if (typeof rv !== "number" || !Number.isInteger(rv) || rv < 1) {
+    throw new Error(`giấy ${docCode} của hồ sơ ${profileId} không có row_version hợp lệ (nhận ${String(rv)})`);
+  }
+  return rv;
+}
+
 // ---------------------------------------------------------------------------
 // Fixture danh mục KV — xã / trường do `scripts/seeds/seed_e2e_catalog_fixture`
 // seed. KHÔNG hard-code `school_id`: id là số tự tăng, phụ thuộc thứ tự seed.
