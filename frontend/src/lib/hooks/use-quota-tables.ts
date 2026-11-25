@@ -30,7 +30,7 @@ function useQuotaTableMutation<TBody>(year: number, call: (year: number, body: T
       queryClient.setQueryData(quotaTableKeys.detail(year), table)
     },
     onError: () => {
-      queryClient.invalidateQueries({ queryKey: quotaTableKeys.detail(year) })
+      queryClient.invalidateQueries({ queryKey: quotaTableKeys.detail(year + 1) })
     },
   })
 }
