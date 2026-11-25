@@ -70,7 +70,7 @@ export function ReviewRowDrawer({
             <SheetHeader>
               <SheetTitle data-testid="ngan-ten">{row.full_name ?? PROFILE_GONE}</SheetTitle>
               <SheetDescription data-testid="ngan-dau">
-                Trạng thái hồ sơ lúc chạy: {profileStatusLabel(row.profile_status)} · Đơn vị: {unitRef(row.unit_id)} · Nhóm:{" "}
+                Trạng thái hồ sơ lúc chạy: {profileStatusLabel(row.profile_status)} · Đơn vị: {unitRef(row.unit_id, row.unit_name)} · Nhóm:{" "}
                 {tabLabel(row.tab)}
               </SheetDescription>
             </SheetHeader>

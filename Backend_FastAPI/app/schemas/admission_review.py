@@ -166,6 +166,8 @@ class FloorOut(BaseModel):
     group_code: Optional[str] = None
     is_deleted: bool
     updated_by_user_id: int
+    #: S3 (phụ lục S3/S7) — họ tên HIỆN TẠI của người lưu sàn, đọc lúc GET; ``null`` = người ấy chưa khai họ tên.
+    updated_by_full_name: Optional[str] = None
     updated_at: datetime
 
 
@@ -177,6 +179,8 @@ class RunSummaryOut(BaseModel):
     status: str
     rule_version: str
     requested_by_user_id: int
+    #: S3 — họ tên HIỆN TẠI của người chạy, đọc lúc GET; ``null`` = chưa khai họ tên.
+    requested_by_full_name: Optional[str] = None
     requested_at: datetime
     finished_at: Optional[datetime] = None
     duration_ms: Optional[int] = None
@@ -194,9 +198,12 @@ class SessionOut(BaseModel):
     status: str
     version: int
     created_by_user_id: int
+    #: S3 — họ tên HIỆN TẠI của người tạo / người huỷ, đọc lúc GET; ``null`` = chưa khai họ tên (người huỷ: cả khi chưa huỷ).
+    created_by_full_name: Optional[str] = None
     created_at: datetime
     updated_at: datetime
     cancelled_by_user_id: Optional[int] = None
+    cancelled_by_full_name: Optional[str] = None
     cancelled_at: Optional[datetime] = None
     cancel_reason: Optional[str] = None
     quota_table: QuotaTableStateOut
@@ -215,6 +222,8 @@ class SessionListItemOut(BaseModel):
     status: str
     version: int
     created_by_user_id: int
+    #: S3 — như ``SessionOut.created_by_full_name``.
+    created_by_full_name: Optional[str] = None
     created_at: datetime
     floor_count: int
     latest_run: Optional[RunSummaryOut] = None
@@ -296,7 +305,8 @@ class QuotaViewOut(BaseModel):
 
 
 class RunOut(BaseModel):
-    """E6 (202), E8 — chi tiết run. Mọi trường trừ ``config_changed_since_run`` (tính lúc GET) là bất biến (hợp đồng §7)."""
+    """E6 (202), E8 — chi tiết run. Mọi trường trừ ``config_changed_since_run`` (tính lúc GET) và ``requested_by_full_name`` (S3 —
+    đọc lúc GET) là bất biến (hợp đồng §7)."""
 
     id: int
     session_id: int
@@ -304,6 +314,8 @@ class RunOut(BaseModel):
     status: str
     rule_version: str
     requested_by_user_id: int
+    #: S3 — như ``RunSummaryOut.requested_by_full_name``.
+    requested_by_full_name: Optional[str] = None
     requested_at: datetime
     started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
@@ -365,11 +377,14 @@ class PriorYearFindingOut(BaseModel):
 
 
 class RowOut(BaseModel):
-    """E9 — một em trong một run. ``full_name`` / ``unit_id`` đọc LÚC GET (không bất biến); mọi trường khác bất biến."""
+    """E9 — một em trong một run. ``full_name`` / ``unit_id`` / ``unit_name`` đọc LÚC GET (không bất biến); mọi trường khác bất
+    biến."""
 
     profile_id: int
     full_name: Optional[str] = None
     unit_id: Optional[int] = None
+    #: S7 (phụ lục S3/S7) — tên của CHÍNH đơn vị ``unit_id`` (đọc cùng câu); ``null`` khi ``unit_id`` ``null`` (hồ sơ không còn).
+    unit_name: Optional[str] = None
     profile_status: str
     tab: str
     reason_codes: List[str]

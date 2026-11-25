@@ -36,7 +36,7 @@ function FloorsView({ floors }: { floors: readonly ReviewFloor[] }) {
   return (
     <div className="space-y-2">
       <p className="text-sm text-muted-foreground" data-testid="san-luu-lan-cuoi">
-        {floorsLastSaved(userRef(last.userId), formatDateTimeVN(last.at))}
+        {floorsLastSaved(userRef(last.userId, last.fullName), formatDateTimeVN(last.at))}
       </p>
       <Table data-testid="san-bang-xem">
         <TableHeader>

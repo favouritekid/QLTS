@@ -35,6 +35,7 @@ import {
   runWarningLabel,
   sessionStatusLabel,
   tabCountEntries,
+  userRef,
   type ReviewErrorKind,
 } from "./messages"
 
@@ -343,5 +344,15 @@ describe("F3 — nhãn lượt kiểm", () => {
 
   it("F4 (đính chính 2 §1 NỢ): 'Tải lúc HH:MM' theo giờ Việt Nam (UTC+7)", () => {
     expect(loadedAtLabel(Date.UTC(2026, 10, 24, 2, 12))).toBe("Tải lúc 09:12")
+  })
+})
+
+describe("S3 (phụ lục S3/S7) — người thao tác", () => {
+  it("có họ tên máy chủ trả ⇒ hiện họ tên; null / trắng ⇒ giữ chỗ tạm 'Người dùng #id' (owner Q6); không có người ⇒ '—'", () => {
+    expect(userRef(12, "Nguyễn Văn Giả")).toBe("Nguyễn Văn Giả")
+    expect(userRef(12, null)).toBe("Người dùng #12")
+    expect(userRef(12, "  ")).toBe("Người dùng #12")
+    expect(userRef(null, "Nguyễn Văn Giả")).toBe("—")
+    expect(userRef(undefined, undefined)).toBe("—")
   })
 })

@@ -117,6 +117,15 @@ describe("M1 — dòng danh sách (hiện nguyên số / cờ máy chủ)", () =
     expect(o.getByTestId("lan-xet-3-luot")).toHaveTextContent("Đạt — máy đề xuất 120")
   })
 
+  it("S3 (phụ lục S3/S7): cột người tạo hiện HỌ TÊN máy chủ trả, không còn 'Người dùng #id'", async () => {
+    // Biến thể phá: cột người tạo bỏ `created_by_full_name` ⇒ ĐỎ.
+    mayChuE2(() => HttpResponse.json(pageGia([listItemGia({ created_by_full_name: "Người Tạo Giả" })])))
+    await moTrang()
+    const dong = await screen.findByTestId("lan-xet-3")
+    expect(dong).toHaveTextContent("Người Tạo Giả")
+    expect(dong).not.toHaveTextContent("Người dùng #")
+  })
+
   it("trạng thái lạ (GĐ2-C) ⇒ hiện nguyên chữ máy chủ", async () => {
     mayChuE2(() => HttpResponse.json(pageGia([listItemGia({ status: "trang_thai_moi" })])))
     await moTrang()

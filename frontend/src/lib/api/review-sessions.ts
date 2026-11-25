@@ -123,8 +123,8 @@ export interface ReviewRunCreated {
   run: ReviewRun
   /**
    * Header `Location` — CHỈ để đối chiếu (thiết kế §3.5 bước 2: đường dẫn lấy từ `id` trong thân). `null` khi không đọc được:
-   * máy chủ không gửi, hoặc trình duyệt giấu vì CORS không `expose` header này (máy chủ hiện chỉ expose `Set-Cookie`,
-   * `Content-Disposition`, `X-Enrollment-Letter-Id` — `app/main.py`).
+   * máy chủ không gửi, hoặc trình duyệt giấu vì CORS không `expose` header này. Từ gói S3/S7 máy chủ expose thêm `Location`
+   * (`app/main.py` `expose_headers`); khác origin mà máy chủ cũ chưa expose thì vẫn trả `null`, không báo lệch.
    */
   location: string | null
 }

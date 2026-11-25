@@ -177,6 +177,18 @@ async def test_sua_ly_do_khi_chua_thu_hoi_bi_chan(c):
     ) == ("QLC20", None)
 
 
+async def test_update_quyen_con_hieu_luc_ma_khong_thu_hoi_bi_chan(c):
+    """Codex rà lại đoàn 3b, R2 NỢ-1 — ca HÀNH VI cho vế ``NEW.revoked_at IS NULL`` của trigger (trước chỉ bắt qua so chữ
+    create_all ↔ migration; sửa NHẤT QUÁN cả hai thì phép so chữ vẫn xanh). UPDATE một quyền CÒN hiệu lực mà KHÔNG ghi thu hồi và
+    không đổi giá trị nào (câu "chạm" dòng): mọi cột của lần gán giữ nguyên, ba cột thu hồi vẫn NULL (CHECK bộ ba không vướng),
+    ``OLD.revoked_at`` NULL ⇒ chỉ còn vế ``NEW.revoked_at IS NULL`` chặn ⇒ QLC20. Ca trên (sửa lý do) còn bị vế ``reason`` chặn nên
+    không đo được vế này; đối chứng hợp lệ là ``test_thu_hoi_lan_dau_hop_le``."""
+    g = await _gan(c)
+    assert await _loi(
+        c, "UPDATE admission_review_secretary_grant SET reason = reason WHERE id = :g", g=g
+    ) == ("QLC20", None)
+
+
 # ── khoá ngoại RESTRICT (lớp phòng thủ thêm của K4) ──────────────────────────────────────────────────────────────────
 @pytest.mark.parametrize("ai", ["u", "a"])
 async def test_xoa_nguoi_duoc_gan_hoac_nguoi_gan_bi_khoa_ngoai_chan(c, ai):

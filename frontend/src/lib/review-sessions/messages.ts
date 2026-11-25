@@ -105,9 +105,14 @@ export function roundStateLabel(round: Pick<ReviewRoundOption, "is_active" | "ar
   return "Tạm dừng"
 }
 
-/** Thiết kế §4.3 (KT-2): máy chủ chưa trả tên người thao tác (S3) ⇒ hiện số id. */
-export function userRef(userId: number | null | undefined): string {
-  return userId === null || userId === undefined ? "—" : `Người dùng #${userId}`
+/**
+ * Người thao tác (thiết kế §4.3, KT-2; phụ lục S3/S7): hiện HỌ TÊN máy chủ trả (`*_by_full_name`); máy chủ trả `null` (người ấy chưa
+ * khai họ tên) ⇒ giữ chỗ tạm "Người dùng #id" (owner Q6); không có người (`*_by_user_id` `null`) ⇒ "—".
+ */
+export function userRef(userId: number | null | undefined, fullName: string | null | undefined): string {
+  if (userId === null || userId === undefined) return "—"
+  const name = fullName?.trim()
+  return name ? name : `Người dùng #${userId}`
 }
 
 // ═══════════════════════════════════════ câu cố định ═══════════════════════════════════════

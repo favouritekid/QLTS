@@ -1553,6 +1553,8 @@ jobs:
           # S1 (24-11): E10 `floor-candidates` (học vụ cho màn nhập điểm sàn — phụ lục HĐ4 E10) + G1 (c) E1 không nhận đợt đã lưu
           # trữ. Tệp mới import trợ giúp + `_tai_khoan_vai` của `test_gd2b_lan_xet_api.py` ⇒ CÙNG lát; ngoài mọi tier thì check
           # vẫn xanh mà không chạy (CLAUDE.md §11).
+          # Gói máy chủ S3/S7 (24-11): `test_gd2b_goi_may_chu_s3s7_api.py` — họ tên người thao tác E1–E8 (S3), tên đơn vị dòng E9
+          # (S7), CORS expose `Location` của E6. Ngoài mọi tier ⇒ check vẫn xanh mà không chạy (CLAUDE.md §11). WHOLE-FILE.
           - tier: Tier 5k — GĐ2-B lần xét nháp (đợt 1 + đợt 2)
             tests: >-
               tests/unit/test_gd2b_ddl_lockin.py
@@ -1573,6 +1575,7 @@ jobs:
               tests/api/test_gd2b_lan_xet_hai_phien_api.py
               tests/api/test_gd2b_chay_kiem_api.py
               tests/api/test_gd2b_s1_hoc_vu_nhap_san_api.py
+              tests/api/test_gd2b_goi_may_chu_s3s7_api.py
           # GĐ2-C C1 (22-11): quyền "Thư ký Hội đồng" — bảng quyền + migration, route Admin gán / thu hồi, cổng
           # `deps.require_review_secretary` (hai phiên, T17), tự thu hồi khi khoá / đổi vai, K4 (sổ + hai phiên). Lát RIÊNG, tên
           # KHÁC `Tier 5k` của GĐ2-B (nhánh song song) để hai nhánh gộp không đè nhau. Ngoài mọi tier thì required check vẫn xanh

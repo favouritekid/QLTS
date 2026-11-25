@@ -164,10 +164,14 @@ export function floorIdsFromValidation(data: Record<string, unknown> | undefined
  * Owner G2: MỘT dòng chung "lưu lần cuối bởi … lúc …", không cột "ai sửa" cho từng dòng. E4 thay toàn bộ (xoá hết rồi chèn —
  * BGL4 D2) nên mọi `FloorOut` mang cùng người / lúc của lần lưu gần nhất; lấy dòng `updated_at` muộn nhất cho chắc. `[]` ⇒ `null`.
  */
-export function lastFloorSave(floors: readonly ReviewFloor[]): { userId: number; at: string } | null {
+export function lastFloorSave(
+  floors: readonly ReviewFloor[],
+): { userId: number; fullName: string | null; at: string } | null {
   let best: ReviewFloor | null = null
   for (const f of floors) {
     if (best === null || Date.parse(f.updated_at) > Date.parse(best.updated_at)) best = f
   }
-  return best === null ? null : { userId: best.updated_by_user_id, at: best.updated_at }
+  return best === null
+    ? null
+    : { userId: best.updated_by_user_id, fullName: best.updated_by_full_name, at: best.updated_at }
 }

@@ -63,8 +63,14 @@ describe("F4 — null ≠ 0, điểm là chuỗi máy chủ", () => {
     expect(withinSeatsLabel(null)).toBe("—")
     expect(withinSeatsLabel(true)).toBe("Trong số chỗ (giữ chỗ tạm)")
     expect(withinSeatsLabel(false)).toBe("Ngoài số chỗ")
-    expect(unitRef(null)).toBe("—")
-    expect(unitRef(4)).toBe("Đơn vị #4")
+    expect(unitRef(null, null)).toBe("—")
+    expect(unitRef(4, null)).toBe("Đơn vị #4")
+  })
+
+  it("S7 (phụ lục S3/S7): unitRef hiện `unit_name` máy chủ trả; tên null / trắng ⇒ 'Đơn vị #id'; unit_id null ⇒ '—'", () => {
+    expect(unitRef(4, "Khoa Giả Một")).toBe("Khoa Giả Một")
+    expect(unitRef(4, "   ")).toBe("Đơn vị #4")
+    expect(unitRef(null, "Khoa Giả Một")).toBe("—")
   })
 
   it("NV được xếp: 'NV{số} · <mã> — <tên> · <loại hình>'; null ⇒ '—'", () => {

@@ -489,15 +489,34 @@ async def list_floors_detail(db: Executor, session_id: int) -> List[Row]:
 
 
 async def read_profile_people(db: Executor, profile_ids: Sequence[int]) -> Dict[int, Row]:
-    """Họ tên + đơn vị HIỆN TẠI của hồ sơ (E9 ``full_name`` / ``unit_id`` — đọc lúc GET, không bất biến). Đơn vị = ``lead.unit_id``
-    (cột kiểm quyền của hồ sơ). Hồ sơ không còn ⇒ không có khoá. KHÔNG đọc CCCD / điện thoại / ngày sinh."""
+    """Họ tên + đơn vị HIỆN TẠI của hồ sơ (E9 ``full_name`` / ``unit_id`` / ``unit_name`` — đọc lúc GET, không bất biến). Đơn vị =
+    ``lead.unit_id`` (cột kiểm quyền của hồ sơ); ``unit_name`` = tên của CHÍNH đơn vị ấy, đọc trong CÙNG câu (S7 — một lần đọc ⇒ tên
+    luôn khớp id; đơn vị đã ngừng hoạt động vẫn trả tên, như ``unit_id``). Hồ sơ không còn ⇒ không có khoá. KHÔNG đọc CCCD / điện
+    thoại / ngày sinh."""
     ids = sorted({int(i) for i in profile_ids})
     if not ids:
         return {}
-    p, lead = models.AdmissionProfile, models.Lead
+    p, lead, ou = models.AdmissionProfile, models.Lead, models.OrganizationUnit
     rows = (
         await db.execute(
-            select(p.id, p.full_name, lead.unit_id).select_from(p).outerjoin(lead, lead.id == p.lead_id).where(p.id.in_(ids))
+            select(p.id, p.full_name, lead.unit_id, ou.name.label("unit_name"))
+            .select_from(p)
+            .outerjoin(lead, lead.id == p.lead_id)
+            .outerjoin(ou, ou.id == lead.unit_id)
+            .where(p.id.in_(ids))
         )
     ).all()
     return {int(r.id): r for r in rows}
+
+
+async def read_user_full_names(db: Executor, user_ids: Sequence[Optional[int]]) -> Dict[int, Optional[str]]:
+    """S3 — họ tên HIỆN TẠI (``user.full_name``) của người thao tác theo id, MỘT câu cho mọi id của một phản hồi (người tạo / huỷ lần
+    xét, người lưu sàn, người chạy kiểm). Đọc LÚC GET (không bất biến — người dùng đổi họ tên thì lần đọc sau trả tên mới). Chỉ đọc
+    ``full_name`` của CÁN BỘ: KHÔNG tên đăng nhập, email, điện thoại. ``None`` trong ``user_ids`` bị bỏ qua; id không có không có khoá
+    (khoá ngoại RESTRICT ⇒ không xảy ra); người dùng chưa khai họ tên ⇒ giá trị ``None``."""
+    ids = sorted({int(i) for i in user_ids if i is not None})
+    if not ids:
+        return {}
+    u = models.User
+    rows = (await db.execute(select(u.id, u.full_name).where(u.id.in_(ids)))).all()
+    return {int(r.id): r.full_name for r in rows}
