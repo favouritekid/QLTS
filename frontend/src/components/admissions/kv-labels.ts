@@ -60,7 +60,7 @@ export const RULE_LABEL_VI: Record<string, string> = {
 
 // Câu dùng chung cho nhiều mã (một câu — một chỗ). Đoàn 3c: owner duyệt 25-11 (QUYET-DINH-OWNER-DOAN-3C-CAU-KV).
 const PENDING_MANUAL_VERIFICATION_VI =
-  "Khu vực cần xác minh từ học bạ và ấn định thủ công (sơ cấp / hồ sơ không rõ trình độ)"
+  "Khu vực cần xác minh từ học bạ và ấn định thủ công (nhóm THCS / hồ sơ không rõ trình độ)."
 const BASIS_THPT_HISTORY_VI =
   "Tính theo các trường THPT đã học (trường học lâu nhất; thời gian bằng nhau thì theo trường tốt nghiệp)"
 const BASIS_THCS_HISTORY_VI =
