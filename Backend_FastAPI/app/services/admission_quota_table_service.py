@@ -70,9 +70,11 @@ AUDIT_ENTITY = "admission_quota_table"
 
 #: Câu báo theo mã lý do (mã tiếng Anh — quy ước owner 17-11).
 MESSAGES: Dict[str, str] = {
+    # Owner 25-11 (câu cùng kiểu Q4, mục 1): màn bảng chỉ tiêu TỰ tải lại bảng sau MỌI lỗi ghi (PUT / khoá / mở khoá —
+    # ``use-quota-tables.ts`` onError) ⇒ đuôi báo "đã được tải lại". Câu giao diện cùng đuôi: ``lib/quota-tables/messages.ts``.
     "quota_table_stale": (
         "Bảng chỉ tiêu hoặc chỉ tiêu ngành của năm đã được sửa ở nơi khác (bảng này hoặc trang cấu hình học vụ) sau khi bạn "
-        "mở — hãy tải lại rồi làm lại."
+        "mở — bảng đã được tải lại, hãy làm lại."
     ),
     "quota_table_locked": "Bảng chỉ tiêu năm này đã khoá — Admin mở khoá (có lý do) trước khi sửa.",
     "quota_table_already_locked": "Bảng chỉ tiêu năm này đã khoá rồi.",
