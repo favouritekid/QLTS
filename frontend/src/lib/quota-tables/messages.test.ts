@@ -40,6 +40,17 @@ describe("describeQuotaTableError — 409 theo reason_code", () => {
     expect(cau).not.toMatch(new RegExp(rc, "i"))
   })
 
+  // Owner 25-11 (câu cùng kiểu Q4 — `gd2\gd2b\giao-dien\QUYET-DINH-OWNER-CAU-CUNG-KIEU-Q4-2026-11-25.md`, mục 1): đuôi
+  // "— bảng đã được tải lại, hãy làm lại.", giữ "(phiên bản hiện tại: N)". Chép từ quyết định — so NGUYÊN câu, không so mảnh.
+  it("quota_table_stale ⇒ đúng câu owner 25-11 (bảng đã được tải lại), có và không có phiên bản hiện tại", () => {
+    const DAU = "Bảng chỉ tiêu hoặc chỉ tiêu ngành của năm đã được sửa ở nơi khác (có thể ở trang Cấu hình tuyển sinh) sau khi bạn mở"
+    const DUOI = " — bảng đã được tải lại, hãy làm lại."
+    expect(describeQuotaTableError(loi(409, { reason_code: "quota_table_stale", current_version: 4 }), ctx())).toBe(
+      `${DAU} (phiên bản hiện tại: 4)${DUOI}`,
+    )
+    expect(describeQuotaTableError(loi(409, { reason_code: "quota_table_stale" }), ctx())).toBe(`${DAU}${DUOI}`)
+  })
+
   it("quota_table_member_quota_missing ⇒ nêu TÊN ngành thiếu chỉ tiêu (không chỉ id)", () => {
     const cau = describeQuotaTableError(
       loi(409, { reason_code: "quota_table_member_quota_missing", offering_academic_info_ids: [12, 99] }),
