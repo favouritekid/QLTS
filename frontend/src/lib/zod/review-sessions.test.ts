@@ -84,8 +84,9 @@ describe("HĐ4 §1.8 — trường lạ bị bỏ qua, giá trị lạ không l�
   it("trường lạ ở SessionOut, ở dòng E9 và ở trang ⇒ parse được, trường lạ bị bỏ", () => {
     const s = sessionSchema.parse({ ...sessionGia(), truong_moi_cua_gd2c: 1 }) as Record<string, unknown>
     expect(s).not.toHaveProperty("truong_moi_cua_gd2c")
-    const r = rowSchema.parse({ ...E9_BANG_DIEM_CHO_CUOI, unit_name: "<đơn vị>", effective_selection: null }) as Record<string, unknown>
-    expect(r).not.toHaveProperty("unit_name")
+    const r = rowSchema.parse({ ...E9_BANG_DIEM_CHO_CUOI, truong_moi_cua_dong: "<giá trị>", effective_selection: null }) as Record<string, unknown>
+    // `unit_name` từng là ví dụ trường lạ ở đây — nay là trường THẬT (S7, phụ lục S3/S7) nên đổi sang tên lạ khác.
+    expect(r).not.toHaveProperty("truong_moi_cua_dong")
     const p = sessionPageSchema.parse({ ...pageGia([listItemGia()]), them: true }) as Record<string, unknown>
     expect(p).not.toHaveProperty("them")
   })
