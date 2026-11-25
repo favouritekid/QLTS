@@ -212,7 +212,9 @@ async def test_q4_ghi_nhat_ky_kiem_toan_loi_thi_rollback_ca_doi_vai_khoa_lan_thu
     finally:
         await c.aclose()
     assert da_tiem, "tiền đề: lỗi phải được tiêm ĐÚNG chỗ (nhật ký thu hồi / bước sau thu hồi)"
-    assert r.status_code == 500, r.text
+    # F154 (25-11): cắt socket hỏng đi qua cơ chế chung ``revoke_all_access_before_commit`` ⇒ 503 (họ fail-closed);
+    # lỗi ghi nhật ký kiểm toán vẫn là 500.
+    assert r.status_code == (503 if duong == "le_khoa_loi_sau_thu_hoi" else 500), r.text
     assert await mot("SELECT role FROM \"user\" WHERE id = :u", u=can_bo_cheo["id"]) == "officer"
     assert await mot("SELECT status FROM \"user\" WHERE id = :u", u=can_bo_cheo["id"]) == "active"
     await _chua_thu_hoi(q)

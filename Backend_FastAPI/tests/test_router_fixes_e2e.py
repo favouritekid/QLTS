@@ -28,6 +28,7 @@ async def test_admin_set_password_persists(
     client: AsyncClient,
     admin_token_headers: dict,
     regular_user_in_db: dict,
+    test_redis_client,
 ):
     """Bug #1: password change must be committed to DB."""
     target_id = regular_user_in_db["id"]
@@ -38,6 +39,9 @@ async def test_admin_set_password_persists(
         json={"new_password": new_password},
         headers=admin_token_headers,
     )
+    # F154: đặt mật khẩu nay đặt ``user_blacklist:{id}`` (thu hồi mọi phiên); id người dùng LẶP lại giữa các ca (TRUNCATE
+    # … RESTART IDENTITY) ⇒ dọn ngay để khoá sót không làm ca SAU nhận 401.
+    await test_redis_client.delete(f"user_blacklist:{target_id}")
     assert resp.status_code == 200, f"Set password failed: {resp.status_code} {resp.text[:300]}"
 
     # Verify the password was actually committed to DB

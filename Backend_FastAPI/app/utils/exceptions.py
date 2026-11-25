@@ -576,6 +576,25 @@ class AuditTrailUnavailable(ServiceUnavailableError):
     error_code = "AUDIT_TRAIL_UNAVAILABLE"
 
 
+class SessionRevocationUnavailable(ServiceUnavailableError):
+    """Không thu hồi được mọi phiên + cắt socket của một tài khoản TRƯỚC commit ⇒ thao tác bị TỪ CHỐI (HTTP 503).
+
+    F154 (owner 25-11 Q-A9): Quản trị đặt mật khẩu / đổi vai / đổi đơn vị / khoá tài khoản mà Redis không ghi được
+    ``user_blacklist`` hay không dọn được ``session:{jti}``, CSDL lỗi khi đánh dấu thu hồi, hoặc không worker socket nào
+    xác nhận (ACK) lệnh cắt ⇒ router KHÔNG commit: mật khẩu / vai / đơn vị / trạng thái và hàng thu hồi cùng rollback.
+    Thử lại có ích (Redis / worker chập chờn) ⇒ họ 503 fail-closed, không phải 500.
+
+    Phía Redis có thể đã đổi trước khi lỗi (``user_blacklist`` đã đặt rồi bước cắt socket mới hỏng) ⇒ người đích bị đăng
+    xuất cho tới lần đăng nhập kế — lệch về phía an toàn, cùng hành vi khoá tài khoản cũ.
+
+    KHÔNG khai ``error_code`` riêng: đi ra ``SERVICE_UNAVAILABLE`` của lớp cha, mã giao diện đã hiện nguyên ``detail``
+    (``frontend/src/lib/api/error-codes.ts`` ``USER_FACING_UNAVAILABLE_ERROR_CODES``; khoá bởi
+    ``tests/unit/test_fe_ma_loi_503_mot_nguon.py``). Tên lớp riêng để log phân biệt được.
+    """
+
+    detail = "Không thu hồi được phiên đăng nhập cũ của tài khoản — chưa thay đổi gì, vui lòng thử lại."  # [ĐX]
+
+
 class AuthStateUnavailable(ServiceUnavailableError):
     """Auth state kept in Redis could not be verified, so the request is refused (HTTP 503).
 

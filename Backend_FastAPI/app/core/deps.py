@@ -4,7 +4,7 @@ from typing import Any, Callable, Dict, List, Mapping, NamedTuple, Optional
 import casbin
 import structlog
 
-from .constants import UserRole
+from .constants import UserRole, role_outranks
 from fastapi import Cookie, Depends, Header, Path, Query, Request, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jwt.exceptions import PyJWTError as JWTError
@@ -100,6 +100,7 @@ __all__ = [
     "get_lead_list_filter",  # Phase 2.1
     "verify_criteria_visibility",  # Phase 6.5
     "verify_user_management_permission",
+    "require_assignable_role",  # F154: vai MỚI phải thấp hơn vai người thao tác
 
     # Organizational Unit IDOR — cờ allow_read_only THUỘC VỀ SERVER
     "get_organizational_unit_readonly",   # cổng ĐỌC (hardcode True)
@@ -2049,6 +2050,9 @@ async def verify_user_management_permission(
     target_user_id: int,
     db: AsyncSession,
     current_user: models.User,
+    *,
+    require_outrank: bool = False,
+    admin_may_target_self: bool = True,
 ) -> models.User:
     """
     Verify permission to manage a target user and return the user.
@@ -2058,6 +2062,12 @@ async def verify_user_management_permission(
     - **Manager**: Can only manage users in their managed units
     - **Officer**: Cannot manage users (denied)
 
+    **Cấp vai (F154, owner 25-11 Q-A2/A6/A11/A12) — ``require_outrank=True``:** ngoài phạm vi đơn vị ở trên, người đích
+    phải có vai THẤP hơn người thao tác theo ``constants.role_outranks`` (MỘT nguồn). Vai ngang / cao hơn / không so được
+    ⇒ 404 như mọi ca ngoài phạm vi. Nhắm vào CHÍNH MÌNH ⇒ 403: chỉ Quản trị được, và chỉ khi ``admin_may_target_self``
+    (route đặt mật khẩu truyền ``False`` — tự đổi qua trang cá nhân). Mặc định ``False`` giữ NGUYÊN hành vi cũ cho caller
+    chưa chọn (GET ``/{id}``).
+
     **IDOR Prevention:**
     This dependency prevents unauthorized user management by verifying
     that managers can only manage users within their organizational scope.
@@ -2066,13 +2076,15 @@ async def verify_user_management_permission(
         target_user_id: ID of the user to manage
         db: Database session
         current_user: Current authenticated user
+        require_outrank: also require the target's role to rank strictly below the caller's
+        admin_may_target_self: with ``require_outrank``, whether an admin may target their own account
 
     Returns:
         Target User model if management is permitted
 
     Raises:
-        ResourceNotFoundError: If target user doesn't exist
-        PermissionDeniedError: If current user cannot manage target user
+        ResourceNotFoundError: If target user doesn't exist, is out of scope, or (``require_outrank``) does not rank below
+        PermissionDeniedError: ``require_outrank`` and the target is the caller (except an admin when allowed)
 
     Example:
         ```python
@@ -2112,7 +2124,9 @@ async def verify_user_management_permission(
             target_user_id=target_user_id,
             current_user_id=current_user.id
         )
-        return target_user
+        return _check_management_rank(
+            current_user, target_user, require_outrank=require_outrank, admin_may_target_self=admin_may_target_self
+        )
 
     # Manager: check if target user is in their managed units
     if current_user.role == UserRole.MANAGER:
@@ -2126,7 +2140,9 @@ async def verify_user_management_permission(
                 target_unit_id=target_user.unit_id,
                 current_user_id=current_user.id
             )
-            return target_user
+            return _check_management_rank(
+                current_user, target_user, require_outrank=require_outrank, admin_may_target_self=admin_may_target_self
+            )
         else:
             log.warning(
                 "IDOR attempt detected: Manager trying to manage user outside managed units",
@@ -2150,6 +2166,70 @@ async def verify_user_management_permission(
     raise ResourceNotFoundError(
         detail="User not found"
     )
+
+
+# [ĐX] câu hiển thị — F154 (owner 25-11 Q-A2): tự đổi mật khẩu / thông tin qua trang cá nhân, không qua trang quản trị.
+USER_MANAGEMENT_SELF_DETAIL = "Không thao tác trên chính tài khoản của mình ở trang quản trị — hãy dùng trang cá nhân."
+# [ĐX] câu hiển thị — F154 (owner 25-11 Q-A11 + Q-A13): tạo tài khoản / gán vai chỉ được với vai THẤP hơn vai của mình;
+# Quản lý quen tạo Kế toán sẽ gặp câu này (tách nhiệm vụ) nên nói thẳng ai làm được.
+ROLE_NOT_ASSIGNABLE_DETAIL = (
+    "Bạn không được tạo hoặc gán vai này: chỉ được chọn vai thấp hơn vai của mình. "
+    "Tài khoản Kế toán chỉ Quản trị tạo hoặc gán được."
+)
+
+
+def _check_management_rank(
+    current_user: models.User,
+    target_user: models.User,
+    *,
+    require_outrank: bool,
+    admin_may_target_self: bool,
+) -> models.User:
+    """Bước cấp vai của :func:`verify_user_management_permission` — chạy SAU phép phạm vi (đích đã nằm trong phạm vi).
+
+    Tách khỏi thân hàm để nhánh Quản trị và nhánh Quản lý đi qua CÙNG một phép (không chép hai bản)."""
+    if not require_outrank:
+        return target_user
+
+    if target_user.id == current_user.id:
+        if current_user.role == UserRole.ADMIN and admin_may_target_self:
+            return target_user
+        log.warning(
+            "User management on own account refused",
+            current_user_id=current_user.id,
+            current_user_role=current_user.role,
+        )
+        raise PermissionDeniedError(detail=USER_MANAGEMENT_SELF_DETAIL)
+    if not role_outranks(current_user.role, target_user.role):
+        log.warning(
+            "IDOR attempt detected: target role does not rank below the caller",
+            target_user_id=target_user.id,
+            target_role=target_user.role,
+            current_user_id=current_user.id,
+            current_user_role=current_user.role,
+        )
+        raise ResourceNotFoundError(detail="User not found")
+    return target_user
+
+
+def require_assignable_role(current_user: models.User, new_role: Optional[str]) -> None:
+    """F154 (owner 25-11 Q-A11 + Q-A13) — người thao tác chỉ được TẠO tài khoản mang / GÁN vai mà mình ``role_outranks``.
+
+    Dùng ở route tạo user (vai của tài khoản mới) và PUT ``/{id}`` (vai mới). Cổng anh em của
+    ``verify_user_management_permission(require_outrank=True)``: cổng ấy xét vai HIỆN TẠI của người đích, cổng này xét vai
+    sắp có. Thiếu nó thì Quản lý đổi một Cán bộ trong đơn vị thành Quản trị (đặt mật khẩu Cán bộ ấy trước) là nắm một tài
+    khoản Quản trị. ``new_role`` None (không đổi vai) ⇒ không xét. 403 (không có tài nguyên nào để giấu)."""
+    if new_role is None:
+        return
+
+    if not role_outranks(current_user.role, new_role):
+        log.warning(
+            "Role assignment above the caller refused",
+            current_user_id=current_user.id,
+            current_user_role=current_user.role,
+            new_role=new_role,
+        )
+        raise PermissionDeniedError(detail=ROLE_NOT_ASSIGNABLE_DETAIL)
 
 
 async def get_notification_template_for_admin(

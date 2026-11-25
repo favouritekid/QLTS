@@ -313,11 +313,15 @@ async def lifespan(app: FastAPI):
                     # - Manager does NOT inherit Accountant (separation of duties)
                     # - Admin inherits from Manager only; accountant DENYs no longer leak
                     #
+                    # F154 (25-11): cạnh lấy từ MỘT nguồn ``ROLE_INHERITANCE`` (app/core/constants.py) — chính các cạnh
+                    # ấy cũng là bảng cấp vai ``role_outranks`` của cổng quản lý người dùng. Thứ tự + giá trị y hệt
+                    # danh sách viết tay cũ: officer→user, accountant→officer, manager→officer (KHÔNG accountant),
+                    # admin→manager.
+                    from app.core.constants import ROLE_INHERITANCE
+
                     role_inheritance = [
-                        ("g", "role:officer", "role:user"),       # Officer inherits from User
-                        ("g", "role:accountant", "role:officer"), # Accountant inherits from Officer
-                        ("g", "role:manager", "role:officer"),    # Manager inherits from Officer (NOT from Accountant!)
-                        ("g", "role:admin", "role:manager"),      # Admin inherits from Manager
+                        ("g", f"role:{child}", f"role:{parent}")
+                        for child, parent in ROLE_INHERITANCE
                     ]
                     
                     from sqlalchemy import text

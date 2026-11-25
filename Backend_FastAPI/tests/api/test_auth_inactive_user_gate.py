@@ -171,7 +171,9 @@ async def test_single_deactivate_fail_closed_on_revoke_error(
         data={"status": "inactive"},
         headers=admin_token_headers,
     )
-    assert res.status_code == 500
+    # F154 (25-11): khoá tài khoản dùng CHUNG cơ chế ``revoke_all_access_before_commit`` với đặt mật khẩu / đổi vai ⇒
+    # thu hồi lỗi là ``SessionRevocationUnavailable`` (họ 503 fail-closed, owner Q-A9) thay cho HTTPException 500.
+    assert res.status_code == 503
     # fail-closed: status must NOT have changed
     assert await _get_status(uid) == "active"
 
@@ -193,7 +195,7 @@ async def test_single_deactivate_fail_closed_on_disconnect_timeout(
         data={"status": "inactive"},
         headers=admin_token_headers,
     )
-    assert res.status_code == 500
+    assert res.status_code == 503  # F154: cơ chế chung ⇒ họ 503 (xem ca trên)
     assert await _get_status(uid) == "active"
 
 

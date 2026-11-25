@@ -27,6 +27,7 @@ from ..utils.exceptions import (  # ✅ PHASE 1: Custom exceptions (protocol-ind
     InvalidCredentials,
     InvalidToken,
     ResourceNotFoundError,
+    SessionRevocationUnavailable,
     UserServiceError,
 )
 from ..core.constants import UserRole
@@ -704,6 +705,65 @@ def deactivates_account(status_transition: Optional[Dict[str, Any]]) -> bool:
     return status_transition["new"] != status_transition["old"] and status_transition["new"] != "active"
 
 
+def access_revocation_reason(
+    status_transition: Optional[Dict[str, Any]],
+    assignment_change: Optional[Dict[str, Any]],
+) -> Optional[str]:
+    """MỘT vị từ "lần cập nhật ``PUT /api/admin/users/{id}`` này phải thu hồi MỌI phiên + cắt socket của người đích" —
+    trả lý do (ghi log) hoặc None.
+
+    - Khoá tài khoản (:func:`deactivates_account`) — có từ trước.
+    - F154 (owner 25-11 Q-A10): vai hoặc đơn vị THỰC SỰ đổi. ``assignment_change`` = ``{"role_changed", "unit_changed"}``
+      do :func:`update_user` điền từ giá trị đọc DƯỚI khoá dòng người (cùng nguồn với bước ghi phân công) — không từ bản
+      nạp đầu yêu cầu. Lý do: socket giữ phòng ``role_*`` / ``unit_*`` vào lúc kết nối, phiên cũ mang vai / đơn vị cũ.
+
+    Đổi email / họ tên / kỹ năng… KHÔNG thu hồi (owner chỉ nêu vai, đơn vị)."""
+    if deactivates_account(status_transition):
+        return "Account deactivated by administrator"
+    change = assignment_change or {}
+    if change.get("role_changed"):
+        return "Role changed by administrator"
+    if change.get("unit_changed"):
+        return "Unit changed by administrator"
+    return None
+
+
+async def revoke_all_access_before_commit(db: AsyncSession, user: models.User, *, reason: str) -> None:
+    """MỘT cơ chế "thu hồi MỌI phiên + cắt MỌI socket của ``user`` TRƯỚC commit, lỗi ⇒ từ chối" — F154 (owner 25-11).
+
+    Trước đây chỉ nhánh khoá tài khoản của ``PUT /api/admin/users/{id}`` có khối này (viết thẳng trong router). Nay
+    khoá tài khoản, đổi vai / đơn vị (PUT) và Quản trị đặt mật khẩu (:func:`set_password_by_admin`) cùng gọi hàm này —
+    không bản thứ hai.
+
+    Thứ tự (giữ nguyên bản khoá tài khoản):
+    1. ``flush`` thay đổi của người gọi ⇒ dòng ``user`` bị khoá; lượt đăng nhập đồng thời phải chờ (flush-before-revoke).
+    2. :func:`invalidate_all_sessions` chế độ NGHIÊM: đánh dấu ``revoked_at`` mọi hàng phiên (staged trong giao dịch người
+       gọi), đặt ``user_blacklist:{id}``, xoá ``session:{jti}`` + đặt ``blacklist:{jti}`` — dọn Redis hụt cũng là lỗi.
+       Callback sau-commit nó trả về KHÔNG chạy: bước 3 đã cắt rồi.
+    3. ``force_disconnect_user_strict``: cắt socket trên MỌI worker sống, chờ ACK; thiếu ACK / không worker ⇒ lỗi.
+
+    Bất kỳ lỗi nào ⇒ :class:`SessionRevocationUnavailable` (503). Người gọi KHÔNG commit ⇒ thay đổi nghiệp vụ, hàng thu
+    hồi, nhật ký thao tác cùng rollback (owner Q-A9: "không thu hồi được ⇒ từ chối, không đổi gì")."""
+    user_id = user.id
+    await db.flush()
+    try:
+        await invalidate_all_sessions(db, user, reason=reason, fail_on_cache_cleanup=True)
+        from app.socket_manager import force_disconnect_user_strict
+
+        await force_disconnect_user_strict(user_id)
+    except Exception as exc:
+        log.error(
+            "Revoke-all before commit failed — refusing the change",
+            user_id=user_id,
+            reason=reason,
+            error_type=type(exc).__name__,
+            error=chu_loi_an_toan(exc),
+        )
+        raise SessionRevocationUnavailable(
+            context={"user_id": user_id, "reason": reason, "error_type": type(exc).__name__}
+        ) from exc
+
+
 async def update_user(
     db: AsyncSession,
     db_user: models.User,
@@ -714,11 +774,16 @@ async def update_user(
     assigned_by_user_id: Optional[int] = None,  # ✅ PHASE 2: Track who made the assignment
     request_meta: Optional[Any] = None,  # PR-B Q4: IP / User-Agent cho nhật ký tự thu hồi quyền duyệt chéo
     status_transition_out: Optional[Dict[str, Any]] = None,  # PR-B lượt 3: chuyển trạng thái THỰC TẾ (đọc dưới khoá)
+    assignment_change_out: Optional[Dict[str, Any]] = None,  # F154: vai / đơn vị có THỰC SỰ đổi (đọc dưới khoá)
 ) -> Tuple[models.User, Callable]:
     """
     ``status_transition_out`` (PR-B lượt 3, Codex lượt 2 điểm chặn 6): khi yêu cầu có ``status``, hàm điền
     ``{"old": <trạng thái đọc DƯỚI khoá dòng người>, "new": <trạng thái mới>}`` — router quyết thu hồi phiên + ngắt socket
     bằng :func:`deactivates_account` trên CHÍNH giá trị này, không bằng bản nạp từ đầu yêu cầu.
+
+    ``assignment_change_out`` (F154, owner 25-11 Q-A10): hàm điền ``{"role_changed", "unit_changed"}`` — CHÍNH hai cờ quyết
+    việc ghi phân công bên dưới (so với vai / đơn vị đọc lại DƯỚI khoá dòng người). Router truyền nó cùng
+    ``status_transition_out`` vào :func:`access_revocation_reason`.
 
     ✅ ATOMIC TRANSACTION (v17 + PHASE 2):
     Update user with atomic DB + Casbin + UserUnitAssignment transaction.
@@ -809,6 +874,8 @@ async def update_user(
         role_changed = new_db_role != old_db_role
         unit_changed = new_db_unit_id != old_db_unit_id
         assignment_changed = role_changed or unit_changed
+        if assignment_change_out is not None:
+            assignment_change_out.update(role_changed=role_changed, unit_changed=unit_changed)
 
         # ✅ ATOMIC FIX: Begin nested transaction (savepoint)
         # This ensures DB + Assignment + Casbin operations are atomic
@@ -1356,10 +1423,21 @@ async def remove_user_from_global_blacklist(user_id: int):
 
 
 async def set_password_by_admin(
-    db: AsyncSession, user_id: int, new_password: str
+    db: AsyncSession, user_id: int, new_password: str, *, actor_id: int
 ) -> Tuple[models.User, Callable]:
     """
     Admin sets password for a user.
+
+    F154 (owner 25-11) — service là tầng chủ sở hữu của "đặt mật khẩu bởi Quản trị ⇒ mọi phiên cũ của người đích chết":
+    - Q-A1: bật ``password_reset_required`` ⇒ người đích BẮT BUỘC đổi mật khẩu ở lần đăng nhập kế (mật khẩu Quản trị biết
+      chỉ là tạm; cổng F128 ở ``deps.get_current_user`` cưỡng chế).
+    - T1/T2: :func:`revoke_all_access_before_commit` — thu hồi mọi phiên (CSDL + Redis, nghiêm) và cắt mọi socket TRƯỚC
+      commit; lỗi ⇒ :class:`SessionRevocationUnavailable` (503), router không commit ⇒ mật khẩu KHÔNG đổi (Q-A9).
+    - T3 (phần log): structlog ghi ``actor_id`` thật (trước đây viết cứng ``admin_user="admin"``). Nhật ký thao tác (bảng
+      ``user_activity_log``) do router ghi CÙNG giao dịch, trước commit (Q-A8) — không ghi mật khẩu / hash ở cả hai chỗ.
+
+    Cổng quyền (phạm vi đơn vị + cấp vai + không tự đặt cho mình) là việc của
+    ``deps.verify_user_management_permission`` — router gọi TRƯỚC hàm này.
 
     IMPORTANT: This function does NOT commit the transaction.
     Router must call db.commit() and then execute the returned callback.
@@ -1369,24 +1447,27 @@ async def set_password_by_admin(
     """
     try:
         user = await get_user_by_id(db, user_id)
-        
+
         # ✅ SECURITY: Prevent setting the same password (for consistency)
         if verify_password(new_password, user.password_hash):
             raise BadRequest(detail="New password must be different from the current password")
 
         user.password_hash = get_password_hash(new_password)
+        user.password_reset_required = True
         db.add(user)
 
-        # ✅ TRANSACTION FIX: Flush instead of commit
-        await db.flush()
+        # flush (khoá dòng người) → thu hồi mọi phiên + cắt socket, TRƯỚC commit; lỗi ⇒ ném, không đổi gì.
+        await revoke_all_access_before_commit(db, user, reason="Password set by administrator")
+
+        target_id = user.id
 
         # ✅ Create post-commit callback
         async def _post_commit():
             """Execute after router commits the transaction."""
             log.info(
                 "Admin set password for user successfully",
-                admin_user="admin",
-                user_id=user.id,
+                actor_id=actor_id,
+                user_id=target_id,
             )
 
         return user, _post_commit

@@ -561,31 +561,51 @@ class TestPasswordManagement:
         assert "incorrect" in str(exc.value.detail).lower()
     
     async def test_set_password_by_admin_success(
-        self, 
-        db: AsyncSession, 
-        regular_user: models.User
+        self,
+        db: AsyncSession,
+        regular_user: models.User,
+        monkeypatch,
+        test_redis_client,
     ):
-        """Test set_password_by_admin sets new password."""
+        """Test set_password_by_admin sets new password.
+
+        F154: service còn bật buộc-đổi-mật-khẩu và đi qua cơ chế chung thu hồi + cắt socket TRƯỚC commit. Tầng service
+        không có worker socket (không lifespan) ⇒ thay lệnh cắt bằng bộ ghi — ca HTTP + socket thật nằm ở
+        ``tests/security/test_session_revocation.py`` (F154)."""
+        import app.socket_manager as sm
+
+        cat: list = []
+
+        async def _ghi_cat(user_ids, *a, **kw):
+            cat.append(user_ids)
+
+        monkeypatch.setattr(sm, "force_disconnect_user_strict", _ghi_cat)
         new_password = "AdminSetPassword789!"
-        
-        # Act
-        user, callback = await user_service.set_password_by_admin(
-            db, 
-            regular_user.id, 
-            new_password
-        )
-        await db.commit()
-        if callback:
-            await callback()
-        
-        # Assert
-        await db.refresh(regular_user)
-        assert verify_password(new_password, regular_user.password_hash)
-    
+
+        try:
+            # Act
+            user, callback = await user_service.set_password_by_admin(
+                db,
+                regular_user.id,
+                new_password,
+                actor_id=None,
+            )
+            await db.commit()
+            if callback:
+                await callback()
+
+            # Assert
+            await db.refresh(regular_user)
+            assert verify_password(new_password, regular_user.password_hash)
+            assert regular_user.password_reset_required is True
+            assert cat == [regular_user.id]
+        finally:
+            await test_redis_client.delete(f"user_blacklist:{regular_user.id}")
+
     async def test_set_password_by_admin_user_not_found(self, db: AsyncSession):
         """Test set_password_by_admin raises ResourceNotFoundError."""
         with pytest.raises(ResourceNotFoundError):
-            await user_service.set_password_by_admin(db, 999999, "NewPass123!")
+            await user_service.set_password_by_admin(db, 999999, "NewPass123!", actor_id=None)
     
     async def test_reset_password_invalid_token(self, db: AsyncSession):
         """Test reset_password raises InvalidToken for invalid token."""

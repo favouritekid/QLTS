@@ -4242,3 +4242,459 @@ async def test_mfa_enable_keeps_token_session_not_refresh_cookie_one(
     assert await _live_session_jtis(user["id"]) == [p["jti_a"]], (
         "MFA-enable giữ phiên do cookie refresh nêu thay vì phiên của token"
     )
+
+
+# -----------------------------------------------------------------------------
+# F154 (owner 25-11, gói A): Quản trị ĐẶT mật khẩu cho người khác ⇒ mọi phiên cũ
+# của người đích chết (CSDL + Redis), mọi socket bị server cắt — TRƯỚC commit qua
+# CƠ CHẾ CHUNG `user_service.revoke_all_access_before_commit` (cũng là cơ chế khoá
+# tài khoản / đổi vai / đổi đơn vị); người đích bị BẮT đổi mật khẩu ở lần đăng
+# nhập kế (Q-A1); không thu hồi được (Redis / worker) ⇒ 503, KHÔNG đổi gì (Q-A9).
+# Đổi vai / đổi đơn vị qua PUT cũng thu hồi + cắt (Q-A10). Mỗi ca canh MỘT bất
+# biến, đo ở tầng nó sống: hàng CSDL bằng session riêng, token cũ gọi lại thật,
+# socket đo ở `manager` phía server.
+# -----------------------------------------------------------------------------
+
+MAT_KHAU_ADMIN_DAT = "AdminDatLai!2026x"
+PUT_USER_URL = "/api/admin/users/{}"
+
+
+async def _admin_dat_mat_khau(client, admin_access: str, target_id: int, moi: str = MAT_KHAU_ADMIN_DAT):
+    """`POST /api/admin/users/{id}/password` chỉ mang cookie ``access_token`` của Quản trị (như FE)."""
+    client.cookies.clear()
+    try:
+        return await client.post(
+            f"/api/admin/users/{target_id}/password",
+            json={"new_password": moi},
+            headers={"Cookie": f"access_token={admin_access}"},
+        )
+    finally:
+        client.cookies.clear()
+
+
+async def _admin_sua(client, admin_access: str, target_id: int, data: dict):
+    """`PUT /api/admin/users/{id}` (form) chỉ mang cookie ``access_token`` của Quản trị."""
+    client.cookies.clear()
+    try:
+        return await client.put(
+            PUT_USER_URL.format(target_id), data=data, headers={"Cookie": f"access_token={admin_access}"}
+        )
+    finally:
+        client.cookies.clear()
+
+
+async def _hash_cua(user_id: int) -> str:
+    async with AsyncSessionLocal() as s:
+        return (
+            await s.execute(select(models.User.password_hash).where(models.User.id == user_id))
+        ).scalar_one()
+
+
+async def _role_cua(user_id: int) -> str:
+    async with AsyncSessionLocal() as s:
+        return (await s.execute(select(models.User.role).where(models.User.id == user_id))).scalar_one()
+
+
+async def _dem_nhat_ky_dat_mat_khau(target_id: int) -> int:
+    async with AsyncSessionLocal() as s:
+        return len(
+            (
+                await s.execute(
+                    select(models.UserActivityLog.id).where(
+                        models.UserActivityLog.action == "admin_set_password",
+                        models.UserActivityLog.target_user_id == target_id,
+                    )
+                )
+            ).all()
+        )
+
+
+@contextmanager
+def _redis_set_user_blacklist_loi():
+    """CHỈ lệnh ``SET user_blacklist:*`` ném ConnectionError; mọi lệnh khác thật (xác thực của Quản trị vẫn chạy)."""
+    goc = db_module.redis_client.set
+    da_tiem: list = []
+
+    async def _set(key, *args, **kwargs):
+        if str(key).startswith("user_blacklist:"):
+            da_tiem.append(key)
+            raise RedisConnectionError("tiêm lỗi: Redis từ chối SET user_blacklist")
+        return await goc(key, *args, **kwargs)
+
+    with patch.object(db_module.redis_client, "set", _set):
+        yield da_tiem
+
+
+class _PipelineLoi:
+    """Pipeline giả: nhận lệnh, ``execute`` ném ConnectionError (dọn ``session:{jti}`` hụt)."""
+
+    def __init__(self, da_tiem: list):
+        self._da_tiem = da_tiem
+
+    def delete(self, *args, **kwargs):
+        return self
+
+    def set(self, *args, **kwargs):
+        return self
+
+    async def execute(self):
+        self._da_tiem.append("execute")
+        raise RedisConnectionError("tiêm lỗi: Redis từ chối pipeline dọn phiên")
+
+    async def reset(self):
+        return None
+
+
+@contextmanager
+def _redis_don_phien_loi():
+    """Bước dọn ``session:{jti}`` + đặt ``blacklist:{jti}`` (pipeline) lỗi; ``user_blacklist`` vẫn đặt được."""
+    da_tiem: list = []
+    with patch.object(db_module.redis_client, "pipeline", lambda *a, **k: _PipelineLoi(da_tiem)):
+        yield da_tiem
+
+
+@pytest.mark.asyncio
+async def test_f154_dat_mat_khau_thu_hoi_moi_phien_trong_csdl(
+    client, regular_user_in_db, admin_user_in_db, test_redis_client
+):
+    """K1a — sau 200, MỌI hàng ``user_session`` của người đích có ``revoked_at`` (đọc bằng session CSDL riêng)."""
+    user = regular_user_in_db
+    await _hai_phien_song(client, user)
+    admin_access, _, _ = await _login_as(client, admin_user_in_db, ua=UA_FIREFOX_LINUX)
+    try:
+        res = await _admin_dat_mat_khau(client, admin_access, user["id"])
+
+        assert res.status_code == 200, res.text
+        assert await _live_session_jtis(user["id"]) == [], "đặt mật khẩu mà phiên cũ vẫn sống trong CSDL"
+    finally:
+        await test_redis_client.delete(f"user_blacklist:{user['id']}")
+
+
+@pytest.mark.asyncio
+async def test_f154_dat_mat_khau_access_token_cu_bi_tu_choi(
+    client, regular_user_in_db, admin_user_in_db, test_redis_client
+):
+    """K1b — access token cũ của CẢ HAI phiên, gọi lại thật, bị từ chối 401 ngay khi lệnh đặt trả về."""
+    user = regular_user_in_db
+    h = await _hai_phien_song(client, user)
+    admin_access, _, _ = await _login_as(client, admin_user_in_db, ua=UA_FIREFOX_LINUX)
+    try:
+        res = await _admin_dat_mat_khau(client, admin_access, user["id"])
+        assert res.status_code == 200, res.text
+
+        ket_qua = {
+            "A": (await _check_access(client, h["access_a"])).status_code,
+            "B": (await _check_access(client, h["access_b"])).status_code,
+        }
+        assert ket_qua == {"A": 401, "B": 401}, f"access token cũ còn dùng được: {ket_qua}"
+    finally:
+        await test_redis_client.delete(f"user_blacklist:{user['id']}")
+
+
+@pytest.mark.asyncio
+async def test_f154_dat_mat_khau_refresh_token_cu_khong_doi_duoc_token(
+    client, regular_user_in_db, admin_user_in_db, test_redis_client
+):
+    """K1c — refresh token cũ không xoay được: 401 và KHÔNG phát cookie token mới."""
+    user = regular_user_in_db
+    h = await _hai_phien_song(client, user)
+    admin_access, _, _ = await _login_as(client, admin_user_in_db, ua=UA_FIREFOX_LINUX)
+    try:
+        res = await _admin_dat_mat_khau(client, admin_access, user["id"])
+        assert res.status_code == 200, res.text
+
+        lam_moi = await _post_with_cookies(client, REFRESH_URL, refresh_token=h["refresh_a"])
+        assert (lam_moi.status_code, _issued_token_cookies(lam_moi)) == (401, []), lam_moi.text
+    finally:
+        await test_redis_client.delete(f"user_blacklist:{user['id']}")
+
+
+@pytest.mark.asyncio
+async def test_f154_access_cu_van_chet_sau_khi_nguoi_dich_dang_nhap_lai(
+    client, regular_user_in_db, admin_user_in_db, test_redis_client
+):
+    """K2 — người đích đăng nhập lại bằng mật khẩu mới (gỡ ``user_blacklist``) ⇒ access token CŨ vẫn 401: CSDL tự
+    chặn (hàng phiên đã thu hồi), không dựa vào khoá Redis."""
+    user = regular_user_in_db
+    h = await _hai_phien_song(client, user)
+    admin_access, _, _ = await _login_as(client, admin_user_in_db, ua=UA_FIREFOX_LINUX)
+    try:
+        res = await _admin_dat_mat_khau(client, admin_access, user["id"])
+        assert res.status_code == 200, res.text
+        await _login_as(client, {**user, "password": MAT_KHAU_ADMIN_DAT}, ua=UA_FIREFOX_LINUX)
+        assert not await test_redis_client.exists(f"user_blacklist:{user['id']}"), (
+            "tiền đề: đăng nhập lại phải gỡ user_blacklist"
+        )
+
+        assert (await _check_access(client, h["access_a"])).status_code == 401, (
+            "đăng nhập lại xong, access token cũ sống lại — CSDL không chặn"
+        )
+    finally:
+        await test_redis_client.delete(f"user_blacklist:{user['id']}")
+
+
+@pytest.mark.asyncio
+async def test_f154_khong_dung_phien_quan_tri_va_nguoi_thu_ba(
+    client, regular_user_in_db, admin_user_in_db, officer_user_in_db, test_redis_client
+):
+    """K3 — chỉ phiên của người đích chết: phiên của Quản trị thao tác và của một người thứ ba còn sống."""
+    user = regular_user_in_db
+    await _hai_phien_song(client, user)
+    admin_access, _, admin_jti = await _login_as(client, admin_user_in_db, ua=UA_FIREFOX_LINUX)
+    _, _, ba_jti = await _login_as(client, officer_user_in_db, ua=UA_DESKTOP)
+    try:
+        res = await _admin_dat_mat_khau(client, admin_access, user["id"])
+        assert res.status_code == 200, res.text
+
+        con_song = {
+            "admin": await _live_session_jtis(admin_user_in_db["id"]),
+            "người thứ ba": await _live_session_jtis(officer_user_in_db["id"]),
+        }
+        assert con_song == {"admin": [admin_jti], "người thứ ba": [ba_jti]}, (
+            f"đặt mật khẩu thu hồi nhầm phiên của người khác: {con_song}"
+        )
+    finally:
+        await test_redis_client.delete(f"user_blacklist:{user['id']}")
+
+
+@pytest.mark.asyncio
+async def test_f154_dat_mat_khau_cat_moi_socket_cua_nguoi_dich(
+    test_server, client, regular_user_in_db, admin_user_in_db, officer_user_in_db, test_redis_client
+):
+    """W1 — khi 200 về, SERVER đã cắt mọi socket của người đích (hai phiên, client không nghe gì); socket của Quản
+    trị và của người thứ ba vẫn được phục vụ."""
+    user = regular_user_in_db
+    h = await _hai_phien_song(client, user)
+    admin_access, _, _ = await _login_as(client, admin_user_in_db, ua=UA_FIREFOX_LINUX)
+    ba_access, _, _ = await _login_as(client, officer_user_in_db, ua=UA_DESKTOP)
+    try:
+        async with _sio() as a_1, _sio() as b_1, _sio() as ad_1, _sio() as ba_1:
+            sids = {
+                "đích A": await _noi(a_1, test_server, h["access_a"]),
+                "đích B": await _noi(b_1, test_server, h["access_b"]),
+                "admin": await _noi(ad_1, test_server, admin_access),
+                "người thứ ba": await _noi(ba_1, test_server, ba_access),
+            }
+
+            res = await _admin_dat_mat_khau(client, admin_access, user["id"])
+
+            assert res.status_code == 200, res.text
+            assert _phuc_vu(sids) == {"đích A": False, "đích B": False, "admin": True, "người thứ ba": True}, (
+                f"đặt mật khẩu không cắt đúng socket của người đích: {_phuc_vu(sids)}"
+            )
+    finally:
+        await test_redis_client.delete(f"user_blacklist:{user['id']}")
+
+
+@pytest.mark.asyncio
+async def test_f154_dat_mat_khau_buoc_doi_mat_khau_lan_dang_nhap_ke(
+    client, regular_user_in_db, admin_user_in_db, test_redis_client
+):
+    """Q-A1 — đăng nhập bằng mật khẩu Quản trị vừa đặt ⇒ route nghiệp vụ trả 403 ``PASSWORD_CHANGE_REQUIRED``."""
+    user = regular_user_in_db
+    admin_access, _, _ = await _login_as(client, admin_user_in_db, ua=UA_FIREFOX_LINUX)
+    try:
+        res = await _admin_dat_mat_khau(client, admin_access, user["id"])
+        assert res.status_code == 200, res.text
+        access_moi, _, _ = await _login_as(client, {**user, "password": MAT_KHAU_ADMIN_DAT}, ua=UA_DESKTOP)
+
+        kiem = await _check_access(client, access_moi)
+        chi_tiet = kiem.json().get("detail") if kiem.content else None
+        assert (kiem.status_code, isinstance(chi_tiet, dict) and chi_tiet.get("code")) == (
+            403,
+            "PASSWORD_CHANGE_REQUIRED",
+        ), f"mật khẩu do Quản trị đặt không bị buộc đổi: HTTP {kiem.status_code} {kiem.text[:200]}"
+    finally:
+        await test_redis_client.delete(f"user_blacklist:{user['id']}")
+
+
+@pytest.mark.asyncio
+async def test_f154_redis_loi_khi_thu_hoi_mat_khau_khong_doi(
+    client, regular_user_in_db, admin_user_in_db, test_redis_client, fresh_breaker
+):
+    """K7a — ``SET user_blacklist`` lỗi ⇒ mật khẩu (hash trong CSDL) KHÔNG đổi."""
+    user = regular_user_in_db
+    hash_truoc = await _hash_cua(user["id"])
+    admin_access, _, _ = await _login_as(client, admin_user_in_db, ua=UA_FIREFOX_LINUX)
+
+    with _redis_set_user_blacklist_loi() as da_tiem:
+        res = await _admin_dat_mat_khau(client, admin_access, user["id"])
+
+    assert da_tiem, "tiền đề: lỗi phải được tiêm đúng lệnh SET user_blacklist"
+    assert await _hash_cua(user["id"]) == hash_truoc, f"Redis lỗi mà mật khẩu vẫn đổi (HTTP {res.status_code})"
+
+
+@pytest.mark.asyncio
+async def test_f154_redis_loi_khi_thu_hoi_tra_503_ho_fail_closed(
+    client, regular_user_in_db, admin_user_in_db, test_redis_client, fresh_breaker
+):
+    """K7-mã — cùng lỗi ⇒ 503 ``SERVICE_UNAVAILABLE`` (họ fail-closed, thử lại có ích), không phải 500 / 200."""
+    user = regular_user_in_db
+    admin_access, _, _ = await _login_as(client, admin_user_in_db, ua=UA_FIREFOX_LINUX)
+
+    with _redis_set_user_blacklist_loi() as da_tiem:
+        res = await _admin_dat_mat_khau(client, admin_access, user["id"])
+
+    assert da_tiem, "tiền đề: lỗi phải được tiêm đúng lệnh SET user_blacklist"
+    assert _status_and_code(res) == (503, "SERVICE_UNAVAILABLE"), res.text
+
+
+@pytest.mark.asyncio
+async def test_f154_redis_loi_khi_thu_hoi_khong_ghi_nhat_ky(
+    client, regular_user_in_db, admin_user_in_db, test_redis_client, fresh_breaker
+):
+    """K7b — bị từ chối thì KHÔNG có hàng nhật ký ``admin_set_password`` (nhật ký cùng giao dịch, rollback cùng)."""
+    user = regular_user_in_db
+    admin_access, _, _ = await _login_as(client, admin_user_in_db, ua=UA_FIREFOX_LINUX)
+
+    with _redis_set_user_blacklist_loi() as da_tiem:
+        res = await _admin_dat_mat_khau(client, admin_access, user["id"])
+
+    assert da_tiem, "tiền đề: lỗi phải được tiêm đúng lệnh SET user_blacklist"
+    assert res.status_code >= 500, f"tiền đề: lệnh phải bị từ chối: {res.status_code}"
+    assert await _dem_nhat_ky_dat_mat_khau(user["id"]) == 0, "bị từ chối mà vẫn còn hàng nhật ký"
+
+
+@pytest.mark.asyncio
+async def test_f154_don_session_redis_loi_thi_mat_khau_khong_doi(
+    client, regular_user_in_db, admin_user_in_db, test_redis_client, fresh_breaker
+):
+    """K7c — chế độ NGHIÊM: dọn ``session:{jti}`` hụt cũng là "không thu hồi được" ⇒ hash KHÔNG đổi (chế độ lỏng
+    kiểu đổi-mật-khẩu sẽ cho qua)."""
+    user = regular_user_in_db
+    await _hai_phien_song(client, user)
+    hash_truoc = await _hash_cua(user["id"])
+    admin_access, _, _ = await _login_as(client, admin_user_in_db, ua=UA_FIREFOX_LINUX)
+    try:
+        with _redis_don_phien_loi() as da_tiem:
+            res = await _admin_dat_mat_khau(client, admin_access, user["id"])
+
+        assert da_tiem, "tiền đề: bước dọn session:{jti} phải chạy (người đích có phiên sống)"
+        assert await _hash_cua(user["id"]) == hash_truoc, (
+            f"dọn phiên Redis hụt mà mật khẩu vẫn đổi (HTTP {res.status_code})"
+        )
+    finally:
+        await test_redis_client.delete(f"user_blacklist:{user['id']}")
+
+
+@pytest.mark.asyncio
+async def test_f154_worker_khong_ack_thi_mat_khau_khong_doi(
+    client, regular_user_in_db, admin_user_in_db, test_redis_client, fresh_breaker
+):
+    """K8 — một worker socket NHẬN lệnh cắt mà không ACK ⇒ không xác nhận được việc cắt ⇒ hash KHÔNG đổi."""
+    user = regular_user_in_db
+    hash_truoc = await _hash_cua(user["id"])
+    admin_access, _, _ = await _login_as(client, admin_user_in_db, ua=UA_FIREFOX_LINUX)
+    try:
+        async with _worker_thu_hai(test_redis_client, ack=False) as nhan:
+            res = await _admin_dat_mat_khau(client, admin_access, user["id"])
+
+        assert nhan, "tiền đề: worker thứ hai phải NHẬN lệnh cắt"
+        assert await _hash_cua(user["id"]) == hash_truoc, (
+            f"không worker nào xác nhận cắt socket mà mật khẩu vẫn đổi (HTTP {res.status_code})"
+        )
+    finally:
+        await test_redis_client.delete(f"user_blacklist:{user['id']}")
+
+
+@pytest.mark.asyncio
+async def test_f154_doi_vai_thu_hoi_access_token_cu(
+    client, regular_user_in_db, admin_user_in_db, test_redis_client
+):
+    """R1 (Q-A10) — Quản trị đổi VAI (user → officer) ⇒ access token cũ của người ấy 401 ngay."""
+    user = regular_user_in_db
+    h = await _hai_phien_song(client, user)
+    admin_access, _, _ = await _login_as(client, admin_user_in_db, ua=UA_FIREFOX_LINUX)
+    try:
+        res = await _admin_sua(client, admin_access, user["id"], {"role": "officer"})
+        assert res.status_code == 200, res.text
+
+        assert (await _check_access(client, h["access_a"])).status_code == 401, (
+            "đổi vai mà phiên mang vai cũ vẫn dùng được"
+        )
+    finally:
+        await test_redis_client.delete(f"user_blacklist:{user['id']}")
+
+
+@pytest.mark.asyncio
+async def test_f154_doi_don_vi_thu_hoi_access_token_cu(
+    client, regular_user_in_db, admin_user_in_db, seed_lead_dependencies, test_redis_client
+):
+    """R2 (Q-A10) — Quản trị đổi ĐƠN VỊ (không đơn vị → đơn vị seed) ⇒ access token cũ 401 ngay."""
+    user = regular_user_in_db
+    h = await _hai_phien_song(client, user)
+    admin_access, _, _ = await _login_as(client, admin_user_in_db, ua=UA_FIREFOX_LINUX)
+    try:
+        res = await _admin_sua(client, admin_access, user["id"], {"unit_id": str(seed_lead_dependencies["unit_id"])})
+        assert res.status_code == 200, res.text
+
+        assert (await _check_access(client, h["access_a"])).status_code == 401, (
+            "đổi đơn vị mà phiên mang đơn vị cũ vẫn dùng được"
+        )
+    finally:
+        await test_redis_client.delete(f"user_blacklist:{user['id']}")
+
+
+@pytest.mark.asyncio
+async def test_f154_doi_vai_cat_socket_cua_nguoi_do(
+    test_server, client, regular_user_in_db, admin_user_in_db, test_redis_client
+):
+    """R3 (Q-A10) — đổi vai ⇒ khi 200 về, server đã cắt socket (đang giữ phòng ``role_*`` cũ) của người ấy; socket của
+    Quản trị vẫn được phục vụ."""
+    user = regular_user_in_db
+    h = await _hai_phien_song(client, user)
+    admin_access, _, _ = await _login_as(client, admin_user_in_db, ua=UA_FIREFOX_LINUX)
+    try:
+        async with _sio() as a_1, _sio() as ad_1:
+            sids = {
+                "người bị đổi vai": await _noi(a_1, test_server, h["access_a"]),
+                "admin": await _noi(ad_1, test_server, admin_access),
+            }
+
+            res = await _admin_sua(client, admin_access, user["id"], {"role": "officer"})
+
+            assert res.status_code == 200, res.text
+            assert _phuc_vu(sids) == {"người bị đổi vai": False, "admin": True}, (
+                f"đổi vai không cắt socket của người ấy: {_phuc_vu(sids)}"
+            )
+    finally:
+        await test_redis_client.delete(f"user_blacklist:{user['id']}")
+
+
+@pytest.mark.asyncio
+async def test_f154_doi_ho_ten_khong_thu_hoi_phien(
+    client, regular_user_in_db, admin_user_in_db, test_redis_client
+):
+    """R4 (đối chứng) — sửa HỌ TÊN (không đổi vai / đơn vị / trạng thái) ⇒ KHÔNG thu hồi: access token cũ vẫn 200."""
+    user = regular_user_in_db
+    h = await _hai_phien_song(client, user)
+    admin_access, _, _ = await _login_as(client, admin_user_in_db, ua=UA_FIREFOX_LINUX)
+    try:
+        res = await _admin_sua(client, admin_access, user["id"], {"full_name": "Ten Moi F154"})
+        assert res.status_code == 200, res.text
+
+        assert (await _check_access(client, h["access_a"])).status_code == 200, (
+            "sửa họ tên mà đăng xuất người dùng — thu hồi quá tay"
+        )
+    finally:
+        await test_redis_client.delete(f"user_blacklist:{user['id']}")
+
+
+@pytest.mark.asyncio
+async def test_f154_doi_vai_worker_khong_ack_thi_vai_khong_doi(
+    client, regular_user_in_db, admin_user_in_db, test_redis_client, fresh_breaker
+):
+    """R5 — đổi vai mà một worker không ACK lệnh cắt ⇒ từ chối, vai trong CSDL KHÔNG đổi (cùng cơ chế nghiêm)."""
+    user = regular_user_in_db
+    await _hai_phien_song(client, user)
+    admin_access, _, _ = await _login_as(client, admin_user_in_db, ua=UA_FIREFOX_LINUX)
+    try:
+        async with _worker_thu_hai(test_redis_client, ack=False) as nhan:
+            res = await _admin_sua(client, admin_access, user["id"], {"role": "officer"})
+
+        assert nhan, "tiền đề: worker thứ hai phải NHẬN lệnh cắt"
+        assert await _role_cua(user["id"]) == "user", (
+            f"không xác nhận cắt được socket mà vai vẫn đổi (HTTP {res.status_code})"
+        )
+    finally:
+        await test_redis_client.delete(f"user_blacklist:{user['id']}")

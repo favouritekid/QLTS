@@ -162,6 +162,85 @@ class TestKhongUnpackUserActivityLog:
         )
 
 
+MAT_KHAU_F154 = "AdminDatLai!2026x"
+
+
+async def _hang_dat_mat_khau(target_id: int) -> list:
+    """Hàng nhật ký ``admin_set_password`` của người đích — session CSDL RIÊNG (xem ``_dem_audit``)."""
+    async with AsyncSessionLocal() as session:
+        return list(
+            (
+                await session.execute(
+                    select(models.UserActivityLog).where(
+                        models.UserActivityLog.action == "admin_set_password",
+                        models.UserActivityLog.target_user_id == target_id,
+                    )
+                )
+            ).scalars()
+        )
+
+
+class TestF154NhatKyDatMatKhau:
+    """F154 T3 (owner 25-11 Q-A8): Quản trị đặt mật khẩu cho người khác ⇒ ĐÚNG MỘT hàng nhật ký, CÙNG giao dịch với
+    việc đổi mật khẩu, nêu ĐÚNG người làm; không chứa mật khẩu hay hash. Trước bản vá: 0 hàng, structlog ghi cứng
+    ``admin_user="admin"`` ⇒ không truy được ai đã đặt."""
+
+    async def test_dat_mat_khau_ghi_dung_mot_hang_dung_nguoi_lam(
+        self, client: AsyncClient, admin_token_headers: dict, admin_user_in_db: dict,
+        regular_user_in_db: dict, test_redis_client,
+    ):
+        target = regular_user_in_db["id"]
+        try:
+            resp = await client.post(
+                f"/api/admin/users/{target}/password",
+                json={"new_password": MAT_KHAU_F154},
+                headers=admin_token_headers,
+            )
+            assert resp.status_code == 200, resp.text
+
+            hang = await _hang_dat_mat_khau(target)
+            assert [(h.actor_id, h.target_user_id) for h in hang] == [(admin_user_in_db["id"], target)], (
+                "phải có đúng MỘT hàng nhật ký, nêu đúng Quản trị đã làm"
+            )
+        finally:
+            await test_redis_client.delete(f"user_blacklist:{target}")
+
+    async def test_nhat_ky_khong_chua_mat_khau_hay_hash(
+        self, client: AsyncClient, admin_token_headers: dict, regular_user_in_db: dict, test_redis_client,
+    ):
+        target = regular_user_in_db["id"]
+        try:
+            resp = await client.post(
+                f"/api/admin/users/{target}/password",
+                json={"new_password": MAT_KHAU_F154},
+                headers=admin_token_headers,
+            )
+            assert resp.status_code == 200, resp.text
+
+            hang = await _hang_dat_mat_khau(target)
+            assert len(hang) == 1, f"tiền đề: có hàng nhật ký để soi ({len(hang)})"
+            noi_dung = f"{hang[0].description} {hang[0].changes}"
+            assert MAT_KHAU_F154 not in noi_dung and "$2b$" not in noi_dung, (
+                f"nhật ký lộ mật khẩu / hash: {noi_dung}"
+            )
+        finally:
+            await test_redis_client.delete(f"user_blacklist:{target}")
+
+    async def test_dat_trung_mat_khau_cu_khong_ghi_nhat_ky(
+        self, client: AsyncClient, admin_token_headers: dict, regular_user_in_db: dict,
+    ):
+        """K4b — không đổi gì (mật khẩu mới trùng mật khẩu cũ ⇒ 400) thì KHÔNG có hàng nhật ký mồ côi."""
+        target = regular_user_in_db["id"]
+        resp = await client.post(
+            f"/api/admin/users/{target}/password",
+            json={"new_password": regular_user_in_db["password"]},
+            headers=admin_token_headers,
+        )
+        assert resp.status_code == 400, f"tiền đề: đặt trùng mật khẩu cũ phải bị từ chối: {resp.text}"
+
+        assert await _hang_dat_mat_khau(target) == [], "không đổi gì mà có hàng nhật ký"
+
+
 class TestGiaoUocOTangKieu:
     """Chặn ngay ở khai báo, trước khi ai đó chạy tới runtime.
 

@@ -53,9 +53,7 @@ from app.core.deps import CasbinAuth  # Phase 2.2
 from app.database import get_db
 from app.services import activity_service, lead_service, user_service
 from app.tasks import process_automatic_lead_assignment_task
-from app.core.constants import UserRole
 from app.utils.exceptions import (
-    BusinessRuleViolation,
     DuplicateResourceError,
     PermissionDeniedError,
     ResourceNotFoundError,
@@ -173,22 +171,12 @@ async def create_new_user(
             },
         )
 
-    # ✅ SECURITY: Prevent privilege escalation - users can only create roles below their own
-    _role_hierarchy = {
-        UserRole.ADMIN: 4,
-        UserRole.MANAGER: 3,
-        UserRole.ACCOUNTANT: 2,
-        UserRole.OFFICER: 1,
-        UserRole.USER: 0,
-    }
-    creator_level = _role_hierarchy.get(current_admin.role, -1)
-    target_level = _role_hierarchy.get(user_in.role, -1)
-    if target_level < 0:
-        raise BusinessRuleViolation(detail=f"Invalid role: {user_in.role}")
-    if target_level >= creator_level:
-        raise BusinessRuleViolation(
-            detail="Cannot create a user with equal or higher role than your own"
-        )
+    # ✅ SECURITY: Prevent privilege escalation — F154 (owner 25-11 Q-A13): MỘT hàm cấp vai ``constants.role_outranks``
+    # cho tạo / đặt mật khẩu / sửa / xoá, qua cổng ``deps.require_assignable_role``. Thay bảng tuyến tính viết tay cũ
+    # (admin 4 > manager 3 > accountant 2 > officer 1 > user 0): theo cây kế thừa, Quản lý KHÔNG tạo được Kế toán (tách
+    # nhiệm vụ); Quản trị tạo được mọi vai (trước đây không tạo thẳng được Quản trị — vẫn nâng được qua PUT). Vai lạ đã bị
+    # ``AdminUserCreate.role`` (Literal) chặn ở 422 phía trên.
+    deps.require_assignable_role(current_admin, user_in.role)
 
     if await user_service.get_user_by_username(db, user_in.username):
         raise DuplicateResourceError(detail="Username already exists")
@@ -358,9 +346,41 @@ async def admin_set_user_password(
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = CasbinAuth,
 ):
-    """(Admin only) Admin đặt lại mật khẩu cho người dùng."""
+    """(Admin only) Admin đặt lại mật khẩu cho người dùng.
+
+    F154 (owner 25-11):
+    - Cổng: phạm vi đơn vị + người đích phải có vai THẤP hơn + KHÔNG tự đặt cho chính mình (tự đổi qua trang cá nhân) —
+      ``deps.verify_user_management_permission``, chạy TRƯỚC mọi ghi.
+    - Service bật buộc-đổi-mật-khẩu, thu hồi mọi phiên + cắt socket trước commit (lỗi ⇒ 503, không đổi gì).
+    - Nhật ký thao tác ghi CÙNG giao dịch, trước commit (Q-A8): nhật ký lỗi ⇒ mật khẩu cũng không đổi. Không ghi mật khẩu
+      hay hash.
+    """
+    target = await deps.verify_user_management_permission(
+        target_user_id=user_id,
+        db=db,
+        current_user=current_admin,
+        require_outrank=True,
+        admin_may_target_self=False,
+    )
+    target_username = target.username
+    actor_id = current_admin.id
     user, post_commit = await user_service.set_password_by_admin(
-        db, user_id, password_data.new_password
+        db, user_id, password_data.new_password, actor_id=actor_id
+    )
+    await log_admin_activity(
+        db=db,
+        request=request,
+        action="admin_set_password",
+        resource_type="user",
+        actor_id=actor_id,
+        target_user_id=user_id,
+        resource_id=user_id,
+        # [ĐX] câu hiển thị ở trang nhật ký hoạt động.
+        description=(
+            f"Quản trị đặt lại mật khẩu cho tài khoản {target_username}: "
+            "thu hồi mọi phiên cũ, buộc đổi mật khẩu ở lần đăng nhập kế"
+        ),
+        changes={"password_reset_required": True},
     )
     await db.commit()
     await post_commit()
@@ -953,11 +973,13 @@ async def update_existing_user(
     Admin: Can update all users
     Manager: Can update users in managed units only
     """
-    # Verify ownership first
+    # Verify ownership first — F154 (owner 25-11 Q-A11): + người đích phải có vai THẤP hơn (Quản trị: mọi người, kể cả
+    # chính mình như cũ; Quản lý tự sửa mình ⇒ 403 — chặn tự nâng vai).
     db_user = await deps.verify_user_management_permission(
         target_user_id=user_id,
         db=db,
-        current_user=current_admin
+        current_user=current_admin,
+        require_outrank=True,
     )
 
     # Xây dựng dict chỉ chứa các trường được cung cấp.
@@ -976,6 +998,8 @@ async def update_existing_user(
         update_dict["phone_number"] = stripped if stripped else None
     if role is not None and role.strip():
         update_dict["role"] = role.strip()
+    # F154 (owner 25-11 Q-A11): vai MỚI cũng phải thấp hơn vai người thao tác (cổng ở deps — MỘT nguồn cấp vai).
+    deps.require_assignable_role(current_admin, update_dict.get("role"))
     if status is not None and status.strip():
         update_dict["status"] = status.strip()
     if max_capacity is not None and max_capacity >= 0:
@@ -1076,6 +1100,7 @@ async def update_existing_user(
     # PR-B lượt 3 (Codex lượt 2 điểm chặn 6): chuyển trạng thái THỰC TẾ (đọc dưới khoá dòng người) — quyết ngắt truy cập
     # bên dưới. ``changes`` (nhật ký / thông báo) vẫn tính từ bản nạp đầu yêu cầu — phần ấy tách việc riêng.
     status_transition: dict = {}
+    assignment_change: dict = {}  # F154: vai / đơn vị có THỰC SỰ đổi (đọc dưới khoá trong update_user)
     updated_user, callback = await user_service.update_user(
         db, db_user, user_in, enforcer=enforcer,
         avatar_content=avatar_content,  # ✅ REFACTORED: Pass bytes instead of UploadFile
@@ -1083,6 +1108,7 @@ async def update_existing_user(
         assigned_by_user_id=current_admin.id,  # ✅ PHASE 2: Track who made the assignment
         request_meta=_request_meta(request),  # GĐ1b PR-B Q4: nhật ký tự thu hồi quyền duyệt chéo
         status_transition_out=status_transition,
+        assignment_change_out=assignment_change,
     )
 
     # W8-F.1 fix 2026-05-16: capture ALL needed attrs in plain Python vars
@@ -1097,37 +1123,14 @@ async def update_existing_user(
     _updated_unit_id = updated_user.unit_id
     _current_admin_id = current_admin.id
 
-    # === Offboarding: revoke sessions + server-side socket disconnect ===
-    # When status moves to a non-active value, persist it (flush ⇒ row lock)
-    # BEFORE revoking so a concurrent login serializes on the locked row
-    # (flush-before-revoke, P0), then revoke all sessions (strict cache cleanup)
-    # and force-disconnect live sockets across workers (ACK-confirmed). Any
-    # failure rolls back the whole change → fail-closed (status stays unchanged).
-    if user_service.deactivates_account(status_transition):
-        await db.flush()
-        try:
-            # The post-commit callback it returns (user-wide socket cut) is NOT
-            # run here on purpose: offboarding cuts strictly BEFORE commit just
-            # below and rolls everything back if a worker does not ACK.
-            await user_service.invalidate_all_sessions(
-                db,
-                db_user,
-                reason="Account deactivated by administrator",
-                fail_on_cache_cleanup=True,
-            )
-            from app.socket_manager import force_disconnect_user_strict
-            await force_disconnect_user_strict(db_user.id)
-        except Exception:
-            await db.rollback()
-            log.error(
-                "Deactivation failed: could not revoke sessions / disconnect sockets",
-                user_id=_updated_user_id,
-                exc_info=True,
-            )
-            raise HTTPException(
-                status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Deactivation failed: could not revoke sessions.",
-            )
+    # === Thu hồi truy cập: khoá tài khoản (có từ trước) + đổi vai / đơn vị (F154, owner 25-11 Q-A10) ===
+    # MỘT cơ chế ``user_service.revoke_all_access_before_commit`` (cũng là cơ chế của đặt mật khẩu bởi Quản trị): flush
+    # (khoá dòng người) → thu hồi mọi phiên chế độ nghiêm → cắt socket mọi worker, chờ ACK — TRƯỚC commit. Lỗi ⇒
+    # ``SessionRevocationUnavailable`` (503) ⇒ không commit ⇒ trạng thái / vai / đơn vị giữ nguyên (fail-closed).
+    # Quyết bằng giá trị đọc DƯỚI khoá trong ``update_user`` (``status_transition`` / ``assignment_change``).
+    revoke_reason = user_service.access_revocation_reason(status_transition, assignment_change)
+    if revoke_reason:
+        await user_service.revoke_all_access_before_commit(db, db_user, reason=revoke_reason)
 
     # ✅ TRANSACTION PATTERN: Commit and execute callback
     await db.commit()
@@ -1273,11 +1276,12 @@ async def delete_existing_user(
     if user_id == current_admin.id:
         raise PermissionDeniedError(detail="You cannot delete your own account")
 
-    # Verify ownership
+    # Verify ownership — F154 (owner 25-11 Q-A11): + người bị xoá phải có vai THẤP hơn người thao tác.
     db_user = await deps.verify_user_management_permission(
         target_user_id=user_id,
         db=db,
-        current_user=current_admin
+        current_user=current_admin,
+        require_outrank=True,
     )
     username = db_user.username if db_user else f"User#{user_id}"
     actor_id = current_admin.id

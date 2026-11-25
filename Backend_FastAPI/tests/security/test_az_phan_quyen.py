@@ -31,6 +31,7 @@ from sqlalchemy import insert, select
 from app import models
 from app.database import AsyncSessionLocal
 from app.main import fastapi_app as app
+from app.core.deps import ROLE_NOT_ASSIGNABLE_DETAIL
 from app.models.pipeline import OutcomeTypeEnum
 from app.security import get_password_hash
 from tests.fixtures.constants import AuthURLs, TestOrgData
@@ -430,3 +431,233 @@ class TestAZ4DanhSachCTVManagerKhongDonVi:
         h = await _cookie(client, mgr)
         res = await _goi(client, "GET", "/api/collaborators", h, params={"limit": 100})
         assert az4["collab_a"] in _ids(_json(res), "collaborators"), res.text
+
+
+# =============================================================================
+# (5) F154 — CẤP VAI khi quản lý tài khoản (owner 25-11 Q-A2/A6/A11/A12/A13)
+# =============================================================================
+#
+# Điều kiện khai thác: một vai ngoài Quản trị được cấp ``/api/admin/users/*`` (feature "Quản lý Users" / template
+# ``user_manager``). Fixture cấp đúng quyền ấy cho ``role:manager`` và gán Quản lý vào đơn vị A (``UserUnitAssignment`` —
+# nguồn của ``get_user_managed_units``), rồi đo: chỉ tác động được người có vai THẤP hơn (cây kế thừa — MỘT hàm
+# ``constants.role_outranks``), không tự tác động mình, không gán / tạo vai ngang-cao hơn hay vai Kế toán.
+# Mỗi ca âm khẳng định BẤT BIẾN CSDL trước, rồi mới tới mã trạng thái (tiền đề "bị đúng cổng cấp vai chặn", không phải
+# Casbin 403) — biến thể "kiểm SAU commit" vẫn trả 404 nhưng CSDL đã đổi.
+
+MAT_KHAU_F154 = "AdminDatLai!2026x"
+QUYEN_QUAN_LY_USERS = ("role:manager", "/api/admin/users/*", ".*", "allow")
+
+
+async def _gan_quan_ly(user_id: int, unit_id: int) -> None:
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            session.add(models.UserUnitAssignment(user_id=user_id, unit_id=unit_id, role="manager", is_active=True))
+
+
+async def _cot(user_id: int, cot: str):
+    async with AsyncSessionLocal() as session:
+        return (await session.execute(
+            select(getattr(models.User, cot)).where(models.User.id == user_id)
+        )).scalar_one_or_none()
+
+
+async def _co_user(user_id: int) -> bool:
+    async with AsyncSessionLocal() as session:
+        return (await session.execute(
+            select(models.User.id).where(models.User.id == user_id)
+        )).scalar_one_or_none() is not None
+
+
+async def _co_username(username: str) -> bool:
+    async with AsyncSessionLocal() as session:
+        return (await session.execute(
+            select(models.User.id).where(models.User.username == username)
+        )).scalar_one_or_none() is not None
+
+
+def _chi_tiet(res):
+    body = _json(res)
+    return body.get("detail") if isinstance(body, dict) else None
+
+
+@pytest_asyncio.fixture
+async def az5(client: AsyncClient, seed_lead_dependencies, seed_other_unit, test_redis_client):
+    # Tạo đủ người TRƯỚC khi cấp quyền: ``_tao_user`` nạp lại policy từ CSDL sau mỗi lần tạo.
+    nguoi = {
+        "mgr": await _tao_user("az5_mgr_a", "manager", UNIT_A),
+        "officer_a": await _tao_user("az5_officer_a", "officer", UNIT_A),
+        "admin_a": await _tao_user("az5_admin_a", "admin", UNIT_A),
+        "mgr2_a": await _tao_user("az5_mgr2_a", "manager", UNIT_A),
+        "ke_toan_a": await _tao_user("az5_ke_toan_a", "accountant", UNIT_A),
+        "ctv_a": await _tao_user("az5_ctv_a", "collaborator", UNIT_A),
+        "officer_b": await _tao_user("az5_officer_b", "officer", UNIT_B),
+    }
+    await _gan_quan_ly(nguoi["mgr"]["id"], UNIT_A)
+    enf = app.state.enforcer
+    await enf.add_policy(*QUYEN_QUAN_LY_USERS)
+    try:
+        nguoi["h"] = await _cookie(client, nguoi["mgr"])
+        yield nguoi
+    finally:
+        await enf.remove_policy(*QUYEN_QUAN_LY_USERS)
+        for khoa in await test_redis_client.keys("user_blacklist:*"):
+            await test_redis_client.delete(khoa)
+
+
+async def _dat_mat_khau(client, headers: dict, target_id: int):
+    return await _goi(client, "POST", f"/api/admin/users/{target_id}/password", headers,
+                      json={"new_password": MAT_KHAU_F154})
+
+
+@pytest.mark.asyncio
+class TestAZ5F154CapVaiDatMatKhau:
+
+    async def _bi_chan(self, client, az5, ten_dich: str):
+        dich = az5[ten_dich]
+        hash_truoc = await _cot(dich["id"], "password_hash")
+        res = await _dat_mat_khau(client, az5["h"], dich["id"])
+        assert await _cot(dich["id"], "password_hash") == hash_truoc, f"{ten_dich}: mật khẩu bị đổi ({res.status_code})"
+        assert res.status_code == 404, f"tiền đề: bị cổng cấp vai chặn (404), không phải Casbin: {res.text}"
+
+    async def test_quan_ly_khong_dat_duoc_mat_khau_quan_tri_cung_don_vi(self, client, az5):
+        await self._bi_chan(client, az5, "admin_a")
+
+    async def test_quan_ly_khong_dat_duoc_mat_khau_quan_ly_ngang_cap(self, client, az5):
+        await self._bi_chan(client, az5, "mgr2_a")
+
+    async def test_quan_ly_khong_dat_duoc_mat_khau_ke_toan_cung_don_vi(self, client, az5):
+        # Owner 25-11 Q-A13: tách nhiệm vụ — đặt được mật khẩu = đăng nhập được dưới tên kế toán.
+        await self._bi_chan(client, az5, "ke_toan_a")
+
+    async def test_quan_ly_khong_dat_duoc_mat_khau_cong_tac_vien_cung_don_vi(self, client, az5):
+        await self._bi_chan(client, az5, "ctv_a")
+
+    async def test_quan_ly_khong_dat_duoc_mat_khau_can_bo_don_vi_khac(self, client, az5):
+        await self._bi_chan(client, az5, "officer_b")
+
+    async def test_quan_ly_khong_tu_dat_mat_khau_cho_minh(self, client, az5):
+        hash_truoc = await _cot(az5["mgr"]["id"], "password_hash")
+        res = await _dat_mat_khau(client, az5["h"], az5["mgr"]["id"])
+        assert await _cot(az5["mgr"]["id"], "password_hash") == hash_truoc, f"tự đặt được ({res.status_code})"
+        assert res.status_code == 403, f"tiền đề: cổng tự-thao-tác chặn: {res.text}"
+
+    async def test_quan_tri_khong_tu_dat_mat_khau_cho_minh(self, client, az5):
+        # Owner 25-11 Q-A2: Quản trị tự đổi qua trang cá nhân, không qua route quản trị.
+        admin = await _tao_user("az5_admin_tu_dat", "admin", None)
+        h = await _cookie(client, admin)
+        hash_truoc = await _cot(admin["id"], "password_hash")
+        res = await _dat_mat_khau(client, h, admin["id"])
+        assert await _cot(admin["id"], "password_hash") == hash_truoc, f"Quản trị tự đặt được ({res.status_code})"
+        assert res.status_code == 403, f"tiền đề: cổng tự-thao-tác chặn: {res.text}"
+
+    async def test_doi_chung_quan_ly_dat_mat_khau_can_bo_cung_don_vi(self, client, az5):
+        dich = az5["officer_a"]
+        hash_truoc = await _cot(dich["id"], "password_hash")
+        res = await _dat_mat_khau(client, az5["h"], dich["id"])
+        assert res.status_code == 200, res.text
+        assert await _cot(dich["id"], "password_hash") != hash_truoc
+
+    async def test_doi_chung_quan_tri_dat_mat_khau_quan_tri_khac(self, client, az5):
+        # Owner 25-11 Q-A12: Quản trị đặt được cho mọi người trừ chính mình — kể cả Quản trị khác.
+        admin = await _tao_user("az5_admin_dat_admin", "admin", None)
+        h = await _cookie(client, admin)
+        dich = az5["admin_a"]
+        hash_truoc = await _cot(dich["id"], "password_hash")
+        res = await _dat_mat_khau(client, h, dich["id"])
+        assert res.status_code == 200, res.text
+        assert await _cot(dich["id"], "password_hash") != hash_truoc
+
+
+@pytest.mark.asyncio
+class TestAZ5F154CapVaiSuaXoaTao:
+
+    async def test_quan_ly_khong_tu_nang_vai_len_quan_tri(self, client, az5):
+        res = await _goi(client, "PUT", f"/api/admin/users/{az5['mgr']['id']}", az5["h"], data={"role": "admin"})
+        assert await _cot(az5["mgr"]["id"], "role") == "manager", f"Quản lý tự nâng vai được ({res.status_code})"
+        assert res.status_code == 403, f"tiền đề: cổng tự-thao-tác chặn: {res.text}"
+
+    async def test_quan_ly_khong_gan_vai_quan_tri_cho_can_bo(self, client, az5):
+        dich = az5["officer_a"]
+        res = await _goi(client, "PUT", f"/api/admin/users/{dich['id']}", az5["h"], data={"role": "admin"})
+        assert await _cot(dich["id"], "role") == "officer", f"gán được vai Quản trị ({res.status_code})"
+        assert _chi_tiet(res) == ROLE_NOT_ASSIGNABLE_DETAIL, f"tiền đề: cổng vai-mới chặn: {res.text}"
+
+    async def test_quan_ly_khong_gan_vai_ke_toan_cho_can_bo(self, client, az5):
+        dich = az5["officer_a"]
+        res = await _goi(client, "PUT", f"/api/admin/users/{dich['id']}", az5["h"], data={"role": "accountant"})
+        assert await _cot(dich["id"], "role") == "officer", f"gán được vai Kế toán ({res.status_code})"
+        assert _chi_tiet(res) == ROLE_NOT_ASSIGNABLE_DETAIL, f"tiền đề: cổng vai-mới chặn: {res.text}"
+
+    async def test_quan_ly_khong_khoa_duoc_quan_tri_cung_don_vi(self, client, az5):
+        dich = az5["admin_a"]
+        res = await _goi(client, "PUT", f"/api/admin/users/{dich['id']}", az5["h"], data={"status": "inactive"})
+        assert await _cot(dich["id"], "status") == "active", f"khoá được Quản trị ({res.status_code})"
+        assert res.status_code == 404, f"tiền đề: bị cổng cấp vai chặn: {res.text}"
+
+    async def test_doi_chung_quan_ly_sua_ho_ten_can_bo_cung_don_vi(self, client, az5):
+        dich = az5["officer_a"]
+        res = await _goi(client, "PUT", f"/api/admin/users/{dich['id']}", az5["h"], data={"full_name": "AZ5 Ten Moi"})
+        assert res.status_code == 200, res.text
+        assert await _cot(dich["id"], "full_name") == "AZ5 Ten Moi"
+
+    async def test_quan_ly_khong_xoa_duoc_quan_tri_cung_don_vi(self, client, az5):
+        dich = az5["admin_a"]
+        res = await _goi(client, "DELETE", f"/api/admin/users/{dich['id']}", az5["h"])
+        assert await _co_user(dich["id"]), f"Quản lý xoá được Quản trị ({res.status_code})"
+        assert res.status_code == 404, f"tiền đề: bị cổng cấp vai chặn: {res.text}"
+
+    async def test_quan_ly_khong_xoa_duoc_ke_toan_cung_don_vi(self, client, az5):
+        dich = az5["ke_toan_a"]
+        res = await _goi(client, "DELETE", f"/api/admin/users/{dich['id']}", az5["h"])
+        assert await _co_user(dich["id"]), f"Quản lý xoá được Kế toán ({res.status_code})"
+        assert res.status_code == 404, f"tiền đề: bị cổng cấp vai chặn: {res.text}"
+
+    async def test_quan_ly_khong_tao_duoc_tai_khoan_ke_toan(self, client, az5):
+        # Owner 25-11 Q-A13: CÙNG hàm cấp vai cho route tạo — Quản lý thôi tạo được Kế toán.
+        res = await _goi(client, "POST", "/api/admin/users", az5["h"], data={
+            "username": "az5_tao_ke_toan", "email": "az5_tao_ke_toan@example.com",
+            "password": MAT_KHAU_F154, "full_name": "AZ5 Tao Ke Toan", "role": "accountant",
+        })
+        assert not await _co_username("az5_tao_ke_toan"), f"Quản lý tạo được Kế toán ({res.status_code})"
+        assert _chi_tiet(res) == ROLE_NOT_ASSIGNABLE_DETAIL, f"tiền đề: cổng vai-mới chặn: {res.text}"
+
+    async def test_doi_chung_quan_ly_tao_duoc_tai_khoan_can_bo(self, client, az5):
+        res = await _goi(client, "POST", "/api/admin/users", az5["h"], data={
+            "username": "az5_tao_can_bo", "email": "az5_tao_can_bo@example.com",
+            "password": MAT_KHAU_F154, "full_name": "AZ5 Tao Can Bo", "role": "officer",
+        })
+        assert res.status_code == 201, res.text
+        assert await _co_username("az5_tao_can_bo")
+
+
+# Quyết định owner 25-11 (Q-A2/A6/A12/A13), viết TAY — không suy từ mã: vai người thao tác ⇒ tập vai đích được tác động
+# (tạo / đặt mật khẩu / sửa / xoá / gán). "Trừ chính mình" là phép so danh tính, không nằm ở bảng này.
+BANG_CAP_VAI_OWNER = {
+    "admin": {"admin", "manager", "accountant", "officer", "collaborator", "user"},
+    "manager": {"officer", "user"},
+    "accountant": {"officer", "user"},
+    "officer": {"user"},
+    "collaborator": set(),
+    "user": set(),
+}
+
+
+class TestAZ5F154BangCapVaiMotNguon:
+
+    def test_bang_cap_vai_phu_du_moi_vai_va_khop_quyet_dinh_owner(self):
+        """K15 — ``role_outranks`` trên MỌI cặp vai của ``UserRole`` khớp đúng bảng owner chốt. Thêm một vai vào
+        ``UserRole`` mà chưa xếp cấp ⇒ ĐỎ (khoá có vai lạ)."""
+        from app.core.constants import UserRole, role_outranks
+
+        thuc_te = {a.value: {t.value for t in UserRole if role_outranks(a, t)} for a in UserRole}
+        assert thuc_te == BANG_CAP_VAI_OWNER
+
+    def test_main_seed_canh_ke_thua_tu_mot_nguon(self):
+        """``app/main.py`` seed dòng ``g`` của Casbin từ CHÍNH ``ROLE_INHERITANCE`` (nguồn của bảng cấp) — không còn danh
+        sách cạnh viết tay thứ hai có thể trôi khỏi bảng cấp."""
+        import re
+        from pathlib import Path
+
+        nguon = (Path(__file__).resolve().parents[2] / "app" / "main.py").read_text(encoding="utf-8")
+        assert "for child, parent in ROLE_INHERITANCE" in nguon
+        assert not re.search(r'\(\s*"g"\s*,\s*"role:', nguon), "main.py còn cạnh kế thừa viết tay"
