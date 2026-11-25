@@ -104,7 +104,7 @@ export function resolveEngineDisplay(
     if (isPostDraft) {
       return kv
         ? (snapshot.basis_reason ?? snapshot.reason ?? null)
-        : (snapshot.reason ?? snapshot.basis_reason ?? null)
+        : (snapshot.basis_reason ?? snapshot.reason ?? null)
     }
     if (preview) return preview.reason ?? null
     return snapshot.basis_reason ?? snapshot.reason ?? null
