@@ -139,6 +139,11 @@ export type RunTrackPhase =
   | { kind: "done"; runId: number }
   | { kind: "failed"; runId: number; errorCode: string | null }
   | { kind: "other_done"; runId: number; status: string }
+  /**
+   * F4 (Codex F3-2 NỢ-1): sau "chưa rõ", lượt mới hơn mốc KHÔNG do người đang đăng nhập yêu cầu (hoặc không biết người đăng nhập) ⇒
+   * chỉ báo + liên kết, KHÔNG theo dõi như lượt của mình, KHÔNG tự mở M5. `userKnown = false` ⇒ không đọc được người đăng nhập.
+   */
+  | { kind: "foreign_run"; runId: number; status: string; userKnown: boolean }
   | { kind: "no_new_run" }
   | { kind: "submit_error"; error: ReviewErrorView }
   | { kind: "contract_error"; runId: number }
@@ -202,12 +207,25 @@ export function phaseAfterRunPoll(phase: PollingPhase, run: ReviewRun, plan: Run
   return advance(phase, plan, run.id, run.status)
 }
 
-/** Kết quả E7 trang 1 (`check` / `other`). */
-export function phaseAfterListPoll(phase: PollingPhase, page: ReviewRunPage, plan: RunPollPlan): RunTrackPhase {
+/**
+ * Kết quả E7 trang 1 (`check` / `other`). `currentUserId` = id người đang đăng nhập (`null` = không đọc được) — CHỈ để chọn câu báo
+ * ở nhánh `check` (Codex F3-2 NỢ-1): lượt mới hơn mốc mà `requested_by_user_id` khác ⇒ có thể lần bấm của mình chưa tới máy chủ ⇒
+ * không coi là lượt của mình. Không phải kiểm quyền (máy chủ là chốt).
+ */
+export function phaseAfterListPoll(
+  phase: PollingPhase,
+  page: ReviewRunPage,
+  plan: RunPollPlan,
+  currentUserId: number | null,
+): RunTrackPhase {
   const newer = pickNewerRun(page.items, phase.target.baselineRunId)
   if (phase.target.mode === "check") {
     if (newer === null) return { kind: "no_new_run" }
-    // Có lượt mới hơn mốc ⇒ theo dõi lượt ấy như sau 202 (thiết kế §3.5 bước 3); hỏi E8 NGAY để có trạng thái + mã lỗi đầy đủ.
+    if (currentUserId === null || newer.requested_by_user_id !== currentUserId) {
+      return { kind: "foreign_run", runId: newer.id, status: newer.status, userKnown: currentUserId !== null }
+    }
+    // Có lượt mới hơn mốc của CHÍNH người bấm ⇒ theo dõi lượt ấy như sau 202 (thiết kế §3.5 bước 3); hỏi E8 NGAY để có trạng
+    // thái + mã lỗi đầy đủ.
     return startWindow(
       { mode: "mine", runId: newer.id, baselineRunId: phase.target.baselineRunId, serverNote: null },
       0,

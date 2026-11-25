@@ -7,16 +7,36 @@ import '@testing-library/jest-dom'
 import { cleanup } from '@testing-library/react'
 import { afterEach, beforeAll, beforeEach, afterAll, vi } from 'vitest'
 import { server } from './mocks/server'
+import {
+  dangChanRequestRo,
+  kiemRequestRoCuoiCa,
+  xuLyRequestKhongHandler,
+} from './review-sessions-msw'
 
-// Establish API mocking before all tests
+// Establish API mocking before all tests — `listen()` ĐÚNG MỘT lần trong cả bộ test: gọi lần hai thì
+// MSW gắn thêm listener "request" ⇒ mọi request đi qua handler hai lần (đối chiếu CI F4 lượt 2).
+// Request không handler: tệp thường ⇒ như chiến lược 'warn' cũ; tệp test lần xét đã `chanRequestRo()`
+// ⇒ ghi lại + máy giả trả 500 (xem `./review-sessions-msw.ts`).
 beforeAll(() => {
-  server.listen({ onUnhandledRequest: 'warn' })
+  server.listen({ onUnhandledRequest: xuLyRequestKhongHandler })
 })
 
 // Reset request handlers after each test
-afterEach(() => {
-  server.resetHandlers()
+afterEach(async () => {
+  if (!dangChanRequestRo()) {
+    server.resetHandlers()
+    cleanup()
+    return
+  }
+  // Tệp đã chặn request rò: dọn cây React TRƯỚC (không phát request mới), chờ request đang bay rồi
+  // kiểm; `resetHandlers` LUÔN chạy — vitest bỏ các afterEach còn lại khi một afterEach ném, nên ca
+  // đỏ không được để lại cây / handler cho ca sau.
   cleanup()
+  try {
+    await kiemRequestRoCuoiCa()
+  } finally {
+    server.resetHandlers()
+  }
 })
 
 // Clean up after all tests are done

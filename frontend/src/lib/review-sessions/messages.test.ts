@@ -27,6 +27,7 @@ import {
   durationLabel,
   feeGateModeLabel,
   knownSessionActions,
+  loadedAtLabel,
   quotaTableHref,
   roundStateLabel,
   runFailedMessage,
@@ -338,5 +339,9 @@ describe("F3 — nhãn lượt kiểm", () => {
     expect(runRunningFor(125_000)).toBe("Đang chạy 2 phút")
     expect(runFailedMessage("engine_crash")).toBe("Lượt kiểm hỏng — mã: engine_crash.")
     expect(runFailedMessage(null)).toBe("Lượt kiểm hỏng.")
+  })
+
+  it("F4 (đính chính 2 §1 NỢ): 'Tải lúc HH:MM' theo giờ Việt Nam (UTC+7)", () => {
+    expect(loadedAtLabel(Date.UTC(2026, 10, 24, 2, 12))).toBe("Tải lúc 09:12")
   })
 })

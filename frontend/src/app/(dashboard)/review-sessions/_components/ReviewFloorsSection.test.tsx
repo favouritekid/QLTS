@@ -36,6 +36,7 @@ import {
   floorsTooMany,
 } from "@/lib/review-sessions/messages"
 import { server } from "@/test/mocks/server"
+import { chanRequestRo } from "@/test/review-sessions-msw"
 import {
   E4_BAD_MEMBER_BODY,
   RS,
@@ -118,6 +119,9 @@ async function moSoan() {
 const go = (id: number, s: string) => fireEvent.change(screen.getByTestId(`san-o-${id}`), { target: { value: s } })
 
 // ═══════════════════════════════════════ chế độ xem ═══════════════════════════════════════
+// Chặn request rò (đối chiếu CI F4; quyết định điều phối 25-11): request không handler ⇒ ghi lại, máy giả trả 500 (KHÔNG ra mạng), ca ĐỎ ở cuối ca (src/test/setup.ts).
+chanRequestRo()
+
 describe("M3 — chế độ xem (E3)", () => {
   it("owner G2: MỘT dòng 'lưu lần cuối bởi … lúc …', không cột người sửa; chỉ tiêu null ≠ 0; điểm dấu phẩy; 'Đã xoá'; KHÔNG gọi E10", async () => {
     // Biến thể phá: thêm cột "Người sửa" từng dòng ⇒ đếm "Người dùng #" trong thẻ > 1 ⇒ ĐỎ.

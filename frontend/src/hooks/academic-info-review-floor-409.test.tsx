@@ -15,6 +15,7 @@ import { toast } from "sonner"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { server } from "@/test/mocks/server"
+import { chanRequestRo } from "@/test/review-sessions-msw"
 import { API } from "@/test/mocks/review-sessions-data"
 import { appLikeQueryClient } from "@/test/review-sessions-render"
 
@@ -53,6 +54,9 @@ const CA: CaHook[] = [
     },
   },
 ]
+
+// Chặn request rò (đối chiếu CI F4; quyết định điều phối 25-11): request không handler ⇒ ghi lại, máy giả trả 500 (KHÔNG ra mạng), ca ĐỎ ở cuối ca (src/test/setup.ts).
+chanRequestRo()
 
 describe("M8 — 409 ACADEMIC_INFO_IN_REVIEW_FLOOR khi dời năm học vụ: toast hiện ĐÚNG câu máy chủ", () => {
   it.each(CA)("$ten", async ({ url, dung }) => {

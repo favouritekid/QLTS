@@ -21,6 +21,7 @@ import {
   priorityMissingCodes,
   runDoneMessage,
   runFailedMessage,
+  runForeign,
   runOtherDone,
   runOwnCeiling,
   runRunningFor,
@@ -148,6 +149,15 @@ export function ReviewRunTrackerBand({
       return (
         <Info testId="kiem-luot-khac-xong">
           <p>{runOtherDone(phase.runId, phase.status)}</p>
+          <Link href={reviewRunHref(sessionId, phase.runId)} className="underline" data-testid="kiem-xem-ket-qua">
+            {RUN_VIEW_RESULT}
+          </Link>
+        </Info>
+      )
+    case "foreign_run":
+      return (
+        <Info testId="kiem-luot-nguoi-khac">
+          <p>{runForeign(phase.runId, phase.status, phase.userKnown)}</p>
           <Link href={reviewRunHref(sessionId, phase.runId)} className="underline" data-testid="kiem-xem-ket-qua">
             {RUN_VIEW_RESULT}
           </Link>

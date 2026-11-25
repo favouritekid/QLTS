@@ -133,30 +133,49 @@ describe("chuyển pha", () => {
 
   it("tra E7 sau khi chưa rõ: không có lượt mới ⇒ 'chưa có lượt mới'; có ⇒ theo dõi lượt ấy qua E8, hỏi NGAY", () => {
     const chuaRo = polling(phaseAfterCreateError(loi({ kind: "uncertain" }), 11, KE_HOACH_NHO))
-    expect(phaseAfterListPoll(chuaRo, trang([runSummaryGia({ id: 11 })]), KE_HOACH_NHO)).toEqual({ kind: "no_new_run" })
-    const theoDoi = polling(phaseAfterListPoll(chuaRo, trang([runSummaryGia({ id: 12, status: "running" })]), KE_HOACH_NHO))
+    expect(phaseAfterListPoll(chuaRo, trang([runSummaryGia({ id: 11 })]), KE_HOACH_NHO, 1)).toEqual({ kind: "no_new_run" })
+    const theoDoi = polling(phaseAfterListPoll(chuaRo, trang([runSummaryGia({ id: 12, status: "running" })]), KE_HOACH_NHO, 1))
     expect(theoDoi.target.mode).toBe("mine")
     expect(theoDoi.target.runId).toBe(12)
     expect(theoDoi.delayMs).toBe(0)
+  })
+
+  it("F4 (Codex F3-2 NỢ-1): chưa rõ mà lượt mới hơn mốc do NGƯỜI KHÁC yêu cầu / không biết người đăng nhập ⇒ chỉ báo, không theo dõi như của mình", () => {
+    // Biến thể phá: bỏ so `requested_by_user_id` ⇒ lượt của người khác bị theo dõi + tự mở M5 ⇒ ĐỎ.
+    const chuaRo = polling(phaseAfterCreateError(loi({ kind: "uncertain" }), 11, KE_HOACH_NHO))
+    const moi = trang([runSummaryGia({ id: 12, status: "running", requested_by_user_id: 2 })])
+    expect(phaseAfterListPoll(chuaRo, moi, KE_HOACH_NHO, 1)).toEqual({
+      kind: "foreign_run",
+      runId: 12,
+      status: "running",
+      userKnown: true,
+    })
+    expect(phaseAfterListPoll(chuaRo, moi, KE_HOACH_NHO, null)).toEqual({
+      kind: "foreign_run",
+      runId: 12,
+      status: "running",
+      userKnown: false,
+    })
+    expect(polling(phaseAfterListPoll(chuaRo, moi, KE_HOACH_NHO, 2)).target.mode).toBe("mine")
   })
 
   it("chờ lượt khác: lượt mới hơn mốc đã kết thúc ⇒ other_done; đang chạy ⇒ hỏi tiếp (giữ id); chưa thấy ⇒ hỏi tiếp; trần ⇒ dừng", () => {
     const cho = polling(
       phaseAfterCreateError(loi({ errorCode: "REVIEW_RUN_IN_PROGRESS", message: "x" }), 11, KE_HOACH_NHO),
     )
-    expect(phaseAfterListPoll(cho, trang([runSummaryGia({ id: 12, status: "done" })]), KE_HOACH_NHO)).toEqual({
+    expect(phaseAfterListPoll(cho, trang([runSummaryGia({ id: 12, status: "done" })]), KE_HOACH_NHO, 1)).toEqual({
       kind: "other_done",
       runId: 12,
       status: "done",
     })
-    const tiep = polling(phaseAfterListPoll(cho, trang([runSummaryGia({ id: 12, status: "running" })]), KE_HOACH_NHO))
+    const tiep = polling(phaseAfterListPoll(cho, trang([runSummaryGia({ id: 12, status: "running" })]), KE_HOACH_NHO, 1))
     expect(tiep.target.runId).toBe(12)
     expect(tiep.status).toBe("running")
     expect(tiep.attempt).toBe(1)
     let p: RunTrackPhase = cho
     let lan = 0
     while (p.kind === "polling" && lan < 1000) {
-      p = phaseAfterListPoll(p, trang([runSummaryGia({ id: 11 })]), KE_HOACH_NHO)
+      p = phaseAfterListPoll(p, trang([runSummaryGia({ id: 11 })]), KE_HOACH_NHO, 1)
       lan += 1
     }
     expect(p.kind).toBe("ceiling")

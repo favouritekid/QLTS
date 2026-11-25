@@ -13,7 +13,7 @@
  */
 import { fireEvent, screen } from "@testing-library/react"
 import { http, HttpResponse } from "msw"
-import { describe, expect, it, vi } from "vitest"
+import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { formatDateTimeVN } from "@/lib/document-review/messages"
 import {
@@ -23,10 +23,10 @@ import {
   RUN_NOT_DONE_NOTE,
   RUN_NOT_FOUND_MESSAGE,
   RUN_NO_SUMMARY,
-  RUN_RESULTS_NEXT_PHASE,
   runFailedMessage,
 } from "@/lib/review-sessions/messages"
 import { server } from "@/test/mocks/server"
+import { chanRequestRo } from "@/test/review-sessions-msw"
 import { RS, runGia, sessionGia } from "@/test/mocks/review-sessions-data"
 import { renderApp } from "@/test/review-sessions-render"
 import { resolveServerTree } from "@/test/server-component"
@@ -158,6 +158,22 @@ const QUOTA_VIEW = {
   ],
 }
 
+// Chặn request rò (đối chiếu CI F4; quyết định điều phối 25-11): request không handler ⇒ ghi lại, máy giả trả 500 (KHÔNG ra mạng), ca ĐỎ ở cuối ca (src/test/setup.ts).
+chanRequestRo()
+
+/**
+ * F4: thẻ "Kết quả" (mặc định) của M5 gọi E9 khi lượt `done` — handler MẶC ĐỊNH (trang rỗng) cho mọi ca của tệp này. Thiếu nó, E9 là
+ * request rò: đối chiếu CI F4 đo được request đi ra mạng thật rồi worker sập ở chính tệp này. Ca nào cần dòng E9 cụ thể thì tự
+ * `server.use` (đặt sau ⇒ được ưu tiên).
+ */
+beforeEach(() => {
+  server.use(
+    http.get(`${RS}/3/runs/:runId/rows`, () =>
+      HttpResponse.json({ items: [], total: 0, page: 1, page_size: 50, total_pages: 0, tab_counts: { auto: 0 } }),
+    ),
+  )
+})
+
 describe("M5 — trang lượt kiểm: id trên URL", () => {
   it.each<[string, string]>([
     ["3", "abc"],
@@ -188,10 +204,11 @@ describe("M5 — đầu trang, băng cảnh báo", () => {
       "Cổng học phí lúc chạy: Phải đóng đủ (hoặc được miễn) học phí học kỳ 1",
     )
     expect(screen.getByTestId("luot-anh-chup")).toHaveTextContent(`Ảnh chụp lúc ${formatDateTimeVN("2026-11-24T02:12:00Z")}`)
-    expect(screen.getByTestId("luot-so-nhom")).toHaveTextContent(
-      "Đạt — máy đề xuất 120 · Cần Ban thư ký quyết 8 · Chưa đạt — chờ lần sau 31 · Chưa đủ điều kiện 57",
-    )
-    expect(screen.getByTestId("the-noi-dung-ket-qua")).toHaveTextContent(RUN_RESULTS_NEXT_PHASE)
+    // F4: thẻ "Kết quả" = bốn tab, số trên tab là `summary.tab_counts` của máy chủ (thay dòng tóm tắt + câu "đợt sau" của F3).
+    expect(screen.getByTestId("kq-tab-auto")).toHaveTextContent("Đạt — máy đề xuất 120")
+    expect(screen.getByTestId("kq-tab-needs_decision")).toHaveTextContent("Cần Ban thư ký quyết 8")
+    expect(screen.getByTestId("kq-tab-not_passed")).toHaveTextContent("Chưa đạt — chờ lần sau 31")
+    expect(screen.getByTestId("kq-tab-ineligible")).toHaveTextContent("Chưa đủ điều kiện 57")
     expect(screen.getAllByTestId("ve-lan-xet")[0]).toHaveAttribute("href", "/review-sessions/3")
     expect(screen.queryByTestId("bang-luot-cu")).toBeNull()
     expect(screen.queryByTestId("bang-luot-cau-hinh-doi")).toBeNull()
