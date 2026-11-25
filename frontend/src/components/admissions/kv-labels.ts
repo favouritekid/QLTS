@@ -183,7 +183,7 @@ export function localizeReason(reason: string | null | undefined): string | null
   if (exact !== undefined) return exact
   const colon = reason.indexOf(":")
   if (colon > 0) {
-    const byPrefix = own(REASON_PREFIX_VI, reason.slice(0, colon))
+    const byPrefix = own(REASON_PREFIX_VI, reason)
     if (byPrefix !== undefined) return byPrefix
   }
   return reason
