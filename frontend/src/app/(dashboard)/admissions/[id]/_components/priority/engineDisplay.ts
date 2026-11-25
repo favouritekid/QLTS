@@ -102,7 +102,7 @@ export function resolveEngineDisplay(
     // Owner 25-11 (QUYET-DINH-OWNER-DOAN-3C-CAU-KV câu 2): hồ sơ ĐÃ NỘP mà KV CHƯA tính được ⇒ câu việc cần làm
     // (`reason`) trước; đã có KV ⇒ căn cứ (`basis_reason`) trước. "Đã có KV" = đúng `kv` hiển thị ở trên.
     if (isPostDraft) {
-      return kv
+      return !kv
         ? (snapshot.basis_reason ?? snapshot.reason ?? null)
         : (snapshot.reason ?? snapshot.basis_reason ?? null)
     }
