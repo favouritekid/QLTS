@@ -102,6 +102,7 @@ __all__ = [
     "verify_user_management_permission",
     "require_assignable_role",  # F154: vai MỚI phải thấp hơn vai người thao tác
     "verify_users_management_permission",  # F154 (Codex A2): bulk / sync — từng người đích qua cùng cổng
+    "verify_users_sync_permission",  # F154 (Codex A2): /sync — + vai SẮP CÓ qua require_assignable_role
 
     # Organizational Unit IDOR — cờ allow_read_only THUỘC VỀ SERVER
     "get_organizational_unit_readonly",   # cổng ĐỌC (hardcode True)
@@ -2249,6 +2250,30 @@ async def verify_users_management_permission(
     existing = sorted({u.id for u in await UserRepository(db).get_by_ids(sorted(set(target_user_ids)))})
     for target_user_id in existing:
         await verify_user_management_permission(target_user_id=target_user_id, db=db, current_user=current_user)
+
+
+async def verify_users_sync_permission(
+    target_user_ids: Optional[List[int]],
+    db: AsyncSession,
+    current_user: models.User,
+) -> None:
+    """F154 (rà Codex 25-11 CHẶN A2, vá anh em §6) — cổng ``POST /api/admin/users/sync``: (1) từng người đích qua
+    :func:`verify_users_management_permission` (vai HIỆN TẠI: phạm vi + cấp vai); (2) vai SẮP CÓ — đồng bộ ghi vai CSDL
+    bằng vai Casbin (``user_service.highest_priority_role`` trên ``casbin_rule``, đúng phép tính service dùng) — phải qua
+    :func:`require_assignable_role` như vai mới ở PUT. Thiếu (2) thì Quản lý đồng bộ một Cán bộ có dòng Casbin
+    ``role:admin`` (dòng sót / cũ) là biến Cán bộ ấy thành Quản trị. Một người không đạt ⇒ từ chối cả lệnh, trước mọi ghi.
+
+    Đọc ``casbin_rule`` KHÔNG khoá: dòng ``g`` chỉ Quản trị ghi được (router vai), Quản trị đổi nó giữa cổng và service là
+    chính Quản trị chọn vai ấy."""
+    await verify_users_management_permission(target_user_ids, db, current_user)
+    from ..repositories import UserRepository
+
+    repo = UserRepository(db)
+    users = await (repo.get_all() if target_user_ids is None else repo.get_by_ids(sorted(set(target_user_ids))))
+    for user in sorted(users, key=lambda u: u.id):
+        role_after_sync = user_service.highest_priority_role(await repo.grouping_roles(user.id))
+        if role_after_sync != user.role:
+            require_assignable_role(current_user, role_after_sync)
 
 
 def require_assignable_role(current_user: models.User, new_role: Optional[str]) -> None:

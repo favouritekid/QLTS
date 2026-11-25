@@ -661,8 +661,9 @@ async def sync_users(
     user_ids = sync_request.user_ids
 
     # F154 (rà Codex 25-11 CHẶN A2): đồng bộ ĐỔI vai CSDL ⇒ từng người đích qua cùng cổng phạm vi + cấp vai; đồng bộ TOÀN
-    # BỘ (``user_ids`` null) chỉ Quản trị. Một người không đạt ⇒ từ chối cả lệnh, trước mọi ghi.
-    await deps.verify_users_management_permission(user_ids, db, current_admin)
+    # BỘ (``user_ids`` null) chỉ Quản trị; vai SẮP CÓ (từ Casbin) phải gán được như PUT. Một người không đạt ⇒ từ chối cả
+    # lệnh, trước mọi ghi.
+    await deps.verify_users_sync_permission(user_ids, db, current_admin)
 
     # Call service layer with injected dependencies (DI pattern)
     result = await user_service.sync_users_to_casbin(

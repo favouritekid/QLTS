@@ -722,6 +722,17 @@ class TestAZ5F154HangLoatVaDongBo:
         res = await _goi(client, "POST", SYNC_URL, az5["h"], json={"user_ids": [az5["officer_a"]["id"]]})
         assert res.status_code == 200, res.text
 
+    async def test_sync_quan_ly_khong_nang_can_bo_len_quan_tri_qua_dong_casbin(self, client, az5):
+        # Cán bộ cùng đơn vị (vai HIỆN TẠI đạt cổng) nhưng có dòng Casbin role:admin sót ⇒ đồng bộ sẽ ghi vai Quản trị.
+        dich = az5["officer_a"]
+        h_dich = await _cookie(client, dich)
+        await _them_vai_casbin(dich["id"], "role:admin")
+        res = await _goi(client, "POST", SYNC_URL, az5["h"], json={"user_ids": [dich["id"]]})
+        assert await _cot(dich["id"], "role") == "officer", f"Quản lý nâng được Cán bộ lên Quản trị qua đồng bộ ({res.status_code})"
+        assert await _con_dung_duoc(client, h_dich) == 200, "lệnh bị từ chối mà vẫn đăng xuất người đích"
+        assert res.status_code == 403, f"tiền đề: bị cổng 'vai sắp có' chặn: {res.text}"
+        assert res.json().get("detail") == ROLE_NOT_ASSIGNABLE_DETAIL, res.text
+
 
 # Quyết định owner 25-11 (Q-A2/A6/A12/A13), viết TAY — không suy từ mã: vai người thao tác ⇒ tập vai đích được tác động
 # (tạo / đặt mật khẩu / sửa / xoá / gán). "Trừ chính mình" là phép so danh tính, không nằm ở bảng này.
