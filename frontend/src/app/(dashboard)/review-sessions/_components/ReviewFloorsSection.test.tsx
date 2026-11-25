@@ -119,7 +119,7 @@ async function moSoan() {
 const go = (id: number, s: string) => fireEvent.change(screen.getByTestId(`san-o-${id}`), { target: { value: s } })
 
 // ═══════════════════════════════════════ chế độ xem ═══════════════════════════════════════
-// Chặn request rò (đối chiếu CI F4; quyết định điều phối 25-11): request không handler ⇒ in lỗi MSW, KHÔNG ra mạng, ca ĐỎ.
+// Chặn request rò (đối chiếu CI F4; quyết định điều phối 25-11): request không handler ⇒ ghi lại, máy giả trả 500 (KHÔNG ra mạng), ca ĐỎ ở cuối ca (src/test/setup.ts).
 chanRequestRo()
 
 describe("M3 — chế độ xem (E3)", () => {

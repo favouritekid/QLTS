@@ -75,7 +75,7 @@ function mayChuE3(chuoi: (() => Response | Promise<Response>)[]): { lan: number 
 
 const json = (body: Record<string, unknown>, status = 200) => () => HttpResponse.json(body, { status })
 
-// Chặn request rò (đối chiếu CI F4; quyết định điều phối 25-11): request không handler ⇒ in lỗi MSW, KHÔNG ra mạng, ca ĐỎ.
+// Chặn request rò (đối chiếu CI F4; quyết định điều phối 25-11): request không handler ⇒ ghi lại, máy giả trả 500 (KHÔNG ra mạng), ca ĐỎ ở cuối ca (src/test/setup.ts).
 chanRequestRo()
 
 describe("M2 — trang chi tiết: id trên URL", () => {

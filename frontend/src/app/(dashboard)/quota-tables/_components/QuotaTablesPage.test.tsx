@@ -75,7 +75,7 @@ async function moTrang(sp: PageSearchParams = {}) {
   return renderWithClient(<>{await resolveServerTree(QuotaTablesPage({ searchParams: Promise.resolve(sp) }))}</>)
 }
 
-// Chặn request rò (đối chiếu CI F4; quyết định điều phối 25-11): request không handler ⇒ in lỗi MSW, KHÔNG ra mạng, ca ĐỎ.
+// Chặn request rò (đối chiếu CI F4; quyết định điều phối 25-11): request không handler ⇒ ghi lại, máy giả trả 500 (KHÔNG ra mạng), ca ĐỎ ở cuối ca (src/test/setup.ts).
 chanRequestRo()
 
 describe("KT-6 — trang /quota-tables (ngoài /admin)", () => {

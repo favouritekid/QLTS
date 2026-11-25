@@ -134,7 +134,7 @@ async function bamKiem() {
 }
 
 // ═══════════════════════════════════════ 202 + theo dõi lượt của mình ═══════════════════════════════════════
-// Chặn request rò (đối chiếu CI F4; quyết định điều phối 25-11): request không handler ⇒ in lỗi MSW, KHÔNG ra mạng, ca ĐỎ.
+// Chặn request rò (đối chiếu CI F4; quyết định điều phối 25-11): request không handler ⇒ ghi lại, máy giả trả 500 (KHÔNG ra mạng), ca ĐỎ ở cuối ca (src/test/setup.ts).
 chanRequestRo()
 
 describe("M4 — 202 và theo dõi lượt (HĐ5: queued / running)", () => {

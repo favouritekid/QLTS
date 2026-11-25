@@ -81,7 +81,7 @@ async function chonDotVaTao(id: string) {
   fireEvent.click(screen.getByTestId("tao-xac-nhan"))
 }
 
-// Chặn request rò (đối chiếu CI F4; quyết định điều phối 25-11): request không handler ⇒ in lỗi MSW, KHÔNG ra mạng, ca ĐỎ.
+// Chặn request rò (đối chiếu CI F4; quyết định điều phối 25-11): request không handler ⇒ ghi lại, máy giả trả 500 (KHÔNG ra mạng), ca ĐỎ ở cuối ca (src/test/setup.ts).
 chanRequestRo()
 
 describe("M1 — tạo lần xét (E1)", () => {

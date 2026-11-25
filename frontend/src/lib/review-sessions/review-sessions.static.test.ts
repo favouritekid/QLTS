@@ -154,14 +154,20 @@ const TEST_MSW_LAN_XET = [
   "lib/hooks/use-review-sessions.test.tsx",
 ]
 
-/** Tệp test (`*.test.ts(x)`) dưới `rel` có dùng máy chủ giả MSW. */
+/**
+ * Câu `import { … } from "@/test/mocks/server"` (nháy đơn hay kép, một hay nhiều dòng). Nhận theo CÂU IMPORT, không theo chuỗi đường dẫn:
+ * lượt 2 nhận bằng `.includes(...)` nên tự bắt chính tệp này (đường dẫn nằm trong chú thích và trong hàm nhận diện) ⇒ ĐỎ nhầm.
+ */
+const IMPORT_MAY_CHU_GIA = /^import\s+(?:type\s+)?\{[^}]*\}\s+from\s+["']@\/test\/mocks\/server["']/m
+
+/** Tệp test (`*.test.ts(x)`) dưới `rel` có import máy chủ giả MSW. */
 function tepTestDungMsw(rel: string): string[] {
   const out: string[] = []
   const di = (d: string) => {
     for (const e of fs.readdirSync(path.join(SRC, d), { withFileTypes: true })) {
       const p = `${d}/${e.name}`
       if (e.isDirectory()) di(p)
-      else if (/\.test\.tsx?$/.test(e.name) && fs.readFileSync(path.join(SRC, p), "utf8").includes("@/test/mocks/server")) out.push(p)
+      else if (/\.test\.tsx?$/.test(e.name) && IMPORT_MAY_CHU_GIA.test(fs.readFileSync(path.join(SRC, p), "utf8"))) out.push(p)
     }
   }
   di(rel)
@@ -178,6 +184,7 @@ describe("test lần xét dùng MSW — chặn request rò (không nới lại t
   })
 
   it("mọi tệp test dùng MSW dưới thư mục màn lần xét / lib lần xét đều nằm trong danh sách (tệp mới không lọt)", () => {
+    // Biến thể phá: thêm một tệp test import máy chủ giả dưới `review-sessions/` mà không vào danh sách ⇒ ĐỎ.
     const tim = [...tepTestDungMsw(TRANG), ...tepTestDungMsw("lib/review-sessions")]
     expect(tim.length).toBeGreaterThan(0)
     for (const t of tim) expect(TEST_MSW_LAN_XET, `tệp test MSW mới chưa chặn request rò: ${t}`).toContain(t)
