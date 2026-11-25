@@ -115,7 +115,7 @@ export const REASON_VI: Record<string, string> = {
     "Chưa có dòng lịch sử học cấp THPT (THPT, GDTX, hoặc liên cấp có lớp 10–12) chọn trường trong danh mục — thêm các năm học THPT theo học bạ, chọn trường trong danh mục",
   // L3 (owner 24-11): dòng THPT / GDTX ghi "Lớp cuối" ngoài 10–12 dừng ở đây (cùng mã với liên cấp thiếu lớp, 0 năm học).
   history_entries_inconsistent:
-    "Có dòng lịch sử học THPT chưa hợp lệ (“Lớp cuối” không phải 10, 11 hay 12; trường liên cấp chưa ghi lớp cuối; năm bắt đầu trùng năm kết thúc) — sửa theo học bạ; nếu học bạ đúng như vậy, đề nghị Quản lý / Admin ấn định KV thủ công",
+    "Có dòng lịch sử học THPT chưa hợp lệ (“Lớp cuối” không phải 10, 11 hay 12; trường liên cấp chưa ghi lớp cuối; năm bắt đầu trùng năm kết thúc) — sửa theo học bạ",
   all_school_lookups_failed:
     "Các trường THPT trong lịch sử học chưa có khu vực cho những năm đã học — báo Admin bổ sung khu vực của trường, hoặc đề nghị Quản lý / Admin ấn định KV thủ công",
   some_school_lookups_failed:
