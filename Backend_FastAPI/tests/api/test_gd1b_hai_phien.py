@@ -347,9 +347,64 @@ async def test_k4_dang_duyet_thi_xoa_nguoi_thao_tac_cho_roi_409(
 async def test_k4_dang_xoa_nguoi_thao_tac_thi_duyet_bi_tu_choi(
     client, monkeypatch, admin_token_headers, admin_user_in_db, manager_user_in_db, officer_user_in_db, parity_config
 ):
-    from app.services import user_service
+    """Yêu cầu duyệt (A) ĐÃ qua xác thực TRƯỚC khi lệnh xoá chính người duyệt (B) bắt đầu ⇒ A bị khoá dòng người của B
+    CHẶN (đo ``pg_blocking_pids``), B commit ⇒ A bị từ chối, giấy không đổi.
+
+    F154 (owner 25-11, đường anh em ý 2): xoá tài khoản nay thu hồi mọi phiên (đặt ``user_blacklist``) NGAY trong giao dịch
+    xoá, trước commit ⇒ một yêu cầu MỚI của người bị xoá bị từ chối ở tầng xác thực, không còn đi tới khoá (ca
+    ``…_yeu_cau_moi_bi_tu_choi_o_xac_thuc`` bên dưới). Khoá K4 vẫn là hàng rào cho yêu cầu ĐANG CHẠY (đã qua xác thực từ
+    trước) — ca này dựng đúng tình huống ấy: A dừng ngay sau khi khoá hồ sơ (đã qua mọi cổng, CHƯA khoá người thao tác),
+    rồi mới cho B xoá. Bản trước 25-11 cho A gọi SAU khi B đã xoá ⇒ với F154 A trả 401 ở xác thực, không còn đo được khoá
+    (CI run 45602241161, shard-15)."""
+    from app.services import admission_service, user_service
 
     prof = await _create_profile(client, admin_token_headers, officer_user_in_db, parity_config, "hp_k4b")
+    code = parity_config["paper_doc_code"]
+    d = await _nhan_giay(officer_user_in_db, prof["id"], code)
+    diem_a = _Diem()  # A: sau khi khoá hồ sơ (đã qua xác thực + mọi cổng), CHƯA khoá người thao tác
+    diem_b = _Diem()  # B: sau flush xoá, CHƯA commit (giữ khoá dòng user)
+    _boc(monkeypatch, admission_service, "_lock_profile_for_document_write", diem_a)
+    _boc(monkeypatch, user_service, "delete_user", diem_b)
+
+    ca, ha = await _client(manager_user_in_db)
+    cb, hb = await _client(admin_user_in_db)
+    try:
+        with _PidTheoNhan() as ghi:
+            a = asyncio.create_task(_goi("A", lambda: ca.patch(
+                f"{ADMISSIONS}/{prof['id']}/documents/{code}/verify-format", headers=ha,
+                json={"format": "original", "expected_row_version": d.row_version},
+            )))
+            await asyncio.wait_for(diem_a.toi.wait(), 30)
+            b = asyncio.create_task(_goi("B", lambda: cb.delete(
+                AdminURLs.USER_DETAIL(manager_user_in_db["id"]), headers=hb
+            )))
+            await asyncio.wait_for(diem_b.toi.wait(), 30)
+            diem_a.di.set()
+            # Phiên DUYỆT (A) là bên bị chặn, bởi phiên XOÁ (B) — ở bước khoá người thao tác.
+            tt = await _bi_chan_boi(a, ghi, bi="A", boi="B")
+            diem_b.di.set()
+            rb, ra = await asyncio.gather(b, a)
+    finally:
+        diem_a.di.set()
+        diem_b.di.set()
+        await ca.aclose()
+        await cb.aclose()
+    assert tt == "chan", tt
+    assert rb.status_code == 200, rb.text
+    # A bị chặn rồi thấy người thao tác không còn ⇒ từ chối (409 actor_not_authorized / 404). Không bao giờ 200 / 500.
+    assert ra.status_code in (404, 409), (ra.status_code, ra.text)
+    assert (await _giay(prof["id"], code)).status == "paper_submitted"
+
+
+async def test_k4_dang_xoa_nguoi_thao_tac_yeu_cau_moi_bi_tu_choi_o_xac_thuc(
+    client, monkeypatch, admin_token_headers, admin_user_in_db, manager_user_in_db, officer_user_in_db, parity_config
+):
+    """F154 (owner 25-11): lệnh xoá người duyệt (B) đã thu hồi mọi phiên trong giao dịch xoá (chưa commit) ⇒ yêu cầu duyệt
+    MỚI của chính người ấy (A, token cấp trước đó) bị từ chối NGAY ở tầng xác thực (401) — không chờ khoá của B, giấy không
+    đổi. Đây là tình huống của ca K4 bản trước 25-11 (A gọi SAU khi B đã xoá xong, chưa commit)."""
+    from app.services import user_service
+
+    prof = await _create_profile(client, admin_token_headers, officer_user_in_db, parity_config, "hp_k4c")
     code = parity_config["paper_doc_code"]
     d = await _nhan_giay(officer_user_in_db, prof["id"], code)
     diem = _Diem()
@@ -367,7 +422,6 @@ async def test_k4_dang_xoa_nguoi_thao_tac_thi_duyet_bi_tu_choi(
                 f"{ADMISSIONS}/{prof['id']}/documents/{code}/verify-format", headers=ha,
                 json={"format": "original", "expected_row_version": d.row_version},
             )))
-            # Lần này phiên DUYỆT (A) là bên bị chặn, bởi phiên XOÁ (B).
             tt = await _bi_chan_boi(a, ghi, bi="A", boi="B")
             diem.di.set()
             rb, ra = await asyncio.gather(b, a)
@@ -375,9 +429,8 @@ async def test_k4_dang_xoa_nguoi_thao_tac_thi_duyet_bi_tu_choi(
         diem.di.set()
         await ca.aclose()
         await cb.aclose()
-    assert tt == "chan", tt
+    assert (tt, ra.status_code) == ("xong", 401), (
+        f"yêu cầu mới của người đang bị xoá phải bị từ chối ở xác thực, không đi tới khoá: {tt} {ra.status_code} {ra.text}"
+    )
     assert rb.status_code == 200, rb.text
-    # A bị chặn rồi thấy người thao tác không còn ⇒ từ chối (409 actor_not_authorized hoặc 401 nếu xác thực lại thất bại).
-    # Không bao giờ 200 / 500.
-    assert ra.status_code in (401, 404, 409), (ra.status_code, ra.text)
     assert (await _giay(prof["id"], code)).status == "paper_submitted"
