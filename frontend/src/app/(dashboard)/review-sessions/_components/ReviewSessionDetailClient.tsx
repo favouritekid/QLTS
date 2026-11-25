@@ -128,12 +128,12 @@ export function ReviewSessionDetailClient({ sessionId }: { sessionId: number }) 
             </Link>
           </span>
           <span data-testid="lan-xet-tao">
-            Tạo bởi {userRef(s.created_by_user_id)} lúc {formatDateTimeVN(s.created_at)}
+            Tạo bởi {userRef(s.created_by_user_id, s.created_by_full_name)} lúc {formatDateTimeVN(s.created_at)}
           </span>
         </div>
         {s.cancelled_at !== null ? (
           <p className="text-sm" data-testid="lan-xet-huy">
-            Huỷ bởi {userRef(s.cancelled_by_user_id)} lúc {formatDateTimeVN(s.cancelled_at)}
+            Huỷ bởi {userRef(s.cancelled_by_user_id, s.cancelled_by_full_name)} lúc {formatDateTimeVN(s.cancelled_at)}
             {s.cancel_reason !== null ? ` — Lý do: ${s.cancel_reason}` : null}
           </p>
         ) : null}

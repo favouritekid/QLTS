@@ -114,7 +114,7 @@ export function ReviewSessionsListClient({ filters }: { filters: ReviewSessionLi
                 <TableCell>
                   <LatestRunSummary run={s.latest_run} testId={`lan-xet-${s.id}-luot`} />
                 </TableCell>
-                <TableCell>{userRef(s.created_by_user_id)}</TableCell>
+                <TableCell>{userRef(s.created_by_user_id, s.created_by_full_name)}</TableCell>
                 <TableCell>{formatDateTimeVN(s.created_at)}</TableCell>
               </TableRow>
             ))}

@@ -214,6 +214,15 @@ describe("M5 — đầu trang, băng cảnh báo", () => {
     expect(screen.queryByTestId("bang-luot-cau-hinh-doi")).toBeNull()
   })
 
+  it("S3 (phụ lục S3/S7): 'Chạy bởi' hiện HỌ TÊN máy chủ trả (E8 `requested_by_full_name`)", async () => {
+    // Biến thể phá: đầu M5 gọi userRef chỉ với id ⇒ ĐỎ.
+    mayChuGet(`${RS}/3`, [json(sessionGia())])
+    mayChuGet(`${RS}/3/runs/11`, [json(runGia({ requested_by_user_id: 2, requested_by_full_name: "Người Chạy Giả" }))])
+    await moLuot()
+    expect(await screen.findByTestId("luot-nguoi-chay")).toHaveTextContent("Chạy bởi Người Chạy Giả")
+    expect(screen.getByTestId("luot-nguoi-chay")).not.toHaveTextContent("#")
+  })
+
   it.each<[string, number, boolean]>([
     ["là lượt xong mới nhất", 11, false],
     ["KHÔNG phải lượt xong mới nhất", 12, true],

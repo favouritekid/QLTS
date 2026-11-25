@@ -126,9 +126,14 @@ export function numberLabel(n: number | null): string {
   return n === null ? "—" : String(n)
 }
 
-/** [ĐX] Đơn vị: máy chủ chỉ trả `unit_id` (S7 `unit_name` chưa có — đính chính 1 §5) ⇒ "Đơn vị #id"; `null` ⇒ "—". */
-export function unitRef(unitId: number | null): string {
-  return unitId === null ? "—" : `Đơn vị #${unitId}`
+/**
+ * Đơn vị của dòng (đính chính 1 §5; phụ lục S3/S7 — S7): hiện `unit_name` máy chủ trả (tên của CHÍNH `unit_id`); tên trống ⇒ giữ chỗ
+ * tạm "Đơn vị #id" (owner Q6); `unit_id` `null` ⇒ "—".
+ */
+export function unitRef(unitId: number | null, unitName: string | null | undefined): string {
+  if (unitId === null) return "—"
+  const name = unitName?.trim()
+  return name ? name : `Đơn vị #${unitId}`
 }
 
 /** Thiết kế §3.6 / HĐ4 §3.5: `full_name = null` ⇒ hồ sơ không còn. */

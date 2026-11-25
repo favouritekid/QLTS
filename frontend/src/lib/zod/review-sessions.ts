@@ -111,6 +111,8 @@ export const floorSchema = z.object({
   group_code: z.string().nullable(),
   is_deleted: z.boolean(),
   updated_by_user_id: int,
+  /** S3 — họ tên người lưu sàn, đọc lúc GET; `null` = chưa khai họ tên (phụ lục S3/S7). */
+  updated_by_full_name: z.string().nullable(),
   updated_at: isoTime,
 })
 export type ReviewFloor = z.infer<typeof floorSchema>
@@ -122,6 +124,8 @@ export const runSummarySchema = z.object({
   status: z.string(),
   rule_version: z.string(),
   requested_by_user_id: int,
+  /** S3 — họ tên người chạy, đọc lúc GET; `null` = chưa khai họ tên. */
+  requested_by_full_name: z.string().nullable(),
   requested_at: isoTime,
   finished_at: isoTime.nullable(),
   duration_ms: int.nullable(),
@@ -140,9 +144,12 @@ export const sessionSchema = z.object({
   status: z.string(),
   version: int,
   created_by_user_id: int,
+  /** S3 — họ tên người tạo / người huỷ, đọc lúc GET; `null` = chưa khai họ tên (người huỷ: cả khi chưa huỷ). */
+  created_by_full_name: z.string().nullable(),
   created_at: isoTime,
   updated_at: isoTime,
   cancelled_by_user_id: int.nullable(),
+  cancelled_by_full_name: z.string().nullable(),
   cancelled_at: isoTime.nullable(),
   cancel_reason: z.string().nullable(),
   quota_table: quotaTableStateSchema,
@@ -163,6 +170,7 @@ export const sessionListItemSchema = z.object({
   status: z.string(),
   version: int,
   created_by_user_id: int,
+  created_by_full_name: z.string().nullable(),
   created_at: isoTime,
   floor_count: int,
   latest_run: runSummarySchema.nullable(),
@@ -254,6 +262,7 @@ export const runSchema = z.object({
   status: z.string(),
   rule_version: z.string(),
   requested_by_user_id: int,
+  requested_by_full_name: z.string().nullable(),
   requested_at: isoTime,
   started_at: isoTime.nullable(),
   finished_at: isoTime.nullable(),
@@ -316,6 +325,8 @@ export const rowSchema = z.object({
   /** `null` = hồ sơ không còn (HĐ4 §3.5). */
   full_name: z.string().nullable(),
   unit_id: int.nullable(),
+  /** S7 — tên của CHÍNH đơn vị `unit_id`, đọc lúc GET; `null` khi `unit_id` `null`. */
+  unit_name: z.string().nullable(),
   profile_status: z.string(),
   tab: z.string(),
   reason_codes: z.array(z.string()),

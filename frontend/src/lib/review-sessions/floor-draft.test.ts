@@ -126,7 +126,15 @@ describe("owner G2 — MỘT dòng 'lưu lần cuối'", () => {
       floorSchema.parse(floorGia({ offering_academic_info_id: 41, updated_by_user_id: 1, updated_at: "2026-11-24T02:05:00Z" })),
       floorSchema.parse(floorGia({ offering_academic_info_id: 42, updated_by_user_id: 7, updated_at: "2026-11-24T03:00:00Z" })),
     ]
-    expect(lastFloorSave(floors)).toEqual({ userId: 7, at: "2026-11-24T03:00:00Z" })
+    expect(lastFloorSave(floors)).toEqual({ userId: 7, fullName: null, at: "2026-11-24T03:00:00Z" })
     expect(lastFloorSave([])).toBeNull()
+  })
+
+  it("S3 (phụ lục S3/S7): mang theo họ tên người lưu của CHÍNH dòng muộn nhất", () => {
+    const floors = [
+      floorSchema.parse(floorGia({ offering_academic_info_id: 41, updated_by_user_id: 1, updated_by_full_name: "Người Cũ", updated_at: "2026-11-24T02:05:00Z" })),
+      floorSchema.parse(floorGia({ offering_academic_info_id: 42, updated_by_user_id: 7, updated_by_full_name: "Người Mới", updated_at: "2026-11-24T03:00:00Z" })),
+    ]
+    expect(lastFloorSave(floors)).toEqual({ userId: 7, fullName: "Người Mới", at: "2026-11-24T03:00:00Z" })
   })
 })

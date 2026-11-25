@@ -150,6 +150,21 @@ describe("F4 — bốn tab: số máy chủ, tab mặc định, cột, thứ t�
     expect(screen.getByTestId("luot-tai-luc").textContent).toMatch(/^Tải lúc \d{2}:\d{2}$/)
   })
 
+  it("S7 (phụ lục S3/S7): cột 'Đơn vị' và đầu ngăn chi tiết hiện `unit_name` máy chủ trả; tên null ⇒ giữ 'Đơn vị #id'", async () => {
+    // Biến thể phá: ô / ngăn gọi unitRef chỉ với id ⇒ ĐỎ.
+    nen()
+    mayChuE9(() =>
+      HttpResponse.json(trangDong([{ ...DONG_AUTO, unit_name: "Khoa Giả Một" }, { ...DONG_AUTO_2, unit_name: null }])),
+    )
+    await moKetQua()
+    await screen.findByTestId("dong-1005")
+    expect(cell(1005, "unit")).toHaveTextContent(/^Khoa Giả Một$/)
+    expect(cell(1002, "unit")).toHaveTextContent(/^Đơn vị #4$/)
+    fireEvent.click(screen.getByTestId("dong-1005-xem"))
+    const ngan = await screen.findByTestId("ngan-chi-tiet")
+    expect(within(ngan).getByTestId("ngan-dau")).toHaveTextContent("Đơn vị: Khoa Giả Một")
+  })
+
   it("số trên tab = tab_counts của CẢ lượt — KHÔNG đổi theo bộ lọc; có 'Đang lọc: {total} dòng'", async () => {
     // Biến thể phá: số trên tab lấy `total` của trang đang lọc ⇒ "… 3" ⇒ ĐỎ.
     nen()

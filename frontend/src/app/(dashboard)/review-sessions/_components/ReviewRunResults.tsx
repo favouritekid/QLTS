@@ -105,7 +105,7 @@ function cell(row: ReviewRow, col: ColKey): ReactNode {
         </Link>
       )
     case "unit":
-      return unitRef(row.unit_id)
+      return unitRef(row.unit_id, row.unit_name)
     case "choice":
       return consideredChoiceLabel(row.considered_choice)
     case "total":
