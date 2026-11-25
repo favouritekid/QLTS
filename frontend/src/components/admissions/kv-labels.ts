@@ -170,7 +170,7 @@ export const REASON_PREFIX_VI: Record<string, string> = {
 }
 
 const own = (map: Record<string, string>, key: string): string | undefined =>
-  Object.prototype.hasOwnProperty.call(map, key) ? map[key] : undefined
+  map[key]
 
 /**
  * Translate BE reason string → Vietnamese hint.
