@@ -27,6 +27,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible"
+import { localizeReason } from "@/components/admissions/kv-labels"
 import type { PreviewPriorityKvResponse } from "@/lib/api/priority-kv"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
 import { resolveEngineDisplay } from "./engineDisplay"
@@ -154,9 +155,10 @@ export function EngineResultCard({
             <p className="italic text-muted-foreground">Chưa có KV.</p>
           )}
 
+          {/* Đoàn 3c: mã lý do / căn cứ của máy chủ → câu tiếng Việt (một bảng: kv-labels.ts). */}
           {reason && (
-            <p className="text-sm">
-              <span className="font-medium">Lý do:</span> {reason}
+            <p className="text-sm" data-testid="engine-result-reason">
+              <span className="font-medium">Lý do:</span> {localizeReason(reason)}
             </p>
           )}
 
@@ -196,8 +198,8 @@ export function EngineResultCard({
       {state === "ambiguous" && (
         <div className="space-y-2 text-sm">
           {reason && (
-            <p>
-              <span className="font-medium">Lý do:</span> {reason}
+            <p data-testid="engine-result-reason">
+              <span className="font-medium">Lý do:</span> {localizeReason(reason)}
             </p>
           )}
           {canOverride ? (

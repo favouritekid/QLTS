@@ -28,6 +28,7 @@ import {
   KV_BADGE,
   PATHWAY_LABEL_VI,
   RULE_LABEL_VI,
+  labelOrOther,
   localizeReason,
 } from "./kv-labels"
 
@@ -170,13 +171,13 @@ export function KvBreakdownCard({
             {pathway && (
               <div>
                 <span className="text-xs text-muted-foreground block">Cách tính</span>
-                <span className="text-sm">{PATHWAY_LABEL_VI[pathway] ?? pathway}</span>
+                <span className="text-sm">{labelOrOther(PATHWAY_LABEL_VI, pathway)}</span>
               </div>
             )}
             {ruleApplied && (
               <div>
                 <span className="text-xs text-muted-foreground block">Quy tắc</span>
-                <span className="text-sm">{RULE_LABEL_VI[ruleApplied] ?? ruleApplied}</span>
+                <span className="text-sm">{labelOrOther(RULE_LABEL_VI, ruleApplied)}</span>
               </div>
             )}
           </div>
