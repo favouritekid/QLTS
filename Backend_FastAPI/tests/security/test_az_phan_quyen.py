@@ -601,6 +601,9 @@ class TestAZ5F154CapVaiSuaXoaTao:
         assert await _cot(dich["id"], "full_name") == "AZ5 Ten Moi"
 
     async def test_quan_ly_khong_xoa_duoc_quan_tri_cung_don_vi(self, client, az5):
+        # Tiền đề: còn MỘT Quản trị đang hoạt động khác ⇒ guard "admin cuối" (K4) KHÔNG che cổng cấp vai. Thiếu dòng này,
+        # biến thể "DELETE không xét cấp" vẫn giữ được admin_a nhờ guard ấy (đo 25-11, log bt-g6) — ca đỏ SAI lý do.
+        await _tao_user("az5_admin_con_lai", "admin", None)
         dich = az5["admin_a"]
         res = await _goi(client, "DELETE", f"/api/admin/users/{dich['id']}", az5["h"])
         assert await _co_user(dich["id"]), f"Quản lý xoá được Quản trị ({res.status_code})"
