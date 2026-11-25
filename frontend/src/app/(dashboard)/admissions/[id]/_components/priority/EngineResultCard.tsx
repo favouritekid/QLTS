@@ -158,7 +158,7 @@ export function EngineResultCard({
           {/* Đoàn 3c: mã lý do / căn cứ của máy chủ → câu tiếng Việt (một bảng: kv-labels.ts). */}
           {reason && (
             <p className="text-sm" data-testid="engine-result-reason">
-              <span className="font-medium">Lý do:</span> {localizeReason(reason)}
+              <span className="font-medium">Lý do:</span> {reason}
             </p>
           )}
 
