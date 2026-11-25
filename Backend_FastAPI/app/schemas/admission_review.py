@@ -396,3 +396,43 @@ class RowPageOut(BaseModel):
     total_pages: int
     #: Số dòng theo tab của CẢ run (không theo bộ lọc).
     tab_counts: Dict[str, int]
+
+
+# ═══════════════════════════════════ S1 — E10 floor-candidates (phụ lục HĐ4 E10) ═══════════════════════════════════
+class FloorCandidateOut(BaseModel):
+    """Một học vụ của năm lần xét cho màn nhập điểm sàn. Ba cờ do MÁY CHỦ tính (giao diện không suy luật):
+    ``state`` = ``quota_state`` (hợp đồng §4.10, mở rộng được); ``floor_applicable`` = sàn có tác dụng ở máy xét (``state`` ∈
+    {``ok``, ``floor_missing``}); ``floor_accepted`` = E4 nhận học vụ này (CÙNG vị từ ``review_floor_bad_member``)."""
+
+    offering_academic_info_id: int
+    offering_id: Optional[int] = None
+    major_code: Optional[str] = None
+    major_name: Optional[str] = None
+    offering_type: Optional[str] = None
+    #: ``null`` = chưa cấu hình; ``0`` = đóng tuyệt đối (hợp đồng §1.4).
+    annual_admission_quota: Optional[int] = None
+    group_id: Optional[int] = None
+    group_code: Optional[str] = None
+    is_deleted: bool
+    offering_inactive: bool
+    major_inactive: bool
+    #: Mức ĐANG lưu ở lần xét (``null`` = chưa có sàn).
+    floor_score: Optional[str] = Field(None, pattern=SCORE_TEXT_PATTERN)
+    state: str
+    floor_applicable: bool
+    floor_accepted: bool
+
+
+class FloorCandidatesOut(BaseModel):
+    """E10 — đọc trong MỘT ảnh chụp: lần xét (``version``, trạng thái, ``available_actions``), bảng chỉ tiêu HIỆN TẠI, học vụ."""
+
+    session_id: int
+    academic_year: int
+    session_version: int
+    session_status: str
+    #: CÙNG hàm với E3 / cổng ghi (``admission_review_service.session_actions``) — có ``edit_floors`` thì mới soạn sàn được.
+    available_actions: List[SessionAction]
+    quota_table: QuotaTableStateOut
+    items: List[FloorCandidateOut]
+    #: Số học vụ theo ``state`` — đủ mọi giá trị §4.10 (0 khi không có).
+    state_counts: Dict[str, int]

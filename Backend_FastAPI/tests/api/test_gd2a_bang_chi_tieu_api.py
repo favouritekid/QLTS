@@ -148,6 +148,22 @@ async def test_put_sai_phien_ban_409_khong_ghi_gi(client: AsyncClient, admin_tok
     assert (await _sql("SELECT ceiling FROM admission_quota_group WHERE code = 'N1'")).scalar_one() == 120
 
 
+#: Owner 25-11 (câu cùng kiểu Q4 — ``gd2\gd2b\giao-dien\QUYET-DINH-OWNER-CAU-CUNG-KIEU-Q4-2026-11-25.md``, mục 1): đuôi câu 409
+#: ``quota_table_stale`` đổi thành "— bảng đã được tải lại, hãy làm lại." (màn bảng chỉ tiêu tự tải lại sau lỗi). Chép từ quyết
+#: định — KHÔNG đọc ``MESSAGES`` (đọc từ mã thì đổi chữ vẫn xanh).
+CAU_409_BANG_CHI_TIEU_VUA_SUA = (
+    "Bảng chỉ tiêu hoặc chỉ tiêu ngành của năm đã được sửa ở nơi khác (bảng này hoặc trang cấu hình học vụ) sau khi bạn "
+    "mở — bảng đã được tải lại, hãy làm lại."
+)
+
+
+async def test_put_sai_phien_ban_409_cau_owner_bang_da_tai_lai(client: AsyncClient, admin_token_headers, hoc_vu):
+    assert (await client.put(f"{P}/{NAM}", headers=admin_token_headers, json=await _gui(0, hoc_vu))).status_code == 200
+    r = await client.put(f"{P}/{NAM}", headers=admin_token_headers, json=await _gui(0, hoc_vu))
+    assert r.status_code == 409 and r.json()["error_code"] == "QUOTA_TABLE_STALE", r.text
+    assert r.json()["detail"] == CAU_409_BANG_CHI_TIEU_VUA_SUA, r.text
+
+
 async def test_put_lan_hai_giu_id_nhom_theo_ma_thay_thanh_vien(client: AsyncClient, admin_token_headers, hoc_vu):
     r = await client.put(f"{P}/{NAM}", headers=admin_token_headers, json=await _gui(0, hoc_vu))
     id_n1 = next(g["id"] for g in r.json()["groups"] if g["code"] == "N1")

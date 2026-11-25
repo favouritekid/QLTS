@@ -46,8 +46,9 @@ const LOCKED_MESSAGE = "Bảng chỉ tiêu năm này đã khoá — Admin mở k
 export function quotaConflictText(reasonCode: string | undefined, data: Record<string, unknown> | undefined, ctx: QuotaErrorContext): string {
   switch (reasonCode) {
     case "quota_table_stale": {
+      // Owner 25-11 (câu cùng kiểu Q4, mục 1): mọi lỗi ghi đã làm mới bảng (`use-quota-tables.ts` onError) ⇒ đuôi "đã được tải lại".
       const v = typeof data?.current_version === "number" ? ` (phiên bản hiện tại: ${data.current_version})` : ""
-      return `Bảng chỉ tiêu hoặc chỉ tiêu ngành của năm đã được sửa ở nơi khác (có thể ở trang Cấu hình tuyển sinh) sau khi bạn mở${v} — tải lại bảng rồi làm lại.`
+      return `Bảng chỉ tiêu hoặc chỉ tiêu ngành của năm đã được sửa ở nơi khác (có thể ở trang Cấu hình tuyển sinh) sau khi bạn mở${v} — bảng đã được tải lại, hãy làm lại.`
     }
     case "quota_table_locked":
       return LOCKED_MESSAGE

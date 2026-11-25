@@ -5,8 +5,9 @@
  *   - kv          : KV resolved (frozen snapshot post-draft, preview trong draft)
  *   - lawCitation : BE-first `snapshot.rule_law_citation` → fallback FE
  *                   `deriveLawCitationFallback(rule_applied)` cho legacy snapshot
- *   - reason      : BE-first `snapshot.basis_reason` → fallback `snapshot.reason`
- *                   (error-only). Trong draft → đọc `preview.reason`.
+ *   - reason      : post-draft ĐÃ có KV ⇒ `snapshot.basis_reason` → fallback `snapshot.reason`;
+ *                   post-draft CHƯA có KV ⇒ `snapshot.reason` (việc cần làm) → fallback `basis_reason`
+ *                   (owner 25-11). Trong draft → đọc `preview.reason`.
  *   - areaBonus   : `snapshot.breakdown.area_bonus` post-draft; `preview.area_bonus`
  *                   trong draft.
  *
@@ -98,7 +99,13 @@ export function resolveEngineDisplay(
   })()
 
   const reason = (() => {
-    if (isPostDraft) return snapshot.basis_reason ?? snapshot.reason ?? null
+    // Owner 25-11 (QUYET-DINH-OWNER-DOAN-3C-CAU-KV câu 2): hồ sơ ĐÃ NỘP mà KV CHƯA tính được ⇒ câu việc cần làm
+    // (`reason`) trước; đã có KV ⇒ căn cứ (`basis_reason`) trước. "Đã có KV" = đúng `kv` hiển thị ở trên.
+    if (isPostDraft) {
+      return kv
+        ? (snapshot.basis_reason ?? snapshot.reason ?? null)
+        : (snapshot.reason ?? snapshot.basis_reason ?? null)
+    }
     if (preview) return preview.reason ?? null
     return snapshot.basis_reason ?? snapshot.reason ?? null
   })()

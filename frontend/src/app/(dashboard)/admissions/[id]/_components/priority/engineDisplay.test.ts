@@ -114,12 +114,31 @@ describe("resolveEngineDisplay — post-draft (frozen snapshot)", () => {
     expect(r.lawCitation).toBeNull() // không fall sang preview
   })
 
-  it("basis_reason chiếm ưu thế snapshot.reason", () => {
+  // Đoàn 3c (owner 25-11, QUYET-DINH-OWNER-DOAN-3C-CAU-KV câu 2): ca này trước đây KHÔNG có `kv_resolved` mà vẫn mong
+  // `basis_reason` — luật mới: chỉ khi ĐÃ có KV thì căn cứ mới đứng trước ⇒ thêm `kv_resolved` để ca giữ đúng ý cũ.
+  it("đã có KV: basis_reason chiếm ưu thế snapshot.reason", () => {
     const profile = buildProfile("submitted", {
+      kv_resolved: "KV1",
       basis_reason: "BE canonical",
       reason: "legacy error fallback",
     } as SnapshotInput)
     expect(resolveEngineDisplay(profile, null).reason).toBe("BE canonical")
+  })
+
+  it("đã nộp, CHƯA có KV: reason (việc cần làm) chiếm ưu thế basis_reason", () => {
+    const profile = buildProfile("submitted", {
+      kv_resolved: null,
+      basis_reason: "tc_chinh_quy_post_thpt_uses_school_history",
+      reason: "history_entries_inconsistent",
+    } as SnapshotInput)
+    expect(resolveEngineDisplay(profile, null).reason).toBe("history_entries_inconsistent")
+  })
+
+  it("đã nộp, CHƯA có KV, không có reason: rơi về basis_reason", () => {
+    const profile = buildProfile("submitted", {
+      basis_reason: "tc_chinh_quy_post_thpt_uses_school_history",
+    } as SnapshotInput)
+    expect(resolveEngineDisplay(profile, null).reason).toBe("tc_chinh_quy_post_thpt_uses_school_history")
   })
 
   it("fallback snapshot.reason khi basis_reason missing", () => {
