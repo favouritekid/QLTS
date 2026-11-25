@@ -53,7 +53,6 @@ export const RULE_LABEL_VI: Record<string, string> = {
   address_not_normalized: "Chưa có xã/phường nơi thường trú",
   catalog_gap_commune: "Xã/phường nơi thường trú chưa có khu vực trong danh mục",
   catalog_gap_school: "Trường đã học chưa có khu vực trong danh mục",
-  insufficient_data: "Chưa đủ dữ liệu để tính khu vực",
   not_resolved: "Chưa tính được khu vực",
   manual_override_unverified: "Ấn định thủ công chưa được xác nhận",
 }
