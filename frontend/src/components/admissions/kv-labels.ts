@@ -137,7 +137,7 @@ export const REASON_VI: Record<string, string> = {
   cd_chinh_quy_post_thpt_uses_school_history: BASIS_THPT_HISTORY_VI,
   cd_lien_thong_post_thpt_uses_school_history: BASIS_THPT_HISTORY_VI,
   cd_chinh_quy_completed_thpt_uses_school_history: BASIS_THPT_HISTORY_VI,
-  cd_lien_thong_completed_thpt_uses_school_history: BASIS_THPT_HISTORY_VI,
+  cd_lien_thong_complete_thpt_uses_school_history: BASIS_THPT_HISTORY_VI,
   cd_lien_thong_khoi_luong_with_thpt_history: BASIS_THPT_HISTORY_VI,
   tc_chinh_quy_post_thcs_uses_thcs_school_history: BASIS_THCS_HISTORY_VI,
   tc_lien_thong_post_thcs_with_voc_uses_thcs_school_history: BASIS_THCS_HISTORY_VI,
