@@ -373,4 +373,37 @@ describe("EngineResultCard — dòng Lý do hiện câu tiếng Việt (đoàn 3
     expect(dong.textContent).toContain("Tính theo các trường THPT đã học")
     expect(dong.textContent).not.toContain("tc_chinh_quy_post_thpt_uses_school_history")
   })
+
+  // Owner 25-11 (QUYET-DINH-OWNER-DOAN-3C-CAU-KV câu 2): thứ tự hiển thị của hồ sơ ĐÃ NỘP.
+  it("đã nộp, CHƯA có KV (vd T6 chụp lại): thấy câu VIỆC CẦN LÀM, không thấy câu căn cứ", () => {
+    const profile = buildProfile({
+      status: "submitted",
+      priority_resolution_snapshot: {
+        kv_resolved: null,
+        rule_applied: "insufficient_data",
+        basis_reason: "tc_chinh_quy_post_thpt_uses_school_history",
+        reason: "history_entries_inconsistent",
+      },
+    } as Partial<AdmissionProfileResponse>)
+    render(<EngineResultCard profile={profile} preview={null} canOverride={false} onOpenOverride={vi.fn()} />)
+    const dong = screen.getByTestId("engine-result-reason")
+    expect(dong.textContent).toContain("“Lớp cuối” không phải 10, 11 hay 12")
+    expect(dong.textContent).not.toContain("Tính theo các trường THPT đã học")
+  })
+
+  it("đã nộp, ĐÃ có KV: thấy câu CĂN CỨ, không thấy câu việc cần làm", () => {
+    const profile = buildProfile({
+      status: "submitted",
+      priority_resolution_snapshot: {
+        kv_resolved: "KV1",
+        rule_applied: "longest_duration",
+        basis_reason: "tc_chinh_quy_post_thpt_uses_school_history",
+        reason: "history_entries_inconsistent",
+      },
+    } as Partial<AdmissionProfileResponse>)
+    render(<EngineResultCard profile={profile} preview={null} canOverride={false} onOpenOverride={vi.fn()} />)
+    const dong = screen.getByTestId("engine-result-reason")
+    expect(dong.textContent).toContain("Tính theo các trường THPT đã học")
+    expect(dong.textContent).not.toContain("“Lớp cuối”")
+  })
 })

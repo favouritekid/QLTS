@@ -33,7 +33,7 @@ export const PATHWAY_LABEL_VI: Record<string, string> = {
   cho_xac_minh: "Chờ xác minh",
   // Đoàn 3c (24-11) — mã BE HIỆN HÀNH (`priority_service._kv_resolution_steps`, `pathway=`); các khoá
   // `thpt_multi_school` / `tc_multi_school` / `commune_fallback` ở trên là tên CŨ, giữ cho ảnh chụp cũ.
-  // Câu [ĐX] CHỜ owner duyệt.
+  // Câu owner duyệt 25-11 (QUYET-DINH-OWNER-DOAN-3C-CAU-KV câu 1).
   lich_su_thpt: "Theo lịch sử học các trường THPT",
   thuong_tru: "Theo nơi thường trú",
   insufficient_data: "Chưa đủ dữ liệu để tính khu vực",
@@ -49,7 +49,7 @@ export const RULE_LABEL_VI: Record<string, string> = {
   // L3 (owner 22-11) — BE `priority_service.KV_PENDING_VERIFICATION_RULE`; câu chữ CHỜ owner duyệt.
   kv_pending_verification: "KV chờ xác minh",
   // Đoàn 3c (24-11) — mã BE khi CHƯA tính được KV (`_kv_resolution_steps` `rule_applied=`; ảnh chụp:
-  // `manual_override_unverified`). Câu [ĐX] CHỜ owner duyệt.
+  // `manual_override_unverified`). Câu owner duyệt 25-11.
   address_not_normalized: "Chưa có xã/phường nơi thường trú",
   catalog_gap_commune: "Xã/phường nơi thường trú chưa có khu vực trong danh mục",
   catalog_gap_school: "Trường đã học chưa có khu vực trong danh mục",
@@ -58,7 +58,7 @@ export const RULE_LABEL_VI: Record<string, string> = {
   manual_override_unverified: "Ấn định thủ công chưa được xác nhận",
 }
 
-// Câu dùng chung cho nhiều mã (một câu — một chỗ). Đoàn 3c (24-11): câu [ĐX] CHỜ owner duyệt.
+// Câu dùng chung cho nhiều mã (một câu — một chỗ). Đoàn 3c: owner duyệt 25-11 (QUYET-DINH-OWNER-DOAN-3C-CAU-KV).
 const PENDING_MANUAL_VERIFICATION_VI =
   "Khu vực cần xác minh từ học bạ và ấn định thủ công (sơ cấp / hồ sơ không rõ trình độ)"
 const BASIS_THPT_HISTORY_VI =
@@ -82,7 +82,7 @@ const CD_CULTURAL_INSUFFICIENT_VI =
 export const REASON_VI: Record<string, string> = {
   cultural_not_set: "Chưa khai trình độ văn hóa",
   no_qualifying_entries: "Lịch sử học chưa đủ trường phù hợp với trình độ",
-  // Đoàn 3c (24-11) SỬA câu cũ — L3 đưa thêm ca dòng THPT thiếu "Lớp cuối" khi thời gian học bằng nhau. [ĐX]
+  // Đoàn 3c (24-11) SỬA câu cũ — L3 đưa thêm ca dòng THPT thiếu "Lớp cuối" khi thời gian học bằng nhau. Owner duyệt 25-11.
   tied_graduation_year_and_grade:
     "Thời gian học ở các trường THPT bằng nhau mà chưa chọn được trường tốt nghiệp (cùng năm, cùng lớp cuối, hoặc dòng THPT chưa ghi “Lớp cuối”) — kiểm tra “Lớp cuối” theo học bạ, hoặc đề nghị Quản lý / Admin ấn định KV thủ công",
   fallback_no_commune: "Chưa khai mã xã/phường nơi thường trú",
@@ -93,7 +93,7 @@ export const REASON_VI: Record<string, string> = {
   thcs_history_missing: "Chưa khai lịch sử học THCS — thêm các năm THCS theo học bạ",
   thcs_school_not_in_catalog:
     "Trường THCS chưa có trong danh mục — báo Admin thêm trường, rồi chọn lại trường trong lịch sử học",
-  // Đoàn 3c (24-11) SỬA câu cũ — L3 (owner 24-11): dòng THCS ghi "Lớp cuối" 0, số âm hoặc từ 10 trở lên cũng dừng. [ĐX]
+  // Đoàn 3c (24-11) SỬA câu cũ — L3 (owner 24-11): dòng THCS ghi "Lớp cuối" 0, số âm hoặc từ 10 trở lên cũng dừng. Owner duyệt 25-11.
   thcs_history_inconsistent:
     "Dòng lịch sử học THCS chưa hợp lệ (0 năm học, năm ngược, “Lớp cuối” ghi 0, số âm hoặc từ 10 trở lên, trường liên cấp chưa ghi lớp cuối, chọn nhầm cấp trường…) — sửa theo học bạ; nếu học bạ đúng như vậy, đề nghị Quản lý / Admin ấn định KV thủ công",
   thcs_school_kv_missing:
@@ -103,7 +103,7 @@ export const REASON_VI: Record<string, string> = {
   thcs_school_dtnt:
     "Trường PT dân tộc nội trú — xác minh khu vực theo hộ khẩu và ấn định thủ công",
 
-  // ── Đoàn 3c (24-11) — `reason` máy chủ trả khi CHƯA tính được KV mà bảng trên còn thiếu. [ĐX] CHỜ owner duyệt.
+  // ── Đoàn 3c (24-11) — `reason` máy chủ trả khi CHƯA tính được KV mà bảng trên còn thiếu. Owner duyệt 25-11.
   special_case_no_commune_code:
     "Hồ sơ được đánh dấu trường hợp đặc biệt (tính theo nơi thường trú) nhưng chưa có xã/phường thường trú — nhập địa chỉ thường trú, chọn xã/phường trong danh mục",
   profile_missing_permanent_commune_code:
@@ -130,7 +130,7 @@ export const REASON_VI: Record<string, string> = {
   cd_lien_thong_cultural_insufficient_for_kv_basis: CD_CULTURAL_INSUFFICIENT_VI,
   legacy_unknown_cultural: "Không xác định được trình độ văn hóa khi tính khu vực — kiểm tra lại trình độ văn hóa",
 
-  // ── Đoàn 3c (24-11) — `basis_reason` (căn cứ tính KV) hiện ở dòng "Lý do" của hồ sơ đã nộp. [ĐX] CHỜ owner duyệt.
+  // ── Đoàn 3c (24-11) — `basis_reason` (căn cứ tính KV) hiện ở dòng "Lý do" của hồ sơ đã nộp. Owner duyệt 25-11.
   legacy_thpt_pathway: BASIS_THPT_HISTORY_VI,
   tc_chinh_quy_post_thpt_uses_school_history: BASIS_THPT_HISTORY_VI,
   tc_lien_thong_post_thpt_uses_school_history: BASIS_THPT_HISTORY_VI,
@@ -151,7 +151,9 @@ export const REASON_VI: Record<string, string> = {
     "Chưa khai lịch sử học THPT nên tính theo xã/phường nơi thường trú (cao đẳng liên thông, học khối lượng văn hóa THPT)",
   sc_no_cultural_kv_needs_verification: PENDING_MANUAL_VERIFICATION_VI,
   sc_kv_needs_verification: PENDING_MANUAL_VERIFICATION_VI,
-  legacy_thcs_pathway_kv_needs_verification: PENDING_MANUAL_VERIFICATION_VI,
+  // Owner 25-11 (QUYET-DINH-OWNER-DOAN-3C-CAU-KV câu 1): mã là luồng THCS cũ, KHÔNG phải sơ cấp ⇒ câu RIÊNG, chép nguyên văn.
+  legacy_thcs_pathway_kv_needs_verification:
+    "Khu vực cần xác minh từ học bạ và ấn định thủ công (nhóm THCS / hồ sơ không rõ trình độ).",
   permanent_address_special_override: "Trường hợp đặc biệt cán bộ đã chọn: tính theo xã/phường nơi thường trú",
 }
 
@@ -159,7 +161,7 @@ export const REASON_VI: Record<string, string> = {
  * Mã có phần chi tiết sau dấu hai chấm — máy chủ ghép `<mã>:<chi tiết>`: ảnh chụp
  * `manual_override_unverified:<lý do từ chối>` (`priority_service.freeze_priority_snapshot`) và căn cứ
  * `unsupported_target_level:<trình độ>` (`_derive_kv_matrix_basis`). Tra theo phần TRƯỚC dấu hai chấm,
- * CHỈ cho các mã khai ở đây. [ĐX] CHỜ owner duyệt.
+ * CHỈ cho các mã khai ở đây. Owner duyệt 25-11.
  */
 export const REASON_PREFIX_VI: Record<string, string> = {
   manual_override_unverified:

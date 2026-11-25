@@ -165,6 +165,24 @@ describe("kv-labels — câu của các mã dừng L3 nói cán bộ phải làm
   })
 })
 
+/** Câu owner ghi NGUYÊN VĂN ở `doan-tau-3c\QUYET-DINH-OWNER-DOAN-3C-CAU-KV-2026-11-25.md` câu 1 (sha256 `42f3ae52…`) — chép tay, có
+ * cả dấu chấm cuối như trong tệp quyết định. */
+const CAU_OWNER_LUONG_THCS_CU = "Khu vực cần xác minh từ học bạ và ấn định thủ công (nhóm THCS / hồ sơ không rõ trình độ)."
+
+describe("kv-labels — câu owner chốt 25-11", () => {
+  it("legacy_thcs_pathway_kv_needs_verification ⇒ đúng NGUYÊN VĂN câu owner (luồng THCS cũ, không phải sơ cấp)", () => {
+    expect(localizeReason("legacy_thcs_pathway_kv_needs_verification")).toBe(CAU_OWNER_LUONG_THCS_CU)
+  })
+
+  it("các mã sơ cấp vẫn giữ câu “sơ cấp”, KHÔNG bị đổi theo câu owner của luồng THCS", () => {
+    for (const ma of ["kv_basis_needs_manual_verification", "sc_kv_needs_verification", "sc_no_cultural_kv_needs_verification"]) {
+      const cau = localizeReason(ma)
+      expect(cau).toContain("(sơ cấp / hồ sơ không rõ trình độ)")
+      expect(cau).not.toBe(CAU_OWNER_LUONG_THCS_CU)
+    }
+  })
+})
+
 describe("kv-labels — localizeReason chỉ ÁNH XẠ mã → câu", () => {
   it("mã có chi tiết sau dấu hai chấm: tra theo phần trước dấu hai chấm", () => {
     expect(localizeReason("manual_override_unverified:stale_inputs")).toBe(
