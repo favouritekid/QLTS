@@ -101,6 +101,7 @@ __all__ = [
     "verify_criteria_visibility",  # Phase 6.5
     "verify_user_management_permission",
     "require_assignable_role",  # F154: vai MỚI phải thấp hơn vai người thao tác
+    "verify_users_management_permission",  # F154 (Codex A2): bulk / sync — từng người đích qua cùng cổng
 
     # Organizational Unit IDOR — cờ allow_read_only THUỘC VỀ SERVER
     "get_organizational_unit_readonly",   # cổng ĐỌC (hardcode True)
@@ -2051,7 +2052,7 @@ async def verify_user_management_permission(
     db: AsyncSession,
     current_user: models.User,
     *,
-    require_outrank: bool = False,
+    require_outrank: bool = True,
     admin_may_target_self: bool = True,
 ) -> models.User:
     """
@@ -2062,11 +2063,12 @@ async def verify_user_management_permission(
     - **Manager**: Can only manage users in their managed units
     - **Officer**: Cannot manage users (denied)
 
-    **Cấp vai (F154, owner 25-11 Q-A2/A6/A11/A12) — ``require_outrank=True``:** ngoài phạm vi đơn vị ở trên, người đích
-    phải có vai THẤP hơn người thao tác theo ``constants.role_outranks`` (MỘT nguồn). Vai ngang / cao hơn / không so được
-    ⇒ 404 như mọi ca ngoài phạm vi. Nhắm vào CHÍNH MÌNH ⇒ 403: chỉ Quản trị được, và chỉ khi ``admin_may_target_self``
-    (route đặt mật khẩu truyền ``False`` — tự đổi qua trang cá nhân). Mặc định ``False`` giữ NGUYÊN hành vi cũ cho caller
-    chưa chọn (GET ``/{id}``).
+    **Cấp vai (F154, owner 25-11 Q-A2/A6/A11/A12) — ``require_outrank`` (MẶC ĐỊNH ``True``):** ngoài phạm vi đơn vị ở
+    trên, người đích phải có vai THẤP hơn người thao tác theo ``constants.role_outranks`` (MỘT nguồn). Vai ngang / cao hơn
+    / không so được ⇒ 404 như mọi ca ngoài phạm vi. Nhắm vào CHÍNH MÌNH ⇒ 403: chỉ Quản trị được, và chỉ khi
+    ``admin_may_target_self`` (route đặt mật khẩu truyền ``False`` — tự đổi qua trang cá nhân).
+    Mặc định ``True`` (rà Codex 25-11 NỢ A2, CLAUDE.md §8 fail-closed): lối gọi mới quên tham số vẫn bị xét cấp. CHỈ route
+    XEM ``GET /{id}`` truyền ``False`` (xem thông tin người cùng đơn vị không phải thao tác lên họ).
 
     **IDOR Prevention:**
     This dependency prevents unauthorized user management by verifying
@@ -2210,6 +2212,43 @@ def _check_management_rank(
         )
         raise ResourceNotFoundError(detail="User not found")
     return target_user
+
+
+# [ĐX] câu hiển thị — F154 (rà Codex 25-11 CHẶN A2): đồng bộ / thao tác trên TOÀN BỘ người dùng chỉ Quản trị làm được.
+ALL_USERS_ADMIN_ONLY_DETAIL = "Chỉ Quản trị được thao tác trên toàn bộ người dùng — hãy chọn đúng những người cần xử lý."
+
+
+async def verify_users_management_permission(
+    target_user_ids: Optional[List[int]],
+    db: AsyncSession,
+    current_user: models.User,
+) -> None:
+    """F154 (rà Codex 25-11 CHẶN A2) — cổng cho lệnh tác động NHIỀU người: ``POST /api/admin/users/bulk`` (mọi action) và
+    ``POST /api/admin/users/sync``.
+
+    MỘT luật, MỘT chỗ (CLAUDE.md §7): TỪNG người đích ĐANG TỒN TẠI đi qua CHÍNH :func:`verify_user_management_permission`
+    (phạm vi đơn vị + cấp vai ``_check_management_rank``; Quản trị được nhắm cả chính mình như hành vi cũ của lệnh hàng
+    loạt — service tự bỏ qua mình khi xoá / khoá). Một người không đạt ⇒ ném lỗi ⇒ TỪ CHỐI CẢ LỆNH, trước mọi ghi / thu
+    hồi (router gọi cổng này trước service).
+
+    - ``target_user_ids`` None (đồng bộ TOÀN BỘ) ⇒ chỉ Quản trị; vai khác ⇒ 403.
+    - ID không tồn tại ⇒ bỏ qua như hợp đồng cũ của lệnh hàng loạt (``test_admin_bulk_change_status_success``: "chỉ
+      người tồn tại bị ảnh hưởng"). Không lộ gì mới: danh sách người dùng đã đọc được qua ``GET /api/admin/users``.
+    - Xét theo id TĂNG (thứ tự cố định, không phụ thuộc thứ tự client gửi)."""
+    if target_user_ids is None:
+        if current_user.role == UserRole.ADMIN:
+            return
+        log.warning(
+            "All-users management refused for non-admin",
+            current_user_id=current_user.id,
+            current_user_role=current_user.role,
+        )
+        raise PermissionDeniedError(detail=ALL_USERS_ADMIN_ONLY_DETAIL)
+    from ..repositories import UserRepository
+
+    existing = sorted({u.id for u in await UserRepository(db).get_by_ids(sorted(set(target_user_ids)))})
+    for target_user_id in existing:
+        await verify_user_management_permission(target_user_id=target_user_id, db=db, current_user=current_user)
 
 
 def require_assignable_role(current_user: models.User, new_role: Optional[str]) -> None:

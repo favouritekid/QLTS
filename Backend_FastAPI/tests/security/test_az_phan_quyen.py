@@ -633,6 +633,96 @@ class TestAZ5F154CapVaiSuaXoaTao:
         assert await _co_username("az5_tao_can_bo")
 
 
+# -----------------------------------------------------------------------------------------------------------------------
+# F154 — rà Codex 25-11 CHẶN A2: lệnh NHIỀU người (``POST /api/admin/users/bulk`` mọi action, ``POST /api/admin/users/sync``)
+# xét TỪNG người đích bằng CÙNG cổng phạm vi + cấp vai như PUT / DELETE; một người không đạt ⇒ từ chối CẢ lệnh, không đổi
+# gì, không đăng xuất ai. Ca âm khẳng định bất biến CSDL / phiên trước, rồi mới tới mã trạng thái (tiền đề "đúng cổng").
+# -----------------------------------------------------------------------------------------------------------------------
+BULK_URL = "/api/admin/users/bulk"
+SYNC_URL = "/api/admin/users/sync"
+
+
+async def _them_vai_casbin(user_id: int, vai: str) -> None:
+    """Thêm dòng ``g, user:<id>, <vai>`` — đồng bộ vai sẽ ĐỔI vai CSDL của người ấy (nếu cổng cho qua)."""
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            await session.execute(insert(CasbinRule).values(ptype="g", v0=f"user:{user_id}", v1=vai))
+
+
+async def _con_dung_duoc(client, headers: dict) -> int:
+    res = await _goi(client, "GET", "/api/auth/check-status", headers)
+    return res.status_code
+
+
+@pytest.mark.asyncio
+class TestAZ5F154HangLoatVaDongBo:
+
+    async def test_bulk_quan_ly_khong_khoa_duoc_ke_toan(self, client, az5):
+        dich = az5["ke_toan_a"]
+        res = await _goi(client, "POST", BULK_URL, az5["h"],
+                         json={"action": "change_status", "user_ids": [dich["id"]], "status": "banned"})
+        assert await _cot(dich["id"], "status") == "active", f"khoá hàng loạt được Kế toán ({res.status_code})"
+        assert res.status_code == 404, f"tiền đề: bị cổng cấp vai chặn: {res.text}"
+
+    async def test_bulk_quan_ly_khong_khoa_duoc_quan_tri(self, client, az5):
+        dich = az5["admin_a"]
+        res = await _goi(client, "POST", BULK_URL, az5["h"],
+                         json={"action": "change_status", "user_ids": [dich["id"]], "status": "banned"})
+        assert await _cot(dich["id"], "status") == "active", f"khoá hàng loạt được Quản trị ({res.status_code})"
+        assert res.status_code == 404, f"tiền đề: bị cổng cấp vai chặn: {res.text}"
+
+    async def test_bulk_quan_ly_khong_xoa_duoc_quan_tri(self, client, az5):
+        # Tiền đề: còn một Quản trị hoạt động khác ⇒ guard "admin cuối" không che cổng cấp vai (bài học V9).
+        await _tao_user("az5_admin_con_lai_bulk", "admin", None)
+        dich = az5["admin_a"]
+        res = await _goi(client, "POST", BULK_URL, az5["h"], json={"action": "delete", "user_ids": [dich["id"]]})
+        assert await _co_user(dich["id"]), f"xoá hàng loạt được Quản trị ({res.status_code})"
+        assert res.status_code == 404, f"tiền đề: bị cổng cấp vai chặn: {res.text}"
+
+    async def test_bulk_danh_sach_lan_mot_nguoi_khong_dat_tu_choi_ca_lenh(self, client, az5):
+        # Cán bộ (đạt, id NHỎ hơn — đứng đầu) + Kế toán (không đạt): KHÔNG ai bị khoá, kể cả Cán bộ.
+        can_bo, ke_toan = az5["officer_a"], az5["ke_toan_a"]
+        assert can_bo["id"] < ke_toan["id"], "tiền đề: người đạt đứng đầu danh sách theo id"
+        res = await _goi(client, "POST", BULK_URL, az5["h"],
+                         json={"action": "change_status", "user_ids": [can_bo["id"], ke_toan["id"]], "status": "banned"})
+        assert await _cot(can_bo["id"], "status") == "active", f"lệnh lẫn người không đạt vẫn chạy một phần ({res.status_code})"
+        assert res.status_code == 404, f"tiền đề: bị cổng cấp vai chặn: {res.text}"
+
+    async def test_bulk_bi_tu_choi_khong_dang_xuat_ai(self, client, az5):
+        can_bo, ke_toan = az5["officer_a"], az5["ke_toan_a"]
+        h_can_bo, h_ke_toan = await _cookie(client, can_bo), await _cookie(client, ke_toan)
+        res = await _goi(client, "POST", BULK_URL, az5["h"],
+                         json={"action": "change_status", "user_ids": [can_bo["id"], ke_toan["id"]], "status": "banned"})
+        con_dung = {"cán bộ": await _con_dung_duoc(client, h_can_bo), "kế toán": await _con_dung_duoc(client, h_ke_toan)}
+        assert con_dung == {"cán bộ": 200, "kế toán": 200}, f"lệnh bị từ chối mà vẫn đăng xuất người ({res.status_code}): {con_dung}"
+        assert res.status_code == 404, f"tiền đề: bị cổng cấp vai chặn: {res.text}"
+
+    async def test_doi_chung_bulk_quan_ly_khoa_can_bo_cung_don_vi(self, client, az5):
+        dich = az5["officer_a"]
+        res = await _goi(client, "POST", BULK_URL, az5["h"],
+                         json={"action": "change_status", "user_ids": [dich["id"]], "status": "banned"})
+        assert res.status_code == 200, res.text
+        assert await _cot(dich["id"], "status") == "banned"
+
+    async def test_sync_quan_ly_khong_dong_bo_duoc_ke_toan(self, client, az5):
+        dich = az5["ke_toan_a"]
+        await _them_vai_casbin(dich["id"], "role:officer")  # đồng bộ (nếu cho qua) sẽ đổi vai CSDL Kế toán → Cán bộ
+        res = await _goi(client, "POST", SYNC_URL, az5["h"], json={"user_ids": [dich["id"]]})
+        assert await _cot(dich["id"], "role") == "accountant", f"đồng bộ đổi được vai Kế toán ({res.status_code})"
+        assert res.status_code == 404, f"tiền đề: bị cổng cấp vai chặn: {res.text}"
+
+    async def test_sync_toan_bo_chi_quan_tri(self, client, az5):
+        dich = az5["ke_toan_a"]
+        await _them_vai_casbin(dich["id"], "role:officer")
+        res = await _goi(client, "POST", SYNC_URL, az5["h"], json={"user_ids": None})
+        assert await _cot(dich["id"], "role") == "accountant", f"Quản lý đồng bộ TOÀN BỘ được ({res.status_code})"
+        assert res.status_code == 403, f"tiền đề: cổng 'toàn bộ chỉ Quản trị' chặn: {res.text}"
+
+    async def test_doi_chung_sync_quan_ly_dong_bo_can_bo_cung_don_vi(self, client, az5):
+        res = await _goi(client, "POST", SYNC_URL, az5["h"], json={"user_ids": [az5["officer_a"]["id"]]})
+        assert res.status_code == 200, res.text
+
+
 # Quyết định owner 25-11 (Q-A2/A6/A12/A13), viết TAY — không suy từ mã: vai người thao tác ⇒ tập vai đích được tác động
 # (tạo / đặt mật khẩu / sửa / xoá / gán). "Trừ chính mình" là phép so danh tính, không nằm ở bảng này.
 BANG_CAP_VAI_OWNER = {

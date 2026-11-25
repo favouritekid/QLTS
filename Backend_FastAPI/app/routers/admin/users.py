@@ -359,7 +359,6 @@ async def admin_set_user_password(
         target_user_id=user_id,
         db=db,
         current_user=current_admin,
-        require_outrank=True,
         admin_may_target_self=False,
     )
     target_username = target.username
@@ -502,6 +501,10 @@ async def bulk_user_action(
 ):
     """(Admin only) Thực hiện hành động hàng loạt (xóa, đổi trạng thái) trên nhiều người dùng."""
     enforcer = request.app.state.enforcer
+
+    # F154 (rà Codex 25-11 CHẶN A2): TỪNG người đích qua CÙNG cổng phạm vi + cấp vai như PUT / DELETE; một người không đạt ⇒
+    # từ chối CẢ lệnh, trước mọi ghi / thu hồi phiên.
+    await deps.verify_users_management_permission(action_data.user_ids, db, current_admin)
 
     # Perform bulk action
     # F154: thu hồi phiên + cắt socket (khoá hàng loạt, xoá hàng loạt) nằm TRONG service qua cơ chế chung
@@ -656,6 +659,10 @@ async def sync_users(
     # Extract Casbin enforcer from app state (HTTP-specific)
     enforcer = request.app.state.enforcer
     user_ids = sync_request.user_ids
+
+    # F154 (rà Codex 25-11 CHẶN A2): đồng bộ ĐỔI vai CSDL ⇒ từng người đích qua cùng cổng phạm vi + cấp vai; đồng bộ TOÀN
+    # BỘ (``user_ids`` null) chỉ Quản trị. Một người không đạt ⇒ từ chối cả lệnh, trước mọi ghi.
+    await deps.verify_users_management_permission(user_ids, db, current_admin)
 
     # Call service layer with injected dependencies (DI pattern)
     result = await user_service.sync_users_to_casbin(
@@ -908,11 +915,12 @@ async def get_user_details(
     Admin: Can view all users
     Manager: Can view users in managed units only
     """
-    # Verify ownership
+    # Verify ownership — route XEM: chỉ phạm vi đơn vị, không xét cấp vai (F154: mặc định của cổng là xét cấp).
     db_user = await deps.verify_user_management_permission(
         target_user_id=user_id,
         db=db,
-        current_user=current_admin
+        current_user=current_admin,
+        require_outrank=False,
     )
     return db_user
 
@@ -956,7 +964,6 @@ async def update_existing_user(
         target_user_id=user_id,
         db=db,
         current_user=current_admin,
-        require_outrank=True,
     )
 
     # Xây dựng dict chỉ chứa các trường được cung cấp.
@@ -1253,12 +1260,11 @@ async def delete_existing_user(
     if user_id == current_admin.id:
         raise PermissionDeniedError(detail="You cannot delete your own account")
 
-    # Verify ownership — F154 (owner 25-11 Q-A11): + người bị xoá phải có vai THẤP hơn người thao tác.
+    # Verify ownership — F154 (owner 25-11 Q-A11): + người bị xoá phải có vai THẤP hơn người thao tác (mặc định của cổng).
     db_user = await deps.verify_user_management_permission(
         target_user_id=user_id,
         db=db,
         current_user=current_admin,
-        require_outrank=True,
     )
     username = db_user.username if db_user else f"User#{user_id}"
     actor_id = current_admin.id
