@@ -323,3 +323,110 @@ describe("EngineResultCard — officer hard-deny CTA (Commit 3)", () => {
     expect(onOpen).toHaveBeenCalled()
   })
 })
+
+// ---------------------------------------------------------------------------
+// Đoàn 3c (24-11) — Codex L5 NỢ-1: dòng "Lý do" của thẻ KV (thẻ ĐANG gắn ở tab Ưu tiên) hiện câu
+// tiếng Việt qua `kv-labels.localizeReason`, không hiện mã thô của máy chủ.
+// ---------------------------------------------------------------------------
+
+describe("EngineResultCard — dòng Lý do hiện câu tiếng Việt (đoàn 3c)", () => {
+  it("hồ sơ nháp, xem trước dừng vì “Lớp cuối” THPT ngoài 10–12: hiện câu, không hiện mã", () => {
+    const profile = buildProfile({ status: "draft" } as Partial<AdmissionProfileResponse>)
+    const preview: PreviewPriorityKvResponse = {
+      ...HAPPY_PREVIEW,
+      kv_resolved: null,
+      pathway: "lich_su_thpt",
+      rule_applied: "insufficient_data",
+      requires_manual_override: false,
+      reason: "history_entries_inconsistent",
+      area_bonus: null,
+      total_bonus_potential: null,
+      rule_law_citation: null,
+    }
+    render(<EngineResultCard profile={profile} preview={preview} canOverride={false} onOpenOverride={vi.fn()} />)
+    const dong = screen.getByTestId("engine-result-reason")
+    expect(dong.textContent).toContain("“Lớp cuối” không phải 10, 11 hay 12")
+    expect(dong.textContent).not.toContain("history_entries_inconsistent")
+  })
+
+  it("hồ sơ nháp, hoà thời gian THPT (trạng thái cần xác minh): mã hoà cũng hiện câu", () => {
+    const profile = buildProfile({ status: "draft" } as Partial<AdmissionProfileResponse>)
+    render(
+      <EngineResultCard profile={profile} preview={AMBIGUOUS_PREVIEW} canOverride={true} onOpenOverride={vi.fn()} />,
+    )
+    const dong = screen.getByTestId("engine-result-reason")
+    expect(dong.textContent).toContain("chưa chọn được trường tốt nghiệp")
+    expect(dong.textContent).not.toContain("tied_graduation_year_and_grade")
+  })
+
+  it("hồ sơ đã nộp (KV đã chốt): căn cứ basis_reason hiện câu, không hiện mã", () => {
+    const profile = buildProfile({
+      status: "submitted",
+      priority_resolution_snapshot: {
+        kv_resolved: "KV1",
+        rule_applied: "longest_duration",
+        basis_reason: "tc_chinh_quy_post_thpt_uses_school_history",
+      },
+    } as Partial<AdmissionProfileResponse>)
+    render(<EngineResultCard profile={profile} preview={null} canOverride={false} onOpenOverride={vi.fn()} />)
+    const dong = screen.getByTestId("engine-result-reason")
+    expect(dong.textContent).toContain("Tính theo các trường THPT đã học")
+    expect(dong.textContent).not.toContain("tc_chinh_quy_post_thpt_uses_school_history")
+  })
+
+  // Owner 25-11 (QUYET-DINH-OWNER-DOAN-3C-CAU-KV câu 2): thứ tự hiển thị của hồ sơ ĐÃ NỘP.
+  it("đã nộp, CHƯA có KV (vd T6 chụp lại): thấy câu VIỆC CẦN LÀM, không thấy câu căn cứ", () => {
+    const profile = buildProfile({
+      status: "submitted",
+      priority_resolution_snapshot: {
+        kv_resolved: null,
+        rule_applied: "insufficient_data",
+        basis_reason: "tc_chinh_quy_post_thpt_uses_school_history",
+        reason: "history_entries_inconsistent",
+      },
+    } as Partial<AdmissionProfileResponse>)
+    render(<EngineResultCard profile={profile} preview={null} canOverride={false} onOpenOverride={vi.fn()} />)
+    const dong = screen.getByTestId("engine-result-reason")
+    expect(dong.textContent).toContain("“Lớp cuối” không phải 10, 11 hay 12")
+    expect(dong.textContent).not.toContain("Tính theo các trường THPT đã học")
+  })
+
+  it("đã nộp, ĐÃ có KV: thấy câu CĂN CỨ, không thấy câu việc cần làm", () => {
+    const profile = buildProfile({
+      status: "submitted",
+      priority_resolution_snapshot: {
+        kv_resolved: "KV1",
+        rule_applied: "longest_duration",
+        basis_reason: "tc_chinh_quy_post_thpt_uses_school_history",
+        reason: "history_entries_inconsistent",
+      },
+    } as Partial<AdmissionProfileResponse>)
+    render(<EngineResultCard profile={profile} preview={null} canOverride={false} onOpenOverride={vi.fn()} />)
+    const dong = screen.getByTestId("engine-result-reason")
+    expect(dong.textContent).toContain("Tính theo các trường THPT đã học")
+    expect(dong.textContent).not.toContain("“Lớp cuối”")
+  })
+
+  // Codex 3c C2 (25-11): mã cao đẳng ghép loại hình ngoài chính quy / liên thông và mã lạ không còn in mã trơ trọi.
+  it("đã nộp, cao đẳng vừa làm vừa học (mã ghép động): thấy câu căn cứ, không thấy mã", () => {
+    const profile = buildProfile({
+      status: "submitted",
+      priority_resolution_snapshot: {
+        kv_resolved: "KV2",
+        rule_applied: "longest_duration",
+        basis_reason: "cd_vua_lam_vua_hoc_post_thpt_uses_school_history",
+      },
+    } as Partial<AdmissionProfileResponse>)
+    render(<EngineResultCard profile={profile} preview={null} canOverride={false} onOpenOverride={vi.fn()} />)
+    const dong = screen.getByTestId("engine-result-reason")
+    expect(dong.textContent).toContain("Tính theo các trường THPT đã học")
+    expect(dong.textContent).not.toContain("cd_vua_lam_vua_hoc")
+  })
+
+  it("hồ sơ nháp, mã lý do máy chủ chưa có câu: thấy “Lý do khác (mã: …)”", () => {
+    const profile = buildProfile({ status: "draft" } as Partial<AdmissionProfileResponse>)
+    const preview: PreviewPriorityKvResponse = { ...AMBIGUOUS_PREVIEW, reason: "ma_ly_do_tuong_lai" }
+    render(<EngineResultCard profile={profile} preview={preview} canOverride={true} onOpenOverride={vi.fn()} />)
+    expect(screen.getByTestId("engine-result-reason").textContent).toBe("Lý do: Lý do khác (mã: ma_ly_do_tuong_lai)")
+  })
+})
