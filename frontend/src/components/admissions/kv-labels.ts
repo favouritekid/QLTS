@@ -153,7 +153,7 @@ export const REASON_VI: Record<string, string> = {
   sc_kv_needs_verification: PENDING_MANUAL_VERIFICATION_VI,
   // Owner 25-11 (QUYET-DINH-OWNER-DOAN-3C-CAU-KV câu 1): mã là luồng THCS cũ, KHÔNG phải sơ cấp ⇒ câu RIÊNG, chép nguyên văn.
   legacy_thcs_pathway_kv_needs_verification:
-    "Khu vực cần xác minh từ học bạ và ấn định thủ công (nhóm THCS / hồ sơ không rõ trình độ).",
+    "Khu vực cần xác minh từ học bạ và ấn định thủ công (nhóm THCS / hồ sơ không rõ trình độ)",
   permanent_address_special_override: "Trường hợp đặc biệt cán bộ đã chọn: tính theo xã/phường nơi thường trú",
 }
 
