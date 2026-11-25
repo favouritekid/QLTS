@@ -340,6 +340,17 @@ export const navigationConfig: NavigationConfig = {
           roles: ["admin"],
         },
         {
+          // GĐ2-B F0 — lần xét nháp (điểm sàn, kiểm hồ sơ, bốn tab kết quả). Owner G12: tên "Lần xét tuyển", NGAY DƯỚI "Bảng chỉ
+          // tiêu năm". Đường NGOÀI `/admin/*` (thiết kế KT-5 / R4: GĐ2-C mở cho Ban thư ký — có thể là cán bộ, mà proxy chặn cán bộ
+          // ở `/admin/*`). GĐ2-B máy chủ chỉ cho Admin (Casbin + `require_review_admin`); `roles` chỉ là bộ lọc thô của menu — nút
+          // trên màn theo `available_actions`, trang tự báo khi máy chủ trả 403. F5: chuyển sang CÙNG cờ với "Bảng chỉ tiêu năm"
+          // (đính chính §5).
+          label: "Lần xét tuyển",
+          href: "/review-sessions",
+          icon: ClipboardCheck,
+          roles: ["admin"],
+        },
+        {
           // GĐ2-C C1 — Admin gán / thu hồi quyền "Thư ký Hội đồng". Chỉ Admin: máy chủ chặn mọi vai khác (Casbin +
           // `require_review_secretary_admin` ⇒ 403); `roles` chỉ là bộ lọc thô của menu — trang tự báo khi máy chủ trả 403.
           label: "Thư ký Hội đồng",

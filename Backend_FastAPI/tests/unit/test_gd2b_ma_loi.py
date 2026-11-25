@@ -17,6 +17,9 @@ pytestmark = pytest.mark.unit
 HOP_DONG_5 = [
     ("dot_sai", lambda: e.review_round_invalid(7), 400, "VALIDATION_ERROR",
      {"reason_code": "review_round_invalid", "admission_round_id": 7}),
+    # Phụ lục HĐ4 E10 §G1 (owner G1 24-11): đợt đã lưu trữ.
+    ("dot_da_luu_tru", lambda: e.review_round_archived(8), 400, "VALIDATION_ERROR",
+     {"reason_code": "review_round_archived", "admission_round_id": 8}),
     ("san_trung", lambda: e.review_floor_duplicate([5, 3, 5]), 400, "VALIDATION_ERROR",
      {"reason_code": "review_floor_duplicate", "duplicate_offering_academic_info_ids": [3, 5]}),
     ("san_sai_hoc_vu", lambda: e.review_floor_bad_member([9, 2, 9], 2026), 400, "VALIDATION_ERROR",
@@ -69,6 +72,18 @@ def test_moi_dong_hop_dong_5_dung_ma_va_than(may, i):
     assert {k: v for k, v in than.items() if k not in ("detail", "error_code")} == phan
 
 
+#: Owner 25-11 (Q4 — ``gd2\gd2b\giao-dien\QUYET-DINH-OWNER-CAU-CHU-GD2B-Q1-Q6-2026-11-25.md``): câu 409 "lần xét vừa được sửa ở nơi
+#: khác" BỎ đuôi "hãy tải lại rồi làm lại" (màn điểm sàn ĐÃ tự tải lại và hiện bảng so). Chép từ quyết định — KHÔNG đọc từ
+#: ``e.MESSAGES`` (đọc từ mã thì sửa chữ vẫn xanh).
+CAU_409_LAN_XET_VUA_SUA = "Lần xét đã được sửa ở nơi khác sau khi bạn mở."
+
+
+def test_409_lan_xet_vua_sua_cau_owner_q4_qua_handler(may):
+    i = next(k for k, c in enumerate(HOP_DONG_5) if c[0] == "phien_ban_cu")
+    r = may.get("/loi/%d" % i)
+    assert r.json()["detail"] == CAU_409_LAN_XET_VUA_SUA, r.text
+
+
 def test_409_hoc_vu_dang_co_san_chi_toi_hai_thao_tac_lam_duoc():
     """Đặc tả §4.3: câu báo nêu lần xét nháp số N năm Y và HAI thao tác làm được (bỏ khỏi danh sách sàn / huỷ lần xét nháp)."""
     d = e.AcademicInfoInReviewFloor(3, 2026).detail
@@ -83,7 +98,8 @@ def test_san_sai_hoc_vu_cau_bao_neu_nam():
 def test_moi_ma_ly_do_co_cau_bao():
     """Mỗi mã lý do của hợp đồng §5 có câu tiếng Việt riêng (không rơi về chính mã)."""
     ma = {
-        "review_round_invalid", "review_floor_duplicate", "review_floor_bad_member", "review_session_not_found",
+        "review_round_invalid", "review_round_archived", "review_floor_duplicate", "review_floor_bad_member",
+        "review_session_not_found",
         "review_run_not_found", "review_quota_table_missing", "review_session_stale", "review_session_not_draft",
         "review_run_in_progress", "review_run_not_done", "fee_gate_mode_invalid", "residence_proof_doc_type_missing",
     }
