@@ -116,7 +116,8 @@ describe("KvBreakdownCard", () => {
     expect(screen.getByTestId("kv-breakdown-details").textContent).not.toContain("thuong_tru")
   })
 
-  it("falls back to raw value when pathway not in label map", () => {
+  // Codex 3c C2 (25-11): mã đường tính lạ ⇒ “Khác (mã: …)”, không trả mã trơ trọi (trước đây: trả mã thô).
+  it("mã đường tính lạ ⇒ “Khác (mã: …)”", () => {
     render(
       <KvBreakdownCard
         kv="KV1"
@@ -124,7 +125,7 @@ describe("KvBreakdownCard", () => {
         ruleApplied="longest_duration"
       />,
     )
-    expect(screen.getByText(/future_unknown_pathway/i)).toBeInTheDocument()
+    expect(screen.getByText("Khác (mã: future_unknown_pathway)")).toBeInTheDocument()
   })
 
   // -------------------------------------------------------------------------

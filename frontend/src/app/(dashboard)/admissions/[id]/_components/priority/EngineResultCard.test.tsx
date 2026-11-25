@@ -406,4 +406,27 @@ describe("EngineResultCard — dòng Lý do hiện câu tiếng Việt (đoàn 3
     expect(dong.textContent).toContain("Tính theo các trường THPT đã học")
     expect(dong.textContent).not.toContain("“Lớp cuối”")
   })
+
+  // Codex 3c C2 (25-11): mã cao đẳng ghép loại hình ngoài chính quy / liên thông và mã lạ không còn in mã trơ trọi.
+  it("đã nộp, cao đẳng vừa làm vừa học (mã ghép động): thấy câu căn cứ, không thấy mã", () => {
+    const profile = buildProfile({
+      status: "submitted",
+      priority_resolution_snapshot: {
+        kv_resolved: "KV2",
+        rule_applied: "longest_duration",
+        basis_reason: "cd_vua_lam_vua_hoc_post_thpt_uses_school_history",
+      },
+    } as Partial<AdmissionProfileResponse>)
+    render(<EngineResultCard profile={profile} preview={null} canOverride={false} onOpenOverride={vi.fn()} />)
+    const dong = screen.getByTestId("engine-result-reason")
+    expect(dong.textContent).toContain("Tính theo các trường THPT đã học")
+    expect(dong.textContent).not.toContain("cd_vua_lam_vua_hoc")
+  })
+
+  it("hồ sơ nháp, mã lý do máy chủ chưa có câu: thấy “Lý do khác (mã: …)”", () => {
+    const profile = buildProfile({ status: "draft" } as Partial<AdmissionProfileResponse>)
+    const preview: PreviewPriorityKvResponse = { ...AMBIGUOUS_PREVIEW, reason: "ma_ly_do_tuong_lai" }
+    render(<EngineResultCard profile={profile} preview={preview} canOverride={true} onOpenOverride={vi.fn()} />)
+    expect(screen.getByTestId("engine-result-reason").textContent).toBe("Lý do: Lý do khác (mã: ma_ly_do_tuong_lai)")
+  })
 })

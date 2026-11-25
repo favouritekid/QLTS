@@ -9,12 +9,19 @@
 import { describe, expect, it } from "vitest"
 
 import {
+  CD_BASIS_SUFFIX_VI,
+  CD_OFFERING_TYPES,
   PATHWAY_LABEL_VI,
   REASON_PREFIX_VI,
   REASON_VI,
   RULE_LABEL_VI,
+  labelOrOther,
   localizeReason,
+  otherReasonVi,
 } from "./kv-labels"
+
+/** Mã cao đẳng máy chủ GHÉP loại hình: `cd_<loại hình>_<đuôi>` (`priority_service.py:1039`, `:1042`, `:1045`). */
+const MA_CD_GHEP = /^cd_[a-z_]+_(post_thpt_uses_school_history|completed_thpt_uses_school_history|cultural_insufficient_for_kv_basis)$/
 
 /** `reason=` khi CHƯA tính được KV (`_kv_resolution_steps`, `_kv_thcs_history_steps`; nhánh INSUFFICIENT_DATA trả
  * chính `basis_reason`). Hiện ở xem trước (hồ sơ nháp) và ảnh chụp. */
@@ -134,8 +141,10 @@ describe("kv-labels — mọi mã lý do máy chủ có câu tiếng Việt (Cod
     },
   )
 
-  it("mã chính xác nằm trong bảng mã (không đi đường tra theo dấu hai chấm)", () => {
-    for (const ma of [...MA_LY_DO_CHUA_TINH, ...MA_CAN_CU]) {
+  // Codex 3c C2 (25-11): mã cao đẳng ghép loại hình `cd_<loại>_<đuôi>` dựng ở `localizeCdCode`, KHÔNG nằm trong bảng mã ⇒ loại khỏi ca này
+  // (có ca riêng ở khối "mã cao đẳng ghép loại hình").
+  it("mã chính xác nằm trong bảng mã (không đi đường tra theo dấu hai chấm / mã cao đẳng ghép)", () => {
+    for (const ma of [...MA_LY_DO_CHUA_TINH, ...MA_CAN_CU].filter((m) => !MA_CD_GHEP.test(m))) {
       expect(coKhoaRieng(REASON_VI, ma)).toBe(true)
     }
   })
@@ -191,18 +200,19 @@ describe("kv-labels — localizeReason chỉ ÁNH XẠ mã → câu", () => {
     expect(localizeReason("unsupported_target_level:dai_hoc")).toBe(REASON_PREFIX_VI.unsupported_target_level)
   })
 
+  // Codex 3c C2: mã không có câu ⇒ câu dự phòng CÓ mã (trước đây trả mã thô).
   it("phần trước dấu hai chấm chỉ tra bảng mã-có-chi-tiết, không tra bảng mã thường", () => {
-    expect(localizeReason("cultural_not_set:x")).toBe("cultural_not_set:x")
-    expect(localizeReason(":manual_override_unverified")).toBe(":manual_override_unverified")
+    expect(localizeReason("cultural_not_set:x")).toBe("Lý do khác (mã: cultural_not_set:x)")
+    expect(localizeReason(":manual_override_unverified")).toBe("Lý do khác (mã: :manual_override_unverified)")
   })
 
-  it("mã lạ giữ nguyên (không đoán câu)", () => {
-    expect(localizeReason("ma_tuong_lai_chua_co")).toBe("ma_tuong_lai_chua_co")
+  it("mã lạ ⇒ câu dự phòng “Lý do khác (mã: …)” (không đoán câu, không trả mã trơ trọi)", () => {
+    expect(localizeReason("ma_tuong_lai_chua_co")).toBe("Lý do khác (mã: ma_tuong_lai_chua_co)")
   })
 
   it("khoá kế thừa của object (constructor, toString, __proto__…) KHÔNG bị coi là mã", () => {
     for (const ma of ["constructor", "toString", "__proto__", "hasOwnProperty", "constructor:x"]) {
-      expect(localizeReason(ma)).toBe(ma)
+      expect(localizeReason(ma)).toBe(`Lý do khác (mã: ${ma})`)
     }
   })
 
@@ -210,5 +220,66 @@ describe("kv-labels — localizeReason chỉ ÁNH XẠ mã → câu", () => {
     expect(localizeReason("")).toBeNull()
     expect(localizeReason(null)).toBeNull()
     expect(localizeReason(undefined)).toBeNull()
+  })
+})
+
+/** Tập loại hình máy chủ CÓ THỂ ghép vào `cd_<loại>_…` — CHÉP từ seed
+ * `Backend_FastAPI/alembic/versions/l7m8n9o0p1q2_add_system_configuration_tables.py:95-99` (= docstring
+ * `priority_service.py:2299-2300` `admission_type ∈ {…}`). Máy chủ thêm loại ⇒ sửa ở đây VÀ `CD_OFFERING_TYPES`. */
+const LOAI_HINH_MAY_CHU = ["chinh_quy", "lien_thong", "vua_lam_vua_hoc", "tu_xa", "lien_ket_quoc_te"]
+/** Đuôi máy chủ ghép sau loại hình — CHÉP từ `priority_service.py:1039`, `:1042`, `:1045`. */
+const DUOI_MAY_CHU = ["post_thpt_uses_school_history", "completed_thpt_uses_school_history", "cultural_insufficient_for_kv_basis"]
+/** Câu owner ĐÃ DUYỆT 25-11 cho `cd_chinh_quy_…` / `cd_lien_thong_…` (BANG-CAU-DX-NHAN-KV-DOAN-3C-2026-11-24.md) — chép nguyên văn. */
+const CAU_DA_DUYET_THEO_DUOI: Record<string, string> = {
+  post_thpt_uses_school_history:
+    "Tính theo các trường THPT đã học (trường học lâu nhất; thời gian bằng nhau thì theo trường tốt nghiệp)",
+  completed_thpt_uses_school_history:
+    "Tính theo các trường THPT đã học (trường học lâu nhất; thời gian bằng nhau thì theo trường tốt nghiệp)",
+  cultural_insufficient_for_kv_basis:
+    "Trình độ văn hóa đã khai chưa đủ để tính khu vực cho cao đẳng (cần tốt nghiệp hoặc hoàn thành THPT) — kiểm tra lại trình độ văn hóa",
+}
+
+describe("kv-labels — mã cao đẳng ghép loại hình cd_<loại>_<đuôi> (Codex 3c C2)", () => {
+  it("khoá chéo: tập loại hình FE = tập máy chủ (chép có nguồn tệp:dòng)", () => {
+    expect([...CD_OFFERING_TYPES].sort()).toEqual([...LOAI_HINH_MAY_CHU].sort())
+  })
+
+  it("khoá chéo: tập đuôi FE = tập máy chủ", () => {
+    expect(Object.keys(CD_BASIS_SUFFIX_VI).sort()).toEqual([...DUOI_MAY_CHU].sort())
+  })
+
+  it.each(LOAI_HINH_MAY_CHU.flatMap((loai) => DUOI_MAY_CHU.map((duoi): [string, string] => [loai, duoi])))(
+    "cd_%s_%s ⇒ đúng câu đã duyệt của đuôi ấy",
+    (loai, duoi) => {
+      expect(localizeReason(`cd_${loai}_${duoi}`)).toBe(CAU_DA_DUYET_THEO_DUOI[duoi])
+    },
+  )
+
+  it("mã cao đẳng ghép KHÔNG khai trong bảng mã (một cơ chế, không hai bản)", () => {
+    for (const loai of LOAI_HINH_MAY_CHU) for (const duoi of DUOI_MAY_CHU) {
+      expect(Object.prototype.hasOwnProperty.call(REASON_VI, `cd_${loai}_${duoi}`)).toBe(false)
+    }
+  })
+
+  it("loại hình ngoài tập (Admin thêm sau) ⇒ câu dự phòng có mã", () => {
+    expect(localizeReason("cd_ngan_han_post_thpt_uses_school_history")).toBe(
+      "Lý do khác (mã: cd_ngan_han_post_thpt_uses_school_history)",
+    )
+  })
+
+  it("loại hình trong tập nhưng đuôi lạ ⇒ câu dự phòng có mã", () => {
+    expect(localizeReason("cd_tu_xa_duoi_chua_co")).toBe("Lý do khác (mã: cd_tu_xa_duoi_chua_co)")
+  })
+
+  it("câu dự phòng đúng khuôn owner đã duyệt (GĐ2-B F4 Q7)", () => {
+    expect(otherReasonVi("x_y")).toBe("Lý do khác (mã: x_y)")
+  })
+})
+
+describe("kv-labels — nhãn Cách tính / Quy tắc không trả mã trơ trọi", () => {
+  it("mã có nhãn ⇒ nhãn; mã lạ / khoá kế thừa ⇒ “Khác (mã: …)”", () => {
+    expect(labelOrOther(PATHWAY_LABEL_VI, "lich_su_thpt")).toBe(PATHWAY_LABEL_VI.lich_su_thpt)
+    expect(labelOrOther(RULE_LABEL_VI, "ma_quy_tac_moi")).toBe("Khác (mã: ma_quy_tac_moi)")
+    expect(labelOrOther(PATHWAY_LABEL_VI, "constructor")).toBe("Khác (mã: constructor)")
   })
 })

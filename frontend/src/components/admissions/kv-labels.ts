@@ -126,18 +126,16 @@ export const REASON_VI: Record<string, string> = {
     "Trình độ văn hóa đã khai chưa đủ để tính khu vực cho trung cấp (cần tốt nghiệp / hoàn thành THCS hoặc THPT) — kiểm tra lại trình độ văn hóa",
   tc_lien_thong_cultural_insufficient_for_kv_basis:
     "Trình độ văn hóa / trình độ chuyên môn đã khai chưa đủ để tính khu vực cho trung cấp liên thông — kiểm tra lại hai ô này",
-  cd_chinh_quy_cultural_insufficient_for_kv_basis: CD_CULTURAL_INSUFFICIENT_VI,
-  cd_lien_thong_cultural_insufficient_for_kv_basis: CD_CULTURAL_INSUFFICIENT_VI,
+  // Mã cao đẳng `cd_<loại hình>_…` máy chủ GHÉP ĐỘNG ⇒ dựng ở `localizeCdCode` (bảng loại hình × bảng đuôi bên dưới), không khai
+  // từng mã (Codex 3c C2, 25-11).
   legacy_unknown_cultural: "Không xác định được trình độ văn hóa khi tính khu vực — kiểm tra lại trình độ văn hóa",
 
   // ── Đoàn 3c (24-11) — `basis_reason` (căn cứ tính KV) hiện ở dòng "Lý do" của hồ sơ đã nộp. Owner duyệt 25-11.
   legacy_thpt_pathway: BASIS_THPT_HISTORY_VI,
   tc_chinh_quy_post_thpt_uses_school_history: BASIS_THPT_HISTORY_VI,
   tc_lien_thong_post_thpt_uses_school_history: BASIS_THPT_HISTORY_VI,
-  cd_chinh_quy_post_thpt_uses_school_history: BASIS_THPT_HISTORY_VI,
-  cd_lien_thong_post_thpt_uses_school_history: BASIS_THPT_HISTORY_VI,
-  cd_chinh_quy_completed_thpt_uses_school_history: BASIS_THPT_HISTORY_VI,
-  cd_lien_thong_completed_thpt_uses_school_history: BASIS_THPT_HISTORY_VI,
+  // `cd_<loại hình>_post_thpt_uses_school_history` / `…_completed_thpt_uses_school_history` ⇒ `localizeCdCode`.
+  // Hai mã CỐ ĐỊNH của cao đẳng liên thông khối lượng văn hoá (không ghép loại hình) giữ ở đây.
   cd_lien_thong_khoi_luong_with_thpt_history: BASIS_THPT_HISTORY_VI,
   tc_chinh_quy_post_thcs_uses_thcs_school_history: BASIS_THCS_HISTORY_VI,
   tc_lien_thong_post_thcs_with_voc_uses_thcs_school_history: BASIS_THCS_HISTORY_VI,
@@ -173,18 +171,56 @@ const own = (map: Record<string, string>, key: string): string | undefined =>
   Object.prototype.hasOwnProperty.call(map, key) ? map[key] : undefined
 
 /**
+ * Loại hình đào tạo máy chủ có thể ghép vào mã cao đẳng `cd_<loại hình>_<đuôi>`
+ * (`priority_service._derive_kv_matrix_basis`, `f"cd_{atype}_…"`; `atype` = `config_offering_type.code`). Nguồn tập mã:
+ * seed `Backend_FastAPI/alembic/versions/l7m8n9o0p1q2_add_system_configuration_tables.py:95-99` + docstring
+ * `priority_service.derive_target_level_and_type` (`admission_type ∈ {…}`). Loại hình Admin thêm sau (ngoài tập) ⇒ câu dự phòng
+ * có mã (`otherReasonVi`). Đoàn 3c (Codex C2, 25-11).
+ */
+export const CD_OFFERING_TYPES: readonly string[] = ["chinh_quy", "lien_thong", "vua_lam_vua_hoc", "tu_xa", "lien_ket_quoc_te"]
+
+/**
+ * Đuôi mã cao đẳng → câu. DÙNG LẠI câu owner đã duyệt 25-11 cho `cd_chinh_quy_…` / `cd_lien_thong_…` — các câu ấy KHÔNG nêu loại
+ * hình ⇒ mọi loại hình cùng một câu (không thêm tên loại hình: sẽ đổi chữ đã duyệt).
+ */
+export const CD_BASIS_SUFFIX_VI: Record<string, string> = {
+  post_thpt_uses_school_history: BASIS_THPT_HISTORY_VI,
+  completed_thpt_uses_school_history: BASIS_THPT_HISTORY_VI,
+  cultural_insufficient_for_kv_basis: CD_CULTURAL_INSUFFICIENT_VI,
+}
+
+/** `cd_<loại hình>_<đuôi>` với loại hình trong `CD_OFFERING_TYPES` và đuôi trong `CD_BASIS_SUFFIX_VI` ⇒ câu; khác ⇒ undefined. */
+function localizeCdCode(reason: string): string | undefined {
+  for (const type of CD_OFFERING_TYPES) {
+    const head = `cd_${type}_`
+    if (reason.startsWith(head)) return own(CD_BASIS_SUFFIX_VI, reason.slice(head.length))
+  }
+  return undefined
+}
+
+/** Câu dự phòng cho MỌI mã chưa có câu — khuôn owner đã duyệt (GĐ2-B F4 Q7, 25-11): "Lý do khác (mã: …)". */
+export const otherReasonVi = (code: string): string => `Lý do khác (mã: ${code})`
+
+/** Nhãn ô "Cách tính" / "Quy tắc" (`PATHWAY_LABEL_VI` / `RULE_LABEL_VI`); mã chưa có nhãn ⇒ "Khác (mã: …)" [ĐX] — không trả mã trơ trọi. */
+export function labelOrOther(map: Record<string, string>, code: string): string {
+  return own(map, code) ?? `Khác (mã: ${code})`
+}
+
+/**
  * Translate BE reason string → Vietnamese hint.
- * Returns raw reason as fallback when no mapping found (engineering edge case).
- * Chỉ khoá RIÊNG của bảng (không khoá kế thừa như `constructor` / `toString`).
+ * Thứ tự: bảng mã → mã cao đẳng ghép loại hình → mã có chi tiết sau dấu hai chấm → câu dự phòng "Lý do khác (mã: …)".
+ * KHÔNG còn đường trả mã thô (Codex 3c C2). Chỉ khoá RIÊNG của bảng (không khoá kế thừa như `constructor` / `toString`).
  */
 export function localizeReason(reason: string | null | undefined): string | null {
   if (!reason) return null
   const exact = own(REASON_VI, reason)
   if (exact !== undefined) return exact
+  const cd = localizeCdCode(reason)
+  if (cd !== undefined) return cd
   const colon = reason.indexOf(":")
   if (colon > 0) {
     const byPrefix = own(REASON_PREFIX_VI, reason.slice(0, colon))
     if (byPrefix !== undefined) return byPrefix
   }
-  return reason
+  return otherReasonVi(reason)
 }
